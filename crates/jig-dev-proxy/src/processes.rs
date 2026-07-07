@@ -52,16 +52,18 @@ pub(crate) fn run_app(
     current_exe: &Path,
 ) -> Result<Value> {
     start_ctrlc_cleanup_session();
+    let store = StateStore::resolve(settings.state_dir.clone())?;
     let route_parts = if spec.proxy {
         ensure_process_routes_supported()?;
         let route_parts = process_route_parts(settings, &spec)?;
+        preflight_process_routes(&store, std::slice::from_ref(&spec))?;
         prepare_certs_for_hosts(settings, std::slice::from_ref(&spec.hostname))?;
         ensure_proxy_running(settings, current_exe)?;
         Some(route_parts)
     } else {
         None
     };
-    let store = StateStore::resolve(settings.state_dir.clone())?;
+    ensure_not_interrupted()?;
 
     let port = choose_app_port(spec.explicit_port, &spec.target_host, &mut HashSet::new())?;
     let argv = command_argv(&spec.command, &spec.kind, port)?;
@@ -183,9 +185,11 @@ pub(crate) fn run_apps(
     }
     validate_explicit_ports(&specs)?;
     let uses_proxy = specs.iter().any(|spec| spec.proxy);
+    let store = StateStore::resolve(settings.state_dir.clone())?;
     if uses_proxy {
         ensure_process_routes_supported()?;
         validate_process_routes(settings, &specs)?;
+        preflight_process_routes(&store, &specs)?;
         let hostnames: Vec<String> = specs
             .iter()
             .filter(|spec| spec.proxy)
@@ -194,7 +198,7 @@ pub(crate) fn run_apps(
         prepare_certs_for_hosts(settings, &hostnames)?;
         ensure_proxy_running(settings, current_exe)?;
     }
-    let store = StateStore::resolve(settings.state_dir.clone())?;
+    ensure_not_interrupted()?;
     let mut children = Vec::new();
     let mut routes = Vec::new();
     let mut assigned_ports = HashSet::new();
@@ -239,6 +243,7 @@ pub(crate) fn run_apps(
     )?;
 
     for prepared in prepared_apps {
+        ensure_not_interrupted()?;
         let PreparedApp {
             spec,
             route_parts,
@@ -436,6 +441,43 @@ fn validate_process_routes(settings: &ProxySettings, specs: &[AppRunSpec]) -> Re
     Ok(())
 }
 
+fn preflight_process_routes(store: &StateStore, specs: &[AppRunSpec]) -> Result<()> {
+    ensure_unique_process_route_hostnames(specs)?;
+    store.ensure_no_live_process_routes_for_hostnames(
+        specs
+            .iter()
+            .filter(|spec| spec.proxy)
+            .map(|spec| spec.hostname.as_str()),
+    )
+}
+
+fn ensure_not_interrupted() -> Result<()> {
+    ensure_not_interrupted_with(ctrl_c_requested)
+}
+
+fn ensure_not_interrupted_with(interrupted: impl FnOnce() -> bool) -> Result<()> {
+    if interrupted() {
+        bail!("Interrupted");
+    }
+    Ok(())
+}
+
+fn ensure_unique_process_route_hostnames(specs: &[AppRunSpec]) -> Result<()> {
+    let mut seen = HashMap::new();
+    for spec in specs.iter().filter(|spec| spec.proxy) {
+        let hostname = spec.hostname.to_ascii_lowercase();
+        if let Some(previous_name) = seen.insert(hostname, spec.name.as_str()) {
+            bail!(
+                "Multiple proxied development apps requested hostname '{}': '{}' and '{}'. Likely fix: give each proxied [[dev.apps]] entry a unique hostname or disable proxy routing for one app.",
+                spec.hostname,
+                previous_name,
+                spec.name
+            );
+        }
+    }
+    Ok(())
+}
+
 fn process_route_parts(
     settings: &ProxySettings,
     spec: &AppRunSpec,
@@ -508,25 +550,6 @@ fn spawn_child(
             ))
         }
     })
-}
-
-fn wait_after_terminate(child: &mut Child) {
-    // Cleanup paths keep the original startup/watch error as primary. Waiting
-    // here only tries to reap the terminated child; failures are not actionable
-    // after terminate_child has already performed the best-effort kill/escalation.
-    // If the child is still present after the deadline, process exit will reap
-    // it; this path must not block the user-facing startup error.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                eprintln!("jig proxy could not reap terminated child process: {error}");
-                return;
-            }
-        }
-    }
 }
 
 fn remove_route_best_effort(store: &StateStore, hostname: &str, app_name: &str) {

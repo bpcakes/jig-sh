@@ -1,0 +1,1 @@
+Plan: preflight live proxy route collisions before app startup, improve route conflict diagnostics, make proxy stop/list service-aware, enable termination-signal cleanup for dev app children, then verify with targeted tests, harness tests, and comprehensive review.

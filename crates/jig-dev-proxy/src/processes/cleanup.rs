@@ -32,10 +32,9 @@ impl RunningChild {
             }
         }
         terminate_child(&mut self.child);
-        // This guard also covers panic/unwind cleanup. On Unix, terminate_child
-        // already performs the bounded SIGTERM-to-SIGKILL escalation before
-        // this wait reaps the direct child.
-        let _ = self.child.wait();
+        // This guard also covers panic/unwind cleanup. Keep reaping bounded so
+        // cleanup cannot hang after best-effort termination.
+        wait_after_terminate(&mut self.child);
         self.cleanup_armed = false;
     }
 }
@@ -49,6 +48,25 @@ impl Drop for RunningChild {
 pub(super) fn cleanup_children(children: &mut [RunningChild]) {
     for running in children {
         running.cleanup();
+    }
+}
+
+pub(super) fn wait_after_terminate(child: &mut Child) {
+    // Cleanup paths keep the original startup/watch error as primary. Waiting
+    // here only tries to reap the terminated child; failures are not actionable
+    // after terminate_child has already performed the best-effort kill/escalation.
+    // If the child is still present after the deadline, process exit will reap
+    // it; this path must not block the user-facing startup error.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                eprintln!("jig proxy could not reap terminated child process: {error}");
+                return;
+            }
+        }
     }
 }
 

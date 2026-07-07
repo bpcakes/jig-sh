@@ -96,9 +96,33 @@ pub fn proxy_start(request: ProxyStartRequest) -> Result<Value> {
 }
 
 pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
+    proxy_stop_with_service_probe(request, proxy_service_status_snapshot)
+}
+
+fn proxy_stop_with_service_probe(
+    request: ProxyStopRequest,
+    service_probe: impl FnOnce(
+        &ProxySettings,
+        &std::path::Path,
+    ) -> Result<Option<service::ServiceStatusSnapshot>>,
+) -> Result<Value> {
+    proxy_stop_with_service_probe_and_terminator(request, service_probe, terminate_proxy_pid)
+}
+
+fn proxy_stop_with_service_probe_and_terminator(
+    request: ProxyStopRequest,
+    service_probe: impl FnOnce(
+        &ProxySettings,
+        &std::path::Path,
+    ) -> Result<Option<service::ServiceStatusSnapshot>>,
+    mut terminate_proxy: impl FnMut(u32) -> bool,
+) -> Result<Value> {
     if let Some(path) = missing_state_dir(&request.settings)? {
+        let service_status =
+            ProbedServiceStatus::from_result(service_probe(&request.settings, &path));
+        let service_degrades_stop_ok = service_status.degrades_stop_ok();
         return Ok(json!({
-            "ok": true,
+            "ok": !service_degrades_stop_ok,
             "stopped": false,
             "runtime_files_cleared": false,
             "pid": null,
@@ -107,7 +131,14 @@ pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
             "health_pid": null,
             "handshake_ok": false,
             "pid_matches_proxy": false,
-            "warning": null,
+            "service_keepalive_active": service_status.keepalive_active(),
+            "service_status_uncertain": service_status.is_uncertain(),
+            "service": service_status.value(),
+            "warning": missing_state_warning(
+                &path,
+                service_status.keepalive_active(),
+                service_status.is_uncertain(),
+            ),
             "state_dir": path,
         }));
     }
@@ -119,13 +150,18 @@ pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
     let health_pid = status.health_pid;
     let handshake_ok = status.handshake_ok;
     let pid_matches_proxy = status.pid_matches_proxy;
+    let service_status =
+        ProbedServiceStatus::from_result(service_probe(&request.settings, store.root()));
+    let service_degrades_stop_ok = service_status.degrades_stop_ok();
     let mut stopped = false;
-    if let Some(pid) = pid {
-        if pid_alive && pid_matches_proxy {
-            stopped = terminate_proxy_pid(pid);
+    if !service_degrades_stop_ok {
+        if let Some(stop_pid) = proxy_stop_target_pid(pid, pid_alive, pid_matches_proxy) {
+            stopped = terminate_proxy(stop_pid);
         }
     }
-    let should_clear_runtime_files = stopped || pid.is_none() || !pid_alive;
+    let authenticated_proxy_still_running = handshake_ok && !stopped;
+    let should_clear_runtime_files = !service_degrades_stop_ok
+        && (stopped || (!authenticated_proxy_still_running && (pid.is_none() || !pid_alive)));
     let runtime_files_cleared = if should_clear_runtime_files {
         match store.try_clear_runtime_files() {
             Ok(()) => true,
@@ -140,10 +176,9 @@ pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
     } else {
         false
     };
-    // ok=false is used for identity-preserving stop refusals: callers should
-    // treat the JSON warning as the actionable result instead of assuming a
-    // proxy process was stopped.
-    let ok = runtime_files_cleared;
+    // ok=false is used for actionable stop caveats: callers should treat the
+    // JSON warning as the result instead of assuming the proxy will stay down.
+    let ok = runtime_files_cleared && !service_degrades_stop_ok;
     Ok(json!({
         "ok": ok,
         "stopped": stopped,
@@ -154,51 +189,164 @@ pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
         "health_pid": health_pid,
         "handshake_ok": handshake_ok,
         "pid_matches_proxy": pid_matches_proxy,
-        "warning": stop_warning(pid, health_pid, pid_alive, handshake_ok, pid_matches_proxy, stopped),
+        "service_keepalive_active": service_status.keepalive_active(),
+        "service_status_uncertain": service_status.is_uncertain(),
+        "service": service_status.value(),
+        "warning": stop_warning(StopWarningStatus {
+            pid,
+            health_pid,
+            pid_alive,
+            handshake_ok,
+            pid_matches_proxy,
+            stopped,
+            service_keepalive_active: service_status.keepalive_active(),
+            service_status_uncertain: service_status.is_uncertain(),
+        }),
         "state_dir": store.root(),
     }))
 }
 
-fn stop_warning(
+fn proxy_stop_target_pid(
+    pid: Option<u32>,
+    pid_alive: bool,
+    pid_matches_proxy: bool,
+) -> Option<u32> {
+    if pid_alive && pid_matches_proxy {
+        return pid;
+    }
+    None
+}
+
+fn missing_state_warning(
+    state_dir: &std::path::Path,
+    service_keepalive_active: bool,
+    service_status_uncertain: bool,
+) -> Option<String> {
+    if service_keepalive_active {
+        return Some(format!(
+            "Jig proxy state dir {} is missing, but a proxy user service may start the proxy. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it.",
+            state_dir.display()
+        ));
+    }
+    if service_status_uncertain {
+        return Some(format!(
+            "Jig proxy state dir {} is missing, and Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may start the proxy; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`.",
+            state_dir.display()
+        ));
+    }
+    None
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StopWarningStatus {
     pid: Option<u32>,
     health_pid: Option<u32>,
     pid_alive: bool,
     handshake_ok: bool,
     pid_matches_proxy: bool,
     stopped: bool,
-) -> Option<String> {
+    service_keepalive_active: bool,
+    service_status_uncertain: bool,
+}
+
+fn stop_warning(status: StopWarningStatus) -> Option<String> {
+    let StopWarningStatus {
+        pid,
+        health_pid,
+        pid_alive,
+        handshake_ok,
+        pid_matches_proxy,
+        stopped,
+        service_keepalive_active,
+        service_status_uncertain,
+    } = status;
+
     if stopped {
+        if service_keepalive_active {
+            return Some(
+                "Jig proxy process stopped, but a proxy user service may restart it immediately. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it."
+                    .into(),
+            );
+        }
+        if service_status_uncertain {
+            return Some(
+                "Jig proxy process stopped, but Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may restart it; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`."
+                    .into(),
+            );
+        }
         return None;
     }
+    if pid.is_none() {
+        if service_keepalive_active {
+            return Some(
+                "No Jig proxy PID file was present, but a proxy user service may start the proxy. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it."
+                    .into(),
+            );
+        }
+        if service_status_uncertain {
+            return Some(
+                "No Jig proxy PID file was present, and Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may start the proxy; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`."
+                    .into(),
+            );
+        }
+    }
+    if handshake_ok && !stopped && !pid_alive {
+        let health_pid = health_pid?;
+        let pid_detail = pid
+            .map(|pid| format!("stale PID file points at {pid}"))
+            .unwrap_or_else(|| "no PID file was present".to_string());
+        return Some(format!(
+            "A Jig proxy answered on the stored port as PID {health_pid}, but {pid_detail}. Runtime files were kept because the authenticated proxy could not be stopped."
+        ));
+    }
     let pid = pid?;
+    if service_keepalive_active {
+        return Some(format!(
+            "Jig proxy PID file points at process {}, but no process was stopped and runtime files were kept because a proxy user service may restart the proxy. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it.",
+            pid
+        ));
+    }
+    if service_status_uncertain {
+        return Some(format!(
+            "Jig proxy PID file points at process {}, but no process was stopped and runtime files were kept because Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may restart it; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`.",
+            pid
+        ));
+    }
+    let service_suffix = if service_keepalive_active {
+        " A proxy user service may restart the proxy; run `jig proxy service uninstall` to disable it."
+    } else if service_status_uncertain {
+        " Jig could not inspect the proxy user service status; run `jig proxy service status` to verify whether an installed service may restart it. If status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`."
+    } else {
+        ""
+    };
     if pid_alive && !handshake_ok {
         return Some(format!(
-            "PID file points at process {}, but it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.",
-            pid
+            "PID file points at process {}, but it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.{}",
+            pid, service_suffix
         ));
     }
     if pid_alive && handshake_ok && !pid_matches_proxy {
         let Some(health_pid) = health_pid else {
             return Some(format!(
-                "A Jig proxy answered the stored health check, but the health response did not include a PID while the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process.",
-                pid
+                "A Jig proxy answered the stored health check, but the health response did not include a PID while the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process.{}",
+                pid, service_suffix
             ));
         };
         return Some(format!(
-            "A Jig proxy answered on the stored port as PID {}, but the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process; use the matching JIG_PROXY_STATE_DIR or stop the other proxy explicitly.",
-            health_pid, pid
+            "A Jig proxy answered on the stored port as PID {}, but the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process; use the matching JIG_PROXY_STATE_DIR or stop the other proxy explicitly.{}",
+            health_pid, pid, service_suffix
         ));
     }
     if pid_alive && handshake_ok {
         return Some(format!(
-            "Jig proxy process {} answered the health check but did not exit after stop signals. Runtime files were kept because the process may still own its ports.",
-            pid
+            "Jig proxy process {} answered the health check but did not exit after stop signals. Runtime files were kept because the process may still own its ports.{}",
+            pid, service_suffix
         ));
     }
     if !pid_alive {
         return Some(format!(
-            "Stale Jig proxy PID file for process {} was found and cleared.",
-            pid
+            "Stale Jig proxy PID file for process {} was found and cleared.{}",
+            pid, service_suffix
         ));
     }
     None
@@ -307,7 +455,19 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
 }
 
 pub fn proxy_list(request: ProxyListRequest) -> Result<Value> {
+    proxy_list_with_service_probe(request, proxy_service_status_snapshot)
+}
+
+fn proxy_list_with_service_probe(
+    request: ProxyListRequest,
+    service_probe: impl FnOnce(
+        &ProxySettings,
+        &std::path::Path,
+    ) -> Result<Option<service::ServiceStatusSnapshot>>,
+) -> Result<Value> {
     if let Some(path) = missing_state_dir(&request.settings)? {
+        let service_status =
+            ProbedServiceStatus::from_result(service_probe(&request.settings, &path));
         return Ok(json!({
             "ok": true,
             "state_dir": path,
@@ -322,6 +482,9 @@ pub fn proxy_list(request: ProxyListRequest) -> Result<Value> {
             "proxy_exe": null,
             "proxy_exe_note": null,
             "proxy_exe_warning": null,
+            "service_keepalive_active": service_status.keepalive_active(),
+            "service_status_uncertain": service_status.is_uncertain(),
+            "service": service_status.value(),
             "raw": request.raw,
             "routes": [],
         }));
@@ -330,6 +493,8 @@ pub fn proxy_list(request: ProxyListRequest) -> Result<Value> {
     let routes = store.read_routes(!request.raw)?;
     let proxy_exe = store.read_proxy_exe_status()?;
     let status = proxy_runtime_status(&store)?;
+    let service_status =
+        ProbedServiceStatus::from_result(service_probe(&request.settings, store.root()));
     // HTTP is the identity and health-check port. HTTPS is informational state
     // for clients that want to display the TLS listener.
     let https_port = store.read_https_port()?;
@@ -352,6 +517,9 @@ pub fn proxy_list(request: ProxyListRequest) -> Result<Value> {
         "proxy_exe": proxy_exe.path,
         "proxy_exe_note": proxy_exe_note,
         "proxy_exe_warning": proxy_exe.warning,
+        "service_keepalive_active": service_status.keepalive_active(),
+        "service_status_uncertain": service_status.is_uncertain(),
+        "service": service_status.value(),
         "raw": request.raw,
         "routes": routes,
     }))
@@ -372,8 +540,10 @@ fn proxy_runtime_status(store: &StateStore) -> Result<ProxyRuntimeStatus> {
     let pid_alive = pid.is_some_and(pid_is_alive);
     let http_port = store.read_http_port()?;
     let health_token = store.read_health_token()?;
-    let health_pid =
-        http_port.and_then(|port| jig_proxy_http_pid("127.0.0.1", port, health_token.as_deref()));
+    let health_pid = match (http_port, health_token.as_deref()) {
+        (Some(port), Some(token)) => jig_proxy_http_pid("127.0.0.1", port, Some(token)),
+        _ => None,
+    };
     let handshake_ok = health_pid.is_some();
     let pid_matches_proxy = pid
         .zip(health_pid)
@@ -386,6 +556,52 @@ fn proxy_runtime_status(store: &StateStore) -> Result<ProxyRuntimeStatus> {
         handshake_ok,
         pid_matches_proxy,
     })
+}
+
+#[derive(Clone, Debug)]
+struct ProbedServiceStatus {
+    snapshot: Option<service::ServiceStatusSnapshot>,
+}
+
+impl ProbedServiceStatus {
+    fn from_result(result: Result<Option<service::ServiceStatusSnapshot>>) -> Self {
+        let snapshot = match result {
+            Ok(snapshot) => snapshot,
+            Err(error) => Some(service::ServiceStatusSnapshot::uncertain(error)),
+        };
+        Self { snapshot }
+    }
+
+    fn value(&self) -> Option<&Value> {
+        self.snapshot
+            .as_ref()
+            .map(service::ServiceStatusSnapshot::json_value)
+    }
+
+    fn keepalive_active(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(service::ServiceStatusSnapshot::keepalive_active)
+    }
+
+    fn is_uncertain(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(service::ServiceStatusSnapshot::is_uncertain)
+    }
+
+    fn degrades_stop_ok(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .is_some_and(service::ServiceStatusSnapshot::degrades_stop_ok)
+    }
+}
+
+fn proxy_service_status_snapshot(
+    settings: &ProxySettings,
+    state_dir: &std::path::Path,
+) -> Result<Option<service::ServiceStatusSnapshot>> {
+    service::status_if_installed_for_state_dir(settings, state_dir)
 }
 
 fn proxy_exe_note() -> &'static str {
@@ -520,7 +736,10 @@ pub fn resolve_state_dir(explicit: Option<std::path::PathBuf>) -> Result<std::pa
 
 fn missing_state_dir(settings: &ProxySettings) -> Result<Option<std::path::PathBuf>> {
     let path = resolve_state_dir(settings.state_dir.clone())?;
-    Ok((!path.exists()).then_some(path))
+    let exists = path
+        .try_exists()
+        .with_context(|| format!("Failed to inspect Jig proxy state dir {}", path.display()))?;
+    Ok((!exists).then_some(path))
 }
 
 // Keep these helpers public for the sibling `jig` crate's config translation,

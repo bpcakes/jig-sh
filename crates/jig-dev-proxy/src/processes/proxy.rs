@@ -18,7 +18,7 @@ use crate::ports::{is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tc
 use crate::state::StateStore;
 use crate::types::ProxySettings;
 
-use super::cleanup::terminate_child;
+use super::cleanup::{terminate_child, wait_after_terminate};
 
 pub(super) const MAX_PROXY_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const PROXY_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -107,7 +107,7 @@ fn ensure_proxy_running_after_lock(
     terminate_child(&mut child);
     // Keep the startup timeout as the primary error. Waiting here only reaps
     // the child after terminate_child has performed best-effort cleanup.
-    let _ = child.wait();
+    wait_after_terminate(&mut child);
     bail!(
         "Timed out waiting for Jig proxy to listen. Logs: {}. Likely fix: inspect the proxy log for bind or certificate errors, stop any process using the requested proxy port, or run `scripts/jig proxy cert generate --force` for HTTPS certificate issues.",
         store.log_path().display()

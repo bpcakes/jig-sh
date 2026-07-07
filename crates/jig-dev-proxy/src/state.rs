@@ -209,6 +209,23 @@ impl StateStore {
         self.with_route_lock(|path| add_route_to_path(path, route))
     }
 
+    pub(crate) fn ensure_no_live_process_routes_for_hostnames<'a>(
+        &self,
+        hostnames: impl IntoIterator<Item = &'a str>,
+    ) -> Result<()> {
+        let hostnames = hostnames
+            .into_iter()
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>();
+        self.with_route_lock(|path| {
+            let routes = read_routes_from_path(path)?;
+            for hostname in &hostnames {
+                ensure_no_live_process_route_for_hostname(&routes, hostname)?;
+            }
+            Ok(())
+        })
+    }
+
     pub(crate) fn remove_route(&self, hostname: &str) -> Result<()> {
         let hostname = hostname.to_ascii_lowercase();
         self.with_route_lock(|path| {
@@ -790,17 +807,32 @@ fn validate_route_for_read(route: &Route) -> Result<()> {
 }
 
 fn ensure_no_live_process_route_replacement(routes: &[Route], route: &Route) -> Result<()> {
-    if routes.iter().any(|existing| {
-        existing.hostname == route.hostname
-            && existing.mode == RouteMode::Process
-            && route_is_alive(existing)
-    }) {
+    ensure_no_live_process_route_for_hostname(routes, route.hostname.as_str())
+}
+
+fn ensure_no_live_process_route_for_hostname(routes: &[Route], hostname: &str) -> Result<()> {
+    if let Some(existing) = live_process_route_for_hostname(routes, hostname) {
+        let owner = existing
+            .owner_pid
+            .map(|pid| pid.to_string())
+            .unwrap_or_else(|| "<unknown>".into());
         anyhow::bail!(
-            "Proxy route '{}' would replace a live process route. Stop the running app or remove its route before reusing that hostname.",
-            route.hostname
+            "Proxy route '{}' would replace a live process route owned by PID {} and targeting {}:{}. Stop that app process, then run `jig proxy prune`, or change one of the duplicate route hostnames before retrying.",
+            existing.hostname,
+            owner,
+            existing.target_host,
+            existing.target_port
         );
     }
     Ok(())
+}
+
+fn live_process_route_for_hostname<'a>(routes: &'a [Route], hostname: &str) -> Option<&'a Route> {
+    routes.iter().find(|existing| {
+        existing.hostname.as_str() == hostname
+            && existing.mode == RouteMode::Process
+            && route_is_alive(existing)
+    })
 }
 
 fn write_routes_to_path(path: &Path, routes: &[Route]) -> Result<()> {

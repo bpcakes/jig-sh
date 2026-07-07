@@ -811,6 +811,38 @@ fn add_route_refuses_to_replace_live_process_route() {
         .to_string();
 
     assert!(error.contains("would replace a live process route"));
+    assert!(error.contains(&std::process::id().to_string()));
+    assert!(error.contains("127.0.0.1:4000"));
+    assert!(error.contains("jig proxy prune"));
+}
+
+#[test]
+fn preflight_refuses_live_process_route() {
+    if !process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    store
+        .add_route(Route {
+            hostname: "web.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: Some(std::process::id()),
+            owner_start_token: process_start_token(std::process::id()),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+
+    let error = store
+        .ensure_no_live_process_routes_for_hostnames(["web.localhost"])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("would replace a live process route"));
+    assert!(error.contains(&std::process::id().to_string()));
+    assert!(error.contains("127.0.0.1:4000"));
 }
 
 #[test]

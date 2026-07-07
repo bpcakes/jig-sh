@@ -158,12 +158,9 @@ pub(crate) mod commands {
             ProxyCommand::Service(ProxyServiceCommand::Status(opts)) => {
                 let progress = CliProgress::new("proxy service");
                 progress.header("inspect user service");
-                progress.step(
-                    "resolve proxy",
-                    "existing state directory and runtime flags",
-                );
+                progress.step("resolve proxy", "state directory and runtime flags");
                 let settings = progress
-                    .log_blocked_on_err(settings_existing_state_dir_without_context(&opts.proxy))?;
+                    .log_blocked_on_err(service_status_settings_without_context(&opts.proxy))?;
                 let output = progress.log_blocked_on_err(jig_dev_proxy::proxy_service(
                     jig_dev_proxy::ProxyServiceRequest::Status { settings },
                 ))?;
@@ -279,7 +276,7 @@ pub(crate) mod commands {
             },
             ProxyServiceCommand::Status(opts) => {
                 let settings =
-                    progress.log_blocked_on_err(settings_existing_state_dir(ctx, &opts.proxy))?;
+                    progress.log_blocked_on_err(service_status_settings(ctx, &opts.proxy))?;
                 jig_dev_proxy::ProxyServiceRequest::Status { settings }
             }
         };
@@ -349,11 +346,79 @@ fn json_ok(output: &Value) -> bool {
 }
 
 fn service_blocked_detail(output: &Value, fallback: &str) -> String {
-    output
-        .get("error")
-        .and_then(Value::as_str)
-        .unwrap_or(fallback)
-        .to_string()
+    service_failure_detail(output).unwrap_or_else(|| fallback.to_string())
+}
+
+fn service_failure_detail(output: &Value) -> Option<String> {
+    service_value_failure_detail(output).or_else(|| {
+        ["service", "load", "unload", "reload"]
+            .into_iter()
+            .filter_map(|key| output.get(key))
+            .find_map(service_nested_failure_detail)
+    })
+}
+
+fn service_nested_failure_detail(value: &Value) -> Option<String> {
+    service_nested_value_failure_detail(value).or_else(|| {
+        value
+            .as_object()?
+            .values()
+            .filter(|value| value.is_object())
+            .find_map(service_nested_failure_detail)
+    })
+}
+
+fn service_nested_value_failure_detail(value: &Value) -> Option<String> {
+    if service_nested_value_is_failed_or_uncertain(value) {
+        service_value_failure_detail(value)
+    } else {
+        None
+    }
+}
+
+fn service_nested_value_is_failed_or_uncertain(value: &Value) -> bool {
+    value.get("ok").and_then(Value::as_bool) == Some(false)
+        || value
+            .get("timed_out")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || ["error", "output_error", "kill_error"]
+            .into_iter()
+            .any(|key| {
+                value
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|detail| !detail.is_empty())
+            })
+}
+
+fn service_value_failure_detail(value: &Value) -> Option<String> {
+    for key in ["error", "stderr", "output_error", "kill_error"] {
+        if let Some(detail) = value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+        {
+            return Some(detail.to_string());
+        }
+    }
+    if value
+        .get("timed_out")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Some("service manager command timed out".to_string());
+    }
+    if let Some(status) = value.get("status").and_then(Value::as_i64) {
+        if status != 0 {
+            return Some(format!(
+                "service manager command exited with status {status}"
+            ));
+        }
+    }
+    None
 }
 
 fn workspace_discovery_enabled(ctx: &RepoContext, cli_requested: bool) -> Result<bool> {
@@ -496,6 +561,13 @@ fn settings_existing_state_dir(
     require_existing_state_dir(settings(ctx, opts)?)
 }
 
+fn service_status_settings(
+    ctx: &RepoContext,
+    opts: &ProxyRuntimeOptions,
+) -> Result<jig_dev_proxy::ProxySettings> {
+    settings(ctx, opts)
+}
+
 fn settings_without_context(opts: &ProxyRuntimeOptions) -> Result<jig_dev_proxy::ProxySettings> {
     let defaults = jig_dev_proxy::ProxySettings::default();
     build_settings(
@@ -516,6 +588,12 @@ fn settings_existing_state_dir_without_context(
     opts: &ProxyRuntimeOptions,
 ) -> Result<jig_dev_proxy::ProxySettings> {
     require_existing_state_dir(settings_without_context(opts)?)
+}
+
+fn service_status_settings_without_context(
+    opts: &ProxyRuntimeOptions,
+) -> Result<jig_dev_proxy::ProxySettings> {
+    settings_without_context(opts)
 }
 
 struct SettingsDefaults {
@@ -574,7 +652,10 @@ fn require_existing_state_dir(
     settings: jig_dev_proxy::ProxySettings,
 ) -> Result<jig_dev_proxy::ProxySettings> {
     if let Some(path) = &settings.state_dir {
-        if !path.exists() {
+        if !path
+            .try_exists()
+            .with_context(|| format!("Failed to inspect proxy state dir {}", path.display()))?
+        {
             bail!("proxy state dir {} does not exist", path.display());
         }
     }

@@ -551,6 +551,25 @@ jig_version = "0.2.0-beta.1"
     assert!(error.contains("does not exist"));
 }
 
+#[cfg(unix)]
+#[test]
+fn explicit_read_only_state_dir_reports_inspection_errors() {
+    let temp = tempdir().unwrap();
+    let loop_path = temp.path().join("loop-state");
+    std::os::unix::fs::symlink(&loop_path, &loop_path).unwrap();
+    let settings = jig_dev_proxy::ProxySettings {
+        state_dir: Some(loop_path.clone()),
+        ..jig_dev_proxy::ProxySettings::default()
+    };
+
+    let error = require_existing_state_dir(settings)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("Failed to inspect proxy state dir"));
+    assert!(error.contains(&loop_path.display().to_string()));
+}
+
 #[test]
 fn settings_does_not_create_missing_state_dir() {
     let temp = tempdir().unwrap();
@@ -576,6 +595,114 @@ jig_version = "0.2.0-beta.1"
 
     assert_eq!(settings.state_dir.as_deref(), Some(missing.as_path()));
     assert!(!missing.exists());
+}
+
+#[test]
+fn service_status_settings_allow_missing_state_dir() {
+    let temp = tempdir().unwrap();
+    write_contract(temp.path());
+    fs::write(
+        temp.path().join(".jig.toml"),
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+"#,
+    )
+    .unwrap();
+    let missing = temp.path().join("missing-state");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let opts = ProxyRuntimeOptions {
+        state_dir: Some(missing.clone()),
+        ..ProxyRuntimeOptions::default()
+    };
+
+    let settings = service_status_settings(&ctx, &opts).unwrap();
+
+    assert_eq!(settings.state_dir.as_deref(), Some(missing.as_path()));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn contextless_service_status_settings_allow_missing_state_dir() {
+    let temp = tempdir().unwrap();
+    let missing = temp.path().join("missing-state");
+    let opts = ProxyRuntimeOptions {
+        state_dir: Some(missing.clone()),
+        ..ProxyRuntimeOptions::default()
+    };
+
+    let settings = service_status_settings_without_context(&opts).unwrap();
+
+    assert_eq!(settings.state_dir.as_deref(), Some(missing.as_path()));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn service_blocked_detail_uses_nested_manager_stderr() {
+    let output = json!({
+        "ok": false,
+        "service": {
+            "ok": false,
+            "show": {
+                "ok": false,
+                "status": 1,
+                "stderr": "Failed to connect to bus: No medium found",
+            },
+        },
+    });
+
+    let detail = service_blocked_detail(&output, "service is not active");
+
+    assert_eq!(detail, "Failed to connect to bus: No medium found");
+}
+
+#[test]
+fn service_blocked_detail_reports_nested_manager_timeout() {
+    let output = json!({
+        "ok": false,
+        "load": {
+            "ok": false,
+            "daemon_reload": {
+                "ok": false,
+                "timed_out": true,
+                "stdout": "",
+                "stderr": "",
+            },
+        },
+    });
+
+    let detail = service_blocked_detail(&output, "service install did not complete");
+
+    assert_eq!(detail, "service manager command timed out");
+}
+
+#[test]
+fn service_blocked_detail_ignores_successful_nested_stderr_before_later_failure() {
+    let output = json!({
+        "ok": false,
+        "unload": {
+            "ok": false,
+            "bootout": {
+                "ok": true,
+                "status": 5,
+                "stderr": "Bootstrap failed: 5: Input/output error\nservice is not loaded",
+            },
+        },
+        "reload": {
+            "ok": false,
+            "daemon_reload": {
+                "ok": false,
+                "status": 1,
+                "stderr": "Failed to reload service manager",
+            },
+        },
+    });
+
+    let detail = service_blocked_detail(&output, "service uninstall did not complete");
+
+    assert_eq!(detail, "Failed to reload service manager");
 }
 
 #[test]

@@ -1,10 +1,36 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
 
 use super::*;
+
+fn no_service_snapshot() -> Result<Option<service::ServiceStatusSnapshot>> {
+    Ok(None)
+}
+
+fn service_snapshot(
+    value: Value,
+    restart_risk: service::ServiceRestartRisk,
+) -> service::ServiceStatusSnapshot {
+    service::ServiceStatusSnapshot::from_parts(value, restart_risk)
+}
+
+fn keepalive_service_snapshot() -> service::ServiceStatusSnapshot {
+    service_snapshot(
+        json!({
+            "ok": true,
+            "may_restart_proxy": true,
+        }),
+        service::ServiceRestartRisk::MayRestart,
+    )
+}
+
+fn inactive_service_snapshot(value: Value) -> service::ServiceStatusSnapshot {
+    service_snapshot(value, service::ServiceRestartRisk::None)
+}
 
 #[test]
 fn proxy_runtime_status_reports_missing_runtime_state() {
@@ -41,7 +67,9 @@ fn proxy_stop_keeps_runtime_files_for_live_unverified_pid() {
     store.write_pid(std::process::id()).unwrap();
     store.write_http_port(closed_loopback_port()).unwrap();
 
-    let output = proxy_stop(ProxyStopRequest { settings }).unwrap();
+    let output =
+        proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| no_service_snapshot())
+            .unwrap();
 
     assert_eq!(output["ok"].as_bool(), Some(false));
     assert_eq!(output["stopped"].as_bool(), Some(false));
@@ -59,6 +87,37 @@ fn proxy_stop_keeps_runtime_files_for_live_unverified_pid() {
 fn closed_loopback_port() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     listener.local_addr().unwrap().port()
+}
+
+fn spawn_fake_health_responder(health_pid: u32) -> (u16, thread::JoinHandle<bool>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0u8; 512];
+                    let _ = stream.read(&mut request).unwrap();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nx-jig-proxy: 1\r\nx-jig-proxy-pid: {health_pid}\r\ncontent-length: 11\r\n\r\n{{\"ok\":true}}",
+                    )
+                    .unwrap();
+                    return true;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("fake health responder accept failed: {error}"),
+            }
+        }
+    });
+    (port, handle)
 }
 
 #[test]
@@ -84,8 +143,11 @@ fn proxy_stop_does_not_kill_when_health_pid_differs() {
     let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
     store.write_pid(std::process::id()).unwrap();
     store.write_http_port(port).unwrap();
+    store.ensure_health_token().unwrap();
 
-    let output = proxy_stop(ProxyStopRequest { settings }).unwrap();
+    let output =
+        proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| no_service_snapshot())
+            .unwrap();
     handle.join().unwrap();
 
     assert_eq!(output["ok"].as_bool(), Some(false));
@@ -101,6 +163,316 @@ fn proxy_stop_does_not_kill_when_health_pid_differs() {
     );
     assert!(store.pid_path().exists());
     assert!(store.http_port_path().exists());
+}
+
+#[test]
+fn proxy_stop_keeps_runtime_files_when_stale_pid_but_health_pid_cannot_stop() {
+    let temp = tempdir().unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let health_pid = 4242_u32;
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0u8; 512];
+        let _ = stream.read(&mut request).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nx-jig-proxy: 1\r\nx-jig-proxy-pid: {health_pid}\r\ncontent-length: 11\r\n\r\n{{\"ok\":true}}",
+        )
+        .unwrap();
+    });
+
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store.write_pid(u32::MAX).unwrap();
+    store.write_http_port(port).unwrap();
+    store.ensure_health_token().unwrap();
+    let attempted_stop = std::cell::Cell::new(None);
+
+    let output = proxy_stop_with_service_probe_and_terminator(
+        ProxyStopRequest { settings },
+        |_, _| no_service_snapshot(),
+        |pid| {
+            attempted_stop.set(Some(pid));
+            false
+        },
+    )
+    .unwrap();
+    handle.join().unwrap();
+
+    assert_eq!(attempted_stop.get(), None);
+    assert_eq!(output["ok"].as_bool(), Some(false));
+    assert_eq!(output["stopped"].as_bool(), Some(false));
+    assert_eq!(output["health_pid"].as_u64(), Some(u64::from(health_pid)));
+    assert_eq!(output["pid_alive"].as_bool(), Some(false));
+    assert_eq!(output["runtime_files_cleared"].as_bool(), Some(false));
+    assert!(
+        output["warning"]
+            .as_str()
+            .unwrap()
+            .contains("authenticated proxy could not be stopped")
+    );
+    assert!(store.pid_path().exists());
+    assert!(store.http_port_path().exists());
+}
+
+#[test]
+fn proxy_stop_keeps_runtime_files_when_pid_file_missing_but_health_pid_answers() {
+    let temp = tempdir().unwrap();
+    let health_pid = 4242_u32;
+    let (port, handle) = spawn_fake_health_responder(health_pid);
+
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store.write_http_port(port).unwrap();
+    store.ensure_health_token().unwrap();
+    let attempted_stop = std::cell::Cell::new(None);
+
+    let output = proxy_stop_with_service_probe_and_terminator(
+        ProxyStopRequest { settings },
+        |_, _| no_service_snapshot(),
+        |pid| {
+            attempted_stop.set(Some(pid));
+            true
+        },
+    )
+    .unwrap();
+    let responder_was_contacted = handle.join().unwrap();
+
+    assert!(responder_was_contacted);
+    assert_eq!(attempted_stop.get(), None);
+    assert_eq!(output["ok"].as_bool(), Some(false));
+    assert_eq!(output["stopped"].as_bool(), Some(false));
+    assert_eq!(output["health_pid"].as_u64(), Some(u64::from(health_pid)));
+    assert!(!output["pid_alive"].as_bool().unwrap());
+    assert_eq!(output["runtime_files_cleared"].as_bool(), Some(false));
+    assert!(
+        output["warning"]
+            .as_str()
+            .unwrap()
+            .contains("authenticated proxy could not be stopped")
+    );
+    assert!(!store.pid_path().exists());
+    assert!(store.http_port_path().exists());
+}
+
+#[test]
+fn proxy_stop_ignores_health_pid_without_health_token() {
+    let temp = tempdir().unwrap();
+    let fake_pid = 4242_u32;
+    let (port, handle) = spawn_fake_health_responder(fake_pid);
+
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store.write_pid(u32::MAX).unwrap();
+    store.write_http_port(port).unwrap();
+    let attempted_stop = std::cell::Cell::new(None);
+
+    let output = proxy_stop_with_service_probe_and_terminator(
+        ProxyStopRequest { settings },
+        |_, _| no_service_snapshot(),
+        |pid| {
+            attempted_stop.set(Some(pid));
+            true
+        },
+    )
+    .unwrap();
+    let responder_was_contacted = handle.join().unwrap();
+
+    assert_eq!(attempted_stop.get(), None);
+    assert!(!responder_was_contacted);
+    assert_eq!(output["ok"].as_bool(), Some(true));
+    assert_eq!(output["stopped"].as_bool(), Some(false));
+    assert!(output["health_pid"].is_null());
+    assert_eq!(output["handshake_ok"].as_bool(), Some(false));
+    assert_eq!(output["runtime_files_cleared"].as_bool(), Some(true));
+    assert!(!store.pid_path().exists());
+    assert!(!store.http_port_path().exists());
+}
+
+#[test]
+fn proxy_stop_warns_when_service_degrades_ok_without_pid() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    StateStore::resolve(settings.state_dir.clone()).unwrap();
+
+    let output = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(Some(keepalive_service_snapshot()))
+    })
+    .unwrap();
+
+    assert_eq!(output["ok"].as_bool(), Some(false));
+    assert_eq!(output["service_keepalive_active"].as_bool(), Some(true));
+    assert!(
+        output["warning"]
+            .as_str()
+            .unwrap()
+            .contains("No Jig proxy PID file")
+    );
+}
+
+#[test]
+fn proxy_stop_keeps_runtime_files_when_service_keepalive_active() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store.write_pid(u32::MAX).unwrap();
+    store.write_http_port(12345).unwrap();
+
+    let output = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(Some(keepalive_service_snapshot()))
+    })
+    .unwrap();
+
+    assert_eq!(output["ok"].as_bool(), Some(false));
+    assert_eq!(output["stopped"].as_bool(), Some(false));
+    assert_eq!(output["runtime_files_cleared"].as_bool(), Some(false));
+    assert_eq!(output["service_keepalive_active"].as_bool(), Some(true));
+    assert!(store.pid_path().exists());
+    assert!(store.http_port_path().exists());
+}
+
+#[test]
+fn proxy_stop_keeps_runtime_files_when_service_status_uncertain() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store.write_pid(u32::MAX).unwrap();
+    store.write_http_port(12345).unwrap();
+
+    let output = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(Some(service::ServiceStatusSnapshot::uncertain(
+            anyhow::anyhow!("service status timed out"),
+        )))
+    })
+    .unwrap();
+
+    assert_eq!(output["ok"].as_bool(), Some(false));
+    assert_eq!(output["stopped"].as_bool(), Some(false));
+    assert_eq!(output["runtime_files_cleared"].as_bool(), Some(false));
+    assert_eq!(output["service_status_uncertain"].as_bool(), Some(true));
+    assert!(store.pid_path().exists());
+    assert!(store.http_port_path().exists());
+}
+
+#[test]
+fn stop_warning_reports_service_keepalive_after_stopped_pid() {
+    let warning = stop_warning(StopWarningStatus {
+        pid: Some(123),
+        health_pid: Some(123),
+        pid_alive: true,
+        handshake_ok: true,
+        pid_matches_proxy: true,
+        stopped: true,
+        service_keepalive_active: true,
+        service_status_uncertain: false,
+    })
+    .unwrap();
+
+    assert!(warning.contains("may restart"));
+    assert!(warning.contains("proxy service uninstall"));
+}
+
+#[test]
+fn stop_warning_reports_uncertain_service_status_after_stopped_pid() {
+    let warning = stop_warning(StopWarningStatus {
+        pid: Some(123),
+        health_pid: Some(123),
+        pid_alive: true,
+        handshake_ok: true,
+        pid_matches_proxy: true,
+        stopped: true,
+        service_keepalive_active: false,
+        service_status_uncertain: true,
+    })
+    .unwrap();
+
+    assert!(warning.contains("could not inspect"));
+    assert!(warning.contains("proxy service status"));
+}
+
+#[test]
+fn stop_warning_reports_service_keepalive_without_pid() {
+    let warning = stop_warning(StopWarningStatus {
+        pid: None,
+        health_pid: None,
+        pid_alive: false,
+        handshake_ok: false,
+        pid_matches_proxy: false,
+        stopped: false,
+        service_keepalive_active: true,
+        service_status_uncertain: false,
+    })
+    .unwrap();
+
+    assert!(warning.contains("No Jig proxy PID file"));
+    assert!(warning.contains("proxy service uninstall"));
+}
+
+#[test]
+fn stop_warning_reports_uncertain_service_status_without_pid() {
+    let warning = stop_warning(StopWarningStatus {
+        pid: None,
+        health_pid: None,
+        pid_alive: false,
+        handshake_ok: false,
+        pid_matches_proxy: false,
+        stopped: false,
+        service_keepalive_active: false,
+        service_status_uncertain: true,
+    })
+    .unwrap();
+
+    assert!(warning.contains("No Jig proxy PID file"));
+    assert!(warning.contains("proxy service status"));
+}
+
+#[test]
+fn service_keepalive_status_degrades_stop_ok() {
+    let snapshot = keepalive_service_snapshot();
+
+    assert!(snapshot.keepalive_active());
+    assert!(snapshot.degrades_stop_ok());
+}
+
+#[test]
+fn uncertain_service_status_degrades_stop_ok() {
+    let snapshot = service::ServiceStatusSnapshot::uncertain(anyhow::anyhow!("launchctl failed"));
+
+    assert!(snapshot.is_uncertain());
+    assert!(snapshot.degrades_stop_ok());
+}
+
+#[test]
+fn typed_uncertain_service_status_degrades_stop_ok() {
+    let snapshot = service_snapshot(
+        json!({
+            "ok": false,
+            "service_state_dir_error": "could not inspect service file"
+        }),
+        service::ServiceRestartRisk::Uncertain,
+    );
+
+    assert!(snapshot.is_uncertain());
+    assert!(snapshot.degrades_stop_ok());
 }
 
 #[test]
@@ -362,14 +734,20 @@ fn proxy_stop_list_and_prune_noop_when_state_dir_is_missing() {
         ..ProxySettings::default()
     };
 
-    let stop = proxy_stop(ProxyStopRequest {
-        settings: settings.clone(),
-    })
+    let stop = proxy_stop_with_service_probe(
+        ProxyStopRequest {
+            settings: settings.clone(),
+        },
+        |_, _| no_service_snapshot(),
+    )
     .unwrap();
-    let list = proxy_list(ProxyListRequest {
-        settings: settings.clone(),
-        raw: false,
-    })
+    let list = proxy_list_with_service_probe(
+        ProxyListRequest {
+            settings: settings.clone(),
+            raw: false,
+        },
+        |_, _| no_service_snapshot(),
+    )
     .unwrap();
     let prune = proxy_prune(ProxyPruneRequest { settings }).unwrap();
 
@@ -378,6 +756,156 @@ fn proxy_stop_list_and_prune_noop_when_state_dir_is_missing() {
     assert!(list["routes"].as_array().unwrap().is_empty());
     assert!(prune["routes"].as_array().unwrap().is_empty());
     assert!(!missing.exists());
+}
+
+#[test]
+fn proxy_stop_list_report_service_when_state_dir_is_missing() {
+    let temp = tempdir().unwrap();
+    let missing = temp.path().join("missing-state");
+    let settings = ProxySettings {
+        state_dir: Some(missing.clone()),
+        ..ProxySettings::default()
+    };
+
+    let stop = proxy_stop_with_service_probe(
+        ProxyStopRequest {
+            settings: settings.clone(),
+        },
+        |_, state_dir| {
+            assert_eq!(state_dir, missing.as_path());
+            Ok(Some(keepalive_service_snapshot()))
+        },
+    )
+    .unwrap();
+    let list = proxy_list_with_service_probe(
+        ProxyListRequest {
+            settings: settings.clone(),
+            raw: false,
+        },
+        |_, state_dir| {
+            assert_eq!(state_dir, missing.as_path());
+            Ok(Some(keepalive_service_snapshot()))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(stop["ok"].as_bool(), Some(false));
+    assert_eq!(stop["service_keepalive_active"].as_bool(), Some(true));
+    assert!(stop["warning"].as_str().unwrap().contains("state dir"));
+    assert_eq!(list["service_keepalive_active"].as_bool(), Some(true));
+    assert!(!missing.exists());
+}
+
+#[test]
+fn proxy_stop_does_not_fail_for_service_bound_to_different_state_dir() {
+    let temp = tempdir().unwrap();
+    let other_state_dir = temp.path().join("other-state");
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().join("current-state")),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+
+    let stop = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, state_dir| {
+        assert_eq!(state_dir, store.root());
+        Ok(Some(inactive_service_snapshot(json!({
+            "ok": true,
+            "installed": false,
+            "may_restart_proxy": false,
+            "service_state_dir": other_state_dir,
+            "service_state_dir_matches": false,
+        }))))
+    })
+    .unwrap();
+
+    assert_eq!(stop["ok"].as_bool(), Some(true));
+    assert_eq!(stop["service_keepalive_active"].as_bool(), Some(false));
+    assert_eq!(stop["service_status_uncertain"].as_bool(), Some(false));
+    assert_eq!(stop["service"]["installed"].as_bool(), Some(false));
+    assert_eq!(stop["warning"], Value::Null);
+}
+
+#[test]
+fn proxy_stop_reports_uncertain_service_when_state_dir_is_missing() {
+    let temp = tempdir().unwrap();
+    let missing = temp.path().join("missing-state");
+    let settings = ProxySettings {
+        state_dir: Some(missing.clone()),
+        ..ProxySettings::default()
+    };
+
+    let stop = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(Some(service::ServiceStatusSnapshot::uncertain(
+            anyhow::anyhow!("launchctl failed"),
+        )))
+    })
+    .unwrap();
+
+    assert_eq!(stop["ok"].as_bool(), Some(false));
+    assert_eq!(stop["service_status_uncertain"].as_bool(), Some(true));
+    assert!(
+        stop["warning"]
+            .as_str()
+            .unwrap()
+            .contains("could not inspect")
+    );
+    assert!(!missing.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_state_dir_propagates_stat_errors() {
+    let temp = tempdir().unwrap();
+    let loop_path = temp.path().join("loop-state");
+    std::os::unix::fs::symlink(&loop_path, &loop_path).unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(loop_path.clone()),
+        ..ProxySettings::default()
+    };
+
+    let error = missing_state_dir(&settings).unwrap_err().to_string();
+
+    assert!(error.contains("Failed to inspect Jig proxy state dir"));
+    assert!(error.contains(&loop_path.display().to_string()));
+}
+
+#[test]
+fn proxy_stop_list_report_uncertain_service_when_probe_errors() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    StateStore::resolve(settings.state_dir.clone()).unwrap();
+
+    let stop = proxy_stop_with_service_probe(
+        ProxyStopRequest {
+            settings: settings.clone(),
+        },
+        |_, _| Err(anyhow::anyhow!("service file stat failed")),
+    )
+    .unwrap();
+    let list = proxy_list_with_service_probe(
+        ProxyListRequest {
+            settings,
+            raw: false,
+        },
+        |_, _| Err(anyhow::anyhow!("service file stat failed")),
+    )
+    .unwrap();
+
+    assert_eq!(stop["ok"].as_bool(), Some(false));
+    assert_eq!(stop["runtime_files_cleared"].as_bool(), Some(false));
+    assert_eq!(stop["service_status_uncertain"].as_bool(), Some(true));
+    assert_eq!(stop["service"]["ok"].as_bool(), Some(false));
+    assert!(
+        stop["service"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("service file stat failed")
+    );
+    assert_eq!(list["service_status_uncertain"].as_bool(), Some(true));
+    assert_eq!(list["service"]["ok"].as_bool(), Some(false));
 }
 
 #[test]

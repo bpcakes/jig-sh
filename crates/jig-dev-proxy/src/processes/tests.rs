@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::thread;
 
 use super::*;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::tempdir;
 
 #[test]
@@ -16,6 +16,15 @@ fn injects_vite_port_and_host_flags() {
     assert!(argv.contains(&"4210".to_string()));
     assert!(argv.contains(&"--host".to_string()));
     assert!(argv.contains(&"--strictPort".to_string()));
+}
+
+#[test]
+fn ensure_not_interrupted_reports_pending_signal() {
+    let error = ensure_not_interrupted_with(|| true)
+        .unwrap_err()
+        .to_string();
+
+    assert_eq!(error, "Interrupted");
 }
 
 #[test]
@@ -743,6 +752,85 @@ fn app_readiness_wait_returns_when_child_owns_listener() {
     assert!(owner_token.is_some());
     terminate_child(&mut child);
     let _ = child.wait();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn run_apps_preflights_live_process_route_before_spawning() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    store
+        .add_route(Route {
+            hostname: "api.demo.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: Some(std::process::id()),
+            owner_start_token: crate::state::process_start_token(std::process::id()),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let spec = AppRunSpec::new(
+        "api",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["definitely-not-run-by-jig-test".into()]),
+        "api.demo.localhost",
+    );
+
+    let error = run_apps(vec![spec], &settings, Path::new("/definitely/not/jig"))
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("would replace a live process route"));
+    assert!(error.contains(&std::process::id().to_string()));
+    assert!(error.contains("127.0.0.1:4000"));
+    assert!(
+        !store.pid_path().exists(),
+        "preflight should run before proxy startup"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn run_apps_preflights_duplicate_process_route_hostnames_before_spawning() {
+    let temp = tempdir().unwrap();
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().to_path_buf()),
+        ..ProxySettings::default()
+    };
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let first = AppRunSpec::new(
+        "api",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["definitely-not-run-by-jig-test".into()]),
+        "api.demo.localhost",
+    );
+    let second = AppRunSpec::new(
+        "admin",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["definitely-not-run-by-jig-test".into()]),
+        "API.demo.localhost",
+    );
+
+    let error = run_apps(
+        vec![first, second],
+        &settings,
+        Path::new("/definitely/not/jig"),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Multiple proxied development apps requested hostname"));
+    assert!(error.contains("api"));
+    assert!(error.contains("admin"));
+    assert!(
+        !store.pid_path().exists(),
+        "preflight should run before proxy startup"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
