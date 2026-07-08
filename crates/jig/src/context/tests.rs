@@ -148,6 +148,96 @@ scope = "repo"
 }
 
 #[test]
+fn loop_config_accepts_compiled_in_workflow_kinds() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[loop]
+lease_ttl_seconds = 60
+max_attempts = 2
+
+[[loop.workflows]]
+id = "status-check"
+kind = "noop_status"
+
+[[loop.workflows]]
+id = "pr-status"
+kind = "github_pr_status"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "pr_manager"
+"#,
+    )
+    .unwrap();
+
+    validate_config(&config).unwrap();
+}
+
+#[test]
+fn loop_config_rejects_unknown_workflow_kinds() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "github_pr_loop"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("Unsupported loop workflow kind 'github_pr_loop'"));
+}
+
+#[test]
+fn loop_config_rejects_zero_backoff() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[loop]
+backoff_seconds = 0
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("[loop].backoff_seconds must be greater than zero"));
+}
+
+#[test]
+fn loop_config_rejects_colon_in_workflow_ids() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "status:check"
+kind = "noop_status"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("Unsupported loop workflow id value 'status:check'"));
+}
+
+#[test]
 fn dynamic_command_map_extends_contract_command_keys() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();

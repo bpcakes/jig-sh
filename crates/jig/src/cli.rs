@@ -9,6 +9,7 @@ use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, tool_de
 mod agent;
 mod bootstrap_run;
 mod check;
+mod loops;
 mod prompt;
 mod proxy;
 mod state;
@@ -19,6 +20,9 @@ mod work;
 pub(crate) use agent::AgentDoctorOpts;
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
+pub(crate) use loops::{
+    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
+};
 pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{
     DevOpts, ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
@@ -192,6 +196,13 @@ pub(crate) enum CommandKind {
     /// Manage structured work plans, receipts, gates, and decisions.
     #[command(name = tool_defs::cli_command::WORK, subcommand)]
     Work(WorkCommand),
+    /// Run runtime-owned orchestration workflows as idempotent ticks.
+    #[command(
+        name = tool_defs::cli_command::LOOP,
+        subcommand,
+        after_help = loops::LOOP_AFTER_HELP
+    )]
+    Loop(LoopCommand),
     /// Inspect and archive runtime-owned Jig state.
     #[command(name = tool_defs::cli_command::STATE, subcommand)]
     State(StateCommand),

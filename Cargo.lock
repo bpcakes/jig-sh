@@ -912,6 +912,7 @@ dependencies = [
  "jig-dev-proxy",
  "jig-features",
  "jig-vault",
+ "libc",
  "minijinja",
  "rpassword",
  "rustyline",

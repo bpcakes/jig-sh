@@ -7,8 +7,10 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{FeatureContext, ManifestTool};
 use serde::Deserialize;
 
+mod loop_config;
 mod work_config;
 
+pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
     parse_review_scope_arg,
@@ -111,6 +113,8 @@ struct RepoConfig {
     dev: DevConfig,
     #[serde(default)]
     work: WorkConfig,
+    #[serde(default, rename = "loop")]
+    loop_config: LoopConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
 }
@@ -485,6 +489,14 @@ impl RepoContext {
         self.config.work.refinements()
     }
 
+    pub(crate) fn loop_config(&self) -> &LoopConfig {
+        &self.config.loop_config
+    }
+
+    pub(crate) fn loop_workflows(&self) -> &[LoopWorkflowConfig] {
+        self.config.loop_config.workflows()
+    }
+
     pub(crate) fn codex_marketplaces(&self) -> &[CodexMarketplaceConfig] {
         &self.config.agent_tooling.codex.marketplaces
     }
@@ -592,7 +604,7 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_web_package_manager(&config.web_package_manager)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    validate_work_config(config)
+    validate_runtime_config(config)
 }
 
 fn validate_command_map(commands: &BTreeMap<String, String>) -> Result<()> {
@@ -727,8 +739,9 @@ fn validate_dev_app_env_prefixes<'a>(
     Ok(())
 }
 
-fn validate_work_config(config: &RepoConfig) -> Result<()> {
-    config.work.validate()
+fn validate_runtime_config(config: &RepoConfig) -> Result<()> {
+    config.work.validate()?;
+    config.loop_config.validate()
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]

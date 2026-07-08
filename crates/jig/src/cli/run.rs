@@ -130,6 +130,11 @@ pub(crate) fn run() -> Result<()> {
                 human_output,
             )
         }
+        CommandKind::Loop(command) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Loop(command.into()),
+            false,
+            None,
+        ),
         CommandKind::State(command) => dispatch_runtime_command(
             crate::command::RuntimeCommand::State(command.into()),
             false,

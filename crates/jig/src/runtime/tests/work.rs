@@ -1,4 +1,5 @@
 use super::*;
+use crate::tool_defs::WORKER_RUN_TOOL;
 use std::path::Path;
 
 #[test]
@@ -1020,6 +1021,22 @@ fn work_review_records_structured_codex_review_findings() {
     assert_eq!(gates["gates"][0]["kind"], "codex_review");
     assert_eq!(gates["gates"][0]["status"], "failed");
     assert_eq!(gates["failed_required"][0], "rust-error-handling");
+
+    let receipts = read_receipts(temp.path());
+    let worker_receipt = receipts
+        .iter()
+        .find(|receipt| {
+            receipt["tool_name"] == WORKER_RUN_TOOL
+                && receipt["evidence"]["purpose"] == "work_review"
+        })
+        .expect("work review should record a worker receipt");
+    assert_eq!(
+        output["reviews"][0]["worker_receipt_id"],
+        worker_receipt["id"]
+    );
+    assert_eq!(worker_receipt["evidence"]["provider"], "codex");
+    assert_eq!(worker_receipt["evidence"]["runner"], "codex_exec");
+    assert_eq!(worker_receipt["evidence"]["mode"], "review");
 }
 
 #[test]
@@ -1422,6 +1439,14 @@ printf 'fixed\n' > fixed.txt
 printf 'refined\n'
 "#,
     );
+}
+
+fn read_receipts(root: &Path) -> Vec<Value> {
+    fs::read_to_string(root.join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect()
 }
 
 fn write_invalid_review_codex_stub(path: &Path) {

@@ -8,6 +8,7 @@
 
 mod agent;
 mod check;
+mod loops;
 mod migration;
 mod prompt;
 mod proxy;
@@ -19,6 +20,9 @@ pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
     AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
     RustFileLocRequest, SqlxTodoRequest,
+};
+pub(crate) use loops::{
+    LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
 pub(crate) use migration::MigrationAddRequest;
 pub(crate) use prompt::{
@@ -59,6 +63,7 @@ pub(crate) enum RuntimeCommand {
     Proxy(ProxyCommand),
     Agent(AgentCommand),
     Work(WorkCommand),
+    Loop(LoopCommand),
     State(StateCommand),
 }
 

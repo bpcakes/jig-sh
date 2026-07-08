@@ -3,7 +3,8 @@ use crate::command;
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
     CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevOpts,
-    GenerateSqlxUncheckedQueriesTodoOpts, MigrationAddOpts, ProxyAliasOpts, ProxyCertCommand,
+    GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts, LoopCommand, LoopRunOpts,
+    LoopStatusOpts, LoopTickOpts, MigrationAddOpts, ProxyAliasOpts, ProxyCertCommand,
     ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
     ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
     ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
@@ -358,6 +359,58 @@ impl From<WorkDecisionAddOpts> for command::WorkDecisionRequest {
             rationale: opts.rationale,
             alternatives: opts.alternatives,
             plan_id: opts.plan_id,
+        }
+    }
+}
+
+impl From<LoopCommand> for command::LoopCommand {
+    fn from(command: LoopCommand) -> Self {
+        match command {
+            LoopCommand::Tick(opts) => Self::Tick(opts.into()),
+            LoopCommand::Status(opts) => Self::Status(opts.into()),
+            LoopCommand::Run(opts) => Self::Run(opts.into()),
+            LoopCommand::ClearAttempt(opts) => Self::ClearAttempt(opts.into()),
+        }
+    }
+}
+
+impl From<LoopTickOpts> for command::LoopTickRequest {
+    fn from(opts: LoopTickOpts) -> Self {
+        Self {
+            workflow: Some(opts.workflow),
+            lease_ttl_seconds: opts.tuning.lease_ttl_seconds,
+            max_attempts: opts.tuning.max_attempts,
+            backoff_seconds: opts.tuning.backoff_seconds,
+        }
+    }
+}
+
+impl From<LoopStatusOpts> for command::LoopStatusRequest {
+    fn from(opts: LoopStatusOpts) -> Self {
+        Self {
+            workflow: opts.workflow,
+        }
+    }
+}
+
+impl From<LoopRunOpts> for command::LoopRunRequest {
+    fn from(opts: LoopRunOpts) -> Self {
+        Self {
+            workflow: Some(opts.workflow),
+            until: opts.until,
+            max_ticks: opts.max_ticks,
+            lease_ttl_seconds: opts.tuning.lease_ttl_seconds,
+            max_attempts: opts.tuning.max_attempts,
+            backoff_seconds: opts.tuning.backoff_seconds,
+        }
+    }
+}
+
+impl From<LoopClearAttemptOpts> for command::LoopClearAttemptRequest {
+    fn from(opts: LoopClearAttemptOpts) -> Self {
+        Self {
+            workflow: opts.workflow,
+            item: opts.item,
         }
     }
 }

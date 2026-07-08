@@ -10,10 +10,12 @@ use crate::policy::{
 use crate::tool_defs::{self, MemoryTool, args, tool};
 
 mod agent;
+mod loops;
 mod prompt;
 mod tool_execution;
 mod vault;
 mod work;
+mod worker_runner;
 
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
     match command {
@@ -60,6 +62,7 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
         RuntimeCommand::Agent(command) => agent::dispatch(ctx, command),
         RuntimeCommand::Work(command) => work::dispatch(ctx, command),
+        RuntimeCommand::Loop(command) => loops::dispatch(ctx, command),
         RuntimeCommand::State(command) => dispatch_state(ctx, command),
     }
 }

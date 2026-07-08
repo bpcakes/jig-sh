@@ -35,6 +35,7 @@ jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
 jig-features.workspace = true
 jig-vault.workspace = true
+libc.workspace = true
 minijinja = { version = "2.19.0", features = ["custom_syntax"] }
 rpassword.workspace = true
 rustyline = "18.0.0"

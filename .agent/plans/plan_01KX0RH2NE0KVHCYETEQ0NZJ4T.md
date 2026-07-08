@@ -1,0 +1,1 @@
+Comprehensive end-to-end QA of the newly added jig loop orchestrator MVP. Review current changes, exercise CLI/runtime behavior, fix issues, add regression coverage, and rerun gates.

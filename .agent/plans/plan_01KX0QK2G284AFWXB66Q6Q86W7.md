@@ -1,0 +1,1 @@
+Implement runtime-owned jig loop commands with level-triggered tick/status/run behavior, machine-local leases, attempt budgets, noop_status workflow, receipts, and tests.

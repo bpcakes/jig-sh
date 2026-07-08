@@ -14,6 +14,7 @@ use super::*;
 
 mod agent;
 mod common;
+mod loops;
 mod mcp;
 mod work;
 
@@ -187,6 +188,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Proxy(command) => RuntimeCommand::Proxy(command.into()),
         CommandKind::Agent(command) => RuntimeCommand::Agent(command.into()),
         CommandKind::Work(command) => RuntimeCommand::Work(command.into()),
+        CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
         | CommandKind::Presets

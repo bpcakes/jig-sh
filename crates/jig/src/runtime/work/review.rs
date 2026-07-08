@@ -147,7 +147,7 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
     let prompt_hash = hash_text(&prompt);
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
-    let command_output = run_codex_review(ctx, gate, &prompt, &schema)?;
+    let command_output = run_codex_review(ctx, plan_id, gate, &prompt, &schema)?;
     let output = command_output.output;
     let ended = now_ms();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -169,6 +169,7 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
                 &schema_hash,
                 &format!("{error:#}"),
                 output.status.code().unwrap_or(1),
+                &command_output.worker_receipt_id,
             );
         }
     };
@@ -206,6 +207,7 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
         "scope": gate.scope.as_str(),
         "threshold": threshold,
         "status": status,
+        "worker_receipt_id": command_output.worker_receipt_id,
         "codex_exit_status": output.status.code().unwrap_or(1),
         "codex_stdout_preview": evidence_preview(&command_output.codex_stdout),
         "codex_stderr_preview": evidence_preview(&stderr),
@@ -254,6 +256,7 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
         "status": status,
         "threshold": threshold,
         "receipt_id": receipt_id,
+        "worker_receipt_id": evidence["worker_receipt_id"],
         "finding_count": raw_finding_count,
         "actionable_count": raw_actionable_count,
         "retained_finding_count": evidence["findings"].as_array().map(Vec::len).unwrap_or(0),
@@ -280,6 +283,7 @@ fn record_invalid_review_output(
     schema_hash: &str,
     parse_error: &str,
     codex_exit_status: i32,
+    worker_receipt_id: &str,
 ) -> Result<Value> {
     let receipt_stderr = if stderr.is_empty() {
         parse_error.to_string()
@@ -297,6 +301,7 @@ fn record_invalid_review_output(
         "scope": gate.scope.as_str(),
         "threshold": threshold,
         "status": "invalid_output",
+        "worker_receipt_id": worker_receipt_id,
         "codex_exit_status": codex_exit_status,
         "codex_stdout_preview": evidence_preview(stdout),
         "codex_stderr_preview": evidence_preview(stderr),
@@ -323,7 +328,7 @@ fn record_invalid_review_output(
             exit_status: 2,
             stdout,
             stderr: &receipt_stderr,
-            evidence: Some(evidence),
+            evidence: Some(evidence.clone()),
             session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
@@ -337,6 +342,7 @@ fn record_invalid_review_output(
         "status": "invalid_output",
         "threshold": threshold,
         "receipt_id": receipt_id,
+        "worker_receipt_id": worker_receipt_id,
         "finding_count": 0,
         "actionable_count": 0,
         "retained_finding_count": 0,
@@ -360,14 +366,16 @@ fn run_fixer(
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);
     let before_fingerprint = current_worktree_fingerprint(ctx);
-    let output = run_codex_refine(
+    let command_output = run_codex_refine(
         ctx,
+        plan_id,
         &prompt,
         refinement
             .and_then(|refinement| refinement.model.as_deref())
             .or_else(|| gates.first().and_then(|gate| gate.model.as_deref())),
     )
     .context("Failed to run Codex refinement")?;
+    let output = command_output.output;
     let ended = now_ms();
     let after_fingerprint = current_worktree_fingerprint(ctx);
     let exit_status = output.status.code().unwrap_or(1);
@@ -379,6 +387,7 @@ fn run_fixer(
         "plan_id": plan_id,
         "iteration": iteration,
         "provider": "codex",
+        "worker_receipt_id": command_output.worker_receipt_id,
         "prompt_hash": hash_text(&prompt),
         "refinement_id": refinement.map(|refinement| refinement.id.as_str()),
         "refinement_skill": refinement.and_then(|refinement| refinement.skill.as_deref()),
@@ -410,7 +419,7 @@ fn run_fixer(
             exit_status,
             stdout: &stdout,
             stderr: &stderr,
-            evidence: Some(evidence),
+            evidence: Some(evidence.clone()),
             session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,
@@ -422,6 +431,7 @@ fn run_fixer(
         "iteration": iteration,
         "status": if output.status.success() { "passed" } else { "failed" },
         "receipt_id": receipt_id,
+        "worker_receipt_id": evidence["worker_receipt_id"],
         "exit_status": exit_status,
         "finding_count": findings.len(),
     }))
