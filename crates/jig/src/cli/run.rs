@@ -10,7 +10,7 @@ use clap::{
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
-use super::output::{HumanOutput, print_json, print_output};
+use super::output::{HumanOutput, emit};
 use super::prompt_run::run_prompt_command;
 use super::structured_error::require_json_ok;
 pub(crate) use super::structured_error::{is_structured_json_failure, structured_error_exit_code};
@@ -29,20 +29,20 @@ pub(crate) fn run() -> Result<()> {
             let ctx = RepoContext::load()?;
             mcp::serve(&ctx)
         }
-        CommandKind::Doctor(opts) => {
+        CommandKind::Doctor => {
             let output = doctor::run()?;
-            print_output(opts.summary.then_some(HumanOutput::DoctorSummary), &output)?;
+            emit(json_output, HumanOutput::Doctor, &output)?;
             require_json_ok(true, &output)
         }
-        CommandKind::Info(opts) => {
+        CommandKind::Info => {
             let output = info::run()?;
-            print_output(opts.summary.then_some(HumanOutput::InfoSummary), &output)?;
+            emit(json_output, HumanOutput::Info, &output)?;
             require_json_ok(true, &output)
         }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Dev(opts) => {
             let output = crate::dev_proxy::commands::dev_without_context(opts.into())?;
-            print_json(&output)?;
+            emit(json_output, HumanOutput::Dev, &output)?;
             require_json_ok(true, &output)
         }
         #[cfg(feature = "dev-proxy")]
@@ -53,13 +53,13 @@ pub(crate) fn run() -> Result<()> {
                 );
             };
             let output = runtime::dispatch(&ctx, crate::command::RuntimeCommand::Dev(opts.into()))?;
-            print_json(&output)?;
+            emit(json_output, HumanOutput::Dev, &output)?;
             require_json_ok(true, &output)
         }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Proxy(command) => {
             let output = crate::dev_proxy::commands::proxy_without_context(command.into())?;
-            print_json(&output)?;
+            emit(json_output, HumanOutput::Proxy, &output)?;
             require_json_ok(true, &output)
         }
         #[cfg(feature = "dev-proxy")]
@@ -75,71 +75,88 @@ pub(crate) fn run() -> Result<()> {
                 let ctx = RepoContext::load()?;
                 runtime::dispatch(&ctx, crate::command::RuntimeCommand::Proxy(runtime_command))?
             };
-            print_json(&output)?;
+            emit(json_output, HumanOutput::Proxy, &output)?;
             require_json_ok(true, &output)
         }
         CommandKind::Bootstrap(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Bootstrap(opts.into()),
             false,
-            None,
+            json_output,
+            HumanOutput::ToolExecution,
         ),
         CommandKind::Check(command) => {
             let require_ok = check_command_reports_failure_with_ok(&command);
+            let human_output = check_human_output(&command);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Check(command.into()),
                 require_ok,
-                None,
+                json_output,
+                human_output,
             )
         }
         CommandKind::SchemaDump(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::SchemaDump(opts.into()),
             false,
-            None,
+            json_output,
+            HumanOutput::ToolExecution,
         ),
         CommandKind::MigrationAdd(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::MigrationAdd(opts.into()),
             false,
-            None,
+            json_output,
+            HumanOutput::MigrationAdd,
         ),
         CommandKind::AgentMap(command) => dispatch_runtime_command(
             crate::command::RuntimeCommand::AgentMap(command.into()),
             false,
-            None,
+            json_output,
+            HumanOutput::AgentMapGenerate,
         ),
         CommandKind::GenerateSqlxUncheckedQueriesTodo(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::GenerateSqlxUncheckedQueriesTodo(opts.into()),
             false,
-            None,
+            json_output,
+            HumanOutput::ToolExecution,
         ),
-        CommandKind::Vault(command) => run_vault_command(command),
+        CommandKind::Vault(command) => run_vault_command(command, json_output),
         CommandKind::Prompt(command) => run_prompt_command(command, json_output),
         CommandKind::Agent(command) => {
             let require_ok = agent_command_reports_failure_with_ok(&command);
-            let human_output = agent_human_output_requested(&command);
+            let human_output = agent_human_output(&command);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Agent(command.into()),
                 require_ok,
+                json_output,
                 human_output,
             )
         }
         CommandKind::Work(command) => {
-            let human_output = work_human_output_requested(&command);
+            let human_output = work_human_output(&command, json_output)?;
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Work(command.into()),
                 false,
+                json_output,
                 human_output,
             )
         }
-        CommandKind::Loop(command) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Loop(command.into()),
-            false,
-            None,
-        ),
-        CommandKind::State(command) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::State(command.into()),
-            false,
-            None,
-        ),
+        CommandKind::Loop(command) => {
+            let human_output = loop_human_output(&command);
+            dispatch_runtime_command(
+                crate::command::RuntimeCommand::Loop(command.into()),
+                false,
+                json_output,
+                human_output,
+            )
+        }
+        CommandKind::State(command) => {
+            let human_output = state_human_output(&command);
+            dispatch_runtime_command(
+                crate::command::RuntimeCommand::State(command.into()),
+                false,
+                json_output,
+                human_output,
+            )
+        }
     }
 }
 
@@ -151,7 +168,7 @@ pub(super) fn test_command_reports_failure_with_ok(command: &CommandKind) -> boo
     // readiness report and returns `ok: false` when required local tooling is
     // missing or unregistered.
     match command {
-        CommandKind::Doctor(_) | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
+        CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
         CommandKind::Check(command) => check_command_reports_failure_with_ok(command),
@@ -160,7 +177,7 @@ pub(super) fn test_command_reports_failure_with_ok(command: &CommandKind) -> boo
 }
 
 fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
-    matches!(command, AgentCommand::Doctor(_))
+    matches!(command, AgentCommand::Doctor)
 }
 
 fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
@@ -175,35 +192,73 @@ fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
     )
 }
 
-fn agent_human_output_requested(command: &AgentCommand) -> Option<HumanOutput> {
+fn check_human_output(command: &CheckCommand) -> HumanOutput {
     match command {
-        AgentCommand::Doctor(opts) if opts.summary => Some(HumanOutput::AgentDoctorSummary),
-        _ => None,
+        CheckCommand::AgentMap(_)
+        | CheckCommand::AgentGuides
+        | CheckCommand::RustFileLoc(_)
+        | CheckCommand::NoModRs
+        | CheckCommand::MigrationImmutability(_)
+        | CheckCommand::SqlxUncheckedNonTest => HumanOutput::ToolExecution,
+        _ => HumanOutput::ToolExecution,
     }
 }
 
-fn work_human_output_requested(command: &WorkCommand) -> Option<HumanOutput> {
+fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
-        WorkCommand::Start(opts) if opts.print_plan_id => Some(HumanOutput::WorkStartPlanId),
-        WorkCommand::Check(opts) if opts.summary => Some(HumanOutput::WorkCheckSummary),
-        WorkCommand::Gates(opts) if opts.summary => Some(HumanOutput::WorkGatesSummary),
-        WorkCommand::Evidence(opts) if opts.summary => Some(HumanOutput::WorkEvidenceSummary),
-        WorkCommand::Review(opts) if opts.summary => Some(HumanOutput::WorkReviewSummary),
-        WorkCommand::Refine(opts) if opts.summary => Some(HumanOutput::WorkRefineSummary),
-        WorkCommand::Receipts(opts) if opts.summary => Some(HumanOutput::WorkReceiptsSummary),
-        WorkCommand::Status(opts) if opts.summary => Some(HumanOutput::WorkStatusSummary),
-        _ => None,
+        AgentCommand::Doctor => HumanOutput::AgentDoctor,
+        AgentCommand::Bootstrap(_) => HumanOutput::AgentBootstrap,
+    }
+}
+
+fn work_human_output(command: &WorkCommand, json_output: bool) -> Result<HumanOutput> {
+    match command {
+        WorkCommand::Start(opts) if opts.print_plan_id => {
+            if json_output {
+                anyhow::bail!("--print-plan-id cannot be combined with --json");
+            }
+            Ok(HumanOutput::WorkStartPlanId)
+        }
+        WorkCommand::Start(_) => Ok(HumanOutput::WorkStart),
+        WorkCommand::Goal(_) => Ok(HumanOutput::WorkGoal),
+        WorkCommand::Append(_) => Ok(HumanOutput::WorkAppend),
+        WorkCommand::Check(_) => Ok(HumanOutput::WorkCheck),
+        WorkCommand::Gates(_) => Ok(HumanOutput::WorkGates),
+        WorkCommand::Evidence(_) => Ok(HumanOutput::WorkEvidence),
+        WorkCommand::Review(_) => Ok(HumanOutput::WorkReview),
+        WorkCommand::Refine(_) => Ok(HumanOutput::WorkRefine),
+        WorkCommand::Decide(_) => Ok(HumanOutput::WorkDecide),
+        WorkCommand::Receipts(_) => Ok(HumanOutput::WorkReceipts),
+        WorkCommand::Status => Ok(HumanOutput::WorkStatus),
+        WorkCommand::Finish(_) => Ok(HumanOutput::WorkFinish),
+    }
+}
+
+fn loop_human_output(command: &LoopCommand) -> HumanOutput {
+    match command {
+        LoopCommand::Tick(_) => HumanOutput::LoopTick,
+        LoopCommand::Status(_) => HumanOutput::LoopStatus,
+        LoopCommand::Run(_) => HumanOutput::LoopRun,
+        LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
+    }
+}
+
+fn state_human_output(command: &StateCommand) -> HumanOutput {
+    match command {
+        StateCommand::Summary => HumanOutput::StateSummary,
+        StateCommand::Archive(_) => HumanOutput::StateArchive,
     }
 }
 
 fn dispatch_runtime_command(
     command: crate::command::RuntimeCommand,
     require_ok: bool,
-    human_output: Option<HumanOutput>,
+    json_output: bool,
+    human_output: HumanOutput,
 ) -> Result<()> {
     let ctx = RepoContext::load()?;
     let output = runtime::dispatch(&ctx, command)?;
-    print_output(human_output, &output)?;
+    emit(json_output, human_output, &output)?;
     require_json_ok(require_ok, &output)
 }
 

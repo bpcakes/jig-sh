@@ -3,8 +3,11 @@ use clap::{Args, Subcommand};
 use crate::tool_defs;
 
 pub(super) const AGENT_AFTER_HELP: &str = "\
+Human-readable output is the default. Pass --json for structured automation output.
+
 Examples:
   jig agent doctor
+  jig agent doctor --json
   jig agent bootstrap";
 
 pub(super) const AGENT_BOOTSTRAP_AFTER_HELP: &str = "\
@@ -18,7 +21,7 @@ Examples:
 pub(crate) enum AgentCommand {
     /// Report local Codex marketplace readiness for this repo.
     #[command(name = tool_defs::cli_command::AGENT_DOCTOR)]
-    Doctor(AgentDoctorOpts),
+    Doctor,
     /// Register the configured Codex skills marketplace.
     #[command(
         name = tool_defs::cli_command::AGENT_BOOTSTRAP,
@@ -34,10 +37,4 @@ pub(crate) struct AgentBootstrapOpts {
         help = "Marketplace source to register; defaults to the single configured source"
     )]
     pub(crate) marketplace: Option<String>,
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct AgentDoctorOpts {
-    #[arg(long, help = "Print a concise human-readable readiness summary")]
-    pub(crate) summary: bool,
 }

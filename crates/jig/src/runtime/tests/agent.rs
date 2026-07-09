@@ -37,13 +37,7 @@ enabled = true
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["codex"]["available"], true);
@@ -78,13 +72,7 @@ source = "https://github.com/bpcakes/jig-skills.git"
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["readiness"]["ok_requires_plugins_enabled"], false);
@@ -129,13 +117,7 @@ enabled = true
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(output["marketplaces"][0]["registered"], false);
@@ -171,13 +153,7 @@ source = "https://github.com/bpcakes/jig-skills.git"
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], false, "{output:#}");
     assert_eq!(output["codex"]["required"], true);
@@ -247,13 +223,7 @@ source = "{}"
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", &codex_home);
     let ctx = RepoContext::load_from(&repo_root).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["marketplaces"][0]["registered"], true);
@@ -287,13 +257,7 @@ tool = "jig.custom_check"
 
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &missing_codex);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["codex"]["probe_skipped"], true);
@@ -380,13 +344,7 @@ source = "./team's-skills"
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let _codex_home = EnvVarGuard::set("CODEX_HOME", temp.path().join("missing-codex-home"));
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(output["ok"], false, "{output:#}");
     let steps = output["next_steps"].as_array().unwrap();
@@ -425,13 +383,8 @@ fn agent_bootstrap_then_doctor_passes_with_marketplace_registration() {
         )),
     )
     .unwrap();
-    let doctor_output = dispatch(
-        &ctx,
-        CommandKind::Agent(crate::cli::AgentCommand::Doctor(
-            crate::cli::AgentDoctorOpts::default(),
-        )),
-    )
-    .unwrap();
+    let doctor_output =
+        dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
 
     assert_eq!(bootstrap_output["ok"], true);
     assert_eq!(bootstrap_output["marketplace_source"], "bpcakes/jig-skills");

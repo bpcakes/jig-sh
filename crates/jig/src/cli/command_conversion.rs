@@ -212,9 +212,7 @@ impl From<VaultRunOpts> for command::VaultRunRequest {
 impl From<AgentCommand> for command::AgentCommand {
     fn from(command: AgentCommand) -> Self {
         match command {
-            // `--summary` is a CLI output-mode flag handled in `run` before
-            // the runtime sees the neutral command.
-            AgentCommand::Doctor(_opts) => Self::Doctor,
+            AgentCommand::Doctor => Self::Doctor,
             AgentCommand::Bootstrap(opts) => Self::Bootstrap(opts.into()),
         }
     }
@@ -241,9 +239,7 @@ impl From<WorkCommand> for command::WorkCommand {
             WorkCommand::Refine(opts) => Self::Refine(opts.into()),
             WorkCommand::Decide(opts) => Self::Decide(opts.into()),
             WorkCommand::Receipts(opts) => Self::Receipts(opts.into()),
-            // `--summary` is a CLI output-mode flag handled in `run` before
-            // the runtime sees the neutral command.
-            WorkCommand::Status(_opts) => Self::Status,
+            WorkCommand::Status => Self::Status,
             WorkCommand::Finish(opts) => Self::Finish(opts.into()),
         }
     }
@@ -644,14 +640,13 @@ mod tests {
     }
 
     #[test]
-    fn work_receipts_conversion_drops_cli_summary_flag() {
+    fn work_receipts_conversion_preserves_filters() {
         let request: command::WorkReceiptsRequest = WorkReceiptsOpts {
             session_id: Some("session_1".to_string()),
             plan_id: Some("plan_1".to_string()),
             tool_name: Some(crate::tool_defs::tool::TEST.to_string()),
             failed_only: true,
             limit: 7,
-            summary: true,
         }
         .into();
 
@@ -666,10 +661,9 @@ mod tests {
     }
 
     #[test]
-    fn work_evidence_conversion_drops_cli_summary_flag() {
+    fn work_evidence_conversion_preserves_plan_id() {
         let request: command::WorkEvidenceRequest = WorkEvidenceOpts {
             plan_id: Some("plan_1".to_string()),
-            summary: true,
         }
         .into();
 

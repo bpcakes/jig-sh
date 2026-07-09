@@ -157,5 +157,5 @@ When changing runtime behavior, build a dev binary and dogfood through the launc
 
 ```sh
 cargo build -p jig-sh --bin jig
-JIG_DEV_BIN=target/debug/jig scripts/jig work status --summary
+JIG_DEV_BIN=target/debug/jig scripts/jig work status
 ```

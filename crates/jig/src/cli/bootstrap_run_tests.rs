@@ -246,7 +246,7 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
         ],
         "next_steps": [
             "cd /tmp/repo",
-            "scripts/jig doctor --summary"
+            "scripts/jig doctor"
         ]
     });
 
@@ -261,7 +261,7 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
     assert!(summary.contains("frontends: web, landing, admin-panel"));
     assert!(summary.contains("git: initialized"));
     assert!(summary.contains("SQLx disabled by default"));
-    assert!(summary.contains("scripts/jig doctor --summary"));
+    assert!(summary.contains("scripts/jig doctor"));
     assert!(summary.contains("full report: rerun with --json"));
 }
 

@@ -30,7 +30,7 @@ fn vault_run_summary_calls_out_truncated_output() {
     }));
 
     assert!(summary.contains("stdout: "));
-    assert!(summary.contains("Output truncated; rerun without --summary for full JSON."));
+    assert!(summary.contains("Output truncated; rerun with --json for full output."));
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn work_status_summary_omits_truncation_hint_at_receipt_limit() {
     }));
 
     assert!(summary.contains("receipt_5"));
-    assert!(!summary.contains("omit --summary"));
+    assert!(!summary.contains("rerun with --json"));
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn work_check_summary_is_actionable() {
     assert!(summary.contains("Plan: plan_1"));
     assert!(summary.contains("Batch receipt: receipt_batch"));
     assert!(summary.contains("jig.test: exit 0, receipt receipt_test"));
-    assert!(summary.contains("work gates --plan-id plan_1 --summary"));
+    assert!(summary.contains("work gates --plan-id plan_1"));
 }
 
 #[test]
@@ -372,7 +372,7 @@ fn work_check_summary_reports_failed_check_status() {
     assert!(summary.contains("Work check: failed"));
     assert!(summary.contains("jig.test: exit 101"));
     assert!(summary.contains("inspect failing receipts"));
-    assert!(!summary.contains("work gates --plan-id plan_1 --summary"));
+    assert!(!summary.contains("work gates --plan-id plan_1"));
 }
 
 #[test]
@@ -578,7 +578,7 @@ fn work_gates_summary_reports_blockers() {
     assert!(summary.contains("tests: missing, freshness missing, required (jig.test)"));
     assert!(summary.contains("Blocked: missing (tests)"));
     assert!(!summary.contains("failed ()"));
-    assert!(summary.contains("work check --plan-id plan_1 --summary"));
+    assert!(summary.contains("work check --plan-id plan_1"));
 }
 
 #[test]
@@ -754,7 +754,7 @@ fn work_evidence_summary_reports_latest_gate_freshness_and_paths() {
     );
     assert!(summary.contains("receipt was recorded for a different worktree fingerprint"));
     assert!(summary.contains("changed paths covered: src/lib.rs, Cargo.toml"));
-    assert!(summary.contains("Next step: scripts/jig work check --plan-id plan_1 --summary"));
+    assert!(summary.contains("Next step: scripts/jig work check --plan-id plan_1"));
 }
 
 #[test]
@@ -826,7 +826,7 @@ fn work_review_summary_reports_truncated_counts() {
     }));
 
     assert!(summary.contains("105/105 actionable, showing 100/100"));
-    assert!(summary.contains("Next step: scripts/jig work refine --plan-id plan_1 --summary"));
+    assert!(summary.contains("Next step: scripts/jig work refine --plan-id plan_1"));
 }
 
 #[test]

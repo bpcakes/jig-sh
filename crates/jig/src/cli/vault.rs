@@ -14,7 +14,7 @@ then redacted. Stdout and stderr are capped at 1 MiB each; brokered runs have a
 Examples:
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'
-  jig vault run --summary --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'";
+  jig vault run --json --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'";
 
 const VAULT_INIT_AFTER_HELP: &str = "\
 Jig prompts twice for a new vault passphrase when run from a terminal. Scripts
@@ -159,8 +159,6 @@ pub(crate) struct VaultSecretRemoveOpts {
         .multiple(true)
 ))]
 pub(crate) struct VaultRunOpts {
-    #[arg(long, help = "Print a concise human-readable brokered run summary")]
-    pub(crate) summary: bool,
     #[arg(
         long = "env",
         help = "Environment mapping VAR=SECRET_NAME; VAR must match [A-Za-z_][A-Za-z0-9_]* and must not be a preserved process variable such as PATH or HOME; may be repeated"

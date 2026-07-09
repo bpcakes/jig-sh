@@ -114,7 +114,7 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
     assert_eq!(steps[0], "cd /tmp/demo");
     for expected in [
         "scripts/jig bootstrap",
-        "scripts/jig doctor --summary",
+        "scripts/jig doctor",
         "scripts/jig agent bootstrap",
         "scripts/jig check contract",
         "scripts/jig check test",

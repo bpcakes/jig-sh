@@ -38,7 +38,7 @@ jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admi
 
 # 2. See what setup remains
 cd ./my-app
-scripts/jig doctor --summary
+scripts/jig doctor
 
 # 3. Bootstrap and verify the contract
 scripts/jig bootstrap
@@ -51,7 +51,7 @@ scripts/jig check test
 scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified" --outcome success
 ```
 
-`doctor` exits nonzero until required setup is complete and reports the next step to take. `--summary` is the human scan path; the default JSON form is the stable output for automation.
+`doctor` exits nonzero until required setup is complete and reports the next step to take. Human-readable output is the default; pass `--json` for structured automation output.
 
 ## How it works
 
@@ -79,7 +79,7 @@ scripts/jig check clippy
 scripts/jig check test
 ```
 
-These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status --summary`, `scripts/jig work evidence --summary`, and `scripts/jig work receipts --summary --failed-only`.
+These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status`, `scripts/jig work evidence`, and `scripts/jig work receipts --failed-only`.
 
 See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
 

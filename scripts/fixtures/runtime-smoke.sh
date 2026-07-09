@@ -212,7 +212,7 @@ PY
     assert_jig_mcp_requires_prebuilt_binary "$repo_dir"
     # MCP startup must use a prebuilt binary; check contract populates the runtime cache.
     env -u JIG_DEV_BIN scripts/jig check contract >/dev/null
-    doctor_json="$(env -u JIG_DEV_BIN scripts/jig doctor || true)"
+    doctor_json="$(env -u JIG_DEV_BIN scripts/jig doctor --json || true)"
     DOCTOR_JSON="$doctor_json" EXPECT_DEV_PROXY="$expect_dev_proxy" python3 <<'PY'
 import json
 import os
@@ -250,7 +250,7 @@ PY
 
     env -u JIG_DEV_BIN scripts/install-jig.sh >/dev/null
 
-    work_json="$(scripts/jig work start --title "Fixture runtime plan" --body "## Fixture\nRuntime validation.")"
+    work_json="$(scripts/jig work start --json --title "Fixture runtime plan" --body "## Fixture\nRuntime validation.")"
     plan_id="$(printf '%s' "$work_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["plan"]["plan_id"])')"
 
     if [[ "$expect_sqlx" == "1" ]]; then
@@ -268,7 +268,7 @@ PY
       --alternatives "Ad-hoc shell commands" \
       >/dev/null
 
-    receipts_json="$(scripts/jig work receipts --plan-id "$plan_id" --limit 20)"
+    receipts_json="$(scripts/jig work receipts --json --plan-id "$plan_id" --limit 20)"
     RECEIPTS_JSON="$receipts_json" EXPECT_SQLX="$expect_sqlx" EXPECT_SCHEMA_DUMP="$expect_schema_dump" python3 <<'PY'
 import json
 import os

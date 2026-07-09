@@ -7,39 +7,82 @@ use crate::{doctor, info};
 const WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT: usize = 5;
 
 pub(super) enum HumanOutput {
-    DoctorSummary,
-    InfoSummary,
-    VaultRunSummary,
-    AgentDoctorSummary,
-    WorkCheckSummary,
-    WorkGatesSummary,
-    WorkEvidenceSummary,
-    WorkReviewSummary,
-    WorkRefineSummary,
+    Doctor,
+    Info,
+    VaultRun,
+    VaultGeneric,
+    AgentDoctor,
+    AgentBootstrap,
+    WorkCheck,
+    WorkGates,
+    WorkEvidence,
+    WorkReview,
+    WorkRefine,
+    WorkStart,
     WorkStartPlanId,
-    WorkReceiptsSummary,
-    WorkStatusSummary,
+    WorkGoal,
+    WorkAppend,
+    WorkDecide,
+    WorkFinish,
+    WorkReceipts,
+    WorkStatus,
+    ToolExecution,
+    AgentMapGenerate,
+    MigrationAdd,
+    LoopTick,
+    LoopStatus,
+    LoopRun,
+    LoopClearAttempt,
+    StateSummary,
+    StateArchive,
+    Dev,
+    Proxy,
 }
 
-pub(super) fn print_output(
-    human_output: Option<HumanOutput>,
+pub(super) fn emit(
+    json_output: bool,
+    human_output: HumanOutput,
     value: &serde_json::Value,
 ) -> Result<()> {
-    match human_output {
-        Some(HumanOutput::DoctorSummary) => print_text(&doctor::format_summary(value)),
-        Some(HumanOutput::InfoSummary) => print_text(&info::format_summary(value)),
-        Some(HumanOutput::VaultRunSummary) => print_text(&format_vault_run_summary(value)),
-        Some(HumanOutput::AgentDoctorSummary) => print_text(&format_agent_doctor_summary(value)),
-        Some(HumanOutput::WorkCheckSummary) => print_text(&format_work_check_summary(value)),
-        Some(HumanOutput::WorkGatesSummary) => print_text(&format_work_gates_summary(value)),
-        Some(HumanOutput::WorkEvidenceSummary) => print_text(&format_work_evidence_summary(value)),
-        Some(HumanOutput::WorkReviewSummary) => print_text(&format_work_review_summary(value)),
-        Some(HumanOutput::WorkRefineSummary) => print_text(&format_work_refine_summary(value)),
-        Some(HumanOutput::WorkStartPlanId) => print_text(&format_work_start_plan_id(value)?),
-        Some(HumanOutput::WorkReceiptsSummary) => print_text(&format_work_receipts_summary(value)),
-        Some(HumanOutput::WorkStatusSummary) => print_text(&format_work_status_summary(value)),
-        None => print_json(value),
+    if json_output {
+        return print_json(value);
     }
+    print_text(&render_human(human_output, value)?)
+}
+
+fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<String> {
+    Ok(match human_output {
+        HumanOutput::Doctor => doctor::format_summary(value),
+        HumanOutput::Info => info::format_summary(value),
+        HumanOutput::VaultRun => format_vault_run_summary(value),
+        HumanOutput::VaultGeneric => format_vault_generic_summary(value),
+        HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
+        HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
+        HumanOutput::WorkCheck => format_work_check_summary(value),
+        HumanOutput::WorkGates => format_work_gates_summary(value),
+        HumanOutput::WorkEvidence => format_work_evidence_summary(value),
+        HumanOutput::WorkReview => format_work_review_summary(value),
+        HumanOutput::WorkRefine => format_work_refine_summary(value),
+        HumanOutput::WorkStart => format_work_start_summary(value),
+        HumanOutput::WorkStartPlanId => format_work_start_plan_id(value)?,
+        HumanOutput::WorkGoal => format_work_goal_summary(value),
+        HumanOutput::WorkAppend => format_work_append_summary(value),
+        HumanOutput::WorkDecide => format_work_decide_summary(value),
+        HumanOutput::WorkFinish => format_work_finish_summary(value),
+        HumanOutput::WorkReceipts => format_work_receipts_summary(value),
+        HumanOutput::WorkStatus => format_work_status_summary(value),
+        HumanOutput::ToolExecution => format_tool_execution_summary(value),
+        HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
+        HumanOutput::MigrationAdd => format_migration_add_summary(value),
+        HumanOutput::LoopTick => format_loop_tick_summary(value),
+        HumanOutput::LoopStatus => format_loop_status_summary(value),
+        HumanOutput::LoopRun => format_loop_run_summary(value),
+        HumanOutput::LoopClearAttempt => format_loop_clear_attempt_summary(value),
+        HumanOutput::StateSummary => format_state_summary(value),
+        HumanOutput::StateArchive => format_state_archive_summary(value),
+        HumanOutput::Dev => format_dev_summary(value),
+        HumanOutput::Proxy => format_proxy_summary(value),
+    })
 }
 
 pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {
@@ -82,7 +125,7 @@ pub(super) fn format_vault_run_summary(value: &serde_json::Value) -> String {
         lines.push(format!("  stderr: {preview}"));
     }
     if truncated {
-        lines.push("  Output truncated; rerun without --summary for full JSON.".into());
+        lines.push("  Output truncated; rerun with --json for full output.".into());
     }
     lines.join("\n")
 }
@@ -232,7 +275,7 @@ pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
             let hidden = recent_receipts.len() - WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT;
             let noun = if hidden == 1 { "receipt" } else { "receipts" };
             lines.push(format!(
-                "  (and {hidden} more recent {noun}; omit --summary for full JSON)"
+                "  (and {hidden} more recent {noun}; rerun with --json for full output)"
             ));
         }
     }
@@ -293,16 +336,16 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
 
     match status {
         WorkCheckSummaryStatus::Passed => lines.push(format!(
-            "Next step: scripts/jig work gates --plan-id {plan_id} --summary"
+            "Next step: scripts/jig work gates --plan-id {plan_id}"
         )),
         WorkCheckSummaryStatus::Failed => lines.push(format!(
-            "Next step: inspect failing receipts, fix issues, then rerun scripts/jig work check --plan-id {plan_id} --summary"
+            "Next step: inspect failing receipts, fix issues, then rerun scripts/jig work check --plan-id {plan_id}"
         )),
         WorkCheckSummaryStatus::Unknown => lines.push(format!(
-            "Next step: inspect receipts with unknown exit status, then rerun scripts/jig work check --plan-id {plan_id} --summary"
+            "Next step: inspect receipts with unknown exit status, then rerun scripts/jig work check --plan-id {plan_id}"
         )),
         WorkCheckSummaryStatus::NoChecksConfigured => lines.push(format!(
-            "Next step: configure work checks or rerun scripts/jig work check --plan-id {plan_id} --tool <tool> --summary"
+            "Next step: configure work checks or rerun scripts/jig work check --plan-id {plan_id} --tool <tool>"
         )),
     }
     lines.join("\n")
@@ -445,7 +488,7 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
         }
         if plan_state == "open" {
             lines.push(format!(
-                "Next step: scripts/jig work check --plan-id {plan_id} --summary"
+                "Next step: scripts/jig work check --plan-id {plan_id}"
             ));
         } else {
             lines.push("Next step: start a new work plan for follow-up changes".into());
@@ -528,7 +571,7 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         lines.push("Next step: none; plan is closed".into());
     } else if plan_state == "open" {
         lines.push(format!(
-            "Next step: scripts/jig work check --plan-id {plan_id} --summary"
+            "Next step: scripts/jig work check --plan-id {plan_id}"
         ));
     } else {
         lines.push("Next step: start a new work plan for follow-up changes".into());
@@ -580,11 +623,11 @@ pub(super) fn format_work_review_summary(value: &serde_json::Value) -> String {
 
     if status == "passed" {
         lines.push(format!(
-            "Next step: scripts/jig work check --plan-id {plan_id} --summary"
+            "Next step: scripts/jig work check --plan-id {plan_id}"
         ));
     } else {
         lines.push(format!(
-            "Next step: scripts/jig work refine --plan-id {plan_id} --summary"
+            "Next step: scripts/jig work refine --plan-id {plan_id}"
         ));
     }
 
@@ -624,7 +667,7 @@ pub(super) fn format_work_refine_summary(value: &serde_json::Value) -> String {
         ));
     } else {
         lines.push(format!(
-            "Next step: inspect remaining findings, then rerun scripts/jig work refine --plan-id {plan_id} --summary"
+            "Next step: inspect remaining findings, then rerun scripts/jig work refine --plan-id {plan_id}"
         ));
     }
 
@@ -691,6 +734,430 @@ pub(super) fn format_work_receipts_summary(value: &serde_json::Value) -> String 
         }
     }
 
+    lines.join("\n")
+}
+
+pub(super) fn format_work_start_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let session = &value["session"];
+    let plan_id = value_str(plan, "plan_id").unwrap_or("<unknown>");
+    let session_id = value_str(session, "session_id").unwrap_or("<unknown>");
+    let body_path = value_str(plan, "body_path");
+    let mut lines = vec![
+        "Work start: opened".into(),
+        format!("  Plan: {plan_id}"),
+        format!("  Session: {session_id}"),
+    ];
+    if let Some(path) = body_path {
+        lines.push(format!("  Body: {path}"));
+    }
+    lines.push(format!(
+        "Next step: scripts/jig work check --plan-id {plan_id}"
+    ));
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_work_goal_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let plan_id = value_str(plan, "plan_id").unwrap_or("<unknown>");
+    let commands = &value["commands"];
+    let mut lines = vec!["Work goal: opened".into(), format!("  Plan: {plan_id}")];
+    if let Some(path) = value_str(plan, "body_path") {
+        lines.push(format!("  Body: {path}"));
+    }
+    if let Some(status) = value_str(commands, "status") {
+        lines.push(format!("  Status command: {status}"));
+    }
+    if let Some(check) = value_str(commands, "check") {
+        lines.push(format!("Next step: {check}"));
+    } else {
+        lines.push(format!(
+            "Next step: scripts/jig work check --plan-id {plan_id}"
+        ));
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_work_append_summary(value: &serde_json::Value) -> String {
+    let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
+    let receipt_id = value_str(value, "receipt_id").unwrap_or("none");
+    [
+        "Work append: recorded".into(),
+        format!("  Plan: {plan_id}"),
+        format!("  Receipt: {receipt_id}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_work_decide_summary(value: &serde_json::Value) -> String {
+    let decision_id = value_str(value, "decision_id").unwrap_or("<unknown>");
+    let receipt_id = value_str(value, "receipt_id").unwrap_or("none");
+    [
+        "Work decide: recorded".into(),
+        format!("  Decision: {decision_id}"),
+        format!("  Receipt: {receipt_id}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_work_finish_summary(value: &serde_json::Value) -> String {
+    let plan = &value["plan"];
+    let session = &value["session"];
+    let plan_id = value_str(plan, "plan_id").unwrap_or("<unknown>");
+    let session_id = value_str(session, "session_id").unwrap_or("none");
+    [
+        "Work finish: closed".into(),
+        format!("  Plan: {plan_id}"),
+        format!("  Session: {session_id}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_agent_bootstrap_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let marketplace = value_str(value, "marketplace_source").unwrap_or("<unknown>");
+    let mut lines = vec![
+        format!("Agent bootstrap: {}", if ok { "ok" } else { "failed" }),
+        format!("  Marketplace: {marketplace}"),
+    ];
+    if let Some(stdout) = value_str(value, "stdout").filter(|text| !text.trim().is_empty()) {
+        lines.push(format!("  stdout: {}", concise_preview(stdout, 160)));
+    }
+    if let Some(stderr) = value_str(value, "stderr").filter(|text| !text.trim().is_empty()) {
+        lines.push(format!("  stderr: {}", concise_preview(stderr, 160)));
+    }
+    if ok {
+        lines.push("Next step: scripts/jig agent doctor".into());
+    } else {
+        lines.push(
+            "Next step: inspect the marketplace source, then rerun scripts/jig agent bootstrap"
+                .into(),
+        );
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String {
+    let command = value_str(value, "command").unwrap_or("vault");
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let scope = value_str(value, "vault_scope").unwrap_or("unknown");
+    let home = value_str(value, "vault_home").unwrap_or("<unknown>");
+    let mut lines = vec![
+        format!("{command}: {}", if ok { "ok" } else { "failed" }),
+        format!("  Scope: {scope}"),
+        format!("  Home: {home}"),
+    ];
+    match command {
+        "vault init" => {
+            let created = value_bool(value, "created").unwrap_or(false);
+            lines.push(format!("  Created: {}", if created { "yes" } else { "no" }));
+        }
+        "vault status" => {
+            let exists = value_bool(value, "exists")
+                .or_else(|| value_bool(value, "vault_file_exists"))
+                .unwrap_or(false);
+            lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
+        }
+        "vault secret list" => {
+            let secrets = value["secrets"].as_array().map(Vec::len).unwrap_or(0);
+            lines.push(format!("  Secrets: {secrets}"));
+            if let Some(items) = value["secrets"].as_array() {
+                for secret in items.iter().take(20) {
+                    let name = value_str(secret, "name").unwrap_or("<unknown>");
+                    lines.push(format!("  - {name}"));
+                }
+                if items.len() > 20 {
+                    lines.push(format!("  (and {} more)", items.len() - 20));
+                }
+            }
+        }
+        "vault secret set" => {
+            if let Some(name) = value_str(value, "name") {
+                lines.push(format!("  Name: {name}"));
+            }
+        }
+        "vault secret remove" => {
+            if let Some(name) = value_str(value, "name") {
+                lines.push(format!("  Name: {name}"));
+            }
+            if let Some(removed) = value_bool(value, "removed") {
+                lines.push(format!("  Removed: {}", if removed { "yes" } else { "no" }));
+            }
+        }
+        "vault audit verify" => {
+            let events = value_u64(value, "event_count").unwrap_or(0);
+            lines.push(format!("  Events: {events}"));
+            if let Some(torn) = value_u64(value, "torn_tail_bytes") {
+                if torn > 0 {
+                    lines.push(format!("  Torn tail bytes: {torn}"));
+                }
+            }
+        }
+        _ => {}
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_tool_execution_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let tool = value_str(value, "tool")
+        .or_else(|| value_str(value, "command"))
+        .unwrap_or("check");
+    let exit_status = value["result"]["exit_status"]
+        .as_i64()
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| if ok { "0".into() } else { "?".into() });
+    let mut lines = vec![
+        format!("{tool}: {}", if ok { "ok" } else { "failed" }),
+        format!("  Exit: {exit_status}"),
+    ];
+    if let Some(receipt) = value_str(value, "receipt_id") {
+        lines.push(format!("  Receipt: {receipt}"));
+    }
+    append_policy_check_details(&mut lines, value);
+    if let Some(preview) = tool_output_preview(value) {
+        lines.push(format!("  Output: {preview}"));
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+fn append_policy_check_details(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(count) = value_u64(value, "guide_count") {
+        lines.push(format!("  Guides: {count}"));
+    }
+    if let Some(agents) = value["agents"].as_array() {
+        lines.push(format!("  Agents: {}", agents.len()));
+    }
+    if let Some(missing) = value["missing_agents"].as_array() {
+        if !missing.is_empty() {
+            lines.push(format!("  Missing agents: {}", missing.len()));
+        }
+    }
+    if let Some(missing) = value["missing_sections"].as_array() {
+        if !missing.is_empty() {
+            lines.push(format!("  Missing sections: {}", missing.len()));
+        }
+    }
+    if let Some(violations) = value["violations"].as_array() {
+        if !violations.is_empty() {
+            lines.push(format!("  Violations: {}", violations.len()));
+            for violation in violations.iter().take(5) {
+                let preview = if let Some(text) = violation.as_str() {
+                    text.to_string()
+                } else {
+                    concise_preview(&violation.to_string(), 120)
+                };
+                lines.push(format!("  - {preview}"));
+            }
+        }
+    }
+    if let Some(errors) = value["errors"].as_array() {
+        if !errors.is_empty() {
+            lines.push(format!("  Errors: {}", errors.len()));
+        }
+    }
+    if let Some(count) = value_u64(value, "non_test_count") {
+        lines.push(format!("  Non-test unchecked queries: {count}"));
+    }
+}
+
+fn tool_output_preview(value: &serde_json::Value) -> Option<String> {
+    let result = &value["result"];
+    value_str(result, "stderr")
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| value_str(result, "stdout").filter(|text| !text.trim().is_empty()))
+        .map(|text| concise_preview(text, 180))
+}
+
+pub(super) fn format_agent_map_generate_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let path = value_str(value, "path").unwrap_or("<unknown>");
+    [
+        format!("Agent map generate: {}", if ok { "ok" } else { "failed" }),
+        format!("  Path: {path}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_migration_add_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let name = value_str(value, "name").unwrap_or("<unknown>");
+    let mut lines = vec![
+        format!("Migration add: {}", if ok { "ok" } else { "failed" }),
+        format!("  Name: {name}"),
+    ];
+    if let Some(receipt) = value_str(value, "receipt_id") {
+        lines.push(format!("  Receipt: {receipt}"));
+    }
+    if let Some(preview) = tool_output_preview(value) {
+        lines.push(format!("  Output: {preview}"));
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let workflow = value_str(value, "workflow").unwrap_or("<unknown>");
+    let status = value_str(value, "status").unwrap_or("unknown");
+    let mut lines = vec![
+        format!("Loop tick: {}", if ok { status } else { "failed" }),
+        format!("  Workflow: {workflow}"),
+    ];
+    if let Some(idle) = value_bool(value, "idle") {
+        lines.push(format!("  Idle: {}", if idle { "yes" } else { "no" }));
+    }
+    if let Some(warning) = value_str(value, "release_warning") {
+        lines.push(format!("  Warning: {warning}"));
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
+    let workflows = value["workflows"].as_array().map(Vec::len).unwrap_or(0);
+    let leases = value["leases"].as_array().map(Vec::len).unwrap_or(0);
+    let attempts = value["attempts"].as_array().map(Vec::len).unwrap_or(0);
+    let waiting = value["waiting_attempts"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+    let exhausted = value["needs_attention"]["exhausted_attempts"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+    [
+        "Loop status:".into(),
+        format!("  Workflows: {workflows}"),
+        format!("  Leases: {leases}"),
+        format!("  Attempts: {attempts} ({waiting} waiting)"),
+        format!("  Needs attention: {exhausted} exhausted"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_loop_run_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let status = value_str(value, "status").unwrap_or("unknown");
+    let tick_count = value_u64(value, "tick_count").unwrap_or(0);
+    let until = value_str(value, "until").unwrap_or("unknown");
+    [
+        format!("Loop run: {}", if ok { status } else { "failed" }),
+        format!("  Until: {until}"),
+        format!("  Ticks: {tick_count}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> String {
+    let workflow = value_str(value, "workflow").unwrap_or("<unknown>");
+    let item_key = value_str(value, "item_key").unwrap_or("<unknown>");
+    let cleared = value_bool(value, "cleared").unwrap_or(false);
+    [
+        format!(
+            "Loop clear-attempt: {}",
+            if cleared { "cleared" } else { "unchanged" }
+        ),
+        format!("  Workflow: {workflow}"),
+        format!("  Item: {item_key}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
+    // Same payload shape as work status.
+    format_work_status_summary(value).replacen("Work status:", "State summary:", 1)
+}
+
+pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String {
+    let dry_run = value_bool(value, "dry_run").unwrap_or(false);
+    let archived = value_u64(value, "receipts_archived").unwrap_or(0);
+    let retained = value_u64(value, "receipts_retained").unwrap_or(0);
+    let path = value_str(value, "archive_path").unwrap_or("<unknown>");
+    let before = value_str(value, "before").unwrap_or("<unknown>");
+    [
+        format!(
+            "State archive: {}",
+            if dry_run { "dry run" } else { "archived" }
+        ),
+        format!("  Before: {before}"),
+        format!("  Archive: {path}"),
+        format!("  Receipts archived: {archived}"),
+        format!("  Receipts retained: {retained}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
+pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let routes = value["routes"].as_array().map(Vec::len).unwrap_or(0);
+    let mut lines = vec![
+        format!("Dev: {}", if ok { "ok" } else { "failed" }),
+        format!("  Routes: {routes}"),
+    ];
+    if let Some(app) = value_str(&value["first_exit"], "app") {
+        let exit = value_i64(&value["first_exit"], "exit_status")
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "?".into());
+        lines.push(format!("  First exit: {app} (exit {exit})"));
+    }
+    if value_bool(value, "proxy_failed").unwrap_or(false) {
+        lines.push("  Proxy: failed".into());
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
+}
+
+pub(super) fn format_proxy_summary(value: &serde_json::Value) -> String {
+    let ok = value_bool(value, "ok").unwrap_or(false);
+    let mut lines = vec![format!("Proxy: {}", if ok { "ok" } else { "failed" })];
+    if let Some(running) = value_bool(value, "running") {
+        lines.push(format!("  Running: {}", if running { "yes" } else { "no" }));
+    }
+    if let Some(pid) = value_i64(value, "pid") {
+        lines.push(format!("  PID: {pid}"));
+    }
+    if let Some(http) = value_u64(value, "http_port") {
+        lines.push(format!("  HTTP port: {http}"));
+    }
+    if let Some(https) = value_u64(value, "https_port") {
+        lines.push(format!("  HTTPS port: {https}"));
+    }
+    if let Some(hostname) = value_str(value, "hostname") {
+        lines.push(format!("  Hostname: {hostname}"));
+    }
+    if let Some(app) = value_str(value, "app") {
+        lines.push(format!("  App: {app}"));
+    }
+    if let Some(routes) = value["routes"].as_array() {
+        lines.push(format!("  Routes: {}", routes.len()));
+    }
+    if let Some(path) = value_str(value, "path") {
+        lines.push(format!("  Path: {path}"));
+    }
+    if let Some(state_dir) = value_str(value, "state_dir") {
+        lines.push(format!("  State: {state_dir}"));
+    }
+    if let Some(warning) = value_str(value, "warning")
+        .or_else(|| value_str(value, "trust_warning"))
+        .or_else(|| value_str(value, "note"))
+    {
+        lines.push(format!("  Note: {warning}"));
+    }
+    lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }
 

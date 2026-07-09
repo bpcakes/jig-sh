@@ -63,7 +63,7 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
 
-The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check --summary` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
+The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
 Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig migration-add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
 
@@ -105,7 +105,7 @@ plugins = [
 
 Jig Codex skills are optional Codex plugin bundles used by agents working in generated Jig repos; the default marketplace source is `bpcakes/jig-skills`.
 
-Use `scripts/jig doctor` as the first readiness check for a repo. It reports the pinned runtime, `.jig.toml`, contract validity, required command executables, agent skills, proxy status, vault status, and the next setup command. Use `scripts/jig agent doctor` when you only need to report whether the local Codex installation can use the configured marketplace and to show diagnostic plugin enablement flags. Add `--summary` for human-readable readiness output; omit it for stable JSON automation output. `agent doctor` exits nonzero until required setup is complete. The agent check requires Codex marketplace support and registered marketplace sources; plugin enablement is reported separately because the supported Codex bootstrap path is marketplace registration. Use `scripts/jig agent bootstrap` to run `codex plugin marketplace add` when exactly one marketplace is configured. If multiple marketplaces are configured, `agent bootstrap` requires `--marketplace <source>` so a repo cannot install several user-level Codex marketplaces by default. `agent bootstrap` mutates user-level Codex config, so it is intentionally separate from the project-owned `bootstrap_command`.
+Use `scripts/jig doctor` as the first readiness check for a repo. It reports the pinned runtime, `.jig.toml`, contract validity, required command executables, agent skills, proxy status, vault status, and the next setup command. Use `scripts/jig agent doctor` when you only need to report whether the local Codex installation can use the configured marketplace and to show diagnostic plugin enablement flags. Human-readable output is the default. Pass `--json` for stable structured automation output. `agent doctor` exits nonzero until required setup is complete. The agent check requires Codex marketplace support and registered marketplace sources; plugin enablement is reported separately because the supported Codex bootstrap path is marketplace registration. Use `scripts/jig agent bootstrap` to run `codex plugin marketplace add` when exactly one marketplace is configured. If multiple marketplaces are configured, `agent bootstrap` requires `--marketplace <source>` so a repo cannot install several user-level Codex marketplaces by default. `agent bootstrap` mutates user-level Codex config, so it is intentionally separate from the project-owned `bootstrap_command`.
 
 Omitting `agent_tooling`, `agent_tooling.codex`, or `agent_tooling.codex.marketplaces` uses the default Jig skills marketplace. Set `marketplaces = []` to opt out explicitly. In `agent doctor` output, `codex.available` is `true` or `false` when Codex is required, and `null` when the Codex probe is skipped because `marketplaces = []`.
 
@@ -132,9 +132,9 @@ kind = "check"
 tool = "jig.test"
 ```
 
-`kind: check` gates must reference execution tool names declared in `.agent/jig-contract.json`. `scripts/jig work check --plan-id ...` runs configured check gates in order unless one or more `--tool` values are passed explicitly. Add `--summary` for concise terminal output; JSON remains the default automation output.
+`kind: check` gates must reference execution tool names declared in `.agent/jig-contract.json`. `scripts/jig work check --plan-id ...` runs configured check gates in order unless one or more `--tool` values are passed explicitly. Human-readable output is the default. Pass `--json` for structured automation output.
 
-`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Add `--summary` for the human scan path. `scripts/jig work evidence --summary` is the higher-level human view: it shows the latest gate evidence per tool, whether the proving receipt matches the current worktree, changed paths covered by the receipt, and the exact stale or unknown freshness reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are repo-relative names from `git status --porcelain=v1 -z`; they can include `.agent/` state paths and untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Check gate freshness is based on the non-`.agent/` worktree fingerprint from the latest check or check-batch receipt that proves the gate.
+`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, whether the proving receipt matches the current worktree, changed paths covered by the receipt, and the exact stale or unknown freshness reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are repo-relative names from `git status --porcelain=v1 -z`; they can include `.agent/` state paths and untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Check gate freshness is based on the non-`.agent/` worktree fingerprint from the latest check or check-batch receipt that proves the gate.
 
 Required check gates should not create or modify non-`.agent/` files during `work check`. Build outputs, generated metadata, and lockfiles should be committed when they are source-of-truth, ignored when they are disposable, or generated before running the fingerprinted check. If a check does intentionally settle generated files, rerun `scripts/jig work check --plan-id ...` after reviewing those changes so the gate evidence matches the final worktree.
 
@@ -450,28 +450,28 @@ message before preparing the runtime needed to render command help.
 It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` through the structured work namespace:
 
 - `scripts/jig doctor`
-- `scripts/jig doctor --summary`
+- `scripts/jig doctor --json`
 - `scripts/jig agent doctor`
-- `scripts/jig agent doctor --summary`
+- `scripts/jig agent doctor --json`
 - `scripts/jig agent bootstrap`
 - `scripts/jig work start --title ...`
 - `scripts/jig work start --title ... --print-plan-id`
 - `scripts/jig work append --plan-id ...`
 - `scripts/jig work check --plan-id ...`
-- `scripts/jig work check --plan-id ... --summary`
+- `scripts/jig work check --plan-id ... --json`
 - `scripts/jig work gates --plan-id ...`
-- `scripts/jig work gates --plan-id ... --summary`
-- `scripts/jig work evidence --summary`
-- `scripts/jig work evidence --plan-id ... --summary`
+- `scripts/jig work gates --plan-id ... --json`
+- `scripts/jig work evidence`
+- `scripts/jig work evidence --plan-id ...`
 - `scripts/jig work review --plan-id ...`
-- `scripts/jig work review --plan-id ... --summary`
+- `scripts/jig work review --plan-id ... --json`
 - `scripts/jig work refine --plan-id ...`
-- `scripts/jig work refine --plan-id ... --summary`
+- `scripts/jig work refine --plan-id ... --json`
 - `scripts/jig work decide --plan-id ...`
 - `scripts/jig work receipts --plan-id ...`
-- `scripts/jig work receipts --plan-id ... --summary`
+- `scripts/jig work receipts --plan-id ... --json`
 - `scripts/jig work status`
-- `scripts/jig work status --summary`
+- `scripts/jig work status --json`
 - `scripts/jig work finish --plan-id ...`
 - `scripts/jig state summary`
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`

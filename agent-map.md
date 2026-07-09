@@ -8,15 +8,15 @@ Fast jump index for agent-facing guidance in this repository.
 
 ## Nested guides
 
-- [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
-- [crates/jig](./crates/jig/AGENTS.md)
 - [crates/jig-contract](./crates/jig-contract/AGENTS.md)
 - [crates/jig-core](./crates/jig-core/AGENTS.md)
+- [crates/jig-dev-proxy](./crates/jig-dev-proxy/AGENTS.md)
 - [crates/jig-features](./crates/jig-features/AGENTS.md)
 - [crates/jig-rust](./crates/jig-rust/AGENTS.md)
 - [crates/jig-sqlx](./crates/jig-sqlx/AGENTS.md)
 - [crates/jig-typescript](./crates/jig-typescript/AGENTS.md)
 - [crates/jig-vault](./crates/jig-vault/AGENTS.md)
+- [crates/jig](./crates/jig/AGENTS.md)
 
 ## Suggested usage pattern
 

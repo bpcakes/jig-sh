@@ -149,15 +149,12 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
             proxy: ProxyRuntimeOpts::default(),
         }
     )));
-    assert!(test_command_reports_failure_with_ok(&CommandKind::Doctor(
-        DoctorOpts::default()
-    )));
+    assert!(test_command_reports_failure_with_ok(&CommandKind::Doctor));
     assert!(test_command_reports_failure_with_ok(&CommandKind::Agent(
-        AgentCommand::Doctor(AgentDoctorOpts::default())
+        AgentCommand::Doctor
     )));
     assert!(test_command_reports_failure_with_ok(&CommandKind::Vault(
         VaultCommand::Run(VaultRunOpts {
-            summary: false,
             env: vec!["TOKEN=api_token".into()],
             files: Vec::new(),
             vault: VaultRuntimeOpts::default(),

@@ -16,8 +16,6 @@ mod state;
 mod vault;
 mod work;
 
-#[cfg(test)]
-pub(crate) use agent::AgentDoctorOpts;
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
 pub(crate) use loops::{
@@ -88,18 +86,22 @@ const DOCTOR_AFTER_HELP: &str = "\
 Runs the read-only readiness checks that are otherwise split across bootstrap,
 agent doctor, check contract, proxy status, and vault status.
 
+Human-readable output is the default. Pass --json for structured automation output.
+
 Examples:
   jig doctor
-  jig doctor --summary";
+  jig doctor --json";
 
 const INFO_AFTER_HELP: &str = "\
 Summarizes what Jig believes about the current repo from .jig.toml and the
 generated contract manifest.
 
+Human-readable output is the default. Pass --json for structured automation output.
+
 Examples:
   jig info
-  jig info --summary
-  jig explain --summary";
+  jig info --json
+  jig explain --json";
 
 const PRESETS_AFTER_HELP: &str = "\
 Use presets with `jig init` when you want Jig to create starter application code
@@ -147,14 +149,14 @@ pub(crate) enum CommandKind {
     Check(CheckCommand),
     /// Report repo harness readiness and the next command to fix setup.
     #[command(name = tool_defs::cli_command::DOCTOR, after_help = DOCTOR_AFTER_HELP)]
-    Doctor(DoctorOpts),
+    Doctor,
     /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
     #[command(
         name = tool_defs::cli_command::INFO,
         visible_alias = "explain",
         after_help = INFO_AFTER_HELP
     )]
-    Info(InfoOpts),
+    Info,
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::SCHEMA_DUMP)]
     SchemaDump(ToolOpts),
@@ -226,18 +228,6 @@ pub(crate) struct AgentMapOpts {
         help = "Agent map file to generate or check"
     )]
     pub(crate) map_path: PathBuf,
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct DoctorOpts {
-    #[arg(long, help = "Print a concise human-readable readiness summary")]
-    pub(crate) summary: bool,
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct InfoOpts {
-    #[arg(long, help = "Print a concise human-readable repo summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Clone, Debug, Default)]

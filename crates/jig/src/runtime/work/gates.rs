@@ -125,7 +125,7 @@ fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<
             .map(str::to_string)
             .ok_or_else(|| anyhow!("Open plan summary did not include a plan id")),
         [] => bail!(
-            "No open work plans. Run `scripts/jig work status --summary` to find recent plan ids, then pass --plan-id to inspect a closed or specific plan."
+            "No open work plans. Run `scripts/jig work status` to find recent plan ids, then pass --plan-id to inspect a closed or specific plan."
         ),
         _ => bail!("Multiple open work plans. Pass --plan-id to choose which plan to inspect."),
     }

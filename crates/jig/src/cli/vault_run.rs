@@ -1,12 +1,12 @@
 use anyhow::Result;
 
-use super::output::{HumanOutput, print_output};
+use super::output::{HumanOutput, emit};
 use super::structured_error::{require_json_ok, require_vault_child_status_ok};
 use super::vault::VaultCommand;
 use crate::{context::RepoContext, runtime};
 
-pub(super) fn run_vault_command(command: VaultCommand) -> Result<()> {
-    let vault_run_summary = matches!(&command, VaultCommand::Run(opts) if opts.summary);
+pub(super) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
+    let human_output = vault_human_output(&command);
     let mut runtime_command: crate::command::VaultCommand = command.into();
     apply_repo_vault_scope(&mut runtime_command)?;
     let is_run = matches!(runtime_command, crate::command::VaultCommand::Run(_));
@@ -20,10 +20,7 @@ pub(super) fn run_vault_command(command: VaultCommand) -> Result<()> {
         }
     }
     let output = runtime::dispatch_vault(runtime_command)?;
-    print_output(
-        vault_run_summary.then_some(HumanOutput::VaultRunSummary),
-        &output,
-    )?;
+    emit(json_output, human_output, &output)?;
     if is_run {
         // `vault run` mirrors the child process status. Its JSON `ok` field is
         // derived from that same status, so avoid reporting a second generic
@@ -31,6 +28,13 @@ pub(super) fn run_vault_command(command: VaultCommand) -> Result<()> {
         return require_vault_child_status_ok(&output);
     }
     require_json_ok(true, &output)
+}
+
+fn vault_human_output(command: &VaultCommand) -> HumanOutput {
+    match command {
+        VaultCommand::Run(_) => HumanOutput::VaultRun,
+        _ => HumanOutput::VaultGeneric,
+    }
 }
 
 fn vault_command_requires_passphrase(command: &crate::command::VaultCommand) -> bool {

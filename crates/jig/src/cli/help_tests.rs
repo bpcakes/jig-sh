@@ -49,17 +49,17 @@ fn top_level_help_describes_common_commands() {
 fn doctor_help_includes_examples() {
     let doctor_help = rendered_help(&["doctor"]);
     assert_help_contains(&doctor_help, "jig doctor");
-    assert_help_contains(&doctor_help, "jig doctor --summary");
-    assert_help_contains(&doctor_help, "--summary");
+    assert_help_contains(&doctor_help, "jig doctor --json");
+    assert_help_contains(&doctor_help, "Human-readable output is the default");
 }
 
 #[test]
 fn info_help_includes_examples_and_alias() {
     let info_help = rendered_help(&["info"]);
     assert_help_contains(&info_help, "jig info");
-    assert_help_contains(&info_help, "jig info --summary");
-    assert_help_contains(&info_help, "jig explain --summary");
-    assert_help_contains(&info_help, "--summary");
+    assert_help_contains(&info_help, "jig info --json");
+    assert_help_contains(&info_help, "jig explain --json");
+    assert_help_contains(&info_help, "Human-readable output is the default");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn work_check_help_includes_examples() {
 #[test]
 fn work_evidence_help_includes_examples() {
     let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "jig work evidence --summary");
+    assert_help_contains(&work_evidence_help, "jig work evidence");
     assert_help_contains(&work_evidence_help, "--plan-id plan_abc123");
     assert_help_contains(&work_evidence_help, "changed paths covered");
 }
@@ -206,36 +206,28 @@ fn state_archive_help_explains_cutoff() {
 }
 
 #[test]
-fn human_summary_flags_are_discoverable() {
-    let agent_doctor_help = rendered_help(&["agent", "doctor"]);
-    assert_help_contains(&agent_doctor_help, "--summary");
-    assert_help_contains(&agent_doctor_help, "human-readable readiness summary");
-
-    let doctor_help = rendered_help(&["doctor"]);
-    assert_help_contains(&doctor_help, "--summary");
-    assert_help_contains(&doctor_help, "human-readable readiness summary");
-
-    let info_help = rendered_help(&["info"]);
-    assert_help_contains(&info_help, "--summary");
-    assert_help_contains(&info_help, "human-readable repo summary");
-
-    let work_status_help = rendered_help(&["work", "status"]);
-    assert_help_contains(&work_status_help, "--summary");
-    assert_help_contains(&work_status_help, "human-readable work summary");
+fn json_output_flag_is_discoverable() {
+    let root_help = Cli::command().render_help().to_string();
+    assert_help_contains(&root_help, "--json");
+    assert_help_contains(
+        &root_help,
+        "Print structured JSON output when a command defaults to human-readable output",
+    );
 
     let work_receipts_help = rendered_help(&["work", "receipts"]);
-    assert_help_contains(&work_receipts_help, "--summary");
-    assert_help_contains(&work_receipts_help, "human-readable receipt summary");
-    assert_help_contains(&work_receipts_help, "work receipts --failed-only --summary");
+    assert_help_contains(&work_receipts_help, "work receipts --failed-only");
+    assert_help_contains(&work_receipts_help, "--json");
 
     let work_evidence_help = rendered_help(&["work", "evidence"]);
-    assert_help_contains(&work_evidence_help, "--summary");
-    assert_help_contains(&work_evidence_help, "human-readable evidence summary");
+    assert_help_contains(&work_evidence_help, "jig work evidence --json");
 
     let vault_run_help = rendered_help(&["vault", "run"]);
-    assert_help_contains(&vault_run_help, "--summary");
-    assert_help_contains(&vault_run_help, "human-readable brokered run summary");
+    assert_help_contains(&vault_run_help, "--json");
     assert_help_contains(&vault_run_help, "--file");
+
+    assert_help_omits(&rendered_help(&["doctor"]), "--summary");
+    assert_help_omits(&rendered_help(&["work", "status"]), "--summary");
+    assert_help_omits(&rendered_help(&["agent", "doctor"]), "--summary");
 }
 
 #[test]

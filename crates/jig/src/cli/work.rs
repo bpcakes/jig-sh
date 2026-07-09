@@ -7,6 +7,7 @@ use crate::tool_defs::{self, DEFAULT_RECEIPTS_LIMIT};
 pub(super) const WORK_START_AFTER_HELP: &str = "\
 Use --body for short notes or --body-file for a prepared markdown plan.
 Use --print-plan-id when shell scripts only need the new plan id.
+Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
   jig work start --title \"Add auth\" --body \"Implement login flow and validation.\"
@@ -14,19 +15,19 @@ Examples:
 
 pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
 Run all required gates for a plan, or use --tool to run one configured gate.
-Use --summary for terminal scanning; JSON remains the default for automation.
+Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
   jig work check --plan-id plan_abc123
-  jig work check --plan-id plan_abc123 --summary
+  jig work check --plan-id plan_abc123 --json
   jig work check --plan-id plan_abc123 --tool jig.test";
 
 pub(super) const WORK_GATES_AFTER_HELP: &str = "\
-Use --summary for terminal scanning; JSON remains the default for automation.
+Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
   jig work gates --plan-id plan_abc123
-  jig work gates --plan-id plan_abc123 --summary";
+  jig work gates --plan-id plan_abc123 --json";
 
 pub(super) const WORK_EVIDENCE_AFTER_HELP: &str = "\
 Shows the latest gate evidence, whether receipts match the current worktree,
@@ -34,16 +35,18 @@ changed paths covered by the receipt, and exact stale or unknown freshness
 reasons. If --plan-id is omitted, exactly one open plan must exist.
 
 Examples:
-  jig work evidence --summary
-  jig work evidence --plan-id plan_abc123 --summary";
+  jig work evidence
+  jig work evidence --plan-id plan_abc123
+  jig work evidence --json";
 
 pub(super) const WORK_REVIEW_AFTER_HELP: &str = "\
 Run configured codex_review gates for a plan and record structured finding receipts.
-Use --gate to run one review gate by id. Use --summary for terminal scanning.
+Use --gate to run one review gate by id.
 
 Examples:
   jig work review --plan-id plan_abc123
-  jig work review --plan-id plan_abc123 --gate rust-error-handling --summary";
+  jig work review --plan-id plan_abc123 --gate rust-error-handling
+  jig work review --plan-id plan_abc123 --json";
 
 pub(super) const WORK_REFINE_AFTER_HELP: &str = "\
 Run review-driven refinement: review, fix actionable findings, review again,
@@ -51,7 +54,8 @@ then rerun normal check gates. Use --gate to limit review gates by id.
 
 Examples:
   jig work refine --plan-id plan_abc123
-  jig work refine --plan-id plan_abc123 --max-iterations 2 --summary";
+  jig work refine --plan-id plan_abc123 --max-iterations 2
+  jig work refine --plan-id plan_abc123 --json";
 
 pub(super) const WORK_FINISH_AFTER_HELP: &str = "\
 Close a plan after required gates pass; use --outcome for a machine-readable result.
@@ -60,11 +64,12 @@ Examples:
   jig work finish --plan-id plan_abc123 --resolution \"Auth flow complete\" --outcome success";
 
 pub(super) const WORK_RECEIPTS_AFTER_HELP: &str = "\
-JSON is the stable default. Use --summary for terminal scanning.
+Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
-  jig work receipts --failed-only --summary --limit 5
-  jig work receipts --plan-id plan_abc123 --summary";
+  jig work receipts --failed-only --limit 5
+  jig work receipts --plan-id plan_abc123
+  jig work receipts --json";
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkCommand {
@@ -121,7 +126,7 @@ pub(crate) enum WorkCommand {
     Receipts(WorkReceiptsOpts),
     /// Summarize current structured work state.
     #[command(name = tool_defs::cli_command::WORK_STATUS)]
-    Status(WorkStatusOpts),
+    Status,
     /// Close a work plan after required gates pass.
     #[command(
         name = tool_defs::cli_command::WORK_FINISH,
@@ -166,7 +171,10 @@ pub(crate) struct WorkStartOpts {
     pub(crate) body: Option<String>,
     #[arg(long, help = "Path to read the initial plan body from")]
     pub(crate) body_file: Option<PathBuf>,
-    #[arg(long, help = "Print only the new plan id instead of JSON")]
+    #[arg(
+        long,
+        help = "Print only the new plan id (for shell capture); conflicts with --json"
+    )]
     pub(crate) print_plan_id: bool,
 }
 
@@ -190,27 +198,18 @@ pub(crate) struct WorkCheckOpts {
         help = "Specific gate tool to run; defaults to configured gates"
     )]
     pub(crate) tools: Vec<String>,
-
-    #[arg(long, help = "Print a concise human-readable check summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Debug)]
 pub(crate) struct WorkGatesOpts {
     #[arg(long, help = "Plan id to inspect; defaults to the single open plan")]
     pub(crate) plan_id: Option<String>,
-
-    #[arg(long, help = "Print a concise human-readable gate summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct WorkEvidenceOpts {
     #[arg(long, help = "Open plan id whose evidence should be summarized")]
     pub(crate) plan_id: Option<String>,
-
-    #[arg(long, help = "Print a concise human-readable evidence summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Debug)]
@@ -220,9 +219,6 @@ pub(crate) struct WorkReviewOpts {
 
     #[arg(long = "gate", help = "Review gate id to run; may be repeated")]
     pub(crate) gates: Vec<String>,
-
-    #[arg(long, help = "Print a concise human-readable review summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Debug)]
@@ -242,15 +238,6 @@ pub(crate) struct WorkRefineOpts {
         help = "Maximum fixer attempts before stopping; default is 1 (fix once, then verify)"
     )]
     pub(crate) max_iterations: usize,
-
-    #[arg(long, help = "Print a concise human-readable refinement summary")]
-    pub(crate) summary: bool,
-}
-
-#[derive(Args, Debug, Default)]
-pub(crate) struct WorkStatusOpts {
-    #[arg(long, help = "Print a concise human-readable work summary")]
-    pub(crate) summary: bool,
 }
 
 #[derive(Args, Debug)]
@@ -275,8 +262,6 @@ pub(crate) struct WorkReceiptsOpts {
     pub(crate) failed_only: bool,
     #[arg(long, default_value_t = DEFAULT_RECEIPTS_LIMIT, help = "Maximum receipts to show")]
     pub(crate) limit: usize,
-    #[arg(long, help = "Print a concise human-readable receipt summary")]
-    pub(crate) summary: bool,
 }
 
 impl Default for WorkReceiptsOpts {
@@ -287,7 +272,6 @@ impl Default for WorkReceiptsOpts {
             tool_name: None,
             failed_only: false,
             limit: DEFAULT_RECEIPTS_LIMIT,
-            summary: false,
         }
     }
 }

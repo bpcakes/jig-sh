@@ -107,7 +107,7 @@ pub(crate) fn run() -> Result<Value> {
                     "blocked",
                     format!("Skipped until repo context loads successfully: {context_error}"),
                 )
-                .with_fix("Run `scripts/jig doctor --summary` after fixing the contract issue."),
+                .with_fix("Run `scripts/jig doctor` after fixing the contract issue."),
             );
             checks.push(
                 check(
@@ -118,7 +118,7 @@ pub(crate) fn run() -> Result<Value> {
                     "blocked",
                     format!("Skipped until repo context loads successfully: {context_error}"),
                 )
-                .with_fix("Run `scripts/jig doctor --summary` after fixing the contract issue."),
+                .with_fix("Run `scripts/jig doctor` after fixing the contract issue."),
             );
         }
     }
@@ -286,7 +286,7 @@ fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -
             "invalid",
             error.to_string(),
         )
-        .with_fix("Fix `.jig.toml`, then run `scripts/jig doctor --summary`.")
+        .with_fix("Fix `.jig.toml`, then run `scripts/jig doctor`.")
         .with_data(json!({ "path": root.join(".jig.toml").display().to_string() })),
     }
 }
@@ -341,7 +341,7 @@ fn runtime_check(root: &Path, config_jig_version: Option<&str>) -> DoctorCheck {
         "mismatch"
     };
     let fix = if !script_ok || !version_ok {
-        Some("Run `scripts/jig update`, then rerun `scripts/jig doctor --summary`.")
+        Some("Run `scripts/jig update`, then rerun `scripts/jig doctor`.")
     } else {
         None
     };
@@ -514,7 +514,7 @@ fn required_tools_check(ctx: &RepoContext) -> DoctorCheck {
             format!("Missing command executable(s): {}", missing.join(", "))
         },
     )
-    .with_optional_fix((!ok).then_some("Install the missing executable or restore the missing repo script, then run `scripts/jig doctor --summary`."))
+    .with_optional_fix((!ok).then_some("Install the missing executable or restore the missing repo script, then run `scripts/jig doctor`."))
     .with_data(json!({ "tools": tools }))
 }
 
@@ -562,7 +562,7 @@ fn agent_check(ctx: &RepoContext) -> DoctorCheck {
             "error",
             error.to_string(),
         )
-        .with_fix("Run `scripts/jig agent doctor --summary` for agent tooling details."),
+        .with_fix("Run `scripts/jig agent doctor` for agent tooling details."),
     }
 }
 
@@ -613,7 +613,7 @@ fn proxy_list_output(ctx: &RepoContext) -> Result<Value> {
 fn proxy_list_output(ctx: &RepoContext) -> Result<Value> {
     let launcher = ctx.root().join("scripts/jig");
     let output = Command::new(&launcher)
-        .args(["proxy", "list"])
+        .args(["proxy", "list", "--json"])
         .current_dir(ctx.root())
         .output()
         .with_context(|| {
@@ -628,7 +628,7 @@ fn proxy_list_output(ctx: &RepoContext) -> Result<Value> {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(anyhow!(
-            "`scripts/jig proxy list` exited with status {}{}",
+            "`scripts/jig proxy list --json` exited with status {}{}",
             output.status,
             if detail.is_empty() {
                 String::new()
@@ -638,7 +638,8 @@ fn proxy_list_output(ctx: &RepoContext) -> Result<Value> {
         ));
     }
 
-    serde_json::from_slice(&output.stdout).context("Failed to parse `scripts/jig proxy list` JSON")
+    serde_json::from_slice(&output.stdout)
+        .context("Failed to parse `scripts/jig proxy list --json` JSON")
 }
 
 fn proxy_check_from_output(configured: bool, output: Value) -> DoctorCheck {

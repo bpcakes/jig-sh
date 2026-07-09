@@ -442,7 +442,6 @@ fn parses_work_receipts_filters() {
         "--failed-only",
         "--limit",
         "5",
-        "--summary",
     ])
     .unwrap();
 
@@ -453,7 +452,6 @@ fn parses_work_receipts_filters() {
             assert_eq!(opts.tool_name.as_deref(), Some(tool::TEST));
             assert!(opts.failed_only);
             assert_eq!(opts.limit, 5);
-            assert!(opts.summary);
         }
         other => panic!("expected work receipts command, got {other:?}"),
     }
@@ -561,19 +559,12 @@ fn parses_agent_doctor_command() {
     let cli = Cli::try_parse_from(["jig", "agent", "doctor"]).unwrap();
 
     match cli.command {
-        CommandKind::Agent(AgentCommand::Doctor(opts)) => {
-            assert!(!opts.summary);
-        }
+        CommandKind::Agent(AgentCommand::Doctor) => {}
         other => panic!("expected agent doctor command, got {other:?}"),
     }
 
-    let summary = Cli::try_parse_from(["jig", "agent", "doctor", "--summary"]).unwrap();
-    match summary.command {
-        CommandKind::Agent(AgentCommand::Doctor(opts)) => {
-            assert!(opts.summary);
-        }
-        other => panic!("expected agent doctor summary command, got {other:?}"),
-    }
+    let rejected = Cli::try_parse_from(["jig", "agent", "doctor", "--summary"]);
+    assert!(rejected.is_err());
 }
 
 #[test]
@@ -581,19 +572,19 @@ fn parses_top_level_doctor_command() {
     let cli = Cli::try_parse_from(["jig", "doctor"]).unwrap();
 
     match cli.command {
-        CommandKind::Doctor(opts) => {
-            assert!(!opts.summary);
-        }
+        CommandKind::Doctor => {}
         other => panic!("expected doctor command, got {other:?}"),
     }
 
-    let summary = Cli::try_parse_from(["jig", "doctor", "--summary"]).unwrap();
-    match summary.command {
-        CommandKind::Doctor(opts) => {
-            assert!(opts.summary);
-        }
-        other => panic!("expected doctor summary command, got {other:?}"),
+    let with_json = Cli::try_parse_from(["jig", "doctor", "--json"]).unwrap();
+    assert!(with_json.json);
+    match with_json.command {
+        CommandKind::Doctor => {}
+        other => panic!("expected doctor command, got {other:?}"),
     }
+
+    let rejected = Cli::try_parse_from(["jig", "doctor", "--summary"]);
+    assert!(rejected.is_err());
 }
 
 #[test]
@@ -601,27 +592,26 @@ fn parses_top_level_info_command_and_explain_alias() {
     let cli = Cli::try_parse_from(["jig", "info"]).unwrap();
 
     match cli.command {
-        CommandKind::Info(opts) => {
-            assert!(!opts.summary);
-        }
+        CommandKind::Info => {}
         other => panic!("expected info command, got {other:?}"),
     }
 
-    let summary = Cli::try_parse_from(["jig", "info", "--summary"]).unwrap();
-    match summary.command {
-        CommandKind::Info(opts) => {
-            assert!(opts.summary);
-        }
-        other => panic!("expected info summary command, got {other:?}"),
+    let with_json = Cli::try_parse_from(["jig", "info", "--json"]).unwrap();
+    assert!(with_json.json);
+    match with_json.command {
+        CommandKind::Info => {}
+        other => panic!("expected info command, got {other:?}"),
     }
 
-    let alias = Cli::try_parse_from(["jig", "explain", "--summary"]).unwrap();
+    let alias = Cli::try_parse_from(["jig", "explain", "--json"]).unwrap();
+    assert!(alias.json);
     match alias.command {
-        CommandKind::Info(opts) => {
-            assert!(opts.summary);
-        }
+        CommandKind::Info => {}
         other => panic!("expected info alias command, got {other:?}"),
     }
+
+    let rejected = Cli::try_parse_from(["jig", "info", "--summary"]);
+    assert!(rejected.is_err());
 }
 
 #[test]
@@ -789,7 +779,7 @@ fn parses_vault_commands() {
         "jig",
         "vault",
         "run",
-        "--summary",
+        "--json",
         "--env",
         "TOKEN=api_token",
         "--file",
@@ -800,9 +790,9 @@ fn parses_vault_commands() {
         "true",
     ])
     .unwrap();
+    assert!(run.json);
     match run.command {
         CommandKind::Vault(VaultCommand::Run(opts)) => {
-            assert!(opts.summary);
             assert_eq!(opts.env, vec!["TOKEN=api_token"]);
             assert_eq!(opts.files, vec!["TOKEN_FILE=api_token"]);
             assert_eq!(opts.command, vec!["sh", "-c", "true"]);
@@ -1016,19 +1006,12 @@ fn parses_work_status_command() {
     let cli = Cli::try_parse_from(["jig", "work", "status"]).unwrap();
 
     match cli.command {
-        CommandKind::Work(WorkCommand::Status(opts)) => {
-            assert!(!opts.summary);
-        }
+        CommandKind::Work(WorkCommand::Status) => {}
         other => panic!("expected work status command, got {other:?}"),
     }
 
-    let summary = Cli::try_parse_from(["jig", "work", "status", "--summary"]).unwrap();
-    match summary.command {
-        CommandKind::Work(WorkCommand::Status(opts)) => {
-            assert!(opts.summary);
-        }
-        other => panic!("expected work status summary command, got {other:?}"),
-    }
+    let rejected = Cli::try_parse_from(["jig", "work", "status", "--summary"]);
+    assert!(rejected.is_err());
 }
 
 #[test]
@@ -1067,7 +1050,6 @@ fn parses_work_check_tools() {
         tool::CONTRACT_CHECK,
         "--tool",
         tool::TEST,
-        "--summary",
     ])
     .unwrap();
 
@@ -1075,7 +1057,6 @@ fn parses_work_check_tools() {
         CommandKind::Work(WorkCommand::Check(opts)) => {
             assert_eq!(opts.plan_id, "plan_1");
             assert_eq!(opts.tools, vec![tool::CONTRACT_CHECK, tool::TEST]);
-            assert!(opts.summary);
         }
         other => panic!("expected work check command, got {other:?}"),
     }
@@ -1083,23 +1064,20 @@ fn parses_work_check_tools() {
 
 #[test]
 fn parses_work_gates_command() {
-    let cli =
-        Cli::try_parse_from(["jig", "work", "gates", "--plan-id", "plan_1", "--summary"]).unwrap();
+    let cli = Cli::try_parse_from(["jig", "work", "gates", "--plan-id", "plan_1"]).unwrap();
 
     match cli.command {
         CommandKind::Work(WorkCommand::Gates(opts)) => {
             assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-            assert!(opts.summary);
         }
         other => panic!("expected work gates command, got {other:?}"),
     }
 
-    let inferred_plan = Cli::try_parse_from(["jig", "work", "gates", "--summary"]).unwrap();
+    let inferred_plan = Cli::try_parse_from(["jig", "work", "gates"]).unwrap();
 
     match inferred_plan.command {
         CommandKind::Work(WorkCommand::Gates(opts)) => {
             assert_eq!(opts.plan_id, None);
-            assert!(opts.summary);
         }
         other => panic!("expected work gates command, got {other:?}"),
     }
@@ -1107,30 +1085,21 @@ fn parses_work_gates_command() {
 
 #[test]
 fn parses_work_evidence_command() {
-    let cli = Cli::try_parse_from(["jig", "work", "evidence", "--summary"]).unwrap();
+    let cli = Cli::try_parse_from(["jig", "work", "evidence"]).unwrap();
 
     match cli.command {
         CommandKind::Work(WorkCommand::Evidence(opts)) => {
             assert_eq!(opts.plan_id, None);
-            assert!(opts.summary);
         }
         other => panic!("expected work evidence command, got {other:?}"),
     }
 
-    let with_plan = Cli::try_parse_from([
-        "jig",
-        "work",
-        "evidence",
-        "--plan-id",
-        "plan_1",
-        "--summary",
-    ])
-    .unwrap();
+    let with_plan =
+        Cli::try_parse_from(["jig", "work", "evidence", "--plan-id", "plan_1"]).unwrap();
 
     match with_plan.command {
         CommandKind::Work(WorkCommand::Evidence(opts)) => {
             assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
-            assert!(opts.summary);
         }
         other => panic!("expected work evidence command, got {other:?}"),
     }
@@ -1146,7 +1115,6 @@ fn parses_work_review_command() {
         "plan_1",
         "--gate",
         "rust-error-handling",
-        "--summary",
     ])
     .unwrap();
 
@@ -1154,7 +1122,6 @@ fn parses_work_review_command() {
         CommandKind::Work(WorkCommand::Review(opts)) => {
             assert_eq!(opts.plan_id, "plan_1");
             assert_eq!(opts.gates, vec!["rust-error-handling"]);
-            assert!(opts.summary);
         }
         other => panic!("expected work review command, got {other:?}"),
     }
@@ -1172,7 +1139,6 @@ fn parses_work_refine_command() {
         "rust-error-handling",
         "--max-iterations",
         "2",
-        "--summary",
     ])
     .unwrap();
 
@@ -1181,7 +1147,6 @@ fn parses_work_refine_command() {
             assert_eq!(opts.plan_id, "plan_1");
             assert_eq!(opts.gates, vec!["rust-error-handling"]);
             assert_eq!(opts.max_iterations, 2);
-            assert!(opts.summary);
         }
         other => panic!("expected work refine command, got {other:?}"),
     }

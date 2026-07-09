@@ -19,14 +19,14 @@ The practical result is that a new contributor can start with a small command se
 
 ```sh
 scripts/jig bootstrap
-scripts/jig doctor --summary
+scripts/jig doctor
 scripts/jig check contract
 scripts/jig check fmt
 scripts/jig check clippy
 scripts/jig check test
 ```
 
-`doctor --summary` is the short onboarding readiness pass, including harness and contract status without recording gate evidence. `scripts/jig check contract` records the contract gate evidence expected by reviews and CI.
+`doctor` is the short onboarding readiness pass, including harness and contract status without recording gate evidence. `scripts/jig check contract` records the contract gate evidence expected by reviews and CI.
 
 Those commands are boring on purpose. They are meant to be copyable by humans, agents, onboarding docs, and CI without each caller having to infer project layout.
 
@@ -80,11 +80,11 @@ The default Rust check commands skip cleanly when no root `Cargo.toml` exists ye
 The daily developer loop is built around a few stable verbs:
 
 - `scripts/jig bootstrap` prepares local dependencies.
-- `scripts/jig doctor --summary` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command.
+- `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured check and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
 - `scripts/jig mcp` exposes the same command contract to MCP clients.
-- `scripts/jig agent doctor --summary` remains the focused local agent tooling check.
+- `scripts/jig agent doctor` remains the focused local agent tooling check.
 
 This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
 

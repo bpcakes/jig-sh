@@ -781,7 +781,7 @@ fn initial_next_steps(
     if result.bootstrap_command_configured {
         steps.push("scripts/jig bootstrap".into());
     }
-    steps.push("scripts/jig doctor --summary".into());
+    steps.push("scripts/jig doctor".into());
     if result.codex_skills_configured {
         steps.push("scripts/jig agent bootstrap".into());
     }
@@ -813,7 +813,7 @@ fn initial_notes(
     let mut notes = vec![
         "The first scripts/jig command may install or compile the pinned Jig runtime into this repo's local cache.".into(),
         "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
-        "Re-run scripts/jig doctor --summary after setup changes to confirm readiness.".into(),
+        "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
         "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
     ];
     if scaffold_plan.is_some() {

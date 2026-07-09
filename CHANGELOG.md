@@ -48,15 +48,16 @@
 ## Unreleased
 
 ### Added
-- Add `scripts/jig doctor --summary` and `scripts/jig info` / `scripts/jig explain --summary` for repo readiness and configuration snapshots.
-- Add `scripts/jig work evidence --summary` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
-- Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and `scripts/jig vault run --summary` for a human brokered-run summary.
+- Add `scripts/jig doctor` and `scripts/jig info` / `scripts/jig explain` for repo readiness and configuration snapshots.
+- Add `scripts/jig work evidence` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
+- Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and human-readable vault run summaries by default (`--json` for the full buffered payload).
 - Add Jig local development proxy commands for stable repo-scoped dev hostnames, HTTP/HTTPS forwarding, WebSocket support, workspace app discovery, local certificates, and service file generation.
 - Add `scripts/jig dev` and `scripts/jig proxy {start,stop,list,prune,run,alias}` runtime flows for supervised app processes, aliases, and route listing/pruning.
 - Add `scripts/jig proxy cert {generate,status,trust,untrust}` and `scripts/jig proxy service {install,status,uninstall}` for certificate trust management and user service installation; trust-store mutations require `--accept-trust-scope`, and `proxy service install` requires `--accept-service-scope`.
 - Enable the `dev-proxy` Cargo feature by default while preserving `--no-default-features` builds for contract/MCP-only consumers.
 
 ### Changed
+- Breaking: CLI commands now print human-readable output by default. Pass global `--json` for structured automation output. The per-command `--summary` flag is removed; scripts that parsed default JSON must add `--json`, and scripts that passed `--summary` should drop that flag.
 - Breaking: `jig init`, `jig adopt`, and `jig update` now print human-readable summaries by default and only print their full structured reports when `--json` is supplied.
 - Default release builds of `jig init` and `jig adopt` to the official `jig-sh` template source pinned to the installed Jig version's release tag; unreleased or dirty local builds now use templates embedded in the binary when `--template` is omitted, with a checked-in snapshot for packaged builds and generated launchers that reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to configured or official install sources. `--template /path/to/jig-sh` and `--vcs-ref <ref>` remain available for explicit checkout or remote template code.
 - Keep `jig init`, `jig adopt`, and `jig update` terminal output human-oriented by default; scripts that consumed the previous implicit JSON output must now pass `jig init --json`, `jig adopt --json`, or `jig update --json` for the full structured bootstrap report. `jig adopt` now previews by default, returns `render_mode = "preview"` until `--write` applies files, confirms interactive writes unless `--defaults` or `--no-input` is supplied, records `.agent/state/adopt-last.json` with backups for overwritten managed files, and reports conflicts in preview instead of blocking before review.
@@ -70,8 +71,8 @@
 - Regenerating defaults with `jig update --recopy` rewrites `bootstrap_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, and `rust_test_locked_command` to the no-root-`Cargo.toml` skip form unless the repo has customized those answers.
 - `scripts/jig work check` now rejects unknown or closed plan IDs before running tools; `scripts/jig work gates` still reports status for any existing plan, including closed plans.
 - `scripts/jig work gates` and `scripts/jig work evidence` keep top-level `ok` as command success and expose gate health through `overall`, `gates_ok`, and per-gate `status`.
-- `scripts/jig work gates --summary` now prints freshness reasons, receipt diffs, changed paths, and plan-state-aware next steps; text-grepping scripts should use default JSON instead.
-- `scripts/jig work receipts --summary` and `scripts/jig vault run --summary` preserve short multiline output previews for readability; automation should read the default JSON output.
+- `scripts/jig work gates` now prints freshness reasons, receipt diffs, changed paths, and plan-state-aware next steps; automation should pass `--json` instead of grepping human text.
+- `scripts/jig work receipts` and `scripts/jig vault run` preserve short multiline output previews for readability; automation should pass `--json`.
 - `scripts/jig vault secret set NAME` now defaults to hidden terminal input when run interactively; non-interactive callers must pass `--value-stdin`.
 - `scripts/jig dev` now prints a compact APP / URL / STATUS / PID table and dev-proxy failures include more specific likely-fix guidance.
 - Release automation that builds Jig from a git checkout should fetch tags before building, or set `JIG_ASSUME_RELEASE_BUILD=1` after validating the workspace version and release tag.
@@ -88,15 +89,15 @@
 - MCP/contract-only consumers can build with `default-features = false`; in that profile, `dev` and `proxy` still parse but return clear unsupported-feature errors instead of linking the proxy stack.
 - Keep `web_package_manager = "bun"` as the default for legacy `[[frontend_apps]]`; configure `dev.apps` or set explicit commands when legacy apps should launch with another package manager.
 - `jig init` and `jig adopt --defaults` now default omitted SQLx answers to a tooling-only profile unless a migration directory is supplied, emit a note about that inference, and keep noninteractive adoption usable without extra SQLx flags.
-- Behavior change: SQLx adoption now leaves schema dumps disabled unless `schema_dump_enabled = true` or an explicit `schema_dump_command` is supplied, so first-run `scripts/jig doctor --summary` does not require a repo-owned `scripts/dump-schema.sh` before the repo has implemented one.
+- Behavior change: SQLx adoption now leaves schema dumps disabled unless `schema_dump_enabled = true` or an explicit `schema_dump_command` is supplied, so first-run `scripts/jig doctor` does not require a repo-owned `scripts/dump-schema.sh` before the repo has implemented one.
 - `jig adopt --json` now reports retired cleanup paths separately as `adoption_profile.retired_managed_files` instead of mixing them into active `managed_files`.
 - `jig init --json` and `jig adopt --json` now expose the managed-file summary as `render_report`.
 - Backend-only adoption no longer writes disabled web workflow/scripts; previously generated backend-only web scaffolding is now treated as retired managed output during refresh.
 - Generated frontend coverage enforcement now uses `scripts/enforce-coverage.cjs` so ESM packages with `"type": "module"` can run the gate; old `scripts/enforce-coverage.js` is retired, and generated guidance now names the required `coverage/coverage-summary.json` artifact.
 - `jig adopt` now detects nested Rust crates even when a repo has no root `Cargo.toml`, and generated Rust check commands run each inferred nested manifest instead of reporting a false skip.
-- `scripts/jig doctor --summary` now includes the detail for required failing checks, and required-tool probing recognizes `cargo sqlx` as needing the `cargo-sqlx` subcommand.
-- `scripts/jig work gates --summary` now defaults to the single open work plan, matching `scripts/jig work evidence --summary`; pass `--plan-id` when multiple plans are open or to inspect a closed plan.
-- `scripts/jig doctor --summary` now reports missing Codex Jig skills as optional setup instead of blocking overall repo readiness.
+- `scripts/jig doctor` now includes the detail for required failing checks, and required-tool probing recognizes `cargo sqlx` as needing the `cargo-sqlx` subcommand.
+- `scripts/jig work gates` now defaults to the single open work plan, matching `scripts/jig work evidence`; pass `--plan-id` when multiple plans are open or to inspect a closed plan.
+- `scripts/jig doctor` now reports missing Codex Jig skills as optional setup instead of blocking overall repo readiness.
 - Behavior change: repo-local `scripts/jig` launchers now run the Jig binary from the owning repository root even when invoked by absolute path from another current directory. This makes check/dev/proxy/agent commands consistently operate on the owning repo; `jig init`, `jig adopt`, and `jig update` still resolve relative destination/template paths against the caller's original directory.
 - Require `--accept-trust-scope` before installing the Jig Dev Proxy local CA through the platform trust tooling.
 - Vite proxy host support relies on Vite's `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` compatibility hook; configure Vite `server.allowedHosts` explicitly if a Vite release changes that hook.

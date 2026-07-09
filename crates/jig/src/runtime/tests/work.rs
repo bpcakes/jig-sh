@@ -353,7 +353,6 @@ fn work_check_runs_configured_tools() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -375,7 +374,6 @@ fn work_check_rejects_unknown_plan_before_running_tools() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_missing".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap_err()
@@ -406,7 +404,6 @@ fn work_check_rejects_closed_plan_before_running_tools() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap_err()
@@ -430,7 +427,6 @@ fn work_check_collects_worktree_fingerprint_only_on_batch_receipt() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -470,7 +466,6 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -479,7 +474,6 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -518,7 +512,6 @@ fn work_gates_reports_missing_and_passing_required_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -534,7 +527,6 @@ fn work_gates_reports_missing_and_passing_required_gates() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -543,7 +535,6 @@ fn work_gates_reports_missing_and_passing_required_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -567,7 +558,6 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -575,10 +565,7 @@ fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() 
     let evidence = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts {
-                plan_id: None,
-                summary: false,
-            },
+            crate::cli::WorkEvidenceOpts { plan_id: None },
         )),
     )
     .unwrap();
@@ -621,10 +608,7 @@ fn work_evidence_gate_health_reflects_blocked_gates() {
     let evidence = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts {
-                plan_id: None,
-                summary: false,
-            },
+            crate::cli::WorkEvidenceOpts { plan_id: None },
         )),
     )
     .unwrap();
@@ -647,7 +631,6 @@ fn work_evidence_reports_closed_plan_state() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -668,7 +651,6 @@ fn work_evidence_reports_closed_plan_state() {
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
             crate::cli::WorkEvidenceOpts {
                 plan_id: Some("plan_1".into()),
-                summary: false,
             },
         )),
     )
@@ -696,10 +678,7 @@ fn work_evidence_requires_plan_id_when_multiple_plans_are_open() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts {
-                plan_id: None,
-                summary: false,
-            },
+            crate::cli::WorkEvidenceOpts { plan_id: None },
         )),
     )
     .unwrap_err()
@@ -726,17 +705,14 @@ fn work_evidence_without_open_plan_points_to_work_status() {
     let error = dispatch(
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Evidence(
-            crate::cli::WorkEvidenceOpts {
-                plan_id: None,
-                summary: false,
-            },
+            crate::cli::WorkEvidenceOpts { plan_id: None },
         )),
     )
     .unwrap_err()
     .to_string();
 
     assert!(error.contains("No open work plans"));
-    assert!(error.contains("scripts/jig work status --summary"));
+    assert!(error.contains("scripts/jig work status"));
 }
 
 #[test]
@@ -749,7 +725,6 @@ fn work_gates_defaults_to_single_open_plan() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: None,
-            summary: false,
         })),
     )
     .unwrap();
@@ -769,7 +744,6 @@ fn work_gates_rejects_unknown_plan() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_missing".into()),
-            summary: false,
         })),
     )
     .unwrap_err()
@@ -838,7 +812,6 @@ fn work_finish_allows_passing_required_gates() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -872,7 +845,6 @@ fn work_gates_reject_stale_required_gate_receipts() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -882,7 +854,6 @@ fn work_gates_reject_stale_required_gate_receipts() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some(plan_id.clone()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -920,7 +891,6 @@ fn work_gates_reject_unknown_required_gate_freshness() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: plan_id.clone(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap();
@@ -929,7 +899,6 @@ fn work_gates_reject_unknown_required_gate_freshness() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some(plan_id.clone()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -996,7 +965,6 @@ fn work_review_records_structured_codex_review_findings() {
             crate::cli::WorkReviewOpts {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
-                summary: false,
             },
         )),
     )
@@ -1014,7 +982,6 @@ fn work_review_records_structured_codex_review_findings() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1057,7 +1024,6 @@ fn work_review_surfaces_raw_counts_when_findings_are_truncated() {
             crate::cli::WorkReviewOpts {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
-                summary: false,
             },
         )),
     )
@@ -1078,7 +1044,6 @@ fn work_review_surfaces_raw_counts_when_findings_are_truncated() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1109,7 +1074,6 @@ fn work_review_fails_when_codex_exits_nonzero_with_below_threshold_findings() {
             crate::cli::WorkReviewOpts {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
-                summary: false,
             },
         )),
     )
@@ -1123,7 +1087,6 @@ fn work_review_fails_when_codex_exits_nonzero_with_below_threshold_findings() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1149,7 +1112,6 @@ fn work_review_records_invalid_output_when_codex_writes_no_structured_output() {
             crate::cli::WorkReviewOpts {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
-                summary: false,
             },
         )),
     )
@@ -1186,7 +1148,6 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1206,7 +1167,6 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1232,7 +1192,6 @@ fn work_refine_fails_when_review_gate_returns_invalid_output() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1254,7 +1213,6 @@ fn work_refine_fails_when_review_gate_returns_invalid_output() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1287,7 +1245,6 @@ fn work_refine_reports_failed_checks_without_aborting() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1322,7 +1279,6 @@ fn work_refine_reports_remaining_findings_after_max_iterations() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1359,7 +1315,6 @@ fn work_refine_reports_fixer_failure_without_aborting() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1395,7 +1350,6 @@ fn work_refine_requires_explicit_refinement_before_writing() {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
                 max_iterations: 1,
-                summary: false,
             },
         )),
     )
@@ -1643,7 +1597,6 @@ fn work_gates_use_direct_receipt_when_prior_batch_ended_in_same_millisecond() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1691,7 +1644,6 @@ fn work_gates_use_legacy_batch_receipt_without_receipt_ids() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1761,7 +1713,6 @@ fn work_gates_use_exact_batch_receipt_id_when_batches_interleave() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
@@ -1783,7 +1734,6 @@ fn work_gates_keep_failed_checks_failed_when_freshness_is_unknown() {
         CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
             plan_id: "plan_1".into(),
             tools: Vec::new(),
-            summary: false,
         })),
     )
     .unwrap_err()
@@ -1794,7 +1744,6 @@ fn work_gates_keep_failed_checks_failed_when_freshness_is_unknown() {
         &ctx,
         CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
             plan_id: Some("plan_1".into()),
-            summary: false,
         })),
     )
     .unwrap();
