@@ -54,6 +54,7 @@ fn update_allows_embedded_source_to_switch_to_committed_checkout() {
             vcs_ref: None,
             force: false,
             write: true,
+            minimal: false,
             defaults: true,
             no_input: true,
             no_vault: true,

@@ -14,6 +14,23 @@ use crate::context::{
 mod dev;
 mod vault;
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HarnessFootprint {
+    #[default]
+    Full,
+    Minimal,
+}
+
+impl HarnessFootprint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Minimal => "minimal",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RenderAnswers {
     repo_name: String,
@@ -21,6 +38,8 @@ pub(super) struct RenderAnswers {
     ci_github_runner: String,
     jig_version: String,
     template_source_url: String,
+    #[serde(serialize_with = "serialize_harness_footprint")]
+    harness_footprint: HarnessFootprint,
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
@@ -85,6 +104,10 @@ impl AnswerInput {
                 shape: AnswerInputShape::default(),
             });
         };
+        Self::from_file(path)
+    }
+
+    pub(super) fn from_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         let value = toml::from_str::<toml::Value>(&text)
@@ -209,6 +232,18 @@ impl RenderAnswers {
         &self.frontend_apps
     }
 
+    pub(super) fn harness_footprint(&self) -> HarnessFootprint {
+        self.harness_footprint
+    }
+
+    pub(super) fn is_minimal_footprint(&self) -> bool {
+        self.harness_footprint == HarnessFootprint::Minimal
+    }
+
+    pub(super) fn frontend_harness_enabled(&self) -> bool {
+        !self.is_minimal_footprint() && !self.frontend_apps.is_empty()
+    }
+
     pub(super) fn dev_apps_configured(&self) -> bool {
         !self.dev_apps.is_empty() || !self.generated_frontend_dev_apps.is_empty()
     }
@@ -249,6 +284,8 @@ struct RawAnswers {
     ci_github_runner: Option<String>,
     jig_version: Option<String>,
     template_source_url: Option<String>,
+    #[serde(default)]
+    harness_footprint: Option<HarnessFootprint>,
     sqlx_enabled: Option<bool>,
     rust_crate_roots: Option<Vec<String>>,
     rust_migration_dir: Option<String>,
@@ -316,6 +353,7 @@ impl RawAnswers {
             &mut self.template_source_url,
             opts.template_source_url.clone(),
         );
+        merge_option(&mut self.harness_footprint, opts.harness_footprint);
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
             self.rust_crate_roots = Some(opts.rust_crate_roots.clone());
@@ -485,6 +523,7 @@ impl RawAnswers {
                 .jig_version
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
             template_source_url: self.template_source_url.unwrap_or_default(),
+            harness_footprint: self.harness_footprint.unwrap_or_default(),
             sqlx_enabled,
             rust_crate_roots: self
                 .rust_crate_roots
@@ -677,6 +716,16 @@ fn web_run_command(package_manager: &str) -> &'static str {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn serialize_harness_footprint<S>(
+    value: &HarnessFootprint,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.as_str())
 }
 
 fn default_codex_marketplaces() -> Vec<CodexMarketplaceAnswers> {

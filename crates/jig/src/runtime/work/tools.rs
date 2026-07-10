@@ -24,10 +24,10 @@ pub(super) fn validate_check_tool(ctx: &RepoContext, name: &str, label: &str) ->
             super::super::tool_execution::undeclared_tool_message(ctx, name)
         )
     })?;
-    if !tool_defs::is_execution_tool(tool) {
-        bail!("{label} is not an execution tool: {name}");
-    }
-    if tool_defs::execution_tool_requires_name(tool) {
+    if !tool_defs::is_no_arg_execution_tool(tool) {
+        if !tool_defs::is_execution_tool(tool) {
+            bail!("{label} is not an execution tool: {name}");
+        }
         bail!("{label} requires an argument and cannot run as a configured gate: {name}");
     }
     Ok(())

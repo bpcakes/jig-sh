@@ -55,6 +55,9 @@ struct RepoConfig {
     template_source_url: String,
     #[allow(dead_code)]
     #[serde(default)]
+    harness_footprint: HarnessFootprintConfig,
+    #[allow(dead_code)]
+    #[serde(default)]
     sqlx_enabled: bool,
     #[allow(dead_code)]
     #[serde(default)]
@@ -117,6 +120,14 @@ struct RepoConfig {
     loop_config: LoopConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum HarnessFootprintConfig {
+    #[default]
+    Full,
+    Minimal,
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -395,6 +406,10 @@ impl RepoContext {
         &self.config.jig_version
     }
 
+    pub(crate) fn is_minimal_footprint(&self) -> bool {
+        self.config.harness_footprint == HarnessFootprintConfig::Minimal
+    }
+
     pub(crate) fn sqlx_enabled(&self) -> bool {
         self.config.sqlx_enabled
     }
@@ -549,7 +564,11 @@ impl FeatureContext for RepoContext {
     }
 
     fn frontend_app_count(&self) -> usize {
-        self.frontend_apps().len()
+        if self.is_minimal_footprint() {
+            0
+        } else {
+            self.frontend_apps().len()
+        }
     }
 }
 

@@ -363,6 +363,11 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
     let mut summary = String::new();
     summary.push_str("adopt summary\n");
     push_summary_field(&mut summary, "mode", output["render_mode"].as_str());
+    push_summary_field(
+        &mut summary,
+        "footprint",
+        output["harness_footprint"].as_str(),
+    );
     push_summary_field(&mut summary, "target", output["destination"].as_str());
 
     let report = &output["render_report"];

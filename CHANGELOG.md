@@ -48,6 +48,8 @@
 ## Unreleased
 
 ### Added
+- Add `jig adopt --minimal` to render `.jig.toml` and `.agent/` scaffolding without scripts, workflows, or agent context files; stores `harness_footprint = "minimal"` so `jig update` keeps the thin footprint until a full re-adopt.
+- Add `.agent/jig-managed-paths.json` as the strict exact-path authority for managed-file retirement; older adopted repositories establish it with an explicit same-footprint re-adopt before updating or contracting.
 - Add `scripts/jig doctor` and `scripts/jig info` / `scripts/jig explain` for repo readiness and configuration snapshots.
 - Add `scripts/jig work evidence` and the `jig.work_evidence` MCP tool for fresh/stale gate evidence inspection.
 - Add `scripts/jig vault run --file VAR=SECRET` for Unix-only secret-file delivery and human-readable vault run summaries by default (`--json` for the full buffered payload).
@@ -57,6 +59,7 @@
 - Enable the `dev-proxy` Cargo feature by default while preserving `--no-default-features` builds for contract/MCP-only consumers.
 
 ### Changed
+- Minimal frontend adoption now retains frontend/dev metadata while deferring TypeScript commands, contract tools, work gates, scripts, workflows, and package validation until full-harness adoption.
 - Breaking: CLI commands now print human-readable output by default. Pass global `--json` for structured automation output. The per-command `--summary` flag is removed; scripts that parsed default JSON must add `--json`, and scripts that passed `--summary` should drop that flag.
 - Breaking: `jig init`, `jig adopt`, and `jig update` now print human-readable summaries by default and only print their full structured reports when `--json` is supplied.
 - Default release builds of `jig init` and `jig adopt` to the official `jig-sh` template source pinned to the installed Jig version's release tag; unreleased or dirty local builds now use templates embedded in the binary when `--template` is omitted, with a checked-in snapshot for packaged builds and generated launchers that reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to configured or official install sources. `--template /path/to/jig-sh` and `--vcs-ref <ref>` remain available for explicit checkout or remote template code.

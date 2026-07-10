@@ -390,6 +390,10 @@ pub(crate) fn is_execution_tool(tool: &ManifestTool) -> bool {
     is_command_tool(tool) || is_native_tool(tool)
 }
 
+pub(crate) fn is_no_arg_execution_tool(tool: &ManifestTool) -> bool {
+    is_execution_tool(tool) && !execution_tool_requires_name(tool)
+}
+
 pub(crate) fn execution_tool_args(tool: &ManifestTool, args_obj: &JsonObject) -> Result<Value> {
     if execution_tool_requires_name(tool) {
         let name = required_string_arg(args_obj, args::NAME)?;
@@ -468,6 +472,8 @@ pub(crate) fn string_arg(map: &JsonObject, key: &str) -> Option<String> {
 mod tests {
     use std::collections::BTreeSet;
 
+    use jig_contract::ManifestTool;
+
     use super::*;
 
     #[test]
@@ -483,5 +489,19 @@ mod tests {
         assert!(unique.contains(tool::WORK_EVIDENCE));
         assert!(unique.contains(tool::WORK_REVIEW));
         assert!(unique.contains(tool::WORK_REFINE));
+    }
+
+    #[test]
+    fn no_arg_execution_tool_excludes_argument_taking_native_tools() {
+        let command =
+            ManifestTool::new("jig.test", kind::COMMAND, "Test.").with_command("rust_test_command");
+        let contract = ManifestTool::new(tool::CONTRACT_CHECK, kind::NATIVE, "Contract.");
+        let migration = ManifestTool::new(tool::MIGRATION_ADD, kind::NATIVE, "Migration.");
+        let unsupported = ManifestTool::new("jig.memory", "memory", "Memory.");
+
+        assert!(is_no_arg_execution_tool(&command));
+        assert!(is_no_arg_execution_tool(&contract));
+        assert!(!is_no_arg_execution_tool(&migration));
+        assert!(!is_no_arg_execution_tool(&unsupported));
     }
 }

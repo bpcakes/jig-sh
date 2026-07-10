@@ -7,7 +7,7 @@
     "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command"[% if frontend_apps | length > 0 %],
+    "rust_test_locked_command"[% if frontend_harness_enabled %],
     "typescript_lint_command",
     "typescript_typecheck_command",
     "typescript_build_command",
@@ -46,7 +46,7 @@
       "description": "Run the configured locked test command.",
       "command": "rust_test_locked_command"
     },
-[% if frontend_apps | length > 0 %]
+[% if frontend_harness_enabled %]
     {
       "name": "jig.typescript_lint",
       "kind": "command",

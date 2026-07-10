@@ -13,6 +13,7 @@ validate_jig_mcp_smoke() {
 import json
 import os
 import pathlib
+import select
 import subprocess
 import sys
 import tempfile
@@ -24,23 +25,17 @@ stderr_file = tempfile.TemporaryFile()
 proc = None
 
 def send(message):
-    body = json.dumps(message).encode()
-    proc.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    proc.stdin.write(json.dumps(message).encode() + b"\n")
     proc.stdin.flush()
 
 def recv():
-    headers = {}
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("MCP server closed stdout unexpectedly")
-        if line == b"\r\n":
-            break
-        name, value = line.decode().split(":", 1)
-        headers[name.lower()] = value.strip()
-
-    body = proc.stdout.read(int(headers["content-length"]))
-    return json.loads(body)
+    readable, _, _ = select.select([proc.stdout], [], [], 5)
+    if not readable:
+        raise RuntimeError("Timed out waiting for MCP server response")
+    line = proc.stdout.readline()
+    if not line:
+        raise RuntimeError("MCP server closed stdout unexpectedly")
+    return json.loads(line)
 
 def print_mcp_stderr():
     stderr_file.flush()

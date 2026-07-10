@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tempfile::Builder as TempFileBuilder;
 use time::OffsetDateTime;
 use toml::Table;
 #[cfg(test)]
@@ -26,7 +27,7 @@ use git::{git, git_stdout};
 #[cfg(test)]
 use initial_copy::seed_answers_toml;
 use initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
-use path::{absolute_path_from, bootstrap_invocation_cwd};
+use path::{absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
 use renderer::{RenderStageRequest, stage_render};
@@ -52,15 +53,20 @@ mod path;
 mod presets;
 mod preview_seed;
 mod renderer;
+mod runtime_config;
 mod scaffold;
 mod staged_render;
 mod sync;
 mod template_source;
 
+pub use answers::HarnessFootprint;
 pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
 
 const ANSWERS_FILE: &str = ".jig.toml";
+const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
+const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
+const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
 const GIT_BIN_ENV: &str = "JIG_GIT_BIN";
 const BUILD_TEMPLATE_PIN_RELEASED: &str = "released";
 const BUILD_TEMPLATE_PIN_UNRELEASED: &str = "unreleased";
@@ -165,6 +171,7 @@ answers resolve to a tooling-only profile. Pass --sqlx-enabled true and --rust-m
 Examples:
   jig adopt .
   jig adopt . --write
+  jig adopt . --minimal --write
   jig adopt . --write --template /path/to/jig-sh --template-mode committed")]
 pub struct AdoptOpts {
     #[arg(default_value = ".", help = "Existing repository directory to adopt")]
@@ -189,6 +196,12 @@ pub struct AdoptOpts {
     pub force: bool,
     #[arg(long, help = "Write rendered managed files; omit to preview only")]
     pub write: bool,
+    #[arg(
+        long,
+        help = "Render only .jig.toml and .agent/ scaffolding (no scripts, workflows, or agent context files)",
+        long_help = "Render a loop-ready minimal footprint: .jig.toml, .agent/jig-contract.json, and .agent/ scaffolding, plus block-managed .gitignore/.gitattributes. Omits scripts/, .github/workflows/, AGENTS.md, agent-map.md, and .mcp.json. Stores harness_footprint = \"minimal\" so jig update keeps the same footprint until you re-adopt without --minimal."
+    )]
+    pub minimal: bool,
     #[arg(
         long,
         help = "Use default answers for omitted configuration prompts and adopt write confirmation; vault setup captures credentials before rendering"
@@ -370,6 +383,12 @@ pub fn run_init(opts: InitOpts) -> Result<Value> {
         opts.template_mode,
         &invocation_cwd,
     ))?;
+    fs::create_dir_all(&destination).with_context(|| {
+        format!(
+            "Failed to create init destination {}",
+            destination.display()
+        )
+    })?;
 
     let copy_result = render_and_copy_bootstrap_template(BootstrapCopyRequest {
         destination: &destination,
@@ -381,6 +400,11 @@ pub fn run_init(opts: InitOpts) -> Result<Value> {
         dry_run: false,
         backup_root: None,
         seed_repo_path: None,
+        prior_harness_footprint: None,
+        prior_managed_paths: None,
+        reconcile_runtime_config: false,
+        allow_answers_overwrite: false,
+        allow_contract_overwrite: false,
         reserved_output_paths: scaffold_plan
             .as_ref()
             .map(scaffold::InitScaffoldPlan::output_paths)
@@ -420,6 +444,7 @@ pub fn run_init(opts: InitOpts) -> Result<Value> {
             copy_result.notes,
             copy_result.frontend_apps_configured,
             scaffold_plan.as_ref(),
+            false,
         ),
     }))
 }
@@ -431,6 +456,8 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     progress.header_for_path("render harness into existing repo", &destination);
     progress.step("validate destination", "existing repository directory");
     progress.log_blocked_on_err(validate_adopt_destination(&destination))?;
+    let prior_managed_paths =
+        progress.log_blocked_on_err(managed_paths::load_manifest(&destination))?;
     progress.step(
         "resolve template",
         template_progress_label(opts.template.as_deref()),
@@ -446,11 +473,49 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     ))?;
     progress.step("infer answers", "scan existing repository");
     let inference = adopt_infer::infer_adopt_answers(&destination);
+    let prior_answers = recognized_prior_answers(&destination);
+    let requested_harness_footprint = if opts.minimal {
+        HarnessFootprint::Minimal
+    } else {
+        HarnessFootprint::Full
+    };
+    let expands_minimal_harness = prior_answers.as_ref().is_some_and(|prior| {
+        prior.harness_footprint() == HarnessFootprint::Minimal
+            && requested_harness_footprint == HarnessFootprint::Full
+    });
+    let changes_harness_footprint = prior_answers
+        .as_ref()
+        .is_some_and(|prior| prior.harness_footprint() != requested_harness_footprint);
+    let establishes_manifest = prior_managed_paths.is_none() && prior_answers.is_some();
+    if prior_managed_paths.is_none()
+        && prior_answers.as_ref().is_some_and(|prior| {
+            prior.harness_footprint() == HarnessFootprint::Full
+                && requested_harness_footprint == HarnessFootprint::Minimal
+        })
+    {
+        bail!(
+            "Cannot switch this adopted repository from the full harness to --minimal because {} is missing. First run `jig adopt . --write` without --minimal to establish exact managed-path ownership, then retry the minimal adoption.",
+            managed_paths::MANIFEST_PATH
+        );
+    }
     let mut answers = opts.answers.clone();
-    let answer_input = progress.log_blocked_on_err(AnswerInput::from_opts(&answers))?;
+    answers.harness_footprint = Some(requested_harness_footprint);
+    let answer_input = progress.log_blocked_on_err(
+        if (changes_harness_footprint || establishes_manifest) && answers.answers_file.is_none() {
+            AnswerInput::from_file(&destination.join(ANSWERS_FILE))
+        } else {
+            AnswerInput::from_opts(&answers)
+        },
+    )?;
     let answer_shape = answer_input.shape().clone();
     progress.info("detected", inference.summary());
     progress.info("detected stack", inference.detected_stack_label());
+    if opts.minimal {
+        progress.info(
+            "footprint",
+            "minimal (.jig.toml + .agent/ scaffolding; no scripts/workflows/context files)",
+        );
+    }
     for warning in inference.warnings() {
         progress.info("warning", warning);
     }
@@ -468,6 +533,12 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         );
     }
     let backup_root = opts.write.then(|| adopt_backup_root(&destination));
+    if opts.write {
+        progress.log_blocked_on_err(validate_adopt_output_ancestors(
+            &destination,
+            backup_root.as_deref(),
+        ))?;
+    }
 
     let copy_result = render_and_copy_bootstrap_template(BootstrapCopyRequest {
         destination: &destination,
@@ -479,6 +550,11 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         dry_run: !opts.write,
         backup_root: backup_root.clone(),
         seed_repo_path: Some(&destination),
+        prior_harness_footprint: prior_answers.as_ref().map(RenderAnswers::harness_footprint),
+        prior_managed_paths: prior_managed_paths.as_ref(),
+        reconcile_runtime_config: prior_answers.is_some(),
+        allow_answers_overwrite: expands_minimal_harness || establishes_manifest,
+        allow_contract_overwrite: expands_minimal_harness,
         reserved_output_paths: Vec::new(),
         progress,
     })?;
@@ -500,6 +576,11 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         "ok": true,
         "command": "adopt",
         "render_mode": if opts.write { "copy" } else { "preview" },
+        "harness_footprint": if copy_result.minimal_footprint {
+            "minimal"
+        } else {
+            "full"
+        },
         "template": template.source(),
         "destination": destination.display().to_string(),
         "answers_file": ANSWERS_FILE,
@@ -516,7 +597,12 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         "adoption_review": review.items,
         "render_report": initial_render_report(&copy_result),
         "next_steps": initial_next_steps(InitialCommand::Adopt, &destination, &copy_result),
-        "notes": initial_notes(copy_result.notes, copy_result.frontend_apps_configured, None),
+        "notes": initial_notes(
+            copy_result.notes,
+            copy_result.frontend_apps_configured,
+            None,
+            copy_result.minimal_footprint,
+        ),
     }))
 }
 
@@ -703,6 +789,14 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
     progress.header_for_path(format!("refresh harness ({mode})"), &destination);
     progress.step("validate destination", "adopted repository directory");
     progress.log_blocked_on_err(validate_update_destination(&destination))?;
+    let prior_managed_paths = progress
+        .log_blocked_on_err(managed_paths::load_manifest(&destination))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot update this repository because {} is missing. Run `jig adopt . --write` with the current harness footprint to establish exact managed-path ownership, then retry `jig update`.",
+                managed_paths::MANIFEST_PATH
+            )
+        })?;
     let answers_path = destination.join(ANSWERS_FILE);
     progress.step("read answers", answers_path.display());
     let stored = progress.log_blocked_on_err(read_stored_template_state(&answers_path))?;
@@ -719,10 +813,14 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         );
     };
     let answers = progress.log_blocked_on_err(RenderAnswers::from_answers_file(&answers_path))?;
+    let reconcile_runtime_config =
+        crate::context::RepoContext::validate_config_file(&destination).is_ok();
     let staged = stage_render(RenderStageRequest {
         template: &update_template,
         answers: &answers,
         seed_repo_path: Some(&destination),
+        prior_managed_paths: Some(&prior_managed_paths),
+        reconcile_runtime_config,
         progress,
     })?;
     let render_report = apply_staged_render(
@@ -732,6 +830,8 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
             force: opts.force,
             dry_run: false,
             allow_answers_overwrite: true,
+            allow_contract_overwrite: false,
+            allow_manifest_overwrite: true,
             backup_root: None,
             conflict_message: "Update would overwrite or remove template-managed paths. No files were changed. Re-run with --force to accept the rendered output:",
             progress,
@@ -748,6 +848,12 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         "git_initialized": false,
         "render_report": render_report,
     }))
+}
+
+fn recognized_prior_answers(destination: &Path) -> Option<RenderAnswers> {
+    let answers = RenderAnswers::from_answers_file(&destination.join(ANSWERS_FILE)).ok()?;
+    crate::context::RepoContext::validate_config_file(destination).ok()?;
+    Some(answers)
 }
 
 fn template_progress_label(template: Option<&str>) -> String {
@@ -774,8 +880,31 @@ fn initial_next_steps(
     )];
     if command == InitialCommand::Adopt && result.apply_report.dry_run {
         steps.push("Review the adoption preview and managed-file diff.".into());
-        steps.push("Re-run jig adopt . --write after reviewing the summary.".into());
+        if result.minimal_footprint {
+            if result.full_to_minimal_transition {
+                steps.push("jig adopt . --minimal --write --force".into());
+            } else {
+                steps.push(
+                    "Re-run jig adopt . --minimal --write after reviewing the summary.".into(),
+                );
+            }
+        } else {
+            steps.push("Re-run jig adopt . --write after reviewing the summary.".into());
+        }
         steps.push("No files were changed by this preview.".into());
+        return steps;
+    }
+    if result.minimal_footprint {
+        steps.push(
+            "Add [[loop.workflows]] entries to .jig.toml, then run jig loop tick / jig loop run."
+                .into(),
+        );
+        steps.push(
+            "Re-run jig adopt . --write (without --minimal) when you want the full harness.".into(),
+        );
+        if command == InitialCommand::Adopt {
+            steps.push("Commit the adoption diff after reviewing .jig.toml and .agent/.".into());
+        }
         return steps;
     }
     if result.bootstrap_command_configured {
@@ -809,20 +938,29 @@ fn initial_notes(
     extra_notes: Vec<String>,
     frontend_apps_configured: bool,
     scaffold_plan: Option<&scaffold::InitScaffoldPlan>,
+    minimal_footprint: bool,
 ) -> Vec<String> {
-    let mut notes = vec![
-        "The first scripts/jig command may install or compile the pinned Jig runtime into this repo's local cache.".into(),
-        "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
-        "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
-        "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
-    ];
+    let mut notes = if minimal_footprint {
+        vec![
+            "Minimal adoption wrote .jig.toml and .agent/ scaffolding only; scripts/, workflows, AGENTS.md, agent-map.md, and .mcp.json were omitted.".into(),
+            "harness_footprint = \"minimal\" is stored in .jig.toml so jig update keeps the same footprint until you re-adopt without --minimal.".into(),
+            "Invoke the installed jig binary directly for loop commands; there is no scripts/jig launcher yet.".into(),
+        ]
+    } else {
+        vec![
+            "The first scripts/jig command may install or compile the pinned Jig runtime into this repo's local cache.".into(),
+            "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
+            "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
+            "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
+        ]
+    };
     if scaffold_plan.is_some() {
         notes.push(
             "Scaffolded application code is project-owned after creation. jig update keeps the Jig harness current and does not rewrite app code."
                 .into(),
         );
     }
-    if frontend_apps_configured {
+    if frontend_apps_configured && !minimal_footprint {
         notes.push(
             "Frontend checks expect package scripts for lint, typecheck, build:bundle, and test:coverage plus a package-manager lockfile; generated preset apps include them."
                 .into(),
@@ -832,10 +970,12 @@ fn initial_notes(
                 .into(),
         );
     }
-    notes.push(
-        "Policy gates are available as scripts/jig check contract and scripts/jig check agent-guides when evidence is needed."
-            .into(),
-    );
+    if !minimal_footprint {
+        notes.push(
+            "Policy gates are available as scripts/jig check contract and scripts/jig check agent-guides when evidence is needed."
+                .into(),
+        );
+    }
     if let Some(note) = scaffold_plan.and_then(scaffold::InitScaffoldPlan::sanitized_repo_name_note)
     {
         notes.push(note);
@@ -848,6 +988,43 @@ fn adopt_backup_root(destination: &Path) -> PathBuf {
     destination
         .join(".agent/.cache/adopt/backups")
         .join(Ulid::new().to_string())
+}
+
+fn validate_adopt_output_ancestors(destination: &Path, backup_root: Option<&Path>) -> Result<()> {
+    validate_adopt_receipt_paths(destination)?;
+    if let Some(backup_root) = backup_root {
+        let backup_relative = backup_root.strip_prefix(destination).with_context(|| {
+            format!(
+                "Backup destination {} must be contained by repository root {}",
+                backup_root.display(),
+                destination.display()
+            )
+        })?;
+        validate_repository_relative_ancestors(destination, &backup_relative.join("preflight"))?;
+    }
+    Ok(())
+}
+
+fn validate_adopt_receipt_paths(destination: &Path) -> Result<()> {
+    for relative in ADOPT_RECEIPT_PATHS.map(Path::new) {
+        validate_repository_relative_ancestors(destination, relative)?;
+        let receipt_path = destination.join(relative);
+        match fs::symlink_metadata(&receipt_path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => {
+                bail!(
+                    "Adopt receipt path must be missing or a regular file, not a symlink, directory, or other file type: {}",
+                    receipt_path.display()
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to stat {}", receipt_path.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn confirm_adopt_write(opts: &AdoptOpts) -> Result<()> {
@@ -882,40 +1059,100 @@ fn write_adopt_last_receipt(
     backup_root: Option<&Path>,
     result: &initial_copy::BootstrapCopyResult,
 ) -> Result<()> {
-    let adopt_cache_dir = destination.join(".agent/.cache/adopt");
-    fs::create_dir_all(&adopt_cache_dir)
-        .with_context(|| format!("Failed to create {}", adopt_cache_dir.display()))?;
-    let receipt_path = adopt_cache_dir.join("adopt-last.json");
+    validate_adopt_output_ancestors(destination, backup_root)?;
     let receipt = json!({
         "command": "adopt",
         "created_at_unix": OffsetDateTime::now_utc().unix_timestamp(),
         "destination": destination.display().to_string(),
         "backup_root": backup_root.map(|path| path.display().to_string()),
-        "canonical_receipt_path": ".agent/.cache/adopt/adopt-last.json",
-        "legacy_receipt_path": ".agent/state/adopt-last.json",
+        "canonical_receipt_path": ADOPT_RECEIPT_PATH,
+        "legacy_receipt_path": LEGACY_ADOPT_RECEIPT_PATH,
         "legacy_receipt_deprecated": true,
         "apply_report": &result.apply_report,
         "undo_hint": "Use apply_report.backups to restore modified or removed files, then delete paths listed in apply_report.files_created if you want to undo this adopt write. Delete backup_root when those backups are no longer needed.",
     });
     let text =
         serde_json::to_string_pretty(&receipt).context("Failed to serialize adopt receipt")?;
-    fs::write(&receipt_path, format!("{text}\n"))
-        .with_context(|| format!("Failed to write {}", receipt_path.display()))?;
+    let bytes = format!("{text}\n");
+    write_adopt_receipt_atomic(destination, Path::new(ADOPT_RECEIPT_PATH), bytes.as_bytes())?;
     // TODO(jig-0.4): remove the legacy receipt copy after adopted repos have
     // had a release window to migrate readers to the canonical cache path.
-    let legacy_receipt_path = destination.join(".agent/state/adopt-last.json");
-    if let Some(parent) = legacy_receipt_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(&legacy_receipt_path, format!("{text}\n"))
-        .with_context(|| format!("Failed to write {}", legacy_receipt_path.display()))?;
+    write_adopt_receipt_atomic(
+        destination,
+        Path::new(LEGACY_ADOPT_RECEIPT_PATH),
+        bytes.as_bytes(),
+    )?;
     Ok(())
+}
+
+fn write_adopt_receipt_atomic(destination: &Path, relative: &Path, bytes: &[u8]) -> Result<()> {
+    validate_adopt_receipt_paths(destination)?;
+    let receipt_path = destination.join(relative);
+    let parent = receipt_path.parent().with_context(|| {
+        format!(
+            "Adopt receipt path has no parent: {}",
+            receipt_path.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+    validate_adopt_receipt_paths(destination)?;
+
+    let existing_permissions = match fs::symlink_metadata(&receipt_path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to stat {}", receipt_path.display()));
+        }
+    };
+    let mut temp_builder = TempFileBuilder::new();
+    #[cfg(unix)]
+    if existing_permissions.is_none() {
+        use std::os::unix::fs::PermissionsExt;
+
+        temp_builder.permissions(fs::Permissions::from_mode(0o666));
+    }
+    let mut temp = temp_builder.tempfile_in(parent).with_context(|| {
+        format!(
+            "Failed to create temporary adopt receipt in {}",
+            parent.display()
+        )
+    })?;
+    if let Some(permissions) = existing_permissions {
+        temp.as_file()
+            .set_permissions(permissions)
+            .with_context(|| {
+                format!(
+                    "Failed to preserve permissions for {}",
+                    receipt_path.display()
+                )
+            })?;
+    }
+    temp.write_all(bytes).with_context(|| {
+        format!(
+            "Failed to write temporary adopt receipt for {}",
+            receipt_path.display()
+        )
+    })?;
+    temp.as_file().sync_all().with_context(|| {
+        format!(
+            "Failed to sync temporary adopt receipt for {}",
+            receipt_path.display()
+        )
+    })?;
+
+    validate_adopt_receipt_paths(destination)?;
+    temp.persist(&receipt_path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to write {}", receipt_path.display()))
 }
 
 fn initial_render_report(result: &initial_copy::BootstrapCopyResult) -> Value {
     json!({
         "dry_run": result.apply_report.dry_run,
+        "active_managed_paths": &result.apply_report.active_managed_paths,
+        "retired_managed_paths": &result.apply_report.retired_managed_paths,
         "files_created": &result.apply_report.files_created,
         "files_modified": &result.apply_report.files_modified,
         "files_removed": &result.apply_report.files_removed,
@@ -931,22 +1168,31 @@ fn initial_render_report(result: &initial_copy::BootstrapCopyResult) -> Value {
 }
 
 fn initial_command_report(result: &initial_copy::BootstrapCopyResult) -> Vec<String> {
+    let launcher = gate_preview::jig_launcher(result.minimal_footprint);
     let mut commands = Vec::new();
     if result.bootstrap_command_configured {
-        commands
-            .push("bootstrap_command configured; run scripts/jig bootstrap before checks".into());
+        commands.push(format!(
+            "bootstrap_command configured; run {launcher} bootstrap before checks"
+        ));
     } else {
-        commands.push("bootstrap_command not configured; skip scripts/jig bootstrap".into());
+        commands.push(format!(
+            "bootstrap_command not configured; skip {launcher} bootstrap"
+        ));
     }
-    commands.push("contract check available through scripts/jig check contract".into());
+    commands.push(format!(
+        "contract check available through {launcher} check contract"
+    ));
     if result.dev_apps_configured {
-        commands.push("[[dev.apps]] configured; run scripts/jig dev".into());
+        commands.push(format!("[[dev.apps]] configured; run {launcher} dev"));
     } else {
-        commands.push("no [[dev.apps]] configured; scripts/jig dev has no app to launch".into());
+        commands.push(format!(
+            "no [[dev.apps]] configured; {launcher} dev has no app to launch"
+        ));
     }
-    if result.frontend_apps_configured {
-        commands
-            .push("frontend app checks available through scripts/jig check typescript-*".into());
+    if result.frontend_apps_configured && !result.minimal_footprint {
+        commands.push(format!(
+            "frontend app checks available through {launcher} check typescript-*"
+        ));
     }
     commands
 }
@@ -962,7 +1208,7 @@ fn initial_todos(result: &initial_copy::BootstrapCopyResult) -> Vec<String> {
     if result.schema_dump_enabled {
         todos.push("Provide the project-owned scripts/dump-schema.sh implementation.".into());
     }
-    if result.frontend_apps_configured {
+    if result.frontend_apps_configured && !result.minimal_footprint {
         todos.push(
             "Confirm each frontend app has package scripts and starts on the injected PORT/HOST."
                 .into(),

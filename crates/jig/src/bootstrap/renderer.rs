@@ -12,6 +12,7 @@ use super::ANSWERS_FILE;
 use super::answers::RenderAnswers;
 use super::embedded_templates::EMBEDDED_TEMPLATE_FILES;
 use super::managed_paths;
+use super::path::validate_no_reserved_git_metadata_components;
 use super::preview_seed::seed_preview_workspace;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
@@ -24,6 +25,8 @@ pub(super) struct RenderStageRequest<'a> {
     pub(super) template: &'a PreparedTemplateSource,
     pub(super) answers: &'a RenderAnswers,
     pub(super) seed_repo_path: Option<&'a Path>,
+    pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
+    pub(super) reconcile_runtime_config: bool,
     pub(super) progress: CliProgress,
 }
 
@@ -44,19 +47,56 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     request
         .progress
         .step("render templates", "managed files, scripts, and workflows");
-    let mut managed_paths = request.progress.log_blocked_on_err(render_template_files(
+    let mut active_paths = request.progress.log_blocked_on_err(render_template_files(
         request.template,
         request.answers,
         &destination,
     ))?;
+    if !request.answers.is_minimal_footprint() {
+        request
+            .progress
+            .step("generate agent map", "native renderer");
+        request
+            .progress
+            .log_blocked_on_err(run_post_render_tasks(&destination))?;
+    } else {
+        request
+            .progress
+            .log_blocked_on_err(set_scripts_executable(&destination))?;
+    }
+    merge_existing_managed_blocks(
+        request.seed_repo_path,
+        &destination,
+        &active_paths,
+        request.progress,
+    )?;
+    let mut retirement_paths = BTreeSet::new();
+    if let Some(prior_paths) = request.prior_managed_paths {
+        retire_inactive_managed_blocks(
+            request.seed_repo_path,
+            &destination,
+            &active_paths,
+            prior_paths,
+            &mut retirement_paths,
+            request.progress,
+        )?;
+    }
+    if request.reconcile_runtime_config {
+        super::runtime_config::reconcile_runtime_config(request.seed_repo_path, &destination)?;
+    }
+
+    active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
     request
         .progress
-        .step("generate agent map", "native renderer");
-    request
-        .progress
-        .log_blocked_on_err(run_post_render_tasks(&destination))?;
-    merge_existing_managed_blocks(request.seed_repo_path, &destination, request.progress)?;
-    managed_paths.extend(managed_paths::retired_managed_paths(request.answers));
+        .log_blocked_on_err(managed_paths::write_manifest(&destination, &active_paths))?;
+    if let Some(prior_paths) = request.prior_managed_paths {
+        retirement_paths.extend(
+            prior_paths
+                .difference(&active_paths)
+                .filter(|path| managed_paths::managed_block_spec(path).is_none())
+                .cloned(),
+        );
+    }
 
     let answers_path = destination.join(ANSWERS_FILE);
     if !answers_path.exists() {
@@ -69,11 +109,25 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
             destination.display()
         );
     }
+    let staged_context = crate::context::RepoContext::load_from_root(destination.clone())
+        .with_context(|| {
+            format!(
+                "Staged render produced an invalid Jig config or contract in {}",
+                destination.display()
+            )
+        })?;
+    crate::policy::validate_contract(&staged_context).with_context(|| {
+        format!(
+            "Staged render produced an invalid Jig config or contract in {}",
+            destination.display()
+        )
+    })?;
 
     Ok(StagedRender {
         _root: root,
         destination,
-        managed_paths,
+        active_paths,
+        retirement_paths,
     })
 }
 
@@ -171,20 +225,135 @@ impl TemplateRender<'_, '_> {
 fn merge_existing_managed_blocks(
     seed_repo_path: Option<&Path>,
     destination: &Path,
+    managed_paths: &BTreeSet<PathBuf>,
     progress: CliProgress,
 ) -> Result<()> {
     let Some(seed_repo_path) = seed_repo_path else {
         return Ok(());
     };
 
-    for relative in [
-        Path::new(managed_paths::ROOT_AGENTS_PATH),
-        Path::new(managed_paths::ROOT_GITATTRIBUTES_PATH),
-        Path::new(managed_paths::ROOT_GITIGNORE_PATH),
-    ] {
+    for spec in managed_paths::managed_block_specs() {
+        let relative = Path::new(spec.path);
+        if !managed_paths.contains(relative) {
+            continue;
+        }
         merge_existing_managed_block(seed_repo_path, destination, relative, progress)?;
     }
     Ok(())
+}
+
+fn retire_inactive_managed_blocks(
+    seed_repo_path: Option<&Path>,
+    destination: &Path,
+    active_paths: &BTreeSet<PathBuf>,
+    prior_paths: &BTreeSet<PathBuf>,
+    retirement_paths: &mut BTreeSet<PathBuf>,
+    progress: CliProgress,
+) -> Result<()> {
+    let Some(seed_repo_path) = seed_repo_path else {
+        return Ok(());
+    };
+
+    for spec in managed_paths::managed_block_specs() {
+        let relative = Path::new(spec.path);
+        if active_paths.contains(relative) || !prior_paths.contains(relative) {
+            continue;
+        }
+        retire_managed_block(
+            seed_repo_path,
+            destination,
+            relative,
+            *spec,
+            retirement_paths,
+            progress,
+        )?;
+    }
+    Ok(())
+}
+
+fn retire_managed_block(
+    seed_repo_path: &Path,
+    destination: &Path,
+    relative: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+    retirement_paths: &mut BTreeSet<PathBuf>,
+    progress: CliProgress,
+) -> Result<()> {
+    let existing_path = seed_repo_path.join(relative);
+    let metadata = match fs::symlink_metadata(&existing_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to stat {}", existing_path.display()));
+        }
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+
+    let existing = fs::read(&existing_path)
+        .with_context(|| format!("Failed to read {}", existing_path.display()))?;
+    let Some((start, end)) = jig_block_byte_bounds(&existing, &existing_path, spec)? else {
+        return Ok(());
+    };
+
+    progress.step(
+        "retire managed block",
+        format!("preserve repo-owned {} content", spec.path),
+    );
+    let remaining = remove_jig_block_and_separator(&existing, start, end);
+    let rendered_path = destination.join(relative);
+    fs::write(&rendered_path, remaining)
+        .with_context(|| format!("Failed to write {}", rendered_path.display()))?;
+    retirement_paths.insert(relative.to_path_buf());
+    Ok(())
+}
+
+fn remove_jig_block_and_separator(contents: &[u8], start: usize, end: usize) -> Vec<u8> {
+    let splice_start = if contents[..start].ends_with(b"\r\n\r\n") {
+        start - 2
+    } else if contents[..start].ends_with(b"\n\n") {
+        start - 1
+    } else {
+        start
+    };
+    let splice_end = if contents[end..].starts_with(b"\r\n") {
+        end + 2
+    } else if contents[end..].starts_with(b"\n") {
+        end + 1
+    } else {
+        end
+    };
+    let mut remaining = Vec::with_capacity(contents.len() - (splice_end - splice_start));
+    remaining.extend_from_slice(&contents[..splice_start]);
+    remaining.extend_from_slice(&contents[splice_end..]);
+    remaining
+}
+
+fn jig_block_byte_bounds(
+    contents: &[u8],
+    path: &Path,
+    spec: managed_paths::ManagedBlockSpec,
+) -> Result<Option<(usize, usize)>> {
+    let begins = byte_match_indices(contents, spec.begin.as_bytes());
+    let ends = byte_match_indices(contents, spec.end.as_bytes());
+    match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => Ok(None),
+        ([begin], [end]) if begin < end => Ok(Some((*begin, end + spec.end.len()))),
+        _ => bail!(
+            "Malformed Jig managed block in {}. Expected exactly one begin marker before exactly one end marker.",
+            path.display()
+        ),
+    }
+}
+
+fn byte_match_indices(contents: &[u8], needle: &[u8]) -> Vec<usize> {
+    contents
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, candidate)| (candidate == needle).then_some(index))
+        .collect()
 }
 
 fn merge_existing_managed_block(
@@ -291,6 +460,10 @@ fn render_context(template: &PreparedTemplateSource, answers: &RenderAnswers) ->
         .cloned()
         .unwrap_or_default();
     context.insert(
+        "frontend_harness_enabled".into(),
+        JsonValue::Bool(answers.frontend_harness_enabled()),
+    );
+    context.insert(
         "_jig".into(),
         json!({
             "commit": template.vcs_ref().unwrap_or_default(),
@@ -344,7 +517,9 @@ fn output_relative_path(relative_template: &Path) -> Result<PathBuf> {
             relative_template.display()
         )
     })?;
-    Ok(relative_template.with_file_name(output_name))
+    let relative = relative_template.with_file_name(output_name);
+    validate_no_reserved_git_metadata_components(&relative)?;
+    Ok(relative)
 }
 
 fn write_rendered_file(destination: &Path, relative: &Path, contents: &[u8]) -> Result<()> {
@@ -370,7 +545,7 @@ fn remove_existing_symlink(path: &Path) -> Result<()> {
 
 fn run_post_render_tasks(destination: &Path) -> Result<()> {
     set_scripts_executable(destination)?;
-    crate::policy::write_agent_map(destination, Path::new("agent-map.md"))
+    crate::policy::write_agent_map(destination, Path::new(managed_paths::AGENT_MAP_PATH))
 }
 
 #[cfg(unix)]
@@ -413,4 +588,65 @@ fn executable_script_paths(destination: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_output_paths_reject_reserved_git_metadata_aliases() {
+        for relative in [
+            ".git/config.jinja",
+            ".git./config.jinja",
+            ".git /config.jinja",
+            "vendor/.GiT.../config.jinja",
+            "vendor/.GIT. . /config.jinja",
+            "GIT~1/config.jinja",
+            "vendor/git~1. . /config.jinja",
+            ".git:stream.jinja",
+            ".git .:stream.jinja",
+            ".git::$INDEX_ALLOCATION.jinja",
+            ".git...:alternate-stream.jinja",
+            ".g\u{200c}it/config.jinja",
+            "\u{feff}.G\u{202e}i\u{206a}T/config.jinja",
+            "vendor\\.GiT...\\config.jinja",
+        ] {
+            let error = output_relative_path(Path::new(relative))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("reserved Git metadata component"),
+                "{relative}: {error}"
+            );
+            assert!(
+                error.contains(relative.trim_end_matches(".jinja")),
+                "{relative}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn template_output_paths_allow_git_near_misses() {
+        for relative in [
+            ".github/workflows/check.yml.jinja",
+            ".gitignore.jinja",
+            ".gitkeep.jinja",
+            "git/config.jinja",
+            "git~2/config.jinja",
+            "git~10/config.jinja",
+            "git~1x/config.jinja",
+            ".gitx. .jinja",
+            ".gitx:stream.jinja",
+            ".git .config.jinja",
+            ".git\u{a0}.jinja",
+            ".git\u{200b}.jinja",
+            ".gi\u{200b}t.jinja",
+            ".git\u{2029}.jinja",
+            ".git\u{2060}.jinja",
+            ".git\u{2069}.jinja",
+        ] {
+            output_relative_path(Path::new(relative)).unwrap();
+        }
+    }
 }

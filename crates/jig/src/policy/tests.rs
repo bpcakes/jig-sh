@@ -38,6 +38,48 @@ rust_test_command = "cargo test"
     .unwrap();
 }
 
+fn write_footprint_contract_repo(root: &Path, footprint: &str) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+harness_footprint = "{footprint}"
+bootstrap_command = "true"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 3,
+            "tool_namespace": "jig",
+            "jig_version": "0.2.0-beta.1",
+            "required_commands": ["bootstrap_command"],
+            "tools": [
+                {
+                    "name": tool::BOOTSTRAP,
+                    "kind": kind::COMMAND,
+                    "description": "Bootstrap.",
+                    "command": "bootstrap_command"
+                },
+                {
+                    "name": tool::CONTRACT_CHECK,
+                    "kind": kind::NATIVE,
+                    "description": "Contract check."
+                }
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 fn write_sqlx_policy_repo(root: &Path) {
     write_policy_repo(root);
     fs::write(
@@ -93,6 +135,89 @@ fn init_git(root: &Path) {
     git(root, &["init", "-q"]);
     git(root, &["config", "user.name", "Fixture"]);
     git(root, &["config", "user.email", "fixture@example.com"]);
+}
+
+#[test]
+fn contract_check_allows_minimal_footprint_to_omit_launcher_files() {
+    let temp = tempdir().unwrap();
+    write_footprint_contract_repo(temp.path(), "minimal");
+
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let output = contract_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+}
+
+#[test]
+fn contract_check_still_validates_minimal_commands_and_tools() {
+    let temp = tempdir().unwrap();
+    write_footprint_contract_repo(temp.path(), "minimal");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("bootstrap_command = \"true\"", "bootstrap_command = \"  \"");
+    fs::write(&config_path, config).unwrap();
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract =
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&contract_path).unwrap())
+            .unwrap();
+    contract["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.unsupported",
+        "kind": kind::NATIVE,
+        "description": "Unsupported."
+    }));
+    fs::write(
+        &contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let output = contract_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(
+        output
+            .stderr
+            .contains("Command key bootstrap_command is empty"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("Unsupported native tool: jig.unsupported"),
+        "{}",
+        output.stderr
+    );
+}
+
+#[test]
+fn contract_check_still_requires_launcher_files_for_full_footprint() {
+    let temp = tempdir().unwrap();
+    write_footprint_contract_repo(temp.path(), "full");
+
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let output = contract_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(
+        output.stderr.contains("Missing .mcp.json."),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("Missing scripts/jig launcher."),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("Missing scripts/install-jig.sh installer."),
+        "{}",
+        output.stderr
+    );
 }
 
 #[test]

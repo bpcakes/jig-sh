@@ -14,7 +14,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
     let mut writer = stdout.lock();
 
     loop {
-        let Some(message) = read_message(&mut reader)? else {
+        let Some((message, framing)) = read_message(&mut reader)? else {
             return Ok(());
         };
 
@@ -67,7 +67,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
         };
 
         if let Some(response) = response {
-            write_message(&mut writer, &response)?;
+            write_message(&mut writer, &response, framing)?;
         }
     }
 }
@@ -112,25 +112,49 @@ fn handle_tool_call(ctx: &RepoContext, id: Option<Value>, params: Value) -> Valu
     }
 }
 
-fn read_message(reader: &mut dyn BufRead) -> Result<Option<Value>> {
-    let mut content_length = None::<usize>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MessageFraming {
+    JsonLine,
+    ContentLength,
+}
+
+fn read_message(reader: &mut dyn BufRead) -> Result<Option<(Value, MessageFraming)>> {
+    let mut first_line = String::new();
     loop {
-        let mut line = String::new();
-        let bytes = reader.read_line(&mut line)?;
+        let bytes = reader.read_line(&mut first_line)?;
         if bytes == 0 {
             return Ok(None);
         }
 
-        // MCP stdio framing is CRLF-delimited, but some local clients send
-        // LF-only header separators. The body remains length-delimited by
-        // Content-Length; MCP headers are still line-oriented.
+        if first_line.trim().is_empty() {
+            first_line.clear();
+        } else {
+            break;
+        }
+    }
+
+    let trimmed = first_line.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        let message = serde_json::from_str(trimmed).context("Failed to decode MCP JSON line")?;
+        return Ok(Some((message, MessageFraming::JsonLine)));
+    }
+
+    let mut content_length = parse_content_length_header(&first_line)?;
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            return Err(anyhow!("Unexpected EOF while reading MCP headers"));
+        }
+
+        // Retain the legacy Content-Length transport for existing Jig clients,
+        // accepting both CRLF and LF-only header separators.
         if line == "\r\n" || line == "\n" {
             break;
         }
 
-        let lower = line.to_ascii_lowercase();
-        if let Some(value) = lower.strip_prefix("content-length:") {
-            content_length = Some(value.trim().parse::<usize>()?);
+        if let Some(value) = parse_content_length_header(&line)? {
+            content_length = Some(value);
         }
     }
 
@@ -138,13 +162,29 @@ fn read_message(reader: &mut dyn BufRead) -> Result<Option<Value>> {
     let mut body = vec![0_u8; content_length];
     reader.read_exact(&mut body)?;
     let message = serde_json::from_slice(&body).context("Failed to decode MCP message body")?;
-    Ok(Some(message))
+    Ok(Some((message, MessageFraming::ContentLength)))
 }
 
-fn write_message(writer: &mut dyn Write, value: &Value) -> Result<()> {
+fn parse_content_length_header(line: &str) -> Result<Option<usize>> {
+    let Some((name, value)) = line.split_once(':') else {
+        return Ok(None);
+    };
+    if !name.trim().eq_ignore_ascii_case("content-length") {
+        return Ok(None);
+    }
+
+    Ok(Some(value.trim().parse::<usize>()?))
+}
+
+fn write_message(writer: &mut dyn Write, value: &Value, framing: MessageFraming) -> Result<()> {
     let body = serde_json::to_vec(value)?;
-    write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
+    if framing == MessageFraming::ContentLength {
+        write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
+    }
     writer.write_all(&body)?;
+    if framing == MessageFraming::JsonLine {
+        writer.write_all(b"\n")?;
+    }
     writer.flush()?;
     Ok(())
 }
@@ -155,7 +195,51 @@ mod tests {
 
     use serde_json::json;
 
-    use super::read_message;
+    use super::{MessageFraming, read_message, write_message};
+
+    #[test]
+    fn read_message_accepts_json_line() {
+        let input = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {}
+        })
+        .to_string()
+            + "\n";
+        let mut reader = Cursor::new(input.into_bytes());
+
+        let (message, framing) = read_message(&mut reader).unwrap().unwrap();
+
+        assert_eq!(message["method"], "initialize");
+        assert_eq!(framing, MessageFraming::JsonLine);
+    }
+
+    #[test]
+    fn read_message_keeps_consecutive_json_lines_separate() {
+        let first = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {}
+        });
+        let second = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {}
+        });
+        let input = format!("{first}\n{second}\n");
+        let mut reader = Cursor::new(input.into_bytes());
+
+        let (first_message, first_framing) = read_message(&mut reader).unwrap().unwrap();
+        let (second_message, second_framing) = read_message(&mut reader).unwrap().unwrap();
+
+        assert_eq!(first_message["id"], 1);
+        assert_eq!(second_message["id"], 2);
+        assert_eq!(first_framing, MessageFraming::JsonLine);
+        assert_eq!(second_framing, MessageFraming::JsonLine);
+    }
 
     #[test]
     fn read_message_accepts_lf_only_header_separator() {
@@ -169,9 +253,10 @@ mod tests {
         let input = format!("Content-Length: {}\n\n{body}", body.len());
         let mut reader = Cursor::new(input.into_bytes());
 
-        let message = read_message(&mut reader).unwrap().unwrap();
+        let (message, framing) = read_message(&mut reader).unwrap().unwrap();
 
         assert_eq!(message["method"], "initialize");
+        assert_eq!(framing, MessageFraming::ContentLength);
     }
 
     #[test]
@@ -186,8 +271,39 @@ mod tests {
         let input = format!("Content-Length: {}\r\n\r\n{body}", body.len());
         let mut reader = Cursor::new(input.into_bytes());
 
-        let message = read_message(&mut reader).unwrap().unwrap();
+        let (message, framing) = read_message(&mut reader).unwrap().unwrap();
 
         assert_eq!(message["method"], "initialize");
+        assert_eq!(framing, MessageFraming::ContentLength);
+    }
+
+    #[test]
+    fn write_message_uses_json_line_framing() {
+        let mut output = Vec::new();
+
+        write_message(
+            &mut output,
+            &json!({"jsonrpc": "2.0", "id": 1, "result": {}}),
+            MessageFraming::JsonLine,
+        )
+        .unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{}}\n"
+        );
+    }
+
+    #[test]
+    fn write_message_preserves_content_length_framing() {
+        let value = json!({"jsonrpc": "2.0", "id": 1, "result": {}});
+        let body = serde_json::to_vec(&value).unwrap();
+        let mut output = Vec::new();
+
+        write_message(&mut output, &value, MessageFraming::ContentLength).unwrap();
+
+        let expected = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+        assert_eq!(&output[..expected.len()], expected);
+        assert_eq!(&output[expected.len()..], body);
     }
 }

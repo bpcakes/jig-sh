@@ -119,6 +119,7 @@ fn adopt_repo_for_test(repo: &Path, template: &Path, template_mode: TemplateMode
         vcs_ref: None,
         force: false,
         write: true,
+        minimal: false,
         defaults: true,
         no_input: true,
         no_vault: true,

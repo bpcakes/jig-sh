@@ -63,7 +63,7 @@ When revising an ExecPlan, update every affected section so the file remains res
     "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command"[% if frontend_apps | length > 0 %],
+    "rust_test_locked_command"[% if frontend_harness_enabled %],
     "typescript_lint_command",
     "typescript_typecheck_command",
     "typescript_build_command",
@@ -102,7 +102,7 @@ When revising an ExecPlan, update every affected section so the file remains res
       "description": "Run the configured locked test command.",
       "command": "rust_test_locked_command"
     },
-[% if frontend_apps | length > 0 %]
+[% if frontend_harness_enabled %]
     {
       "name": "jig.typescript_lint",
       "kind": "command",
@@ -705,6 +705,7 @@ default_branch = "<<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\
 ci_github_runner = "<<[ ci_github_runner | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 jig_version = "<<[ jig_version | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 template_source_url = "<<[ template_source_url | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+harness_footprint = "<<[ harness_footprint | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 sqlx_enabled = [% if sqlx_enabled %]true[% else %]false[% endif %]
 rust_crate_roots = [[% for root in rust_crate_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
 [% if sqlx_enabled %]
@@ -748,7 +749,7 @@ scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
 
-[% if frontend_apps | length > 0 %]
+[% if frontend_harness_enabled %]
 # Extra command keys must use *_command names so contract required_commands
 # stay distinct from tool names and gate ids. Entries here override same-named
 # legacy top-level command fields.
@@ -805,7 +806,7 @@ id = "tests"
 kind = "check"
 tool = "jig.test"
 
-[% if frontend_apps | length > 0 %]
+[% if frontend_harness_enabled %]
 [[work.gates]]
 id = "typescript-lint"
 kind = "check"

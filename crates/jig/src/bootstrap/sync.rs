@@ -13,6 +13,7 @@ use super::file_copy::{
     copy_file_or_symlink_with_permissions, path_exists, prepare_copy_destination_and_read_metadata,
 };
 use super::managed_paths::{self, ManagedBlockSpec};
+use super::path::{RepositoryFileLeaf, validate_repository_relative_file_leaf};
 use super::staged_render::StagedRender;
 use crate::progress::CliProgress;
 
@@ -20,6 +21,8 @@ pub(super) struct ApplyRenderOptions<'a> {
     pub(super) force: bool,
     pub(super) dry_run: bool,
     pub(super) allow_answers_overwrite: bool,
+    pub(super) allow_contract_overwrite: bool,
+    pub(super) allow_manifest_overwrite: bool,
     pub(super) backup_root: Option<&'a Path>,
     pub(super) conflict_message: &'a str,
     pub(super) progress: CliProgress,
@@ -28,6 +31,8 @@ pub(super) struct ApplyRenderOptions<'a> {
 #[derive(Clone, Debug, Default, Serialize)]
 pub(super) struct ApplyRenderReport {
     pub(super) dry_run: bool,
+    pub(super) active_managed_paths: Vec<String>,
+    pub(super) retired_managed_paths: Vec<String>,
     pub(super) files_created: Vec<String>,
     pub(super) files_modified: Vec<String>,
     pub(super) files_removed: Vec<String>,
@@ -54,7 +59,6 @@ pub(super) struct RenderConflict {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum RenderConflictKind {
-    BlockingAncestor,
     NonRegularRootAgents,
     ModifiedManagedPath,
     RemovedManagedPath,
@@ -65,12 +69,20 @@ pub(super) fn apply_staged_render(
     destination: &Path,
     options: ApplyRenderOptions<'_>,
 ) -> Result<ApplyRenderReport> {
+    preflight_apply_paths(staged, destination, options.backup_root)?;
+
     let conflicts = if options.force {
         options.progress.step(
             "check conflicts",
             "--force supplied; accepting rendered output",
         );
-        staged_render_conflicts(staged, destination, options.allow_answers_overwrite)?
+        staged_render_conflicts(
+            staged,
+            destination,
+            options.allow_answers_overwrite,
+            options.allow_contract_overwrite,
+            options.allow_manifest_overwrite,
+        )?
     } else {
         options
             .progress
@@ -81,6 +93,8 @@ pub(super) fn apply_staged_render(
                 staged,
                 destination,
                 options.allow_answers_overwrite,
+                options.allow_contract_overwrite,
+                options.allow_manifest_overwrite,
             ))?;
         if !conflicts.is_empty() {
             let message = conflict_count_message(conflicts.len());
@@ -107,17 +121,28 @@ pub(super) fn apply_staged_render(
         } else {
             "apply managed paths"
         },
-        format!("{} path(s)", staged.managed_paths.len()),
+        format!("{} path(s)", staged.operation_count()),
     );
     let mut report = ApplyRenderReport {
         dry_run: options.dry_run,
+        active_managed_paths: staged
+            .active_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        retired_managed_paths: staged
+            .retirement_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
         conflicts,
         ..ApplyRenderReport::default()
     };
-    for relative in &staged.managed_paths {
+    for relative in ordered_operation_paths(staged) {
         let rendered_path = staged.destination.join(relative);
         let destination_path = destination.join(relative);
         let relative_text = relative.display().to_string();
+        validate_managed_destination_leaf(destination, relative)?;
         if path_exists(&rendered_path) {
             if path_exists(&destination_path) {
                 if files_match(&rendered_path, &destination_path)? {
@@ -140,32 +165,40 @@ pub(super) fn apply_staged_render(
                 }
             }
             if !options.dry_run {
+                validate_managed_destination_leaf(destination, relative)?;
                 if path_exists(&destination_path)
                     && !files_match(&rendered_path, &destination_path)?
                 {
                     backup_destination_path(
+                        destination,
                         &destination_path,
                         relative,
                         options.backup_root,
                         &mut report,
                     )?;
                 }
-                options
-                    .progress
-                    .log_blocked_on_err(copy_rendered_path(&rendered_path, &destination_path))?;
+                options.progress.log_blocked_on_err(copy_rendered_path(
+                    &rendered_path,
+                    destination,
+                    &destination_path,
+                    relative,
+                ))?;
             }
         } else if path_exists(&destination_path) {
             report.files_removed.push(relative_text.clone());
             if !options.dry_run {
+                validate_managed_destination_leaf(destination, relative)?;
                 backup_destination_path(
+                    destination,
                     &destination_path,
                     relative,
                     options.backup_root,
                     &mut report,
                 )?;
+                validate_managed_destination_leaf(destination, relative)?;
                 options
                     .progress
-                    .log_blocked_on_err(remove_destination_path(&destination_path))?;
+                    .log_blocked_on_err(remove_managed_destination_leaf(destination, relative))?;
             }
         }
     }
@@ -176,28 +209,27 @@ fn staged_render_conflicts(
     staged: &StagedRender,
     destination: &Path,
     allow_answers_overwrite: bool,
+    allow_contract_overwrite: bool,
+    allow_manifest_overwrite: bool,
 ) -> Result<Vec<RenderConflict>> {
     let mut conflicts = BTreeSet::new();
-    for relative in &staged.managed_paths {
+    for relative in staged
+        .active_paths
+        .iter()
+        .chain(staged.retirement_paths.iter())
+    {
         if allow_answers_overwrite && relative == Path::new(ANSWERS_FILE) {
+            continue;
+        }
+        if allow_contract_overwrite && relative == Path::new(".agent/jig-contract.json") {
+            continue;
+        }
+        if allow_manifest_overwrite && relative == Path::new(managed_paths::MANIFEST_PATH) {
             continue;
         }
 
         let rendered_path = staged.destination.join(relative);
         let destination_path = destination.join(relative);
-        if let Some(blocking_ancestor) = blocking_ancestor(destination, &destination_path) {
-            let path = relative_to_string(destination, &blocking_ancestor);
-            conflicts.insert(RenderConflict {
-                detail: format!(
-                    "blocking ancestor file prevents writing {}",
-                    relative.display()
-                ),
-                path,
-                kind: RenderConflictKind::BlockingAncestor,
-            });
-            continue;
-        }
-
         if path_exists(&rendered_path) {
             if let Some(spec) = managed_paths::managed_block_spec(relative) {
                 if destination_is_regular_file(&destination_path)? {
@@ -231,6 +263,39 @@ fn staged_render_conflicts(
         }
     }
     Ok(conflicts.into_iter().collect())
+}
+
+fn ordered_operation_paths(staged: &StagedRender) -> Vec<&PathBuf> {
+    let manifest = Path::new(managed_paths::MANIFEST_PATH);
+    staged
+        .active_paths
+        .iter()
+        .filter(|path| path.as_path() != manifest)
+        .chain(staged.retirement_paths.iter())
+        .chain(staged.active_paths.get(manifest))
+        .collect()
+}
+
+fn preflight_apply_paths(
+    staged: &StagedRender,
+    destination: &Path,
+    backup_root: Option<&Path>,
+) -> Result<()> {
+    for relative in ordered_operation_paths(staged) {
+        validate_managed_destination_leaf(destination, relative)?;
+        if let Some(backup_root) = backup_root {
+            let backup_path = backup_root.join(relative);
+            let backup_relative = backup_path.strip_prefix(destination).with_context(|| {
+                format!(
+                    "Backup destination {} must be contained by repository root {}",
+                    backup_path.display(),
+                    destination.display()
+                )
+            })?;
+            validate_backup_destination_leaf(destination, backup_relative)?;
+        }
+    }
+    Ok(())
 }
 
 fn conflict_lines(conflicts: &[RenderConflict]) -> Vec<String> {
@@ -278,32 +343,35 @@ fn destination_is_regular_file(path: &Path) -> Result<bool> {
     }
 }
 
-fn blocking_ancestor(root: &Path, path: &Path) -> Option<PathBuf> {
-    let mut current = path.parent()?;
-    while current != root {
-        if current.exists() && !current.is_dir() {
-            return Some(current.to_path_buf());
-        }
-        current = current.parent()?;
-    }
-    None
-}
-
-fn relative_to_string(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .map(|relative| relative.display().to_string())
-        .unwrap_or_else(|_| path.display().to_string())
-}
-
-fn copy_rendered_path(rendered_path: &Path, destination_path: &Path) -> Result<()> {
+fn copy_rendered_path(
+    rendered_path: &Path,
+    destination: &Path,
+    destination_path: &Path,
+    relative: &Path,
+) -> Result<()> {
+    validate_managed_destination_leaf(destination, relative)?;
     let metadata = prepare_copy_destination_and_read_metadata(rendered_path, destination_path)?;
-    if path_exists(destination_path) && !metadata.is_dir() {
-        remove_destination_path(destination_path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        bail!(
+            "Cannot apply rendered directory {}; managed render paths must be files or symlinks",
+            rendered_path.display()
+        );
+    }
+    validate_managed_destination_leaf(destination, relative)?;
+    if path_exists(destination_path) {
+        remove_managed_destination_leaf(destination, relative)?;
+    }
+    if validate_managed_destination_leaf(destination, relative)? != RepositoryFileLeaf::Missing {
+        bail!(
+            "Managed destination {} changed while it was being replaced",
+            destination_path.display()
+        );
     }
     copy_file_or_symlink_with_permissions(rendered_path, destination_path, &metadata)
 }
 
 fn backup_destination_path(
+    destination: &Path,
     destination_path: &Path,
     relative: &Path,
     backup_root: Option<&Path>,
@@ -313,7 +381,18 @@ fn backup_destination_path(
         return Ok(());
     };
     let backup_path = backup_root.join(relative);
+    let backup_relative = backup_path.strip_prefix(destination).with_context(|| {
+        format!(
+            "Backup destination {} must be contained by repository root {}",
+            backup_path.display(),
+            destination.display()
+        )
+    })?;
+    validate_managed_destination_leaf(destination, relative)?;
+    validate_backup_destination_leaf(destination, backup_relative)?;
     let metadata = prepare_copy_destination_and_read_metadata(destination_path, &backup_path)?;
+    validate_managed_destination_leaf(destination, relative)?;
+    validate_backup_destination_leaf(destination, backup_relative)?;
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         bail!(
             "Cannot back up directory managed path {}; expected file or symlink",
@@ -328,13 +407,34 @@ fn backup_destination_path(
     Ok(())
 }
 
-fn remove_destination_path(path: &Path) -> Result<()> {
-    let metadata =
-        fs::symlink_metadata(path).with_context(|| format!("Failed to stat {}", path.display()))?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(path).with_context(|| format!("Failed to remove {}", path.display()))
-    } else {
-        fs::remove_file(path).with_context(|| format!("Failed to remove {}", path.display()))
+fn validate_managed_destination_leaf(
+    destination: &Path,
+    relative: &Path,
+) -> Result<RepositoryFileLeaf> {
+    validate_repository_relative_file_leaf(destination, relative)
+}
+
+fn validate_backup_destination_leaf(
+    destination: &Path,
+    backup_relative: &Path,
+) -> Result<RepositoryFileLeaf> {
+    let leaf = validate_repository_relative_file_leaf(destination, backup_relative)?;
+    if leaf == RepositoryFileLeaf::Symlink {
+        bail!(
+            "Unsafe backup destination {}: backup leaf must be missing or a regular file, not a symlink",
+            destination.join(backup_relative).display()
+        );
+    }
+    Ok(leaf)
+}
+
+fn remove_managed_destination_leaf(destination: &Path, relative: &Path) -> Result<()> {
+    let path = destination.join(relative);
+    match validate_managed_destination_leaf(destination, relative)? {
+        RepositoryFileLeaf::RegularFile | RepositoryFileLeaf::Symlink => {
+            fs::remove_file(&path).with_context(|| format!("Failed to remove {}", path.display()))
+        }
+        RepositoryFileLeaf::Missing => Ok(()),
     }
 }
 

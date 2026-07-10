@@ -42,6 +42,9 @@ pub struct AnswerOpts {
         help = "Portable canonical template source URL for future updates"
     )]
     pub template_source_url: Option<String>,
+    /// Set by `jig adopt --minimal`; not a public answer flag.
+    #[arg(skip)]
+    pub harness_footprint: Option<super::answers::HarnessFootprint>,
     #[arg(
         long,
         help_heading = "Common Answers",

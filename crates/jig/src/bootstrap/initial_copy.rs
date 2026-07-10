@@ -8,9 +8,8 @@ use serde_json::Value as JsonValue;
 use toml::{Table, Value as TomlValue};
 
 use super::AnswerOpts;
-use super::answers::{AnswerInput, AnswerResolution, RenderAnswers};
+use super::answers::{AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers};
 use super::gate_preview::generated_gates;
-use super::managed_paths;
 use super::renderer::{RenderStageRequest, stage_render};
 use super::sync::ApplyRenderReport;
 use super::sync::{ApplyRenderOptions, apply_staged_render};
@@ -34,6 +33,11 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) dry_run: bool,
     pub(super) backup_root: Option<PathBuf>,
     pub(super) seed_repo_path: Option<&'a Path>,
+    pub(super) prior_harness_footprint: Option<HarnessFootprint>,
+    pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
+    pub(super) reconcile_runtime_config: bool,
+    pub(super) allow_answers_overwrite: bool,
+    pub(super) allow_contract_overwrite: bool,
     pub(super) reserved_output_paths: Vec<PathBuf>,
     pub(super) progress: CliProgress,
 }
@@ -46,6 +50,8 @@ pub(super) struct BootstrapCopyResult {
     pub(super) codex_skills_configured: bool,
     pub(super) sqlx_enabled: bool,
     pub(super) schema_dump_enabled: bool,
+    pub(super) minimal_footprint: bool,
+    pub(super) full_to_minimal_transition: bool,
     pub(super) render_preview: AdoptionRenderPreview,
     pub(super) apply_report: ApplyRenderReport,
     pub(super) notes: Vec<String>,
@@ -78,7 +84,10 @@ pub(super) fn render_and_copy_bootstrap_template(
             ),
         })?;
     let (answers, mut notes) = answer_resolution.into_parts();
-    if request.seed_repo_path.is_some() && !answers.frontend_apps().is_empty() {
+    let full_to_minimal_transition = request.prior_harness_footprint
+        == Some(HarnessFootprint::Full)
+        && answers.is_minimal_footprint();
+    if request.seed_repo_path.is_some() && answers.frontend_harness_enabled() {
         request
             .progress
             .step("validate web apps", "package.json scripts for CI checks");
@@ -90,10 +99,15 @@ pub(super) fn render_and_copy_bootstrap_template(
         template: request.template,
         answers: &answers,
         seed_repo_path: request.seed_repo_path,
+        prior_managed_paths: request.prior_managed_paths,
+        reconcile_runtime_config: request.reconcile_runtime_config,
         progress: request.progress,
     })?;
-    let render_preview =
-        AdoptionRenderPreview::from_answers_and_managed_paths(&answers, &staged.managed_paths);
+    let render_preview = AdoptionRenderPreview::from_staged_render(
+        &answers,
+        &staged.active_paths,
+        &staged.retirement_paths,
+    );
     request
         .progress
         .info("generated gates", render_preview.generated_gates.join(", "));
@@ -101,7 +115,11 @@ pub(super) fn render_and_copy_bootstrap_template(
         "managed files",
         format!("{} path(s)", render_preview.managed_files.len()),
     );
-    reject_reserved_output_collisions(&staged.managed_paths, &request.reserved_output_paths)?;
+    request.progress.info(
+        "retired managed files",
+        format!("{} path(s)", render_preview.retired_managed_files.len()),
+    );
+    reject_reserved_output_collisions(&staged.active_paths, &request.reserved_output_paths)?;
 
     let apply_report = apply_staged_render(
         &staged,
@@ -109,7 +127,9 @@ pub(super) fn render_and_copy_bootstrap_template(
         ApplyRenderOptions {
             force: request.force,
             dry_run: request.dry_run,
-            allow_answers_overwrite: false,
+            allow_answers_overwrite: request.allow_answers_overwrite,
+            allow_contract_overwrite: request.allow_contract_overwrite,
+            allow_manifest_overwrite: request.prior_managed_paths.is_some(),
             backup_root: request.backup_root.as_deref(),
             conflict_message: "Adopt would overwrite template-managed paths. No files were changed. Re-run with --force or clear these paths first:",
             progress: request.progress,
@@ -131,6 +151,8 @@ pub(super) fn render_and_copy_bootstrap_template(
         codex_skills_configured: answers.codex_skills_configured(),
         sqlx_enabled: answers.sqlx_enabled(),
         schema_dump_enabled: answers.schema_dump_enabled(),
+        minimal_footprint: answers.is_minimal_footprint(),
+        full_to_minimal_transition,
         render_preview,
         apply_report,
         notes,
@@ -160,21 +182,19 @@ fn reject_reserved_output_collisions(
 }
 
 impl AdoptionRenderPreview {
-    fn from_answers_and_managed_paths(
+    fn from_staged_render(
         answers: &RenderAnswers,
-        managed_paths: &BTreeSet<PathBuf>,
+        active_paths: &BTreeSet<PathBuf>,
+        retirement_paths: &BTreeSet<PathBuf>,
     ) -> Self {
-        let (retired_paths, active_paths): (Vec<_>, Vec<_>) = managed_paths
-            .iter()
-            .partition(|path| managed_paths::is_retired_managed_path(path, answers));
         Self {
             generated_gates: generated_gates(answers),
             managed_files: active_paths
-                .into_iter()
+                .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
-            retired_managed_files: retired_paths
-                .into_iter()
+            retired_managed_files: retirement_paths
+                .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
         }

@@ -1,33 +1,42 @@
 use super::answers::RenderAnswers;
 
+pub(super) fn jig_launcher(minimal_footprint: bool) -> &'static str {
+    if minimal_footprint {
+        "jig"
+    } else {
+        "scripts/jig"
+    }
+}
+
 pub(super) fn generated_gates(answers: &RenderAnswers) -> Vec<String> {
     // Keep this list in sync with the check tools rendered into the harness.
     // Bootstrap adopt tests cross-check the rendered tools against this preview.
+    let launcher = jig_launcher(answers.is_minimal_footprint());
     let mut gates = Vec::new();
     if answers.bootstrap_command_configured() {
-        gates.push("scripts/jig bootstrap".into());
+        gates.push(format!("{launcher} bootstrap"));
     }
     gates.extend([
-        "scripts/jig check contract".into(),
-        "scripts/jig check fmt".into(),
-        "scripts/jig check clippy".into(),
-        "scripts/jig check test".into(),
+        format!("{launcher} check contract"),
+        format!("{launcher} check fmt"),
+        format!("{launcher} check clippy"),
+        format!("{launcher} check test"),
     ]);
     if answers.sqlx_enabled() {
-        gates.push("scripts/jig check sqlx".into());
+        gates.push(format!("{launcher} check sqlx"));
     }
     if answers.schema_dump_enabled() {
-        gates.push("scripts/jig check schema".into());
-        gates.push("scripts/jig schema-dump".into());
+        gates.push(format!("{launcher} check schema"));
+        gates.push(format!("{launcher} schema-dump"));
     }
-    if !answers.frontend_apps().is_empty() {
+    if answers.frontend_harness_enabled() {
         gates.extend([
-            "scripts/jig check typescript-lint".into(),
-            "scripts/jig check typescript-typecheck".into(),
-            "scripts/jig check typescript-build".into(),
-            "scripts/jig check typescript-coverage".into(),
+            format!("{launcher} check typescript-lint"),
+            format!("{launcher} check typescript-typecheck"),
+            format!("{launcher} check typescript-build"),
+            format!("{launcher} check typescript-coverage"),
         ]);
     }
-    gates.push("scripts/jig check agent-guides".into());
+    gates.push(format!("{launcher} check agent-guides"));
     gates
 }

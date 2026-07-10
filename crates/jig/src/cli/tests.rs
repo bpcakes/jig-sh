@@ -258,8 +258,11 @@ fn parses_prompt_get_with_global_json_for_exact_output_contract() {
 fn adopt_and_init_default_to_official_template() {
     let adopt = Cli::try_parse_from(["jig", "adopt", ".", "--repo-name", "demo"]).unwrap();
     match adopt.command {
-        CommandKind::Adopt(bootstrap::AdoptOpts { template, .. }) => {
+        CommandKind::Adopt(bootstrap::AdoptOpts {
+            template, minimal, ..
+        }) => {
             assert_eq!(template, None);
+            assert!(!minimal);
         }
         other => panic!("expected adopt command, got {other:?}"),
     }
@@ -270,6 +273,27 @@ fn adopt_and_init_default_to_official_template() {
             assert_eq!(template, None);
         }
         other => panic!("expected init command, got {other:?}"),
+    }
+}
+
+#[test]
+fn adopt_parses_minimal_flag() {
+    let adopt = Cli::try_parse_from([
+        "jig",
+        "adopt",
+        ".",
+        "--minimal",
+        "--write",
+        "--repo-name",
+        "demo",
+    ])
+    .unwrap();
+    match adopt.command {
+        CommandKind::Adopt(opts) => {
+            assert!(opts.minimal);
+            assert!(opts.write);
+        }
+        other => panic!("expected adopt command, got {other:?}"),
     }
 }
 

@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::env;
+use std::error::Error;
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::context::RepoContext;
 use crate::process::require_success;
-use crate::tool_defs::kind;
+use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 // New or growing files above this fail unless an explicit exception is present.
@@ -50,6 +52,25 @@ pub(crate) struct NativeToolOutput {
     pub(crate) stderr: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct ContractValidationError {
+    errors: Vec<String>,
+}
+
+impl fmt::Display for ContractValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, error) in self.errors.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("\n")?;
+            }
+            write!(formatter, "ERROR: {error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Error for ContractValidationError {}
+
 pub(crate) enum PolicyDirectCommand {
     AgentMapGenerate(AgentMapInput),
     GenerateSqlxUncheckedQueriesTodo(SqlxTodoInput),
@@ -85,9 +106,36 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
 }
 
 pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+    if let Err(error) = validate_contract(ctx) {
+        return Ok(NativeToolOutput {
+            exit_status: 1,
+            stdout: String::new(),
+            stderr: error
+                .errors
+                .into_iter()
+                .map(|error| format!("ERROR: {error}\n"))
+                .collect(),
+        });
+    }
+
+    let manifest_path = ctx.root().join(".agent/jig-contract.json");
+    Ok(NativeToolOutput {
+        exit_status: 0,
+        stdout: format!(
+            "jig contract check passed.\n  - manifest: {}\n  - jig version: {}\n  - tool definitions: {}\n",
+            manifest_path.display(),
+            ctx.jig_version(),
+            ctx.tool_specs().len()
+        ),
+        stderr: String::new(),
+    })
+}
+
+pub(crate) fn validate_contract(
+    ctx: &RepoContext,
+) -> std::result::Result<(), ContractValidationError> {
     let mut errors = Vec::new();
     let root = ctx.root();
-    let manifest_path = root.join(".agent/jig-contract.json");
     let mcp_path = root.join(".mcp.json");
     let jig_script = root.join("scripts/jig");
     let install_script = root.join("scripts/install-jig.sh");
@@ -98,14 +146,16 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
     if ctx.tool_specs().iter().any(|tool| tool.kind == "memory") {
         errors.push("Runtime state tools must not be declared in .agent/jig-contract.json.".into());
     }
-    if !mcp_path.exists() {
-        errors.push("Missing .mcp.json.".into());
-    }
-    if !jig_script.exists() {
-        errors.push("Missing scripts/jig launcher.".into());
-    }
-    if !install_script.exists() {
-        errors.push("Missing scripts/install-jig.sh installer.".into());
+    if !ctx.is_minimal_footprint() {
+        if !mcp_path.exists() {
+            errors.push("Missing .mcp.json.".into());
+        }
+        if !jig_script.exists() {
+            errors.push("Missing scripts/jig launcher.".into());
+        }
+        if !install_script.exists() {
+            errors.push("Missing scripts/install-jig.sh installer.".into());
+        }
     }
     if ctx.sqlx_enabled() && ctx.rust_migration_dir().is_empty() {
         errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
@@ -168,27 +218,35 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
         }
     }
 
-    if !errors.is_empty() {
-        return Ok(NativeToolOutput {
-            exit_status: 1,
-            stdout: String::new(),
-            stderr: errors
-                .into_iter()
-                .map(|error| format!("ERROR: {error}\n"))
-                .collect(),
-        });
+    let mut work_tools = HashSet::new();
+    for name in ctx.work_check_tools() {
+        if !work_tools.insert(name.clone()) {
+            continue;
+        }
+        let Some(tool) = ctx.tool_spec(&name) else {
+            errors.push(format!(
+                "Configured work check or gate references undeclared tool: {name}."
+            ));
+            continue;
+        };
+        if !tool_defs::is_no_arg_execution_tool(tool) {
+            if !tool_defs::is_execution_tool(tool) {
+                errors.push(format!(
+                    "Configured work check or gate tool is not an execution tool: {name}."
+                ));
+            } else {
+                errors.push(format!(
+                    "Configured work check or gate tool requires an argument: {name}."
+                ));
+            }
+        }
     }
 
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: format!(
-            "jig contract check passed.\n  - manifest: {}\n  - jig version: {}\n  - tool definitions: {}\n",
-            manifest_path.display(),
-            ctx.jig_version(),
-            ctx.tool_specs().len()
-        ),
-        stderr: String::new(),
-    })
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(ContractValidationError { errors })
+    }
 }
 
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
