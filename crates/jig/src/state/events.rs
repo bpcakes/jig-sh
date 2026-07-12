@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -563,7 +563,7 @@ fn legacy_lock_for_path(path: &Path) -> Result<Option<File>> {
         .with_context(|| format!("Failed to open legacy lock {}", path.display()))
 }
 
-fn state_lock_path(path: &Path) -> PathBuf {
+pub(super) fn state_lock_path(path: &Path) -> PathBuf {
     let Some(parent) = path.parent() else {
         return path.with_extension("lock");
     };
@@ -585,27 +585,311 @@ fn state_lock_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
-    if !path.exists() {
-        return Ok(Vec::new());
+    read_jsonl_with_data_lock(path, FileExt::lock_shared)
+}
+
+pub(super) fn read_receipt_window(path: &Path, limit: usize) -> Result<Vec<ReceiptRecord>> {
+    read_receipts_reverse(path, limit, |_| true).map(|(receipts, _)| receipts)
+}
+
+pub(super) fn receipts_for_plan(
+    path: &Path,
+    plan_id: &str,
+    limit: usize,
+) -> Result<Vec<ReceiptRecord>> {
+    read_receipts_reverse(path, limit, |receipt| {
+        receipt.plan_id.as_deref() == Some(plan_id)
+    })
+    .map(|(receipts, _)| receipts)
+}
+
+#[cfg(test)]
+pub(super) fn read_receipt_window_with_bytes(
+    path: &Path,
+    limit: usize,
+) -> Result<(Vec<ReceiptRecord>, u64)> {
+    read_receipts_reverse(path, limit, |_| true)
+}
+
+#[cfg(test)]
+pub(super) fn receipts_for_plan_with_lock(
+    path: &Path,
+    plan_id: &str,
+    limit: usize,
+    lock_data: impl FnMut(&File) -> io::Result<()>,
+) -> Result<Vec<ReceiptRecord>> {
+    read_receipts_reverse_with_lock(
+        path,
+        limit,
+        |receipt| receipt.plan_id.as_deref() == Some(plan_id),
+        lock_data,
+    )
+    .map(|(receipts, _)| receipts)
+}
+
+fn read_receipts_reverse(
+    path: &Path,
+    limit: usize,
+    predicate: impl Fn(&ReceiptRecord) -> bool,
+) -> Result<(Vec<ReceiptRecord>, u64)> {
+    read_receipts_reverse_with_lock(path, limit, predicate, FileExt::lock_shared)
+}
+
+fn read_receipts_reverse_with_lock(
+    path: &Path,
+    limit: usize,
+    predicate: impl Fn(&ReceiptRecord) -> bool,
+    mut lock_data: impl FnMut(&File) -> io::Result<()>,
+) -> Result<(Vec<ReceiptRecord>, u64)> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+        }
+    };
+    loop {
+        match lock_data(&file) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                let mut read_snapshot = |path: &Path| {
+                    fs::read(path).with_context(|| {
+                        format!("Failed to read unlocked snapshot {}", path.display())
+                    })
+                };
+                let receipts =
+                    read_stable_unlocked_snapshot::<ReceiptRecord>(path, &mut read_snapshot)?;
+                let selected = receipts
+                    .into_iter()
+                    .rev()
+                    .filter(predicate)
+                    .take(limit)
+                    .collect();
+                return Ok((selected, 0));
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+            }
+        }
     }
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let result = scan_jsonl_reverse(&file, path, limit, predicate);
+    let unlock = FileExt::unlock(&file);
+    match (result, unlock) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error).context("Failed to unlock receipt state file"),
+    }
+}
+
+const REVERSE_READ_CHUNK: usize = 16 * 1024;
+
+fn scan_jsonl_reverse(
+    file: &File,
+    path: &Path,
+    limit: usize,
+    predicate: impl Fn(&ReceiptRecord) -> bool,
+) -> Result<(Vec<ReceiptRecord>, u64)> {
+    if limit == 0 {
+        return Ok((Vec::new(), 0));
+    }
+    let mut file = file;
+    let mut cursor = file
+        .seek(SeekFrom::End(0))
+        .with_context(|| format!("Failed to seek {}", path.display()))?;
+    let mut carry = Vec::new();
+    let mut selected = Vec::with_capacity(limit);
+    let mut bytes_read = 0u64;
+    while cursor > 0 && selected.len() < limit {
+        let read_len =
+            usize::try_from(cursor.min(REVERSE_READ_CHUNK as u64)).unwrap_or(REVERSE_READ_CHUNK);
+        cursor -= read_len as u64;
+        file.seek(SeekFrom::Start(cursor))
+            .with_context(|| format!("Failed to seek {}", path.display()))?;
+        let mut chunk = vec![0u8; read_len];
+        file.read_exact(&mut chunk)
+            .with_context(|| format!("Failed to read receipt tail {}", path.display()))?;
+        bytes_read += read_len as u64;
+        chunk.extend_from_slice(&carry);
+        let split_at = if cursor == 0 {
+            0
+        } else {
+            chunk
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(chunk.len(), |index| index + 1)
+        };
+        let complete = &chunk[split_at..];
+        for record in complete.split(|byte| *byte == b'\n').rev() {
+            if record.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let receipt: ReceiptRecord = serde_json::from_slice(record)
+                .with_context(|| format!("Failed to parse receipt tail in {}", path.display()))?;
+            if predicate(&receipt) {
+                selected.push(receipt);
+                if selected.len() == limit {
+                    break;
+                }
+            }
+        }
+        carry = chunk[..split_at].to_vec();
+    }
+    Ok((selected, bytes_read))
+}
+
+pub(super) fn read_jsonl_locked<T: DeserializeOwned>(
+    _guard: &JsonlWriteGuard,
+    path: &Path,
+) -> Result<Vec<T>> {
+    let file = File::open(path)
+        .with_context(|| format!("Failed to open {} for locked read", path.display()))?;
+    parse_jsonl_file(&file, path, false)
+}
+
+pub(super) fn read_jsonl_with_data_lock<T: DeserializeOwned>(
+    path: &Path,
+    lock_data: impl FnMut(&File) -> io::Result<()>,
+) -> Result<Vec<T>> {
+    read_jsonl_with_io(path, lock_data, |path| {
+        fs::read(path)
+            .with_context(|| format!("Failed to read unlocked snapshot {}", path.display()))
+    })
+}
+
+pub(super) fn read_jsonl_with_io<T: DeserializeOwned>(
+    path: &Path,
+    mut lock_data: impl FnMut(&File) -> io::Result<()>,
+    mut read_snapshot: impl FnMut(&Path) -> Result<Vec<u8>>,
+) -> Result<Vec<T>> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+        }
+    };
+
+    loop {
+        match lock_data(&file) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                return read_stable_unlocked_snapshot(path, &mut read_snapshot);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+            }
+        }
+    }
+
+    // Match the writer's data-file-then-cache-lock acquisition order. The
+    // cache lock is deliberately opportunistic: reads never create state.
+    let cache_lock = File::open(state_lock_path(path))
+        .ok()
+        .and_then(|lock| FileExt::lock_shared(&lock).ok().map(|()| lock));
+    let result = parse_jsonl_file(&file, path, false);
+    let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
+    let data_unlock = FileExt::unlock(&file);
+    match (result, cache_unlock, data_unlock) {
+        (Ok(items), Ok(()), Ok(())) => Ok(items),
+        (Err(error), _, _) => Err(error),
+        (Ok(_), Err(error), _) => Err(error).context("Failed to unlock state cache file"),
+        (Ok(_), Ok(()), Err(error)) => Err(error).context("Failed to unlock state data file"),
+    }
+}
+
+const UNLOCKED_SNAPSHOT_SAMPLES: usize = 3;
+
+fn read_stable_unlocked_snapshot<T: DeserializeOwned>(
+    path: &Path,
+    read_snapshot: &mut impl FnMut(&Path) -> Result<Vec<u8>>,
+) -> Result<Vec<T>> {
+    let mut previous_invalid = None;
+    for sample in 0..UNLOCKED_SNAPSHOT_SAMPLES {
+        let bytes = read_snapshot(path)?;
+        match parse_jsonl_snapshot(&bytes, path, true)? {
+            ParsedSnapshot::Complete(items) => return Ok(items),
+            ParsedSnapshot::InvalidFinal { prefix, error } => {
+                if previous_invalid.as_ref() == Some(&bytes) {
+                    return Err(error);
+                }
+                if sample + 1 == UNLOCKED_SNAPSHOT_SAMPLES {
+                    return Ok(prefix);
+                }
+                previous_invalid = Some(bytes);
+            }
+        }
+    }
+    unreachable!("unlocked snapshot sampling always returns")
+}
+
+fn parse_jsonl_file<T: DeserializeOwned>(
+    file: &File,
+    path: &Path,
+    allow_partial_final: bool,
+) -> Result<Vec<T>> {
+    let mut bytes = Vec::new();
+    let mut reader = file;
+    reader
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("Failed to read state stream {}", path.display()))?;
+    match parse_jsonl_snapshot(&bytes, path, allow_partial_final)? {
+        ParsedSnapshot::Complete(items) => Ok(items),
+        ParsedSnapshot::InvalidFinal { error, .. } => Err(error),
+    }
+}
+
+enum ParsedSnapshot<T> {
+    Complete(Vec<T>),
+    InvalidFinal {
+        prefix: Vec<T>,
+        error: anyhow::Error,
+    },
+}
+
+fn parse_jsonl_snapshot<T: DeserializeOwned>(
+    bytes: &[u8],
+    path: &Path,
+    allow_partial_final: bool,
+) -> Result<ParsedSnapshot<T>> {
+    let final_record_is_unterminated = !bytes.is_empty() && !bytes.ends_with(b"\n");
+    let records = bytes.split(|byte| *byte == b'\n').collect::<Vec<_>>();
     let mut items = Vec::new();
-    for (index, line) in reader.lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
+    for (index, record) in records.iter().enumerate() {
+        if record.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let value = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "Failed to parse JSONL record {} in {}",
-                index + 1,
-                path.display()
-            )
-        })?;
-        items.push(value);
+        match serde_json::from_slice(record) {
+            Ok(value) => items.push(value),
+            Err(error)
+                if allow_partial_final
+                    && final_record_is_unterminated
+                    && index + 1 == records.len() =>
+            {
+                return Ok(ParsedSnapshot::InvalidFinal {
+                    prefix: items,
+                    error: anyhow::Error::new(error).context(format!(
+                        "Failed to parse JSONL record {} in {}",
+                        index + 1,
+                        path.display()
+                    )),
+                });
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to parse JSONL record {} in {}",
+                        index + 1,
+                        path.display()
+                    )
+                });
+            }
+        }
     }
-    Ok(items)
+    Ok(ParsedSnapshot::Complete(items))
 }
 
 pub(crate) fn now_ms() -> u64 {

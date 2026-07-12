@@ -17,11 +17,15 @@ use crate::ports::{is_port_free, is_tcp_listening};
 use crate::state::{process_start_token, process_start_tokens_supported};
 use crate::types::AppRunSpec;
 
-use super::cleanup::ctrl_c_requested;
 #[cfg(unix)]
-use super::cleanup::unix_pid;
+use super::child_lifecycle::{terminate_and_reap_logged, unix_pid};
+use super::cleanup::ctrl_c_requested;
+use super::interruption_error;
 
+#[cfg(not(test))]
 const APP_READY_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const APP_READY_TIMEOUT: Duration = Duration::from_millis(500);
 const APP_READY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const LISTENER_OWNER_RECHECK_ATTEMPTS: usize = 3;
 const LISTENER_OWNER_RECHECK_DELAY: Duration = Duration::from_millis(50);
@@ -31,12 +35,29 @@ pub(super) fn wait_for_app_ready(
     port: u16,
     child: &mut Child,
 ) -> Result<Option<String>> {
-    wait_for_app_ready_with_timeout(
+    wait_for_app_ready_until(
         &spec.name,
         &spec.target_host,
         port,
         child,
-        APP_READY_TIMEOUT,
+        Some(APP_READY_TIMEOUT),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn wait_for_app_ready_with_test_probe(
+    spec: &AppRunSpec,
+    port: u16,
+    child: &mut Child,
+) -> Result<Option<String>> {
+    wait_for_app_ready_until_with_probe(
+        &spec.name,
+        &spec.target_host,
+        port,
+        child,
+        Some(APP_READY_TIMEOUT),
+        |_, _| false,
+        |_, _| true,
     )
 }
 
@@ -81,6 +102,7 @@ fn owner_start_token_for_child(pid: u32) -> Result<Option<String>> {
     Ok(token)
 }
 
+#[cfg(test)]
 pub(super) fn wait_for_app_ready_with_timeout(
     name: &str,
     target_host: &str,
@@ -88,22 +110,71 @@ pub(super) fn wait_for_app_ready_with_timeout(
     child: &mut Child,
     timeout: Duration,
 ) -> Result<Option<String>> {
+    wait_for_app_ready_until(name, target_host, port, child, Some(timeout))
+}
+
+#[cfg(test)]
+pub(super) fn wait_for_app_ready_with_timeout_and_test_probe(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<Option<String>> {
+    wait_for_app_ready_until_with_probe(
+        name,
+        target_host,
+        port,
+        child,
+        Some(timeout),
+        |_, _| false,
+        |_, _| true,
+    )
+}
+
+fn wait_for_app_ready_until(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    timeout: Option<Duration>,
+) -> Result<Option<String>> {
+    wait_for_app_ready_until_with_probe(
+        name,
+        target_host,
+        port,
+        child,
+        timeout,
+        is_tcp_listening,
+        is_port_free,
+    )
+}
+
+fn wait_for_app_ready_until_with_probe(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    timeout: Option<Duration>,
+    is_listening: impl Fn(&str, u16) -> bool,
+    port_is_free: impl Fn(&str, u16) -> bool,
+) -> Result<Option<String>> {
     if let Some(status) = child.try_wait()? {
         bail!("App '{name}' exited before listening on {target_host}:{port} with status {status}");
     }
     let child_pid = child.id();
     let expected_start_token = owner_start_token_for_child(child_pid)?;
-    let deadline = Instant::now() + timeout;
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
     loop {
         if ctrl_c_requested() {
-            bail!("Interrupted");
+            return Err(interruption_error());
         }
         if let Some(status) = child.try_wait()? {
             bail!(
                 "App '{name}' exited before listening on {target_host}:{port} with status {status}"
             );
         }
-        if is_tcp_listening(target_host, port) {
+        if is_listening(target_host, port) {
             verify_process_route_owner(
                 name,
                 target_host,
@@ -113,15 +184,19 @@ pub(super) fn wait_for_app_ready_with_timeout(
             )?;
             return Ok(expected_start_token);
         }
-        if Instant::now() >= deadline {
-            if is_port_free(target_host, port) {
-                bail!(
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            let timeout = timeout.expect("a readiness deadline always has a timeout");
+            let message = if port_is_free(target_host, port) {
+                format!(
                     "App '{name}' did not listen on {target_host}:{port} within {timeout:?}. The process may have ignored PORT/HOST or rebound to a different port. Likely fix: configure the app to honor PORT={port} and HOST={target_host}, and make it fail when the requested port is unavailable."
-                );
-            }
-            bail!(
-                "App '{name}' did not listen on {target_host}:{port} within {timeout:?}, and that port is now in use by another process. Likely fix: stop the process using that port or configure a different [[dev.apps]].port."
-            );
+                )
+            } else {
+                format!(
+                    "App '{name}' did not listen on {target_host}:{port} within {timeout:?}, and that port is now in use by another process. Likely fix: stop the process using that port or configure a different [[dev.apps]].port."
+                )
+            };
+            terminate_and_reap_logged(child, "could not clean up after app readiness timeout");
+            bail!(message);
         }
         thread::sleep(APP_READY_CHECK_INTERVAL);
     }

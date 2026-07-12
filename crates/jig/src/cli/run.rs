@@ -29,6 +29,10 @@ pub(crate) fn run() -> Result<()> {
             let ctx = RepoContext::load()?;
             mcp::serve(&ctx)
         }
+        CommandKind::Ui(opts) => {
+            let ctx = RepoContext::load()?;
+            ui::serve(&ctx, opts, json_output)
+        }
         CommandKind::Doctor => {
             let output = doctor::run()?;
             emit(json_output, HumanOutput::Doctor, &output)?;

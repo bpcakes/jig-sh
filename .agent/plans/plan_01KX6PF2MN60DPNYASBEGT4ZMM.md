@@ -1,0 +1,1 @@
+Add /plan/<id> detail pages (body, gate evidence, decisions, receipts with output), dashboard sections for recent failures, finished work, and per-tool check health, timeline filters via query params, and /api/plan/<id>. Validated by expanded ui tests and dogfooding.

@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::error::Error as StdError;
+use std::fmt;
 #[cfg(test)]
 use std::fs;
 #[cfg(unix)]
@@ -22,14 +24,18 @@ use crate::state::{StateStore, now_ms, process_start_tokens_supported};
 #[cfg(test)]
 use crate::types::CommandSpec;
 use crate::types::{AppKind, AppRunSpec, ProxySettings, Route, RouteMode};
+mod child_lifecycle;
 mod cleanup;
 mod frameworks;
 mod listener_owner;
+mod output;
 mod proxy;
 
+use self::child_lifecycle::*;
 use self::cleanup::*;
 use self::frameworks::*;
 use self::listener_owner::*;
+use self::output::*;
 pub(crate) use self::proxy::ensure_proxy_running;
 #[cfg(test)]
 use self::proxy::{MAX_PROXY_LOG_BYTES, ensure_requested_https, open_proxy_log};
@@ -44,6 +50,30 @@ struct PreparedApp {
     route_parts: Option<(RouteHostname, TargetHost)>,
     port: u16,
     argv: Vec<String>,
+}
+
+struct SpawnedChild {
+    child: Child,
+    output: CapturedAppOutput,
+}
+
+#[derive(Debug)]
+struct Interrupted;
+
+impl fmt::Display for Interrupted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Interrupted")
+    }
+}
+
+impl StdError for Interrupted {}
+
+fn interruption_error() -> anyhow::Error {
+    Interrupted.into()
+}
+
+fn is_interruption(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<Interrupted>().is_some()
 }
 
 pub(crate) fn run_app(
@@ -72,31 +102,46 @@ pub(crate) fn run_app(
     }
     let dev_env = dev_app_environment([(&spec, port)], settings, &store)?;
 
-    let mut child = spawn_child(&spec, &argv, port, settings, &dev_env)?;
+    let SpawnedChild {
+        mut child,
+        mut output,
+    } = spawn_child(&spec, &argv, port, settings, &dev_env)?;
     let pid = child.id();
     let owner_start_token = if spec.proxy {
         match wait_for_app_ready(&spec, port, &mut child) {
             Ok(token) => token,
             Err(error) => {
-                terminate_child(&mut child);
-                wait_after_terminate(&mut child);
+                terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after readiness failure",
+                );
+                if is_interruption(&error) {
+                    output.discard();
+                } else {
+                    output.print_failure(&spec.name);
+                }
                 return Err(error);
             }
         }
     } else {
         None
     };
+    output.finish_progress();
     if spec.proxy {
         let Some(owner_start_token) = owner_start_token else {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after missing owner identity",
+            );
             bail!(
                 "Could not verify start identity for child process {pid}; refusing to publish process route"
             );
         };
         let Some((hostname, target_host)) = route_parts else {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after route preparation failure",
+            );
             bail!(
                 "Could not prepare process route for child process {pid}; refusing to publish route"
             );
@@ -119,8 +164,10 @@ pub(crate) fn run_app(
                 Some(&owner_start_token),
             )
         }) {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after route verification failure",
+            );
             return Err(error);
         }
     }
@@ -128,8 +175,7 @@ pub(crate) fn run_app(
     let display = match app_display(&spec, settings, port, pid, &store) {
         Ok(display) => display,
         Err(error) => {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(&mut child, "could not clean up app after display failure");
             if spec.proxy {
                 remove_route_best_effort(&store, &spec.hostname, &spec.name);
             }
@@ -140,12 +186,12 @@ pub(crate) fn run_app(
 
     let status = loop {
         if ctrl_c_requested() {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(&mut child, "could not clean up interrupted app");
+            output.discard();
             if spec.proxy {
                 remove_route_best_effort(&store, &spec.hostname, &spec.name);
             }
-            bail!("Interrupted");
+            return Err(interruption_error());
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -154,14 +200,20 @@ pub(crate) fn run_app(
                 if spec.proxy {
                     remove_route_best_effort(&store, &spec.hostname, &spec.name);
                 }
-                terminate_child(&mut child);
-                wait_after_terminate(&mut child);
+                terminate_and_reap_logged(&mut child, "could not clean up app after wait failure");
                 return Err(error.into());
             }
         }
     };
     if spec.proxy {
         store.remove_route(&spec.hostname)?;
+    }
+
+    if !status.success() {
+        // The direct wrapper may exit before descendants that inherited its
+        // output pipes. Shut down the whole group before finalizing the tail.
+        terminate_and_reap_logged(&mut child, "could not finalize failed app process group");
+        output.print_failure(&spec.name);
     }
 
     let exit_status = status.code().unwrap_or(1);
@@ -250,8 +302,11 @@ pub(crate) fn run_apps(
             port,
             argv,
         } = prepared;
-        let mut child = match spawn_child(&spec, &argv, port, settings, &dev_env) {
-            Ok(child) => child,
+        let SpawnedChild {
+            mut child,
+            mut output,
+        } = match spawn_child(&spec, &argv, port, settings, &dev_env) {
+            Ok(spawned) => spawned,
             Err(error) => {
                 cleanup_children(&mut children);
                 return Err(error);
@@ -262,8 +317,15 @@ pub(crate) fn run_apps(
             match wait_for_app_ready(&spec, port, &mut child) {
                 Ok(token) => token,
                 Err(error) => {
-                    terminate_child(&mut child);
-                    wait_after_terminate(&mut child);
+                    terminate_and_reap_logged(
+                        &mut child,
+                        "could not clean up app after readiness failure",
+                    );
+                    if is_interruption(&error) {
+                        output.discard();
+                    } else {
+                        output.print_failure(&spec.name);
+                    }
                     cleanup_children(&mut children);
                     return Err(error);
                 }
@@ -271,9 +333,12 @@ pub(crate) fn run_apps(
         } else {
             None
         };
+        output.finish_progress();
         if spec.proxy && owner_start_token.is_none() {
-            terminate_child(&mut child);
-            wait_after_terminate(&mut child);
+            terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after missing owner identity",
+            );
             cleanup_children(&mut children);
             bail!(
                 "Could not verify start identity for child process {child_pid}; refusing to publish process route"
@@ -281,8 +346,10 @@ pub(crate) fn run_apps(
         }
         if spec.proxy {
             let Some((hostname, target_host)) = route_parts else {
-                terminate_child(&mut child);
-                wait_after_terminate(&mut child);
+                terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after route preparation failure",
+                );
                 cleanup_children(&mut children);
                 bail!(
                     "Could not prepare process route for child process {child_pid}; refusing to publish route"
@@ -306,8 +373,10 @@ pub(crate) fn run_apps(
                     route.owner_start_token.as_deref(),
                 )
             }) {
-                terminate_child(&mut child);
-                wait_after_terminate(&mut child);
+                terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after route verification failure",
+                );
                 cleanup_children(&mut children);
                 return Err(error);
             }
@@ -316,8 +385,10 @@ pub(crate) fn run_apps(
         let display = match app_display(&spec, settings, port, child_pid, &store) {
             Ok(display) => display,
             Err(error) => {
-                terminate_child(&mut child);
-                wait_after_terminate(&mut child);
+                terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after display failure",
+                );
                 if spec.proxy {
                     remove_route_best_effort(&store, &spec.hostname, &spec.name);
                 }
@@ -332,6 +403,7 @@ pub(crate) fn run_apps(
             proxied: spec.proxy,
             store: store.clone(),
             child,
+            output,
             cleanup_armed: true,
         });
     }
@@ -341,6 +413,7 @@ pub(crate) fn run_apps(
     let mut first_exit = None;
     let mut proxy_stopped = false;
     let mut interrupted = false;
+    let mut failed_child = None;
     let mut proxy_health_misses = 0u8;
     let mut next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
     while first_exit.is_none() {
@@ -349,9 +422,12 @@ pub(crate) fn run_apps(
             interrupted = true;
             break;
         }
-        for running in &mut children {
+        for (index, running) in children.iter_mut().enumerate() {
             match running.child.try_wait() {
                 Ok(Some(status)) => {
+                    if !status.success() {
+                        failed_child = Some(index);
+                    }
                     first_exit = Some((running.name.clone(), status.code().unwrap_or(1)));
                     break;
                 }
@@ -372,6 +448,16 @@ pub(crate) fn run_apps(
         }
         thread::sleep(Duration::from_millis(100));
     }
+    cleanup_children(&mut children);
+    if interrupted {
+        for running in &mut children {
+            running.output.discard();
+        }
+    } else if let Some(index) = failed_child {
+        let failed = &mut children[index];
+        failed.output.print_failure(&failed.name);
+    }
+
     if proxy_stopped {
         eprintln!("Jig proxy stopped responding; shutting down development session");
     } else if interrupted {
@@ -380,9 +466,8 @@ pub(crate) fn run_apps(
         eprintln!("{name} exited with status {code}; stopping development session");
     }
 
-    cleanup_children(&mut children);
     if interrupted {
-        bail!("Interrupted");
+        return Err(interruption_error());
     }
 
     Ok(json!({
@@ -457,7 +542,7 @@ fn ensure_not_interrupted() -> Result<()> {
 
 fn ensure_not_interrupted_with(interrupted: impl FnOnce() -> bool) -> Result<()> {
     if interrupted() {
-        bail!("Interrupted");
+        return Err(interruption_error());
     }
     Ok(())
 }
@@ -505,7 +590,7 @@ fn spawn_child(
     port: u16,
     settings: &ProxySettings,
     dev_env: &[(String, String)],
-) -> Result<Child> {
+) -> Result<SpawnedChild> {
     // App commands are trusted repo-configured dev processes and intentionally
     // inherit the caller's environment; only the background proxy clears env.
     let mut command = Command::new(&argv[0]);
@@ -531,9 +616,9 @@ fn spawn_child(
     }
     command
         .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    command.spawn().map_err(|error| {
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             anyhow::Error::new(error).context(format!(
                 "Failed to run command '{}' for dev app '{}' in {}: executable was not found in PATH. Likely fix: run the repo bootstrap command or install the package manager/tool used by [[dev.apps]].argv.",
@@ -549,7 +634,9 @@ fn spawn_child(
                 spec.dir.display()
             ))
         }
-    })
+    })?;
+    let output = CapturedAppOutput::from_child(&mut child, &spec.name)?;
+    Ok(SpawnedChild { child, output })
 }
 
 fn remove_route_best_effort(store: &StateStore, hostname: &str, app_name: &str) {

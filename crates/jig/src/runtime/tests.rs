@@ -198,6 +198,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Info
         | CommandKind::Prompt(_)
         | CommandKind::Vault(_)
+        | CommandKind::Ui(_)
         | CommandKind::Mcp => {
             panic!("runtime test helper only accepts runtime commands")
         }

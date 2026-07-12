@@ -127,6 +127,22 @@ See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for 
 
 `work start` opens a plan, `check` runs gates, and `work finish` closes a plan only after fresh evidence exists. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
 
+### Flight recorder UI
+
+`jig ui` serves a read-only loopback dashboard over `.agent/state/`: open plans with gate status and the next command to unblock them, recent failures with stderr, finished work with resolutions, per-tool check health, loop workflows and attempt budgets, and a filterable timeline of sessions, plans, receipts, and decisions. Plan ids link to detail pages with the plan body, gate evidence, decisions, and per-receipt output.
+
+```sh
+scripts/jig ui               # prints a one-time loopback sign-in URL
+scripts/jig ui --port 0      # pick any free port
+```
+
+The dashboard validates the exact loopback `Host` and `Origin` and requires a
+session cookie established by the printed one-time URL. Proxy aliases are not
+supported because accepting arbitrary hostnames would reopen DNS-rebinding
+access to receipt and plan contents.
+
+The printed unguessable namespace contains JSON snapshot and plan endpoints returning the same joined data. The server binds `127.0.0.1` only and records no receipts. See [Developer UX](docs/developer-ux.md#flight-recorder-ui).
+
 ### Vault
 
 Jig Vault stores selected local secrets outside the repo, unlocks them with a local passphrase, and injects only requested values into a brokered child process. Generated repos use a repo-scoped local vault by default.
@@ -205,6 +221,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 - `crates/jig/` — publishable `jig` runtime and MCP server
 - `crates/jig-dev-proxy/` — local HTTP/HTTPS proxy with TLS certificate management
+- `crates/jig-ui/` — read-only loopback dashboard server and presentation
 - `crates/jig-vault/` — local encrypted vault, redaction, audit, and brokered-run primitives
 - `templates/project/` — files rendered into downstream repos
 - `examples/` — sample `.jig.toml` answer files

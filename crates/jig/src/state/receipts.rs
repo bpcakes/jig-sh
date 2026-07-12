@@ -15,8 +15,8 @@ use crate::git_receipts::{
 use crate::tool_defs::tool;
 
 use super::events::{
-    ReceiptRecord, append_jsonl, ensure_state_layout, new_id, now_ms, read_jsonl, truncate,
-    with_jsonl_write_lock, write_jsonl_locked,
+    ReceiptRecord, append_jsonl, ensure_state_layout, new_id, now_ms, read_jsonl,
+    read_jsonl_locked, truncate, with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::sessions::current_session;
 
@@ -135,7 +135,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
         .display()
         .to_string();
     with_jsonl_write_lock(&receipts_path, |guard| {
-        let receipts = read_jsonl::<ReceiptRecord>(&receipts_path)?;
+        let receipts = read_jsonl_locked::<ReceiptRecord>(guard, &receipts_path)?;
         let protected = protected_receipt_ids(&receipts);
         let (retained, archived): (Vec<_>, Vec<_>) = receipts.into_iter().partition(|receipt| {
             receipt.ended_at_ms >= before_ms || protected.contains(&receipt.id)
@@ -540,7 +540,7 @@ fn receipt_args_has_receipt_ids(receipt: &ReceiptRecord) -> bool {
         .is_some()
 }
 
-fn receipt_list_value(receipt: ReceiptRecord) -> Result<Value> {
+pub(super) fn receipt_list_value(receipt: ReceiptRecord) -> Result<Value> {
     let diff_summary = receipt_diff_summary(&receipt);
     let mut value = serde_json::to_value(receipt)?;
     if let Some(object) = value.as_object_mut() {

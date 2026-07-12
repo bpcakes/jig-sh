@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 #[cfg(test)]
 use crate::tool_defs::tool;
-use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, tool_defs};
+use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, tool_defs, ui};
 
 mod agent;
 mod bootstrap_run;
@@ -112,6 +112,20 @@ Examples:
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 
+const UI_AFTER_HELP: &str = "\
+Serves a read-only loopback dashboard over .agent/state: open plans with gate
+status, loop workflows, and a merged timeline of sessions, plans, receipts, and
+decisions. The page auto-refreshes; the printed namespaced snapshot path returns the same data as JSON
+after the browser establishes a session from the printed one-time URL.
+
+The server binds 127.0.0.1 only, validates its exact Host and Origin, and records
+no receipts. Proxy aliases are intentionally rejected to prevent DNS rebinding.
+
+Examples:
+  jig ui
+  jig ui --port 0        # pick any free port
+  jig ui --json          # print the URL as JSON, then serve";
+
 const VAULT_AFTER_HELP: &str = "\
 Jig Vault stores local secrets outside the repository. Terminal use prompts for
 the vault passphrase; scripts can set JIG_VAULT_PASSPHRASE. Command-line
@@ -208,6 +222,9 @@ pub(crate) enum CommandKind {
     /// Inspect and archive runtime-owned Jig state.
     #[command(name = tool_defs::cli_command::STATE, subcommand)]
     State(StateCommand),
+    /// Serve the local flight-recorder dashboard for plans, gates, receipts, and loops.
+    #[command(name = tool_defs::cli_command::UI, after_help = UI_AFTER_HELP)]
+    Ui(UiOpts),
     /// Serve the Jig MCP server over stdio.
     #[command(name = tool_defs::cli_command::MCP)]
     Mcp,
@@ -255,6 +272,16 @@ pub(crate) struct MigrationAddOpts {
 pub(crate) struct GenerateSqlxUncheckedQueriesTodoOpts {
     /// Optional output path for the generated TODO report.
     pub(crate) output: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct UiOpts {
+    #[arg(
+        long,
+        default_value_t = ui::DEFAULT_UI_PORT,
+        help = "Loopback port to serve on; 0 selects any free port"
+    )]
+    pub(crate) port: u16,
 }
 
 mod command_conversion;

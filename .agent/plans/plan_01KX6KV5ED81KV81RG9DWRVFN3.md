@@ -1,0 +1,1 @@
+Serve a read-only loopback dashboard over .agent/state: open plans with gate status, loop workflows, and a merged session/plan/receipt/decision timeline. Validated by ui module tests plus dogfooding against this repo.

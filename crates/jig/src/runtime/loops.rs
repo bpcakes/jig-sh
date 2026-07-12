@@ -206,14 +206,14 @@ fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
             .collect::<Vec<_>>()
     };
 
-    let attempts = AttemptStore::new(ctx).snapshot()?;
+    let attempts = AttemptStore::new(ctx).snapshot_read_only()?;
     let attempt_sections = AttemptSections::new(&attempts, now_ms());
 
     Ok(json!({
         "ok": true,
         "command": "loop status",
         "workflows": workflows,
-        "leases": LeaseStore::new(ctx).active_leases()?,
+        "leases": LeaseStore::new(ctx).active_leases_read_only()?,
         "attempts": attempts,
         "waiting_attempts": attempt_sections.waiting,
         "needs_attention": {
@@ -615,6 +615,12 @@ impl LeaseStore {
         })
     }
 
+    fn active_leases_read_only(&self) -> Result<Vec<LeaseRecord>> {
+        let mut store = read_json_or_default::<LeaseFile>(&self.path)?;
+        store.prune_expired(now_ms());
+        Ok(store.leases.into_values().collect())
+    }
+
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut LeaseFile) -> Result<T>) -> Result<T> {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
     }
@@ -745,6 +751,13 @@ impl AttemptStore {
 
     fn snapshot(&mut self) -> Result<Vec<AttemptRecord>> {
         self.with_locked(|store| Ok(store.attempts.values().cloned().collect()))
+    }
+
+    fn snapshot_read_only(&self) -> Result<Vec<AttemptRecord>> {
+        Ok(read_json_or_default::<AttemptFile>(&self.path)?
+            .attempts
+            .into_values()
+            .collect())
     }
 
     fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {

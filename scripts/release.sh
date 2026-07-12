@@ -15,6 +15,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-features"
   "jig-vault"
   "jig-dev-proxy"
+  "jig-ui"
   "$PACKAGE_NAME"
 )
 BIN_NAME="jig"
@@ -89,6 +90,7 @@ crate_dir_for_package() {
     jig-features) printf '%s\n' "crates/jig-features" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
+    jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
       echo "Unknown publish package: $1" >&2
@@ -187,7 +189,7 @@ require_version_consistency() {
   local cargo_version
   local contract_version
   local launcher_version
-  local proxy_dependency_version
+  local dependency_version
 
   local package_name
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
@@ -198,25 +200,29 @@ require_version_consistency() {
     fi
   done
 
-  proxy_dependency_version="$(python3 - "$ROOT_DIR/Cargo.toml" <<'PY'
+  local dependency_name
+  for dependency_name in jig-dev-proxy jig-ui; do
+    dependency_version="$(python3 - "$ROOT_DIR/Cargo.toml" "$dependency_name" <<'PY'
 import pathlib
 import re
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text()
-match = re.search(r'(?m)^jig-dev-proxy\s*=\s*\{[^}\n]*version\s*=\s*"=([^"]+)"', text)
+name = re.escape(sys.argv[2])
+match = re.search(rf'(?m)^{name}\s*=\s*\{{[^}}\n]*version\s*=\s*"=([^"]+)"', text)
 if match:
     print(match.group(1))
 PY
 )"
-  if [[ -z "$proxy_dependency_version" ]]; then
-    echo "Could not read jig-dev-proxy exact dependency version from workspace Cargo.toml." >&2
-    exit 1
-  fi
-  if [[ "$proxy_dependency_version" != "$version" ]]; then
-    echo "jig-dev-proxy dependency version is $proxy_dependency_version, expected $version." >&2
-    exit 1
-  fi
+    if [[ -z "$dependency_version" ]]; then
+      echo "Could not read $dependency_name exact dependency version from workspace Cargo.toml." >&2
+      exit 1
+    fi
+    if [[ "$dependency_version" != "$version" ]]; then
+      echo "$dependency_name dependency version is $dependency_version, expected $version." >&2
+      exit 1
+    fi
+  done
 
   contract_version="$(python3 - "$ROOT_DIR/.agent/jig-contract.json" <<'PY'
 import json
@@ -463,11 +469,17 @@ replace_exactly_once(
 )
 replace_exactly_once(
     root / "Cargo.toml",
+    r'(jig-ui\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
+    rf'\g<1>"={version}"',
+    "workspace jig-ui exact dependency version",
+)
+replace_exactly_once(
+    root / "Cargo.toml",
     r'(jig-dev-proxy\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
     rf'\g<1>"={version}"',
     "workspace jig-dev-proxy exact dependency version",
 )
-for package in ("jig-dev-proxy", "jig-sh"):
+for package in ("jig-dev-proxy", "jig-ui", "jig-sh"):
     replace_exactly_once(
         root / "Cargo.lock",
         rf'(?ms)(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = )"[^"]*"',

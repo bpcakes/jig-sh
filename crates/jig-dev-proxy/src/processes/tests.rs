@@ -20,11 +20,10 @@ fn injects_vite_port_and_host_flags() {
 
 #[test]
 fn ensure_not_interrupted_reports_pending_signal() {
-    let error = ensure_not_interrupted_with(|| true)
-        .unwrap_err()
-        .to_string();
+    let error = ensure_not_interrupted_with(|| true).unwrap_err();
 
-    assert_eq!(error, "Interrupted");
+    assert_eq!(error.to_string(), "Interrupted");
+    assert!(is_interruption(&error));
 }
 
 #[test]
@@ -106,12 +105,12 @@ fn terminate_child_kills_process_group_grandchild() {
         thread::sleep(Duration::from_millis(20));
     }
     let Some(grandchild_pid) = grandchild_pid else {
-        terminate_child(&mut child);
+        terminate_child(&mut child).unwrap();
         let _ = child.wait();
         panic!("grandchild PID was not written");
     };
 
-    terminate_child(&mut child);
+    terminate_child(&mut child).unwrap();
     let _ = child.wait();
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -681,7 +680,9 @@ fn spawn_child_errors_preserve_io_source() {
     };
     let argv = ["jig-dev-proxy-definitely-missing-test-command".to_string()];
 
-    let error = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap_err();
+    let error = spawn_child(&spec, &argv, 4321, &settings, &[])
+        .err()
+        .expect("missing executable should fail to spawn");
 
     assert!(error.to_string().contains("executable was not found"));
     assert!(
@@ -689,6 +690,142 @@ fn spawn_child_errors_preserve_io_source() {
             .chain()
             .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
     );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn spawn_child_captures_output_without_inheriting_the_terminal() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = ProxySettings::default();
+    let spec = AppRunSpec {
+        name: "captured".into(),
+        dir: temp.path().to_path_buf(),
+        command: CommandSpec::Argv(Vec::new()),
+        kind: AppKind::EnvPort,
+        hostname: "captured.example.localhost".into(),
+        target_host: "127.0.0.1".into(),
+        explicit_port: None,
+        proxy: false,
+    };
+    let argv = [
+        "sh".to_string(),
+        "-c".to_string(),
+        "printf 'captured stdout\\n'; printf 'captured stderr\\n' >&2".to_string(),
+    ];
+
+    let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap();
+    assert!(spawned.child.wait().unwrap().success());
+    let output = String::from_utf8(spawned.output.captured_bytes()).unwrap();
+
+    assert!(output.contains("captured stdout"));
+    assert!(output.contains("captured stderr"));
+}
+
+#[cfg(not(windows))]
+#[test]
+fn captured_output_does_not_wait_for_grandchildren_holding_pipes_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = ProxySettings::default();
+    let spec = AppRunSpec {
+        name: "captured".into(),
+        dir: temp.path().to_path_buf(),
+        command: CommandSpec::Argv(Vec::new()),
+        kind: AppKind::EnvPort,
+        hostname: "captured.example.localhost".into(),
+        target_host: "127.0.0.1".into(),
+        explicit_port: None,
+        proxy: false,
+    };
+    let argv = [
+        "sh".to_string(),
+        "-c".to_string(),
+        "sleep 5 & printf 'failure before wrapper exit\\n'; exit 1".to_string(),
+    ];
+    let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap();
+    assert!(!spawned.child.wait().unwrap().success());
+
+    let started = Instant::now();
+    let output = spawned.output.captured_bytes();
+
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(output.ends_with(b"failure before wrapper exit\n"));
+    terminate_child(&mut spawned.child).unwrap();
+}
+
+#[cfg(not(windows))]
+#[test]
+fn failure_tail_is_finalized_after_process_group_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let ready = temp.path().join("term-trap-ready");
+    let release = temp.path().join("release-wrapper");
+    let settings = ProxySettings::default();
+    let spec = AppRunSpec {
+        name: "captured".into(),
+        dir: temp.path().to_path_buf(),
+        command: CommandSpec::Argv(Vec::new()),
+        kind: AppKind::EnvPort,
+        hostname: "captured.example.localhost".into(),
+        target_host: "127.0.0.1".into(),
+        explicit_port: None,
+        proxy: false,
+    };
+    let argv = [
+        "sh".to_string(),
+        "-c".to_string(),
+        "(trap 'printf shutdown-tail\\n >&2; exit 0' TERM; : > \"$1\"; while :; do sleep 1; done) & while [ ! -f \"$1\" ]; do sleep 0.01; done; while [ ! -f \"$2\" ]; do sleep 0.01; done; printf wrapper-failed\\n; exit 1".to_string(),
+        "sh".to_string(),
+        ready.display().to_string(),
+        release.display().to_string(),
+    ];
+    let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap();
+    let ready_deadline = Instant::now() + Duration::from_secs(2);
+    while !ready.exists() && Instant::now() < ready_deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !ready.exists() {
+        terminate_and_reap(&mut spawned.child).unwrap();
+        panic!("TERM trap did not report readiness");
+    }
+    fs::write(&release, b"release\n").unwrap();
+
+    let exit_deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match spawned.child.try_wait().unwrap() {
+            Some(status) => break status,
+            None if Instant::now() < exit_deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            None => {
+                terminate_and_reap(&mut spawned.child).unwrap();
+                panic!("wrapper did not exit after release");
+            }
+        }
+    };
+    assert!(!status.success());
+
+    terminate_and_reap(&mut spawned.child).unwrap();
+    let output = String::from_utf8(spawned.output.captured_bytes()).unwrap();
+
+    assert!(output.contains("wrapper-failed"));
+    assert!(output.contains("shutdown-tail"));
+}
+
+#[test]
+fn captured_output_keeps_a_bounded_tail() {
+    let mut buffer = TailBuffer::default();
+    buffer.push(&vec![b'a'; MAX_APP_OUTPUT_BYTES]);
+    buffer.push(b"failure tail");
+
+    assert_eq!(buffer.bytes.len(), MAX_APP_OUTPUT_BYTES);
+    assert!(
+        buffer
+            .bytes
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .ends_with(b"failure tail")
+    );
+    assert!(buffer.truncated);
 }
 
 #[test]
@@ -750,7 +887,7 @@ fn app_readiness_wait_returns_when_child_owns_listener() {
     .unwrap();
 
     assert!(owner_token.is_some());
-    terminate_child(&mut child);
+    terminate_child(&mut child).unwrap();
     let _ = child.wait();
 }
 
@@ -836,27 +973,64 @@ fn run_apps_preflights_duplicate_process_route_hostnames_before_spawning() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn app_readiness_wait_errors_when_child_exits_first() {
+    struct ChildCleanup(Child);
+    impl Drop for ChildCleanup {
+        fn drop(&mut self) {
+            terminate_and_reap_logged(&mut self.0, "test cleanup failed");
+        }
+    }
     let target_host = "127.0.0.1";
-    let listener = TcpListener::bind((target_host, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let mut child = Command::new("sh")
-        .args(["-c", "sleep 1; exit 7"])
-        .spawn()
-        .unwrap();
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 1; exit 7"]);
+    configure_app_child_process_group(&mut command);
+    let mut child = ChildCleanup(command.spawn().unwrap());
 
-    let error = wait_for_app_ready_with_timeout(
+    let error = wait_for_app_ready_with_timeout_and_test_probe(
         "dead",
         target_host,
-        port,
-        &mut child,
+        43_211,
+        &mut child.0,
         Duration::from_secs(3),
     )
     .unwrap_err()
     .to_string();
 
     assert!(error.contains("exited before listening"));
-    let _ = child.wait();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn production_readiness_path_times_out_and_reaps_live_non_listener() {
+    struct ChildCleanup(Child);
+    impl Drop for ChildCleanup {
+        fn drop(&mut self) {
+            terminate_and_reap_logged(&mut self.0, "test cleanup failed");
+        }
+    }
+
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 30"]);
+    configure_app_child_process_group(&mut command);
+    let mut child = ChildCleanup(command.spawn().unwrap());
+
+    let error = wait_for_app_ready_with_test_probe(
+        &AppRunSpec::new(
+            "never-ready",
+            std::env::current_dir().unwrap(),
+            CommandSpec::Argv(vec![]),
+            "never-ready.localhost",
+        ),
+        43_210,
+        &mut child.0,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("did not listen"));
+    assert!(
+        child.0.try_wait().unwrap().is_some(),
+        "timed-out child must be reaped"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -874,7 +1048,7 @@ fn app_listener_owner_rejects_external_listener() {
         .to_string();
 
     assert!(error.contains("refusing to publish process route"));
-    terminate_child(&mut child);
+    terminate_child(&mut child).unwrap();
     let _ = child.wait();
     drop(listener);
 }
@@ -900,7 +1074,7 @@ fn app_readiness_wait_rejects_port_owned_by_other_process() {
     .to_string();
 
     assert!(error.contains("refusing to publish process route"));
-    terminate_child(&mut child);
+    terminate_child(&mut child).unwrap();
     let _ = child.wait();
     drop(listener);
 }
@@ -952,7 +1126,7 @@ fn app_readiness_wait_rejects_listener_in_different_process_group() {
     {
         terminate_pid(pid);
     }
-    terminate_child(&mut child);
+    terminate_child(&mut child).unwrap();
     let _ = child.wait();
 }
 

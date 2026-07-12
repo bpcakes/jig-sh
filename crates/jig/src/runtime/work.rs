@@ -90,6 +90,11 @@ pub(super) fn dispatch(ctx: &RepoContext, command: WorkCommand) -> Result<Value>
     }
 }
 
+/// Read-only gate status used by `jig ui`; same evaluation as `work gates`.
+pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
+    gates::gates(ctx, WorkGatesRequest { plan_id })
+}
+
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     let session = session_start(ctx)?;
     let plan = plans_open(ctx, plan)?;

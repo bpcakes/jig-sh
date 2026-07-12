@@ -12,6 +12,8 @@
 - `src/runtime.rs`: command-backed tool execution plus MCP tool call dispatch.
 - `src/mcp.rs`: JSON-RPC/MCP stdio server.
 - `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.
+- `src/ui.rs`: `jig ui` CLI adapter for the separately owned `jig-ui` server and presentation crate.
+- `src/ui/snapshot.rs`: joins Jig-owned state, work-gate, and loop data for the UI provider boundary.
 - `src/bootstrap.rs`: init/adopt/update command surface.
 - `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.
 
@@ -21,6 +23,8 @@
 - Change make-tool behavior or receipt recording around command execution: `src/runtime.rs`.
 - Change MCP descriptors, schemas, or protocol handling: `src/mcp.rs`.
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.
+- Change the data exposed by `jig ui`: `src/ui/snapshot.rs`.
+- Change `jig ui` routes, query parsing, server behavior, or rendering: `crates/jig-ui/`.
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`.
 - Change git metadata captured in receipts: `src/git_receipts.rs`.
 

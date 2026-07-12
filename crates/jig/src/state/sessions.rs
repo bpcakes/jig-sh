@@ -155,7 +155,6 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
 }
 
 pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
-    ensure_state_layout(ctx)?;
     let sessions = read_jsonl::<SessionEvent>(&ctx.state_file("sessions.jsonl"))?;
     let plans = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?;

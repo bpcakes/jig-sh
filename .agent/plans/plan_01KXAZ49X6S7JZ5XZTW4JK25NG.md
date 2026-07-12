@@ -1,0 +1,1 @@
+Extract the loopback UI server, routing, query model, and HTML rendering into a dedicated jig-ui library crate. Keep runtime/state snapshot construction in jig-sh behind a provider adapter, update tests and docs, and validate workspace gates.

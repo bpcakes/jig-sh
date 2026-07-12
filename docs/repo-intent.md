@@ -87,6 +87,8 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 
+`crates/jig-ui` implements the loopback HTTP server, routes, timeline query model, and server-rendered dashboard used by `scripts/jig ui`. It depends only on a read-only snapshot-provider contract. `crates/jig/src/ui/snapshot.rs` remains responsible for joining repository state, work-gate evaluation, and loop status, so UI presentation does not depend on Jig runtime internals or read `.agent/state` directly.
+
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
 `crates/jig/src/mcp.rs` is a minimal MCP stdio server. It lists execution tools from the manifest and runtime memory tools from code, then dispatches `tools/call` through the same runtime path as the CLI.

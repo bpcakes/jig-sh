@@ -80,6 +80,19 @@ fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
     }
 }
 
+/// Read-only gate status for `jig ui`; reuses the `work gates` evaluation.
+pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
+    work::gates_snapshot(ctx, plan_id)
+}
+
+/// Read-only loop workflow status for `jig ui`; reuses `loop status`.
+pub(crate) fn loop_status_snapshot(ctx: &RepoContext) -> Result<Value> {
+    loops::dispatch(
+        ctx,
+        crate::command::LoopCommand::Status(crate::command::LoopStatusRequest { workflow: None }),
+    )
+}
+
 pub(crate) fn dispatch_vault(command: crate::command::VaultCommand) -> Result<Value> {
     vault::dispatch(command)
 }

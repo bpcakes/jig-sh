@@ -83,10 +83,33 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured check and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
+- `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
 - `scripts/jig mcp` exposes the same command contract to MCP clients.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 
 This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
+
+## Flight Recorder UI
+
+`scripts/jig ui` turns the append-only record under `.agent/state/` into a browsable page instead of raw JSONL:
+
+```sh
+scripts/jig ui               # prints a one-time loopback sign-in URL
+scripts/jig ui --port 0      # pick any free port
+```
+
+One page answers the daily questions:
+
+- **Open plans and gates.** Each open plan shows its gate table — status, freshness, last run, diff summary — plus the exact command to produce missing evidence.
+- **Recent failures.** The latest failed receipts with expandable stderr, so "why is this red" never requires `jq`.
+- **Recently finished work.** Closed plans with resolutions and how long they took.
+- **Check health.** Per-tool aggregates over recent receipts: runs, failures, last status, average duration.
+- **Loops.** Configured loop workflows, live leases, and exhausted attempt budgets that need a human, with the matching `loop clear-attempt` command.
+- **Timeline.** Sessions, plan events, receipts, and decisions merged newest-first, filterable with `?show=receipts|failures|plans|sessions|decisions` and `?limit=N`. Failed receipts include a stderr preview inline.
+
+Every plan id links to a detail page under the server's per-run namespace, covering open and closed plans alike: the plan body, gate evidence as recorded, linked decisions, and the plan's receipts with expandable stdout/stderr and changed paths.
+
+The server is read-only, binds `127.0.0.1` only, records no receipts, and re-reads state on every request, so the page is always current (it also auto-refreshes). It accepts only the exact bound `Host` and same-origin `Origin`; the printed one-time URL establishes an `HttpOnly`, `SameSite=Strict` session cookie scoped to an unguessable per-run path before redirecting to the clean dashboard URL. Snapshot and plan JSON routes live below that same namespace after the session is established, preventing the browser from sending the cookie to ordinary paths on unrelated loopback ports. Proxy aliases are intentionally unsupported because arbitrary accepted hostnames would weaken the DNS-rebinding defense.
 
 ## Dev Proxy
 

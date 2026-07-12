@@ -56,6 +56,7 @@ mod state;
 #[cfg(test)]
 mod test_env;
 mod tool_defs;
+mod ui;
 
 // Shared protocol between generated optional Cargo command defaults and
 // `work check`: keep this prefix stable unless both sides change.

@@ -97,6 +97,7 @@ pub(crate) mod cli_command {
     pub(crate) const STATE: &str = "state";
     pub(crate) const STATE_ARCHIVE: &str = "archive";
     pub(crate) const STATE_SUMMARY: &str = "summary";
+    pub(crate) const UI: &str = "ui";
     pub(crate) const UPDATE: &str = "update";
     pub(crate) const VAULT: &str = "vault";
     pub(crate) const VAULT_AUDIT: &str = "audit";
