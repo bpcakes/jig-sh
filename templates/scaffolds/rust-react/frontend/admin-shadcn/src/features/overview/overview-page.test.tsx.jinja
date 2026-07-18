@@ -1,0 +1,106 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { afterEach, expect, it, vi } from "vitest"
+
+import { OverviewPage } from "@/features/overview/overview-page"
+
+// Renderer values are not length-bounded.
+// prettier-ignore
+const expectedAppName = "<<[ repo_name ]>>"
+
+afterEach(() => vi.unstubAllGlobals())
+
+it("shows application identity and readiness from the API", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ name: expectedAppName, version: "0.1.0" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+  )
+
+  render(<OverviewPage />)
+
+  expect(screen.getByLabelText("Loading application status")).toBeDefined()
+  expect(await screen.findByText(expectedAppName)).toBeDefined()
+  expect(screen.getByText("0.1.0")).toBeDefined()
+  expect(screen.getByText("Ready")).toBeDefined()
+})
+
+it("reports malformed API data and retries", async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ name: 42 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    .mockResolvedValueOnce(new Response("", { status: 503 }))
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ name: expectedAppName, version: "0.2.0" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    )
+    .mockResolvedValueOnce(new Response("", { status: 200 }))
+  vi.stubGlobal("fetch", fetchMock)
+
+  render(<OverviewPage />)
+
+  expect(
+    await screen.findByText(/did not contain string name and version fields/)
+  ).toBeDefined()
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+  expect(await screen.findByText("0.2.0")).toBeDefined()
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4))
+})
+
+it("reports an unsuccessful API version response", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+  )
+
+  render(<OverviewPage />)
+
+  expect(
+    await screen.findByText(/version request failed with status 503/)
+  ).toBeDefined()
+})
+
+it("shows a connected application that is not ready", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ name: expectedAppName, version: "0.3.0" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+  )
+
+  render(<OverviewPage />)
+
+  expect(await screen.findByText("Not ready")).toBeDefined()
+  expect(screen.getByText("Unavailable")).toBeDefined()
+})

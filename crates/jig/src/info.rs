@@ -79,6 +79,8 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
                 "name": &app.name,
                 "dir": &app.dir,
                 "coverage_threshold": app.coverage_threshold,
+                "kind": ctx.frontend_app_kind(app),
+                "role": ctx.frontend_app_role(app),
             })
         })
         .collect::<Vec<_>>();
@@ -382,6 +384,8 @@ mod tests {
         assert_eq!(output["check_tools"][0], "jig.test");
         assert_eq!(output["work_gates"][0]["id"], "tests");
         assert_eq!(output["dev_apps"][0]["name"], "web");
+        assert_eq!(output["frontend_apps"][0]["kind"], "vite");
+        assert_eq!(output["frontend_apps"][0]["role"], "spa");
         assert_eq!(output["mcp_command"], "scripts/jig mcp");
         assert_eq!(output["mcp_command_source"], "default");
         assert_eq!(output["mcp_command_error"], Value::Null);

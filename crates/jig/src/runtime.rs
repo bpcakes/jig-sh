@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
 use crate::context::RepoContext;
@@ -16,6 +17,25 @@ mod tool_execution;
 mod vault;
 mod work;
 mod worker_runner;
+
+pub(crate) type CodexSupportProbeResult = std::result::Result<bool, String>;
+
+pub(crate) fn agent_doctor_with_codex_support_probe(
+    ctx: &RepoContext,
+    probe: impl FnMut(&str) -> CodexSupportProbeResult,
+) -> Result<Value> {
+    agent::doctor_with_codex_support_probe(ctx, probe)
+}
+
+pub(crate) fn probe_codex_marketplace_support(
+    codex_bin: &str,
+    timeout: Duration,
+    cancelled: impl FnMut() -> bool,
+) -> CodexSupportProbeResult {
+    agent::codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+        codex_bin, timeout, cancelled,
+    )
+}
 
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
     match command {

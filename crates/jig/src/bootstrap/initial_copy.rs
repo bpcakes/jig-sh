@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 use toml::{Table, Value as TomlValue};
 
 use super::AnswerOpts;
+use super::InitMutationTransaction;
 use super::answers::{AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers};
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
@@ -18,6 +19,7 @@ use super::template_source::PreparedTemplateSource;
 use super::template_source::PrivateAnswerOverrides;
 #[cfg(test)]
 use super::{TEMPLATE_LOCAL_PATH_KEY, TEMPLATE_MODE_KEY};
+use crate::bootstrap::path::validate_portable_planned_file_collisions;
 use crate::progress::CliProgress;
 
 const ANSWERS_DETAIL: &str = ".jig.toml values and command defaults";
@@ -39,6 +41,7 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) allow_answers_overwrite: bool,
     pub(super) allow_contract_overwrite: bool,
     pub(super) reserved_output_paths: Vec<PathBuf>,
+    pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
     pub(super) progress: CliProgress,
 }
 
@@ -65,7 +68,7 @@ pub(super) struct AdoptionRenderPreview {
 }
 
 pub(super) fn render_and_copy_bootstrap_template(
-    request: BootstrapCopyRequest<'_>,
+    mut request: BootstrapCopyRequest<'_>,
 ) -> Result<BootstrapCopyResult> {
     request.progress.step("resolve answers", ANSWERS_DETAIL);
     let answer_resolution = request
@@ -120,6 +123,9 @@ pub(super) fn render_and_copy_bootstrap_template(
         format!("{} path(s)", render_preview.retired_managed_files.len()),
     );
     reject_reserved_output_collisions(&staged.active_paths, &request.reserved_output_paths)?;
+    if let Some(transaction) = request.init_transaction.as_deref_mut() {
+        transaction.plan_staged_render(&staged, &request.reserved_output_paths)?;
+    }
 
     let apply_report = apply_staged_render(
         &staged,
@@ -133,6 +139,7 @@ pub(super) fn render_and_copy_bootstrap_template(
             backup_root: request.backup_root.as_deref(),
             conflict_message: "Adopt would overwrite template-managed paths. No files were changed. Re-run with --force or clear these paths first:",
             progress: request.progress,
+            init_transaction: request.init_transaction,
         },
     )?;
 
@@ -164,21 +171,9 @@ fn reject_reserved_output_collisions(
     reserved_output_paths: &[PathBuf],
 ) -> Result<()> {
     // This guards preset/template ownership bugs, so --force must not bypass it.
-    if reserved_output_paths.is_empty() {
-        return Ok(());
-    }
-    let collisions = reserved_output_paths
-        .iter()
-        .filter(|path| managed_paths.contains(path.as_path()))
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
-    if !collisions.is_empty() {
-        bail!(
-            "Internal scaffold/template path conflict (preset/template bug): {}",
-            collisions.join(", ")
-        );
-    }
-    Ok(())
+    validate_portable_planned_file_collisions(
+        managed_paths.iter().chain(reserved_output_paths.iter()),
+    )
 }
 
 impl AdoptionRenderPreview {
@@ -273,7 +268,7 @@ fn validate_frontend_app_lockfile(
 fn frontend_lockfile_names(package_manager: &str) -> &'static [&'static str] {
     match package_manager {
         "bun" => &["bun.lock", "bun.lockb"],
-        "npm" => &["package-lock.json"],
+        "npm" => &["npm-shrinkwrap.json", "package-lock.json"],
         "pnpm" => &["pnpm-lock.yaml"],
         "yarn" => &["yarn.lock"],
         _ => unreachable!("web package manager was already validated"),
@@ -450,8 +445,24 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains(
-            "Internal scaffold/template path conflict (preset/template bug): Cargo.toml"
-        ));
+        assert!(error.contains("Portable planned repository file collision"));
+        assert!(error.matches("Cargo.toml").count() >= 2, "{error}");
+    }
+
+    #[test]
+    fn rejects_nonportable_managed_paths_without_reserved_scaffold_outputs() {
+        for managed_paths in [
+            BTreeSet::from([PathBuf::from("CON")]),
+            BTreeSet::from([PathBuf::from("Owned"), PathBuf::from("owned/child")]),
+        ] {
+            let error = reject_reserved_output_collisions(&managed_paths, &[])
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("not portable to Windows")
+                    || error.contains("Portable planned repository file collision"),
+                "{error}"
+            );
+        }
     }
 }

@@ -1,3 +1,6 @@
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_http as app_http_crate;
+
 pub mod app;
 [% if db_enabled %]
 pub mod db;
@@ -9,5 +12,5 @@ pub use app::TestApp;
 pub use responses::TestResponse;
 
 pub fn test_router() -> axum::Router {
-    <<[ module_name ]>>_http::router(<<[ module_name ]>>::AppState::new())
+    app_http_crate::router(app_crate::AppState::new())
 }

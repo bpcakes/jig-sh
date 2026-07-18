@@ -95,7 +95,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 `crates/jig/src/state/` stores append-only JSONL records:
 
-- `sessions.jsonl`: session start/end events and summaries
+- `sessions.jsonl`: session start/end events and write-time summaries; recent-session references inside new summaries are shallow so history cannot recurse
 - `plans.jsonl`: plan open/append/close events
 - `receipts.jsonl`: tool execution evidence
 - `decisions.jsonl`: structured decision records

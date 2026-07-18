@@ -7,9 +7,44 @@ write_backend_stub_repo() {
   mkdir -p "$repo_dir/crates/acme-db/migrations"
   mkdir -p "$repo_dir/docs/schema"
   mkdir -p "$repo_dir/.sqlx"
+  mkdir -p "$repo_dir/.agent/tmp/fixture-bin"
+
+  # This controlled executable verifies that the generated default SQLx command
+  # reaches the expected binary boundary. It is not a substitute for the real
+  # SQLx integration exercised by fresh-scaffold QA.
+  cat > "$repo_dir/.agent/tmp/fixture-bin/sqlx" <<'EOF'
+#!/bin/sh
+set -eu
+
+fail() {
+  printf '%s\n' "fixture sqlx invocation mismatch: $*" >&2
+  exit 64
+}
+
+[ "${CARGO:-}" = "cargo" ] || fail "CARGO=${CARGO-<unset>}"
+[ "${SQLX_OFFLINE:-}" = "false" ] || fail "SQLX_OFFLINE=${SQLX_OFFLINE-<unset>}"
+[ "${SQLX_OFFLINE_DIR:-}" = ".sqlx" ] || fail "SQLX_OFFLINE_DIR=${SQLX_OFFLINE_DIR-<unset>}"
+[ "$#" -eq 6 ] || fail "argc=$# argv=$*"
+[ "$1" = "prepare" ] || fail "argv=$*"
+[ "$2" = "--check" ] || fail "argv=$*"
+[ "$3" = "--workspace" ] || fail "argv=$*"
+[ "$4" = "--" ] || fail "argv=$*"
+[ "$5" = "--workspace" ] || fail "argv=$*"
+[ "$6" = "--all-targets" ] || fail "argv=$*"
+: "${JIG_FIXTURE_SQLX_MARKER:?missing fixture SQLx marker path}"
+
+{
+  printf '%s\n' 'CARGO=cargo'
+  printf '%s\n' 'SQLX_OFFLINE=false'
+  printf '%s\n' 'SQLX_OFFLINE_DIR=.sqlx'
+  printf '%s\n' 'argv=prepare --check --workspace -- --workspace --all-targets'
+} > "$JIG_FIXTURE_SQLX_MARKER"
+EOF
+  chmod +x "$repo_dir/.agent/tmp/fixture-bin/sqlx"
 
   cat > "$repo_dir/.gitignore" <<'EOF'
 /target/
+/.agent/tmp/
 node_modules/
 coverage/
 */node_modules/
@@ -136,6 +171,18 @@ EOF
     "build:bundle": "node -e \"process.exit(0)\"",
     "test:coverage": "node write-coverage.mjs",
     "dev": "node -e \"setInterval(() => {}, 1000)\""
+  }
+}
+EOF
+    cat > "$repo_dir/$app_dir/package-lock.json" <<EOF
+{
+  "name": "$app_dir",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "$app_dir"
+    }
   }
 }
 EOF

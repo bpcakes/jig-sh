@@ -403,6 +403,52 @@ fn parses_init_scaffold_preset_frontends_and_db() {
 }
 
 #[test]
+fn parses_explicit_harness_only_init_preset() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "harness-only",
+        "--no-input",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Init(bootstrap::InitOpts { scaffold, .. }) => {
+            assert_eq!(
+                scaffold.preset,
+                Some(bootstrap::ScaffoldPreset::HarnessOnly)
+            );
+            assert!(scaffold.db.is_none());
+            assert!(!scaffold.has_frontends());
+        }
+        other => panic!("expected init command, got {other:?}"),
+    }
+}
+
+#[test]
+fn init_parser_allows_defaults_and_no_input_for_defaults_precedence() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "init",
+        "demo",
+        "--defaults",
+        "--no-input",
+        "--no-vault",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Init(opts) => {
+            assert!(opts.defaults);
+            assert!(opts.no_input);
+        }
+        other => panic!("expected init command, got {other:?}"),
+    }
+}
+
+#[test]
 fn rejects_working_tree_template_mode() {
     let error = Cli::try_parse_from([
         "jig",
@@ -681,6 +727,28 @@ fn parses_proxy_run_command() {
             assert_eq!(opts.proxy.http_port, Some(1555));
             assert!(!opts.no_proxy);
             assert_eq!(opts.command, vec!["vite", "--open"]);
+        }
+        other => panic!("expected proxy run command, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_ephemeral_proxy_http_port() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "proxy",
+        "run",
+        "web",
+        "--http-port",
+        "0",
+        "--",
+        "vite",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Proxy(ProxyCommand::Run(opts)) => {
+            assert_eq!(opts.proxy.http_port, Some(0));
         }
         other => panic!("expected proxy run command, got {other:?}"),
     }

@@ -11,6 +11,134 @@ fn no_service_snapshot() -> Result<Option<service::ServiceStatusSnapshot>> {
     Ok(None)
 }
 
+#[test]
+fn interrupted_dev_result_is_structured_after_cleanup() {
+    let reason = processes::TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGINT
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+    let output = normalize_dev_result(Err(processes::interruption_error(reason))).unwrap();
+
+    assert_eq!(
+        output,
+        json!({
+            "ok": false,
+            "interrupted": true,
+            "exit_status": reason.exit_status(),
+            "exit_signal": reason.signal(),
+            "termination_signal": reason.label(),
+            "first_exit": null,
+            "proxy_failed": false,
+            "routes": [],
+        })
+    );
+}
+
+#[test]
+fn dev_result_normalization_preserves_success_and_ordinary_errors() {
+    let success = json!({ "ok": true, "routes": [] });
+    assert_eq!(normalize_dev_result(Ok(success.clone())).unwrap(), success);
+
+    let error = normalize_dev_result(Err(anyhow::anyhow!("ordinary failure"))).unwrap_err();
+    assert_eq!(error.to_string(), "ordinary failure");
+}
+
+#[test]
+fn interrupted_proxy_run_result_is_structured_after_cleanup() {
+    let reason = processes::TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGTERM
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+    let output = normalize_proxy_run_result(
+        Err(processes::interruption_error(reason)),
+        "web",
+        "web.demo.localhost",
+    )
+    .unwrap();
+
+    assert_eq!(
+        output,
+        json!({
+            "ok": false,
+            "interrupted": true,
+            "exit_status": reason.exit_status(),
+            "exit_signal": reason.signal(),
+            "termination_signal": reason.label(),
+            "app": "web",
+            "hostname": "web.demo.localhost",
+            "port": null,
+        })
+    );
+}
+
+#[test]
+fn proxy_run_result_normalization_preserves_success_and_ordinary_errors() {
+    let success = json!({ "ok": true, "app": "web", "exit_status": 0 });
+    assert_eq!(
+        normalize_proxy_run_result(Ok(success.clone()), "web", "web.demo.localhost").unwrap(),
+        success
+    );
+
+    let error = normalize_proxy_run_result(
+        Err(anyhow::anyhow!("ordinary failure")),
+        "web",
+        "web.demo.localhost",
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "ordinary failure");
+}
+
+#[test]
+fn interrupted_proxy_start_result_is_structured_after_cleanup() {
+    let reason = processes::TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGINT
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+    let output = normalize_proxy_start_result(Err(processes::interruption_error(reason)))
+        .unwrap()
+        .expect("interruption produces a structured result");
+
+    assert_eq!(
+        output,
+        json!({
+            "ok": false,
+            "interrupted": true,
+            "exit_status": reason.exit_status(),
+            "exit_signal": reason.signal(),
+            "termination_signal": reason.label(),
+            "foreground": false,
+            "http_port": null,
+            "https_port": null,
+        })
+    );
+}
+
+#[test]
+fn proxy_start_result_normalization_preserves_success_and_ordinary_errors() {
+    assert_eq!(normalize_proxy_start_result(Ok(())).unwrap(), None);
+
+    let error = normalize_proxy_start_result(Err(anyhow::anyhow!("ordinary failure"))).unwrap_err();
+    assert_eq!(error.to_string(), "ordinary failure");
+}
+
 fn service_snapshot(
     value: Value,
     restart_risk: service::ServiceRestartRisk,
@@ -98,6 +226,11 @@ fn spawn_fake_health_responder(health_pid: u32) -> (u16, thread::JoinHandle<bool
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets can inherit the listener's nonblocking
+                    // mode on some platforms. The health client writes after
+                    // connect, so make this fixture's request read blocking
+                    // instead of racing it and intermittently seeing EAGAIN.
+                    stream.set_nonblocking(false).unwrap();
                     let mut request = [0u8; 512];
                     let _ = stream.read(&mut request).unwrap();
                     write!(
@@ -941,6 +1074,38 @@ fn dev_reports_unknown_selected_app_names() {
 }
 
 #[test]
+fn dev_rejects_unknown_selected_app_names_even_when_another_filter_matches() {
+    let temp = tempdir().unwrap();
+    let error = dev(DevRequest {
+        repo_name: "demo".into(),
+        root: temp.path().to_path_buf(),
+        package_manager: "npm".into(),
+        settings: ProxySettings {
+            state_dir: Some(temp.path().to_path_buf()),
+            ..ProxySettings::default()
+        },
+        apps: vec![AppRunSpec {
+            name: "web".into(),
+            dir: temp.path().to_path_buf(),
+            command: CommandSpec::Argv(vec!["unused".into()]),
+            kind: AppKind::EnvPort,
+            hostname: "web.demo.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            explicit_port: None,
+            proxy: false,
+        }],
+        selected_apps: vec!["web".into(), "api".into()],
+        discover_workspace: false,
+        no_proxy: false,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("No development apps matched --app filter 'api'"));
+    assert!(error.contains("Available apps: web"));
+}
+
+#[test]
 fn dev_reports_empty_app_configuration_before_launch() {
     let temp = tempdir().unwrap();
     let error = dev(DevRequest {
@@ -995,4 +1160,28 @@ fn duplicate_hostname_error_includes_source_dirs() {
     assert!(error.contains("Duplicate development app hostname"));
     assert!(error.contains(&web_dir.display().to_string()));
     assert!(error.contains(&api_dir.display().to_string()));
+}
+
+#[test]
+fn resolved_dev_request_keeps_the_canonical_directory_for_preflight() {
+    let temp = tempdir().unwrap();
+    let app_dir = temp.path().join("web");
+    std::fs::create_dir(&app_dir).unwrap();
+    let request = DevRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        "npm",
+        ProxySettings::default(),
+    )
+    .with_apps(vec![AppRunSpec::new(
+        "web",
+        Path::new("web").to_path_buf(),
+        CommandSpec::Argv(vec!["pnpm".into(), "dev".into()]),
+        "web.demo.localhost",
+    )]);
+
+    let resolved = resolve_dev_request(request).unwrap();
+    let resolved_dir = &resolved.apps()[0].dir;
+
+    assert_eq!(resolved_dir, &std::fs::canonicalize(app_dir).unwrap());
 }

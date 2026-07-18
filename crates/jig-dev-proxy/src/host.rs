@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const ALLOWED_TLD_SUFFIXES: &[&str] = &["localhost", "local", "test", "internal"];
+const DNS_LABEL_LIMIT: usize = 63;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct RouteHostname(String);
@@ -208,8 +209,10 @@ pub(crate) fn sanitize_label(input: &str) -> Result<String> {
     if out.is_empty() {
         bail!("hostname label is empty after sanitizing '{input}'");
     }
-    if out.len() > 63 {
-        out.truncate(63);
+    if out.len() > DNS_LABEL_LIMIT {
+        // Keep the existing route identity for long app/repository names:
+        // these hostnames are user-visible and may already be bookmarked.
+        out.truncate(DNS_LABEL_LIMIT);
         while out.ends_with('-') {
             out.pop();
         }
@@ -354,6 +357,29 @@ mod tests {
             .to_string();
 
         assert!(error.contains("must be ASCII"));
+    }
+
+    #[test]
+    fn long_dns_labels_preserve_the_legacy_bounded_prefix() {
+        let vectors = [
+            ("my-app".to_string(), "my-app".to_string()),
+            ("a".repeat(64), "a".repeat(63)),
+            (
+                format!("{}project", "project-".repeat(26)),
+                "project-project-project-project-project-project-project-project".to_string(),
+            ),
+        ];
+
+        for (input, expected) in vectors {
+            let label = sanitize_label(&input).unwrap();
+            assert_eq!(label, expected);
+            assert!(label.len() <= DNS_LABEL_LIMIT);
+        }
+
+        assert_eq!(
+            sanitize_label(&format!("{}-", "a".repeat(63))).unwrap(),
+            "a".repeat(63)
+        );
     }
 
     #[test]

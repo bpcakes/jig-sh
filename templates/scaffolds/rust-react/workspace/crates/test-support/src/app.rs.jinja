@@ -1,3 +1,5 @@
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_http as app_http_crate;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -18,11 +20,11 @@ pub struct TestApp {
 
 impl TestApp {
     pub fn new() -> Self {
-        Self::from_state(<<[ module_name ]>>::AppState::for_tests())
+        Self::from_state(app_crate::AppState::for_tests())
     }
 
-    pub fn from_state(state: <<[ module_name ]>>::AppState) -> Self {
-        Self::from_router(<<[ module_name ]>>_http::router(state))
+    pub fn from_state(state: app_crate::AppState) -> Self {
+        Self::from_router(app_http_crate::router(state))
     }
 
     pub fn from_router(router: Router) -> Self {

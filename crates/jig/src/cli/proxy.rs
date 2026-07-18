@@ -72,8 +72,7 @@ pub(crate) struct ProxyRuntimeOpts {
     pub(crate) state_dir: Option<PathBuf>,
     #[arg(
         long,
-        help = "HTTP listener port for the local proxy",
-        value_parser = clap::value_parser!(u16).range(1..)
+        help = "HTTP listener port for the local proxy; use 0 for an ephemeral runtime port"
     )]
     pub(crate) http_port: Option<u16>,
     #[arg(

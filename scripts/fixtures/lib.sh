@@ -131,8 +131,9 @@ render_fixture() {
   run_jig init "$dest_dir" \
     --template "$ROOT_DIR" \
     --answers-file "$answers_file" \
-    --defaults \
+    --preset harness-only \
     --no-input \
+    --no-vault \
     --force >/dev/null
 }
 
@@ -144,8 +145,9 @@ render_fixture_from_template() {
   run_jig init "$dest_dir" \
     --template "$template_root" \
     --answers-file "$answers_file" \
-    --defaults \
+    --preset harness-only \
     --no-input \
+    --no-vault \
     --force >/dev/null
 }
 

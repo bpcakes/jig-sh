@@ -40,12 +40,14 @@ impl ScaffoldPreset {
         match self {
             Self::RustReact => ScaffoldPresetReport {
                 name: "rust-react",
-                summary: "Rust API workspace plus optional Vite React, Astro, and admin frontend apps.",
+                summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site.",
                 defaults: vec![
                     "Rust crate roots default to apps and crates.",
                     "Frontends default to web when omitted.",
                     "Database scaffolding defaults to none; pass --db postgres or --db sqlite when wanted.",
                     "Generated frontend checks default to bun unless --web-package-manager is supplied.",
+                    "Frontends share a pinned root workspace and install dependencies once during bootstrap.",
+                    "React frontends ship tested shadcn 4 sources and provenance without running a mutable CLI during init.",
                     "Schema dumps stay disabled until a command is configured.",
                 ],
                 layout: vec![
@@ -59,7 +61,7 @@ impl ScaffoldPreset {
                 frontend_shorthands: vec![
                     ScaffoldFrontendShorthandReport {
                         name: "web",
-                        expands_to: "Vite React app in web/",
+                        expands_to: "shadcn Vite React product app in web/",
                     },
                     ScaffoldFrontendShorthandReport {
                         name: "landing",
@@ -67,7 +69,7 @@ impl ScaffoldPreset {
                     },
                     ScaffoldFrontendShorthandReport {
                         name: "admin",
-                        expands_to: "Vite React admin app in admin-panel/",
+                        expands_to: "shadcn Vite React admin app in admin-panel/",
                     },
                 ],
                 examples: vec![
@@ -79,6 +81,21 @@ impl ScaffoldPreset {
                 non_goals: vec![
                     "jig update does not migrate or overwrite scaffolded application source.",
                     "Presets are starter shapes, not long-term application frameworks.",
+                ],
+            },
+            Self::HarnessOnly => ScaffoldPresetReport {
+                name: "harness-only",
+                summary: "Jig harness configuration without starter application code.",
+                defaults: vec![
+                    "SQLx defaults to disabled unless SQLx-shaped answers are supplied.",
+                    "Existing frontend_apps answers are retained as project-owned configuration.",
+                ],
+                layout: vec![],
+                frontend_shorthands: vec![],
+                examples: vec!["jig init ./my-repo --preset harness-only --no-input --no-vault"],
+                ownership: "Only the Jig harness is generated; application source remains entirely project-owned.",
+                non_goals: vec![
+                    "The harness-only preset does not create Rust crates, databases, or frontend applications.",
                 ],
             },
         }

@@ -1,5 +1,7 @@
+use std::process::Command;
+
 use super::*;
-use crate::bootstrap::template_source::prepare_template_source_from_base;
+use crate::bootstrap::template_source::{TemplateRenderSource, prepare_template_source_from_base};
 
 #[test]
 fn adopt_without_template_uses_official_template_release_tag_and_records_metadata() {
@@ -16,6 +18,9 @@ fn adopt_without_template_uses_official_template_release_tag_and_records_metadat
         &git_path,
         format!(
             r#"#!/bin/sh
+if [ "$1" = "--no-replace-objects" ]; then
+  shift
+fi
 printf 'git %s\n' "$*" >> "{log_path}"
 if [ "$1" = "clone" ]; then
   mkdir -p "$4"
@@ -250,6 +255,168 @@ fn embedded_template_source_rejects_mode_and_vcs_ref() {
 }
 
 #[test]
+fn committed_local_template_ignores_ambient_git_dir() {
+    let _guard = lock_env();
+    let template = materialize_template_git_worktree();
+    let external = materialize_template_git_worktree();
+    fs::write(external.path().join("external-only"), "external\n").unwrap();
+    git(external.path(), ["add", "external-only"]).unwrap();
+    git(external.path(), ["commit", "-m", "external commit"]).unwrap();
+
+    let local_commit = git_stdout(template.path(), ["rev-parse", "HEAD"]).unwrap();
+    let external_commit = git_stdout(external.path(), ["rev-parse", "HEAD"]).unwrap();
+    assert_ne!(local_commit, external_commit);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(external.path())
+        .args(["config", "core.worktree"])
+        .arg(template.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let _git_dir = EnvVarGuard::set("GIT_DIR", external.path().join(".git"));
+    let prepared = prepare_template_source_from_base(
+        &template.path().display().to_string(),
+        Some(TemplateMode::Committed),
+        None,
+        template.path().parent().unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(prepared.vcs_ref(), Some(local_commit.as_str()));
+    let TemplateRenderSource::Filesystem(render_root) = prepared.render_source() else {
+        panic!("local template must render from its worktree");
+    };
+    assert_eq!(
+        fs::canonicalize(render_root).unwrap(),
+        fs::canonicalize(template.path()).unwrap()
+    );
+    assert_eq!(
+        git_stdout(external.path(), ["rev-parse", "HEAD"]).unwrap(),
+        external_commit
+    );
+}
+
+#[test]
+fn committed_local_template_ignores_repository_replace_refs() {
+    let template = materialize_template_git_worktree();
+    let original = git_stdout(template.path(), ["rev-parse", "HEAD"]).unwrap();
+    let guide = template.path().join("templates/project/AGENTS.md.jinja");
+    fs::write(&guide, "replacement tree\n").unwrap();
+    git(
+        template.path(),
+        ["add", "templates/project/AGENTS.md.jinja"],
+    )
+    .unwrap();
+    git(template.path(), ["commit", "-m", "replacement object"]).unwrap();
+    let replacement = git_stdout(template.path(), ["rev-parse", "HEAD"]).unwrap();
+    git(template.path(), ["reset", "--hard", &original]).unwrap();
+    git(template.path(), ["replace", &original, &replacement]).unwrap();
+
+    let prepared = prepare_template_source_from_base(
+        &template.path().display().to_string(),
+        Some(TemplateMode::Committed),
+        None,
+        template.path().parent().unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(prepared.vcs_ref(), Some(original.as_str()));
+    assert_ne!(fs::read_to_string(guide).unwrap(), "replacement tree\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_template_clone_ignores_ambient_object_directory() {
+    let _guard = lock_env();
+    let template = materialize_template_git_worktree();
+    let temp = tempdir().unwrap();
+    let external_objects = temp.path().join("external-objects");
+    fs::create_dir(&external_objects).unwrap();
+    let remote = format!("file://{}", template.path().display());
+
+    let _object_directory = EnvVarGuard::set("GIT_OBJECT_DIRECTORY", &external_objects);
+    let prepared = prepare_template_source_from_base(&remote, None, None, temp.path()).unwrap();
+
+    assert_eq!(fs::read_dir(&external_objects).unwrap().count(), 0);
+    let TemplateRenderSource::Filesystem(render_root) = prepared.render_source() else {
+        panic!("remote template must render from its checkout");
+    };
+    assert!(render_root.join(".git/objects").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_template_clone_preserves_transport_policy_but_scrubs_repository_redirects() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = lock_env();
+    let template = materialize_template_git_worktree();
+    let temp = tempdir().unwrap();
+    let log = temp.path().join("git-environment.log");
+    let wrapper = temp.path().join("git-wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            r#"#!/bin/sh
+phase=known
+[ "${{2:-}}" = clone ] && phase=clone
+printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+  "$phase" \
+  "${{GIT_SSL_CAINFO-unset}}" \
+  "${{GIT_PROXY_COMMAND-unset}}" \
+  "${{GIT_HTTP_PROXY_AUTHMETHOD-unset}}" \
+  "${{GIT_SSL_NO_VERIFY-unset}}" \
+  "${{GIT_DIR-unset}}" \
+  "${{GIT_OBJECT_DIRECTORY-unset}}" \
+  "${{GIT_INDEX_FILE-unset}}" \
+  "${{GIT_TRACE-unset}}" >> "{log}"
+exec git "$@"
+"#,
+            log = log.display(),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let remote = format!("file://{}", template.path().display());
+
+    let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, &wrapper);
+    let _ca = EnvVarGuard::set("GIT_SSL_CAINFO", "/trusted/ca.pem");
+    let _proxy = EnvVarGuard::set("GIT_PROXY_COMMAND", "/trusted/proxy-command");
+    let _proxy_auth = EnvVarGuard::set("GIT_HTTP_PROXY_AUTHMETHOD", "basic");
+    let _no_verify = EnvVarGuard::set("GIT_SSL_NO_VERIFY", "1");
+    let _git_dir = EnvVarGuard::set("GIT_DIR", temp.path().join("redirected.git"));
+    let _objects = EnvVarGuard::set("GIT_OBJECT_DIRECTORY", temp.path().join("objects"));
+    let _index = EnvVarGuard::set("GIT_INDEX_FILE", temp.path().join("index"));
+    let _trace = EnvVarGuard::set("GIT_TRACE", "1");
+
+    let prepared = prepare_template_source_from_base(&remote, None, None, temp.path()).unwrap();
+    assert!(matches!(
+        prepared.render_source(),
+        TemplateRenderSource::Filesystem(_)
+    ));
+
+    let entries = fs::read_to_string(log).unwrap();
+    let clone = entries
+        .lines()
+        .find(|entry| entry.starts_with("clone|"))
+        .expect("clone invocation was logged");
+    assert_eq!(
+        clone,
+        "clone|/trusted/ca.pem|/trusted/proxy-command|basic|1|unset|unset|unset|unset"
+    );
+    let known = entries
+        .lines()
+        .find(|entry| entry.starts_with("known|"))
+        .expect("known-repository invocation was logged");
+    assert_eq!(
+        known, "known|unset|unset|unset|unset|unset|unset|unset|unset",
+        "transport policy must not broaden strict known-repository commands"
+    );
+}
+
+#[test]
 fn update_rejects_explicit_switch_from_committed_source_to_embedded_source() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -452,6 +619,9 @@ fn default_template_resolution_errors_explain_offline_and_ref_overrides() {
         &git_path,
         format!(
             r#"#!/bin/sh
+if [ "$1" = "--no-replace-objects" ]; then
+  shift
+fi
 if [ "$1" = "clone" ]; then
   mkdir -p "$4"
   cp -R "{template}/." "$4"
@@ -513,6 +683,9 @@ fn default_template_clone_errors_get_official_template_context() {
     fs::write(
         &git_path,
         r#"#!/bin/sh
+if [ "$1" = "--no-replace-objects" ]; then
+  shift
+fi
 if [ "$1" = "clone" ]; then
   echo "network unavailable" >&2
   exit 1

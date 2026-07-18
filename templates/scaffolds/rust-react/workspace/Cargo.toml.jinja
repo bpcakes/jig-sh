@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "apps/<<[ package_name ]>>-api",
   "crates/<<[ package_name ]>>-core",
@@ -15,6 +15,7 @@ members = [
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
+rust-version = "1.85"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -23,11 +24,15 @@ dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal",[% if db_enabled and sqlx_driver == "sqlite" %] "sync",[% endif %] "time"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [% if db_enabled %]
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
+[% if sqlx_driver == "sqlite" %]
+fs4 = "0.13.1"
+url = "2"
+[% endif %]
 [% endif %]

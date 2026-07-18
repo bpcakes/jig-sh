@@ -9,11 +9,19 @@ use serde::Serialize;
 #[cfg(test)]
 use super::ALWAYS_TASK_MUTATED_PATHS;
 use super::ANSWERS_FILE;
+use super::InitMutationTransaction;
 use super::file_copy::{
     copy_file_or_symlink_with_permissions, path_exists, prepare_copy_destination_and_read_metadata,
 };
 use super::managed_paths::{self, ManagedBlockSpec};
-use super::path::{RepositoryFileLeaf, validate_repository_relative_file_leaf};
+use super::path::{
+    RepositoryFileCommit, RepositoryFileLeaf, RepositorySymlinkCommit,
+    copy_repository_regular_file_atomic_with_permissions,
+    copy_repository_regular_file_atomic_with_permissions_guarded,
+    copy_repository_regular_file_atomic_with_permissions_staged, copy_repository_symlink_atomic,
+    copy_repository_symlink_atomic_guarded, copy_repository_symlink_atomic_staged,
+    validate_portable_planned_file_collisions, validate_repository_relative_file_leaf,
+};
 use super::staged_render::StagedRender;
 use crate::progress::CliProgress;
 
@@ -26,6 +34,7 @@ pub(super) struct ApplyRenderOptions<'a> {
     pub(super) backup_root: Option<&'a Path>,
     pub(super) conflict_message: &'a str,
     pub(super) progress: CliProgress,
+    pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -67,8 +76,9 @@ pub(super) enum RenderConflictKind {
 pub(super) fn apply_staged_render(
     staged: &StagedRender,
     destination: &Path,
-    options: ApplyRenderOptions<'_>,
+    mut options: ApplyRenderOptions<'_>,
 ) -> Result<ApplyRenderReport> {
+    validate_portable_planned_file_collisions(&staged.active_paths)?;
     preflight_apply_paths(staged, destination, options.backup_root)?;
 
     let conflicts = if options.force {
@@ -150,18 +160,18 @@ pub(super) fn apply_staged_render(
                     continue;
                 } else {
                     report.files_modified.push(relative_text.clone());
-                    if let Some(spec) = managed_paths::managed_block_spec(relative)
-                        && managed_block_inserted(&rendered_path, Some(&destination_path), spec)?
-                    {
-                        report.managed_blocks_inserted.push(relative_text.clone());
+                    if let Some(spec) = managed_paths::managed_block_spec(relative) {
+                        if managed_block_inserted(&rendered_path, Some(&destination_path), spec)? {
+                            report.managed_blocks_inserted.push(relative_text.clone());
+                        }
                     }
                 }
             } else {
                 report.files_created.push(relative_text.clone());
-                if let Some(spec) = managed_paths::managed_block_spec(relative)
-                    && managed_block_inserted(&rendered_path, None, spec)?
-                {
-                    report.managed_blocks_rendered.push(relative_text.clone());
+                if let Some(spec) = managed_paths::managed_block_spec(relative) {
+                    if managed_block_inserted(&rendered_path, None, spec)? {
+                        report.managed_blocks_rendered.push(relative_text.clone());
+                    }
                 }
             }
             if !options.dry_run {
@@ -177,12 +187,26 @@ pub(super) fn apply_staged_render(
                         &mut report,
                     )?;
                 }
-                options.progress.log_blocked_on_err(copy_rendered_path(
+                if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                    transaction.prepare_file_publication(relative)?;
+                }
+                let published = options.progress.log_blocked_on_err(copy_rendered_path(
                     &rendered_path,
                     destination,
                     &destination_path,
                     relative,
+                    options.init_transaction.as_deref_mut(),
                 ))?;
+                if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                    match published {
+                        PublishedRepositoryPath::Regular(commit) => {
+                            transaction.record_regular_commit(relative, commit)?;
+                        }
+                        PublishedRepositoryPath::Symlink(commit) => {
+                            transaction.record_symlink_commit(relative, commit)?;
+                        }
+                    }
+                }
             }
         } else if path_exists(&destination_path) {
             report.files_removed.push(relative_text.clone());
@@ -195,10 +219,18 @@ pub(super) fn apply_staged_render(
                     options.backup_root,
                     &mut report,
                 )?;
-                validate_managed_destination_leaf(destination, relative)?;
-                options
-                    .progress
-                    .log_blocked_on_err(remove_managed_destination_leaf(destination, relative))?;
+                if let Some(transaction) = options.init_transaction.as_deref_mut() {
+                    transaction.prepare_file_publication(relative)?;
+                    transaction.record_missing_commit(relative)?;
+                } else {
+                    validate_managed_destination_leaf(destination, relative)?;
+                    options
+                        .progress
+                        .log_blocked_on_err(remove_managed_destination_leaf(
+                            destination,
+                            relative,
+                        ))?;
+                }
             }
         }
     }
@@ -348,18 +380,81 @@ fn copy_rendered_path(
     destination: &Path,
     destination_path: &Path,
     relative: &Path,
-) -> Result<()> {
+    transaction: Option<&mut InitMutationTransaction>,
+) -> Result<PublishedRepositoryPath> {
     validate_managed_destination_leaf(destination, relative)?;
-    let metadata = prepare_copy_destination_and_read_metadata(rendered_path, destination_path)?;
+    let guarded = transaction
+        .as_ref()
+        .is_some_and(|transaction| !transaction.is_privately_staged());
+    let privately_staged = transaction
+        .as_ref()
+        .is_some_and(|transaction| transaction.is_privately_staged());
+    let metadata = if transaction.is_some() {
+        fs::symlink_metadata(rendered_path)
+            .with_context(|| format!("Failed to stat {}", rendered_path.display()))?
+    } else {
+        prepare_copy_destination_and_read_metadata(rendered_path, destination_path)?
+    };
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
         bail!(
             "Cannot apply rendered directory {}; managed render paths must be files or symlinks",
             rendered_path.display()
         );
     }
-    validate_managed_destination_leaf(destination, relative)?;
-    if path_exists(destination_path) {
+    let expected_leaf = validate_managed_destination_leaf(destination, relative)?;
+    if !metadata.file_type().is_symlink() {
+        if !metadata.is_file() {
+            bail!(
+                "Cannot apply rendered special file {}; managed render paths must be files or symlinks",
+                rendered_path.display()
+            );
+        }
+        return if guarded {
+            let transaction = transaction.expect("checked above");
+            let temporary_directory = transaction
+                .write_staging_path(relative)
+                .context("Existing-destination init write staging is unavailable")?
+                .to_path_buf();
+            copy_repository_regular_file_atomic_with_permissions_guarded(
+                destination,
+                relative,
+                rendered_path,
+                metadata.permissions(),
+                &temporary_directory,
+                || transaction.verify_destination_identity(),
+            )
+            .map(PublishedRepositoryPath::Regular)
+        } else if privately_staged {
+            let transaction = transaction.expect("checked above");
+            copy_repository_regular_file_atomic_with_permissions_staged(
+                destination,
+                relative,
+                rendered_path,
+                metadata.permissions(),
+                expected_leaf,
+                || transaction.verify_destination_identity(),
+            )
+            .map(PublishedRepositoryPath::Regular)
+        } else {
+            copy_repository_regular_file_atomic_with_permissions(
+                destination,
+                relative,
+                rendered_path,
+                metadata.permissions(),
+                expected_leaf,
+            )
+            .map(PublishedRepositoryPath::Regular)
+        };
+    }
+
+    if !guarded && path_exists(destination_path) {
+        if let Some(transaction) = transaction.as_deref() {
+            transaction.verify_destination_identity()?;
+        }
         remove_managed_destination_leaf(destination, relative)?;
+        if let Some(transaction) = transaction.as_deref() {
+            transaction.verify_destination_identity()?;
+        }
     }
     if validate_managed_destination_leaf(destination, relative)? != RepositoryFileLeaf::Missing {
         bail!(
@@ -367,7 +462,35 @@ fn copy_rendered_path(
             destination_path.display()
         );
     }
-    copy_file_or_symlink_with_permissions(rendered_path, destination_path, &metadata)
+    if guarded {
+        let transaction = transaction.expect("checked above");
+        let temporary_directory = transaction
+            .write_staging_path(relative)
+            .context("Existing-destination init write staging is unavailable")?
+            .to_path_buf();
+        copy_repository_symlink_atomic_guarded(
+            destination,
+            relative,
+            rendered_path,
+            &temporary_directory,
+            || transaction.verify_destination_identity(),
+        )
+        .map(PublishedRepositoryPath::Symlink)
+    } else if privately_staged {
+        let transaction = transaction.expect("checked above");
+        copy_repository_symlink_atomic_staged(destination, relative, rendered_path, || {
+            transaction.verify_destination_identity()
+        })
+        .map(PublishedRepositoryPath::Symlink)
+    } else {
+        copy_repository_symlink_atomic(destination, relative, rendered_path)
+            .map(PublishedRepositoryPath::Symlink)
+    }
+}
+
+enum PublishedRepositoryPath {
+    Regular(RepositoryFileCommit),
+    Symlink(RepositorySymlinkCommit),
 }
 
 fn backup_destination_path(

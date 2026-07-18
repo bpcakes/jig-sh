@@ -4,10 +4,15 @@ on:
   pull_request:
     paths:
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
+[% if sqlx_enabled %]
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
+[% endif %]
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".clippy.toml"
       - "clippy.toml"
@@ -19,13 +24,18 @@ on:
       - ".github/workflows/rust-tests.yml"
   push:
     branches:
-      - <<[ default_branch ]>>
+      - <<[ default_branch | tojson ]>>
     paths:
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
+[% if sqlx_enabled %]
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
+[% endif %]
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".clippy.toml"
       - "clippy.toml"
@@ -50,7 +60,10 @@ concurrency:
 jobs:
   fmt:
     name: scripts/jig check fmt
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -65,10 +78,14 @@ jobs:
 
   clippy:
     name: scripts/jig check clippy
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
 [% if sqlx_enabled %]
     env:
       SQLX_OFFLINE: "true"
+      SQLX_OFFLINE_DIR: <<[ ("${{ github.workspace }}/" ~ rust_sqlx_metadata_dir) | tojson ]>>
 [% endif %]
     steps:
       - name: Checkout
@@ -86,10 +103,14 @@ jobs:
 
   test:
     name: scripts/jig check test-locked
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
 [% if sqlx_enabled %]
     env:
       SQLX_OFFLINE: "true"
+      SQLX_OFFLINE_DIR: <<[ ("${{ github.workspace }}/" ~ rust_sqlx_metadata_dir) | tojson ]>>
 [% endif %]
     steps:
       - name: Checkout

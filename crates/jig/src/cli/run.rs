@@ -12,8 +12,8 @@ use super::bootstrap_run::{
 };
 use super::output::{HumanOutput, emit};
 use super::prompt_run::run_prompt_command;
-use super::structured_error::require_json_ok;
 pub(crate) use super::structured_error::{is_structured_json_failure, structured_error_exit_code};
+use super::structured_error::{require_foreground_status, require_json_ok};
 use super::vault_run::run_vault_command;
 use super::*;
 
@@ -47,7 +47,7 @@ pub(crate) fn run() -> Result<()> {
         CommandKind::Dev(opts) => {
             let output = crate::dev_proxy::commands::dev_without_context(opts.into())?;
             emit(json_output, HumanOutput::Dev, &output)?;
-            require_json_ok(true, &output)
+            require_foreground_status(&output)
         }
         #[cfg(feature = "dev-proxy")]
         CommandKind::Dev(opts) => {
@@ -58,13 +58,13 @@ pub(crate) fn run() -> Result<()> {
             };
             let output = runtime::dispatch(&ctx, crate::command::RuntimeCommand::Dev(opts.into()))?;
             emit(json_output, HumanOutput::Dev, &output)?;
-            require_json_ok(true, &output)
+            require_foreground_status(&output)
         }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Proxy(command) => {
             let output = crate::dev_proxy::commands::proxy_without_context(command.into())?;
             emit(json_output, HumanOutput::Proxy, &output)?;
-            require_json_ok(true, &output)
+            require_foreground_status(&output)
         }
         #[cfg(feature = "dev-proxy")]
         CommandKind::Proxy(command) => {
@@ -80,7 +80,7 @@ pub(crate) fn run() -> Result<()> {
                 runtime::dispatch(&ctx, crate::command::RuntimeCommand::Proxy(runtime_command))?
             };
             emit(json_output, HumanOutput::Proxy, &output)?;
-            require_json_ok(true, &output)
+            require_foreground_status(&output)
         }
         CommandKind::Bootstrap(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Bootstrap(opts.into()),
@@ -315,7 +315,7 @@ fn missing_init_path_hint(error: &clap::Error) -> Option<&'static str> {
 Use `jig adopt .` for an existing repository.
 
 Use one of:
-  jig init /path/to/new-repo --repo-name new-repo --sqlx-enabled false
+  jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
   jig init /path/to/new-repo --preset rust-react
   jig init /path/to/new-repo --preset rust-react --db postgres --frontends web,landing,admin
   jig adopt .              # preview Jig adoption for this existing repo

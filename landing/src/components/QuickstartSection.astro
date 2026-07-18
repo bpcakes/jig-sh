@@ -21,8 +21,11 @@ import { site } from '../config/site';
 
 <span class="c"># harness-only repo</span>
 <span class="h">jig init</span> /path/to/target-repo \
+  --preset <span class="a">harness-only</span> \
   --repo-name target-repo \
-  --sqlx-enabled <span class="a">false</span>
+  --sqlx-enabled <span class="a">false</span> \
+  --no-input \
+  --no-vault
 
 <span class="c"># greenfield app scaffold</span>
 <span class="h">jig init</span> /path/to/target-repo \

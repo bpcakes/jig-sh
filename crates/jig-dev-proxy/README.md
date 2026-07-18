@@ -9,6 +9,16 @@ command envelopes may change between matching `jig-sh` releases.
 
 Development app commands are trusted repo-configured commands. They intentionally
 inherit the caller environment so package managers, local credentials, and dev
-tooling keep working. The long-running background proxy process is different:
+tooling keep working. Jig-owned `JIG_DEV_<APP>_{HOST,PORT,ORIGIN,URL}` coordinates
+describe only the current app selection, so inherited copies are removed before
+current coordinates are injected. The long-running background proxy process is different:
 it starts with a constrained environment and should not be used to run arbitrary
 repo commands.
+
+On Windows, batch shims use an absolute explicit `ComSpec` only after validation;
+when it is absent, Jig resolves native `cmd.exe` from the operating system's
+reported system directory. The same authority supplies `taskkill.exe` and
+`icacls.exe`, so neither PATH shadows nor a hard-coded system drive control
+process cleanup or state ACLs. Foreground route cleanup keeps exact route
+ownership and shares one absolute lock deadline across all children, retries,
+and the final Drop fallback.

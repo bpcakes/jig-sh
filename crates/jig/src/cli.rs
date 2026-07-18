@@ -9,6 +9,7 @@ use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, tool_de
 mod agent;
 mod bootstrap_run;
 mod check;
+mod init_wizard;
 mod loops;
 mod prompt;
 mod proxy;
@@ -50,7 +51,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Print structured JSON output when a command defaults to human-readable output"
+        help = "Print structured JSON output; does not disable interactive prompts"
     )]
     json: bool,
     #[command(subcommand)]
@@ -70,7 +71,7 @@ or provide a path/URL.
 Use one of:
   jig adopt .
   jig adopt . --write
-  jig init /path/to/new-repo --repo-name new-repo --sqlx-enabled false
+  jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
   jig adopt . --write --template /path/to/jig-sh
 
 Pass --template only for a local checkout, fork, or private template.";
@@ -109,6 +110,7 @@ and the repo harness together.
 
 Examples:
   jig presets
+  jig init ./my-repo --preset harness-only --no-input --no-vault
   jig init ./my-app --preset rust-react
   jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin";
 

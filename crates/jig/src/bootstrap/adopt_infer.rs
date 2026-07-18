@@ -350,12 +350,12 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
                 .join(", ")
         ));
     }
-    if !inference.frontend_apps.is_empty()
-        && let Some(package_manager) = inference.web_package_manager.as_deref()
-    {
-        inference
-            .signals
-            .push(format!("package manager: {package_manager}"));
+    if !inference.frontend_apps.is_empty() {
+        if let Some(package_manager) = inference.web_package_manager.as_deref() {
+            inference
+                .signals
+                .push(format!("package manager: {package_manager}"));
+        }
     }
     if let Some(runner) = inference.ci_github_runner.as_deref() {
         inference.signals.push(format!("GitHub runner: {runner}"));
@@ -1449,6 +1449,56 @@ edition = "2024"
     }
 
     #[test]
+    fn npm_shrinkwrap_is_inferred_and_precedes_package_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("npm-shrinkwrap.json"), "{}").unwrap();
+
+        let mut warnings = Vec::new();
+        let scan = RepoScan::collect(temp.path(), &mut warnings);
+        let inference = super::package_manager::infer_package_manager_with_metadata(
+            temp.path(),
+            &scan,
+            &mut warnings,
+        );
+
+        assert_eq!(inference.value.as_deref(), Some("npm"));
+        assert_eq!(inference.sources, vec!["npm-shrinkwrap.json"]);
+        assert!(warnings.is_empty());
+
+        fs::write(temp.path().join("package-lock.json"), "{}").unwrap();
+        let scan = RepoScan::collect(temp.path(), &mut warnings);
+        let inference = super::package_manager::infer_package_manager_with_metadata(
+            temp.path(),
+            &scan,
+            &mut warnings,
+        );
+        assert_eq!(inference.value.as_deref(), Some("npm"));
+        assert_eq!(inference.sources, vec!["npm-shrinkwrap.json"]);
+
+        fs::remove_file(temp.path().join("npm-shrinkwrap.json")).unwrap();
+        let scan = RepoScan::collect(temp.path(), &mut warnings);
+        let inference = super::package_manager::infer_package_manager_with_metadata(
+            temp.path(),
+            &scan,
+            &mut warnings,
+        );
+        assert_eq!(inference.value.as_deref(), Some("npm"));
+        assert_eq!(inference.sources, vec!["package-lock.json"]);
+
+        fs::remove_file(temp.path().join("package-lock.json")).unwrap();
+        fs::create_dir_all(temp.path().join("apps/web")).unwrap();
+        fs::write(temp.path().join("apps/web/npm-shrinkwrap.json"), "{}").unwrap();
+        let scan = RepoScan::collect(temp.path(), &mut warnings);
+        let inference = super::package_manager::infer_package_manager_with_metadata(
+            temp.path(),
+            &scan,
+            &mut warnings,
+        );
+        assert_eq!(inference.value.as_deref(), Some("npm"));
+        assert_eq!(inference.sources, vec!["apps/web/npm-shrinkwrap.json"]);
+    }
+
+    #[test]
     fn default_branch_prefers_known_origin_refs_over_current_branch() {
         let _guard = crate::test_env::lock_env();
         let temp = tempfile::tempdir().unwrap();
@@ -1721,6 +1771,146 @@ edition = "2024"
 
         assert_eq!(inference.frontend_apps.len(), 1);
         assert_eq!(inference.frontend_apps[0].dir, "apps/web");
+    }
+
+    #[test]
+    fn frontend_roles_distinguish_astro_from_other_non_vite_apps() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("apps/docs")).unwrap();
+        fs::create_dir_all(temp.path().join("apps/storefront")).unwrap();
+        fs::write(
+            temp.path().join("pnpm-workspace.yaml"),
+            "packages:\n  - apps/*\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("apps/docs/package.json"),
+            r#"{
+  "scripts": {
+    "dev": "astro dev",
+    "lint": "eslint .",
+    "typecheck": "astro check",
+    "build:bundle": "astro build",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": { "astro": "^5.0.0" }
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("apps/storefront/package.json"),
+            r#"{
+  "scripts": {
+    "dev": "next dev",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "build:bundle": "next build",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": { "next": "^15.0.0" }
+}"#,
+        )
+        .unwrap();
+
+        let inference = infer_adopt_answers(temp.path());
+
+        assert_eq!(inference.frontend_apps.len(), 2);
+        assert_eq!(inference.frontend_apps[0].dir, "apps/docs");
+        assert_eq!(inference.frontend_apps[0].kind, "env-port");
+        assert_eq!(inference.frontend_apps[0].role, "astro");
+        assert_eq!(inference.frontend_apps[1].dir, "apps/storefront");
+        assert_eq!(inference.frontend_apps[1].kind, "env-port");
+        assert_eq!(inference.frontend_apps[1].role, "spa");
+    }
+
+    #[test]
+    fn legacy_admin_panel_vite_package_infers_the_shared_admin_role() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("apps/admin-panel")).unwrap();
+        fs::write(
+            temp.path().join("pnpm-workspace.yaml"),
+            "packages:\n  - apps/*\n",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("apps/admin-panel/package.json"),
+            r#"{
+  "scripts": {
+    "dev": "vite",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "build:bundle": "vite build",
+    "test:coverage": "vitest run --coverage"
+  }
+}"#,
+        )
+        .unwrap();
+
+        let inference = infer_adopt_answers(temp.path());
+
+        assert_eq!(inference.frontend_apps.len(), 1);
+        assert_eq!(inference.frontend_apps[0].name, "admin-panel");
+        assert_eq!(inference.frontend_apps[0].kind, "vite");
+        assert_eq!(inference.frontend_apps[0].role, "admin");
+    }
+
+    #[test]
+    fn frontend_role_inference_is_dev_script_authoritative() {
+        let temp = tempfile::tempdir().unwrap();
+        for app in ["vite-with-astro", "astro-script", "astro-fallback"] {
+            fs::create_dir_all(temp.path().join("apps").join(app)).unwrap();
+        }
+        fs::write(
+            temp.path().join("pnpm-workspace.yaml"),
+            "packages:\n  - apps/*\n",
+        )
+        .unwrap();
+
+        let package = |dev: &str, dependencies: &str| {
+            format!(
+                r#"{{
+  "scripts": {{
+    "dev": "{dev}",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "build:bundle": "build",
+    "test:coverage": "vitest run --coverage"
+  }},
+  "dependencies": {dependencies}
+}}"#
+            )
+        };
+        fs::write(
+            temp.path().join("apps/vite-with-astro/package.json"),
+            package("vite", r#"{ "astro": "^5.0.0" }"#),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("apps/astro-script/package.json"),
+            package("astro dev", "{}"),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("apps/astro-fallback/package.json"),
+            package("custom-dev-server", r#"{ "astro": "^5.0.0" }"#),
+        )
+        .unwrap();
+
+        let inference = infer_adopt_answers(temp.path());
+        let app = |dir: &str| {
+            inference
+                .frontend_apps
+                .iter()
+                .find(|app| app.dir == dir)
+                .unwrap()
+        };
+
+        assert_eq!(app("apps/vite-with-astro").kind, "vite");
+        assert_eq!(app("apps/vite-with-astro").role, "spa");
+        assert_eq!(app("apps/astro-script").kind, "env-port");
+        assert_eq!(app("apps/astro-script").role, "astro");
+        assert_eq!(app("apps/astro-fallback").kind, "env-port");
+        assert_eq!(app("apps/astro-fallback").role, "spa");
     }
 
     #[test]

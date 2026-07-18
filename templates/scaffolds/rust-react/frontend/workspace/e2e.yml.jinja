@@ -1,0 +1,208 @@
+name: Browser E2E
+
+on:
+  # Classic required status checks can remain pending when this path-filtered
+  # workflow is skipped. Prefer repository rules that require this workflow;
+  # otherwise remove pull_request.paths before making its job a required check.
+  pull_request:
+    paths:
+[% for path in e2e_workflow_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+  push:
+    branches:
+      - <<[ default_branch_yaml ]>>
+    paths:
+[% for path in e2e_workflow_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: ${{ matrix.app.name }} browser E2E
+[% if db == "postgres" %]
+    # GitHub service containers require a Linux runner.
+    runs-on: "ubuntu-latest"
+[% else %]
+    runs-on: <<[ ci_github_runner | tojson ]>>
+[% endif %]
+    defaults:
+      run:
+        shell: bash
+    # Includes setup/install time outside Playwright's 15-minute default CI suite budget.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app:
+[% for app in e2e_frontends %]
+          - name: <<[ app.name | tojson ]>>
+            dir: <<[ app.dir | tojson ]>>
+[% endfor %]
+    env:
+      APP_DIR: ${{ matrix.app.dir }}
+      E2E_SERVER_TIMEOUT_MS: "300000"
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright
+[% if db != "none" %]
+      SQLX_OFFLINE: "true"
+      SQLX_OFFLINE_DIR: ${{ github.workspace }}/<<[ sqlx_metadata_dir ]>>
+[% endif %]
+[% if db == "postgres" %]
+      E2E_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/jig_e2e_${{ github.run_id }}_${{ github.run_attempt }}
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+[% endif %]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Bootstrap Node for dependency metadata
+        uses: actions/setup-node@v5
+        with:
+          node-version: <<[ node_version | tojson ]>>
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Resolve Node version file
+        id: node-version
+        shell: bash
+        run: |
+          if node_version_file="$(scripts/check-webapps.sh node-version-file "$APP_DIR")"; then
+            :
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              : "${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}"
+              fallback_node_version_dir="$(umask 077 && mktemp -d "$RUNNER_TEMP/jig-node-version.XXXXXX")" || exit $?
+              node_version_file="$fallback_node_version_dir/node-version"
+              (umask 077; set -o noclobber; printf '%s\n' '<<[ node_version ]>>' > "$node_version_file") || exit $?
+            else
+              exit "$status"
+            fi
+          fi
+          printf 'path=%s\n' "$node_version_file" >> "$GITHUB_OUTPUT"
+[% if package_manager == "bun" %]
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: <<[ package_manager_version | tojson ]>>
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+            ${{ matrix.app.dir }}/node_modules
+          key: ${{ runner.os }}-bun-e2e-${{ matrix.app.dir }}-${{ hashFiles('bun.lock', 'bun.lockb', format('{0}/bun.lock', matrix.app.dir), format('{0}/bun.lockb', matrix.app.dir)) }}
+[% elif package_manager == "npm" %]
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+          cache: npm
+          cache-dependency-path: |
+            npm-shrinkwrap.json
+            package-lock.json
+            ${{ matrix.app.dir }}/npm-shrinkwrap.json
+            ${{ matrix.app.dir }}/package-lock.json
+      - name: Pin npm
+        run: npm install --global npm@<<[ package_manager_version ]>>
+[% elif package_manager == "pnpm" %]
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+      - name: Enable Corepack
+        shell: bash
+        run: |
+          corepack enable
+          package_manager_spec="$(scripts/check-webapps.sh package-manager-spec "$APP_DIR")" || exit $?
+          corepack prepare "$package_manager_spec" --activate
+      - name: Configure Node dependency cache
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            ${{ matrix.app.dir }}/pnpm-lock.yaml
+[% elif package_manager == "yarn" %]
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+      - name: Enable Corepack
+        shell: bash
+        run: |
+          corepack enable
+          package_manager_spec="$(scripts/check-webapps.sh package-manager-spec "$APP_DIR")" || exit $?
+          corepack prepare "$package_manager_spec" --activate
+      - name: Configure Node dependency cache
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: ${{ steps.node-version.outputs.path }}
+          cache: yarn
+          cache-dependency-path: |
+            yarn.lock
+            ${{ matrix.app.dir }}/yarn.lock
+[% endif %]
+      - name: Install dependencies
+        shell: bash
+        run: scripts/check-webapps.sh dependencies-install "$APP_DIR"
+      - name: Cache Playwright Chromium
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+[% if package_manager == "bun" %]
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-${{ hashFiles('package.json', format('{0}/package.json', matrix.app.dir), 'bun.lock', 'bun.lockb', format('{0}/bun.lock', matrix.app.dir), format('{0}/bun.lockb', matrix.app.dir)) }}
+[% elif package_manager == "npm" %]
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-${{ hashFiles('package.json', format('{0}/package.json', matrix.app.dir), 'npm-shrinkwrap.json', 'package-lock.json', format('{0}/npm-shrinkwrap.json', matrix.app.dir), format('{0}/package-lock.json', matrix.app.dir)) }}
+[% elif package_manager == "pnpm" %]
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-${{ hashFiles('package.json', format('{0}/package.json', matrix.app.dir), 'pnpm-lock.yaml', format('{0}/pnpm-lock.yaml', matrix.app.dir)) }}
+[% elif package_manager == "yarn" %]
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-chromium-${{ hashFiles('package.json', format('{0}/package.json', matrix.app.dir), 'yarn.lock', format('{0}/yarn.lock', matrix.app.dir)) }}
+[% endif %]
+      - name: Install Chromium
+        run: scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci
+      - name: Run browser E2E
+        run: scripts/check-webapps.sh run-script "$APP_DIR" test:e2e
+      - name: Upload Playwright artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-${{ matrix.app.name }}-${{ github.run_attempt }}
+          path: |
+            ${{ matrix.app.dir }}/playwright-report
+            ${{ matrix.app.dir }}/test-results
+          if-no-files-found: ignore
+          retention-days: 14

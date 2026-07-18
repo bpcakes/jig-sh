@@ -6,6 +6,7 @@ Owns reusable test harness code only. It should make integration tests concise w
 
 ## Key entrypoints
 
+- `src/lib.rs`: crate module exports and shared `TestApp` re-exports.
 - `src/app.rs`: in-memory Axum test app.
 - `src/http.rs`: HTTP request helpers.
 - `src/responses.rs`: response assertions and JSON decoding.

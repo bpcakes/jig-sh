@@ -20,7 +20,7 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 ## Install
 
-**Prerequisites:** Rust 1.85+, [Bun](https://bun.sh) (for web targets), and your database engine when SQLx is enabled.
+**Prerequisites:** Rust 1.85+, Bash, Node.js 22.22.2+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled. On Windows, run Jig from Git Bash or WSL so generated shell checks have Bash available; Git Bash dependency locking also requires its Linux-compatible `/proc` process records.
 
 ```sh
 cargo install jig-sh
@@ -33,8 +33,8 @@ You only need a global install to run `jig init` or `jig adopt` on a repo for th
 Render the harness, check readiness, and run the work loop:
 
 ```sh
-# 1. Render into a new repo (or `jig adopt .` inside an existing one)
-jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin
+# 1. Run the guided init (or `jig adopt .` inside an existing repo)
+jig init ./my-app
 
 # 2. See what setup remains
 cd ./my-app
@@ -85,10 +85,12 @@ See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer
 
 ## Creating and adopting repos
 
+Run bare `jig init /path/to/target-repo` in a terminal for the guided path: choose a Rust + React starter or a harness-only repo, then choose the database and one or more `web`, `landing`, and `admin` frontends when scaffolding an app. `--defaults` skips the project-shape questions and fills omitted choices with `--preset rust-react --db none --frontend web`; initial vault setup can still prompt unless `JIG_VAULT_PASSPHRASE` is set or `--no-vault` is passed. `--no-input` is strict automation: pass a complete Rust React shape or the explicit `--preset harness-only`; redirected/non-terminal init is equally strict unless `--defaults` is present. Explicit CLI and answers-file values always win over defaults.
+
 **Greenfield, harness only:**
 
 ```sh
-jig init /path/to/target-repo --repo-name target-repo --sqlx-enabled false
+jig init /path/to/target-repo --preset harness-only --no-input --no-vault
 ```
 
 **Greenfield Rust backend + React frontends.** Run `jig presets` to see available presets and their generated layout, then:
@@ -97,7 +99,11 @@ jig init /path/to/target-repo --repo-name target-repo --sqlx-enabled false
 jig init /path/to/target-repo --preset rust-react --db postgres --frontends web,landing,admin
 ```
 
-This scaffolds a Cargo workspace (`apps/<repo>-api`, `crates/<repo>-core`, `crates/<repo>`, `crates/<repo>-http`, `crates/<repo>-test-support`, optional `crates/<repo>-db`) plus frontend apps (Vite React `web`/`admin-panel`, Astro `landing`). The app crate owns typed `AppConfig`/`AppState`; the API binary loads `.env` with `dotenvy`; the HTTP crate owns the Axum router, handlers, middleware, and health endpoints. The scaffold includes a root `.env.example` for local settings and ignores local `.env` files. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
+This scaffolds a Cargo workspace (`apps/<repo>-api`, `crates/<repo>-core`, `crates/<repo>`, `crates/<repo>-http`, `crates/<repo>-test-support`, optional `crates/<repo>-db`) plus a shadcn Vite React product app, an Astro site, and a responsive shadcn admin application. Both React apps start with Tailwind 4, source-owned shadcn components, and a tested API version/readiness slice; the admin adds theme switching, navigation, and operational routes. Authentication and authorization remain project-owned. Jig records the tested shadcn CLI, preset, primitive library, and style for both React apps instead of running a mutable `shadcn@latest` during init.
+
+Bare frontend names other than `web`, `landing`, `admin` and the compatible `marketing`, `astro`, and `admin-panel` aliases are custom names. Interactive init shows the resolved app kind and directory, then asks for confirmation so a typo such as `amdin` does not silently become a directory; non-interactive init calls the custom name out in the summary. Use an explicit kind such as `dashboard:spa`, `ops:admin`, or `campaign:astro` when a custom name is intentional. The Rust + React preset reserves `api` (case-insensitively) for its backend dev app, so use a name such as `api-client` for an API-facing frontend.
+
+The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig bootstrap`. Bootstrap creates or safely reuses the configured database, applies migrations, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. The app crate owns typed `AppConfig`/`AppState`; the API binary optionally loads `.env` with `dotenvy`; the HTTP crate owns the Axum router, handlers, middleware, and health endpoints. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
 
 **Adopt an existing repo.** `jig adopt` scans first and previews managed-file changes; re-run with `--write` after reviewing:
 
@@ -145,9 +151,10 @@ The printed unguessable namespace contains JSON snapshot and plan endpoints retu
 
 ### Vault
 
-Jig Vault stores selected local secrets outside the repo, unlocks them with a local passphrase, and injects only requested values into a brokered child process. Generated repos use a repo-scoped local vault by default.
+Jig Vault stores selected local secrets outside the repo, unlocks them with a local passphrase, and injects only requested values into a brokered child process. `jig init` and `jig adopt . --write` initialize a repo-scoped local vault by default; pass `--no-vault` to defer that setup.
 
 ```sh
+# Run this only when init/adopt used --no-vault.
 scripts/jig vault init
 scripts/jig vault secret set api_token --value-prompt
 scripts/jig vault run --env TOKEN=api_token -- sh -c 'printf "%s\n" "$TOKEN"'

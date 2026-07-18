@@ -6,6 +6,7 @@ mod context;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
 mod doctor;
+mod frontend_metadata;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {
     // Keep the CLI surface parseable in `--no-default-features` binaries while
@@ -55,6 +56,8 @@ mod shell;
 mod state;
 #[cfg(test)]
 mod test_env;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod test_process;
 mod tool_defs;
 mod ui;
 

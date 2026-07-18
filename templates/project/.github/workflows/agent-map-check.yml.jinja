@@ -7,20 +7,20 @@ on:
       - "**/AGENTS.md"
       - "agent-map.md"
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"
       - ".github/workflows/agent-map-check.yml"
   push:
     branches:
-      - <<[ default_branch ]>>
+      - <<[ default_branch | tojson ]>>
     paths:
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"
@@ -40,7 +40,10 @@ concurrency:
 jobs:
   agent-map-check:
     name: Verify AGENTS map drift
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6

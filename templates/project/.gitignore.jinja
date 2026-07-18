@@ -15,8 +15,19 @@
 # Rust
 target/
 
+# Default local SQLite database and transient sidecars
+/<<[ repo_name | replace("-", "_") ]>>.db
+/<<[ repo_name | replace("-", "_") ]>>.db-*
+
 # JavaScript and TypeScript
 node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
 coverage/
 dist/
 build/
@@ -27,6 +38,7 @@ build/
 # Jig local runtime cache. Keep durable agent state tracked.
 .agent/.cache/*
 !.agent/.cache/.gitignore
+.agent/tmp/
 
 # Local logs and scratch files
 *.log

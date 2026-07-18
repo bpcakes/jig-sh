@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 #[cfg(test)]
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,30 +21,91 @@ use serde_json::{Value, json};
 use crate::certs;
 use crate::host::{RouteHostname, TargetHost, target_host_is_loopback};
 use crate::ports::{find_free_app_port_excluding, local_lan_ip_for_ipv4_listener, port_is_free};
-use crate::state::{StateStore, now_ms, process_start_tokens_supported};
+use crate::state::{
+    LockOutcome, ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore, now_ms,
+    process_start_tokens_supported,
+};
 #[cfg(test)]
 use crate::types::CommandSpec;
 use crate::types::{AppKind, AppRunSpec, ProxySettings, Route, RouteMode};
+use crate::{DevPreflightError, DevPreflightResult};
 mod child_lifecycle;
 mod cleanup;
 mod frameworks;
 mod listener_owner;
 mod output;
 mod proxy;
+#[cfg(any(windows, test))]
+mod windows_launch;
 
 use self::child_lifecycle::*;
-use self::cleanup::*;
+pub(crate) use self::cleanup::TerminationReason;
+use self::cleanup::{
+    RunningChild, arm_owned_resources, cleanup_children, force_cleanup_requested,
+    new_route_cleanup_deadline, select_interruption, select_primary_outcome,
+    start_termination_cleanup_session, termination_requested,
+};
 use self::frameworks::*;
 use self::listener_owner::*;
 use self::output::*;
-pub(crate) use self::proxy::ensure_proxy_running;
+#[cfg(test)]
+use self::proxy::proxy_ready;
 #[cfg(test)]
 use self::proxy::{MAX_PROXY_LOG_BYTES, ensure_requested_https, open_proxy_log};
-use self::proxy::{proxy_health_failed, proxy_ready};
+use self::proxy::{
+    ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
+};
 
 const PROXY_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-static CTRL_C_REQUESTED: AtomicBool = AtomicBool::new(false);
-static CTRL_C_HANDLER: OnceLock<()> = OnceLock::new();
+// Keep this exact prefix aligned with the npm branch rendered for
+// `generated_frontend_dev_apps` in templates/project/.jig.toml.jinja. Matching
+// the complete generated form keeps ordinary repository-authored npm commands
+// on the normal inherited-environment boundary.
+const GENERATED_NPM_DEV_ARGV_PREFIX: [&str; 13] = [
+    "npm",
+    "--prefix=.",
+    "--workspace=.",
+    "--workspaces=true",
+    "--include-workspace-root=true",
+    "--global=false",
+    "--location=project",
+    "--if-present=false",
+    "--include=dev",
+    "--include=optional",
+    "--include=peer",
+    "run",
+    "dev",
+];
+const MANAGED_NPM_RUN_CONFIG_KEYS: [&str; 14] = [
+    "workspace",
+    "workspaces",
+    "include-workspace-root",
+    "prefix",
+    "global",
+    "location",
+    "if-present",
+    "omit",
+    "include",
+    "production",
+    "optional",
+    "only",
+    "dev",
+    "also",
+];
+#[cfg(test)]
+static TERMINATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+fn recover_test_mutex_guard<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+pub(super) fn termination_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    recover_test_mutex_guard(&TERMINATION_TEST_LOCK)
+}
 
 struct PreparedApp {
     spec: AppRunSpec,
@@ -55,25 +117,55 @@ struct PreparedApp {
 struct SpawnedChild {
     child: Child,
     output: CapturedAppOutput,
+    process_lease: AppProcessLease,
+}
+
+pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path) -> Result<()> {
+    let _termination_session = start_termination_cleanup_session()?;
+    let cancelled = || termination_requested().is_some();
+    let result = (|| {
+        let store = lock_outcome_or_interruption(
+            StateStore::resolve_interruptible(settings.state_dir.clone(), &cancelled)?,
+            &termination_requested,
+        )?;
+        lock_outcome_or_interruption(
+            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
+            &termination_requested,
+        )?;
+        ensure_not_interrupted_with(termination_requested)
+    })();
+
+    // Once an authenticated shared proxy is ready, or an ordinary startup
+    // error has won, a later signal must not replace that primary outcome.
+    // Interrupted lock/startup paths select interruption themselves so their
+    // original signal remains available to the structured CLI result.
+    if !matches!(&result, Err(error) if is_interruption(error)) {
+        select_primary_outcome();
+    }
+    result
 }
 
 #[derive(Debug)]
-struct Interrupted;
+struct Interrupted(TerminationReason);
 
 impl fmt::Display for Interrupted {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Interrupted")
+        write!(formatter, "Interrupted by {}", self.0.label())
     }
 }
 
 impl StdError for Interrupted {}
 
-fn interruption_error() -> anyhow::Error {
-    Interrupted.into()
+pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
+    Interrupted(reason).into()
 }
 
-fn is_interruption(error: &anyhow::Error) -> bool {
+pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Interrupted>().is_some()
+}
+
+pub(crate) fn interruption_reason(error: &anyhow::Error) -> Option<TerminationReason> {
+    error.downcast_ref::<Interrupted>().map(|error| error.0)
 }
 
 pub(crate) fn run_app(
@@ -81,36 +173,72 @@ pub(crate) fn run_app(
     settings: &ProxySettings,
     current_exe: &Path,
 ) -> Result<Value> {
-    start_ctrlc_cleanup_session();
-    let store = StateStore::resolve(settings.state_dir.clone())?;
+    let _termination_session = start_termination_cleanup_session()?;
+    run_app_with_interrupt_probe(spec, settings, current_exe, termination_requested)
+}
+
+fn run_app_with_interrupt_probe(
+    spec: AppRunSpec,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    interrupt_requested: impl Fn() -> Option<TerminationReason>,
+) -> Result<Value> {
+    let cancelled = || interrupt_requested().is_some();
+    let store = lock_outcome_or_interruption(
+        StateStore::resolve_interruptible(settings.state_dir.clone(), &cancelled)?,
+        &interrupt_requested,
+    )?;
     let route_parts = if spec.proxy {
         ensure_process_routes_supported()?;
         let route_parts = process_route_parts(settings, &spec)?;
-        preflight_process_routes(&store, std::slice::from_ref(&spec))?;
-        prepare_certs_for_hosts(settings, std::slice::from_ref(&spec.hostname))?;
-        ensure_proxy_running(settings, current_exe)?;
+        preflight_process_routes(&store, std::slice::from_ref(&spec), &interrupt_requested)?;
+        prepare_certs_for_hosts_interruptible(
+            settings,
+            std::slice::from_ref(&spec.hostname),
+            &interrupt_requested,
+        )?;
+        lock_outcome_or_interruption(
+            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
+            &interrupt_requested,
+        )?;
         Some(route_parts)
     } else {
         None
     };
-    ensure_not_interrupted()?;
+    ensure_not_interrupted_with(&interrupt_requested)?;
 
     let port = choose_app_port(spec.explicit_port, &spec.target_host, &mut HashSet::new())?;
     let argv = command_argv(&spec.command, &spec.kind, port)?;
     if argv.is_empty() {
         bail!("No command configured for app '{}'", spec.name);
     }
-    let dev_env = dev_app_environment([(&spec, port)], settings, &store)?;
+    let dev_env = lock_outcome_or_interruption(
+        dev_app_environment_interruptible([(&spec, port)], settings, &store, &cancelled)?,
+        &interrupt_requested,
+    )?;
 
+    arm_owned_resources()?;
     let SpawnedChild {
         mut child,
         mut output,
-    } = spawn_child(&spec, &argv, port, settings, &dev_env)?;
+        process_lease: _process_lease,
+    } = match spawn_child(&spec, &argv, port, settings, &dev_env) {
+        Ok(spawned) => spawned,
+        Err(error) => {
+            select_primary_outcome();
+            return Err(error);
+        }
+    };
     let pid = child.id();
     let owner_start_token = if spec.proxy {
         match wait_for_app_ready(&spec, port, &mut child) {
             Ok(token) => token,
             Err(error) => {
+                if is_interruption(&error) {
+                    select_interruption();
+                } else {
+                    select_primary_outcome();
+                }
                 terminate_and_reap_logged(
                     &mut child,
                     "could not clean up app after readiness failure",
@@ -127,8 +255,10 @@ pub(crate) fn run_app(
         None
     };
     output.finish_progress();
+    let mut route_ownership = None;
     if spec.proxy {
         let Some(owner_start_token) = owner_start_token else {
+            select_primary_outcome();
             terminate_and_reap_logged(
                 &mut child,
                 "could not clean up app after missing owner identity",
@@ -138,6 +268,7 @@ pub(crate) fn run_app(
             );
         };
         let Some((hostname, target_host)) = route_parts else {
+            select_primary_outcome();
             terminate_and_reap_logged(
                 &mut child,
                 "could not clean up app after route preparation failure",
@@ -155,29 +286,64 @@ pub(crate) fn run_app(
             mode: RouteMode::Process,
             created_at_ms: now_ms(),
         };
-        if let Err(error) = store.add_verified_route(route, || {
-            verify_process_route_owner(
-                &spec.name,
-                &spec.target_host,
-                port,
-                pid,
-                Some(&owner_start_token),
-            )
-        }) {
-            terminate_and_reap_logged(
+        let ownership =
+            ProcessRouteOwnership::new(route.hostname.clone(), pid, owner_start_token.clone());
+        if let Err(error) = publish_process_route_interruptible(
+            &store,
+            route,
+            &spec,
+            port,
+            pid,
+            Some(&owner_start_token),
+            &interrupt_requested,
+        ) {
+            let interrupted = is_interruption(&error);
+            if interrupted {
+                select_interruption();
+            } else {
+                select_primary_outcome();
+            }
+            let process_cleaned = terminate_and_reap_logged(
                 &mut child,
                 "could not clean up app after route verification failure",
             );
+            remove_route_best_effort(&store, &ownership, &spec.name, process_cleaned);
+            if interrupted {
+                output.discard();
+            }
             return Err(error);
         }
+        if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
+            select_interruption();
+            let process_cleaned = terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app interrupted after route publication",
+            );
+            output.discard();
+            remove_route_best_effort(&store, &ownership, &spec.name, process_cleaned);
+            return Err(error);
+        }
+        route_ownership = Some(ownership);
     }
 
-    let display = match app_display(&spec, settings, port, pid, &store) {
+    let display_result = app_display_interruptible(&spec, settings, port, pid, &store, &cancelled)
+        .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
+    let display = match display_result {
         Ok(display) => display,
         Err(error) => {
-            terminate_and_reap_logged(&mut child, "could not clean up app after display failure");
-            if spec.proxy {
-                remove_route_best_effort(&store, &spec.hostname, &spec.name);
+            let interrupted = is_interruption(&error);
+            if interrupted {
+                select_interruption();
+                output.discard();
+            } else {
+                select_primary_outcome();
+            }
+            let process_cleaned = terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after display failure",
+            );
+            if let Some(ownership) = route_ownership.as_ref() {
+                remove_route_best_effort(&store, ownership, &spec.name, process_cleaned);
             }
             return Err(error);
         }
@@ -185,38 +351,92 @@ pub(crate) fn run_app(
     print_dev_table(std::slice::from_ref(&display));
 
     let status = loop {
-        if ctrl_c_requested() {
-            terminate_and_reap_logged(&mut child, "could not clean up interrupted app");
-            output.discard();
-            if spec.proxy {
-                remove_route_best_effort(&store, &spec.hostname, &spec.name);
+        match try_wait_preserving_process_group(&mut child) {
+            Ok(Some(status)) => {
+                select_primary_outcome();
+                break status;
             }
-            return Err(interruption_error());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Ok(None) => {}
             Err(error) => {
-                if spec.proxy {
-                    remove_route_best_effort(&store, &spec.hostname, &spec.name);
+                select_primary_outcome();
+                let process_cleaned = terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after wait failure",
+                );
+                if let Some(ownership) = route_ownership.as_ref() {
+                    remove_route_best_effort(&store, ownership, &spec.name, process_cleaned);
                 }
-                terminate_and_reap_logged(&mut child, "could not clean up app after wait failure");
                 return Err(error.into());
             }
         }
+        if let Some(reason) = interrupt_requested() {
+            // Prefer a child status that became observable immediately before
+            // the signal; once selected, it must not be replaced during cleanup.
+            match try_wait_preserving_process_group(&mut child) {
+                Ok(Some(status)) => {
+                    select_primary_outcome();
+                    break status;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    select_primary_outcome();
+                    let process_cleaned = terminate_and_reap_logged(
+                        &mut child,
+                        "could not clean up app after wait failure",
+                    );
+                    if let Some(ownership) = route_ownership.as_ref() {
+                        remove_route_best_effort(&store, ownership, &spec.name, process_cleaned);
+                    }
+                    return Err(error.into());
+                }
+            }
+            select_interruption();
+            let process_cleaned =
+                terminate_and_reap_logged(&mut child, "could not clean up interrupted app");
+            output.discard();
+            if let Some(ownership) = route_ownership.as_ref() {
+                remove_route_best_effort(&store, ownership, &spec.name, process_cleaned);
+            }
+            return Err(interruption_error(reason));
+        }
+        thread::sleep(Duration::from_millis(100));
     };
-    if spec.proxy {
-        store.remove_route(&spec.hostname)?;
+    let mut cleanup_error = None;
+    // The direct wrapper can exit while descendants remain in its detached
+    // process group. Reap the whole tree before route cleanup and output
+    // finalization, regardless of the wrapper's status.
+    let process_cleaned =
+        terminate_and_reap_with_retry_logged(&mut child, "could not finalize app process group");
+    if let Some(ownership) = route_ownership.as_ref() {
+        let route_cleanup_deadline = Instant::now() + STATE_LOCK_TIMEOUT;
+        let mut route_cleanup = store.remove_process_route_if_owned_cancelable_until(
+            ownership,
+            route_cleanup_deadline,
+            || process_cleaned && force_cleanup_requested(),
+        );
+        if !matches!(route_cleanup, Ok(true)) {
+            route_cleanup = store.remove_process_route_if_owned_cancelable_until(
+                ownership,
+                route_cleanup_deadline,
+                || process_cleaned && force_cleanup_requested(),
+            );
+        }
+        match route_cleanup {
+            Ok(true) => {}
+            Ok(false) => {
+                cleanup_error = Some(anyhow::anyhow!(
+                    "Development app route '{}' could not be removed after bounded retries; the dead process route is inert and can be pruned later",
+                    ownership.hostname()
+                ));
+            }
+            Err(error) => cleanup_error = Some(error),
+        }
     }
-
-    if !status.success() {
-        // The direct wrapper may exit before descendants that inherited its
-        // output pipes. Shut down the whole group before finalizing the tail.
-        terminate_and_reap_logged(&mut child, "could not finalize failed app process group");
+    finalize_single_app_cleanup(status.success(), process_cleaned, cleanup_error, || {
         output.print_failure(&spec.name);
-    }
+    })?;
 
-    let exit_status = status.code().unwrap_or(1);
+    let exit_status = child_exit_status(&status);
     Ok(json!({
         "ok": status.success(),
         "app": spec.name,
@@ -226,32 +446,105 @@ pub(crate) fn run_app(
     }))
 }
 
-pub(crate) fn run_apps(
+fn finalize_single_app_cleanup(
+    status_success: bool,
+    process_cleaned: bool,
+    cleanup_error: Option<anyhow::Error>,
+    print_failure: impl FnOnce(),
+) -> Result<()> {
+    if !status_success {
+        print_failure();
+        if !process_cleaned {
+            eprintln!("jig proxy app process-tree cleanup was not confirmed after bounded retries");
+        }
+        if let Some(error) = cleanup_error {
+            eprintln!("jig proxy app route cleanup also failed: {error:#}");
+        }
+        return Ok(());
+    }
+    if !process_cleaned {
+        if let Some(error) = cleanup_error {
+            bail!(
+                "Development app exited successfully, but process-tree cleanup was not confirmed and route cleanup failed: {error:#}"
+            );
+        }
+        bail!(
+            "Development app exited successfully, but process-tree cleanup was not confirmed after bounded retries"
+        );
+    }
+    if let Some(error) = cleanup_error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+pub(crate) fn run_apps_with_preflight(
     specs: Vec<AppRunSpec>,
     settings: &ProxySettings,
     current_exe: &Path,
+    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
 ) -> Result<Value> {
-    start_ctrlc_cleanup_session();
+    let _termination_session = start_termination_cleanup_session()?;
+    // The preflight owns a subprocess tree too. Arm before handing control to
+    // it so a repeated signal requests cleanup instead of taking the
+    // no-resources `_exit` path and orphaning that tree.
+    arm_owned_resources()?;
+    let interrupted = || termination_requested().is_some();
+    normalize_preflight_result(preflight(&specs, &interrupted), termination_requested())?;
+    ensure_not_interrupted_with(termination_requested)?;
+    run_apps_with_interrupt_probe(specs, settings, current_exe, termination_requested)
+}
+
+fn normalize_preflight_result(
+    result: DevPreflightResult,
+    termination_reason: Option<TerminationReason>,
+) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(DevPreflightError::Cancelled) => match termination_reason {
+            Some(reason) => Err(interruption_error(reason)),
+            None => bail!(
+                "Development preflight reported cancellation without a pending termination request"
+            ),
+        },
+        Err(DevPreflightError::Failed(error)) => Err(error),
+    }
+}
+
+fn run_apps_with_interrupt_probe(
+    specs: Vec<AppRunSpec>,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    interrupt_requested: impl Fn() -> Option<TerminationReason>,
+) -> Result<Value> {
     if specs.is_empty() {
         bail!("No development apps were configured or discovered.");
     }
     validate_explicit_ports(&specs)?;
     let uses_proxy = specs.iter().any(|spec| spec.proxy);
-    let store = StateStore::resolve(settings.state_dir.clone())?;
+    let cancelled = || interrupt_requested().is_some();
+    let store = lock_outcome_or_interruption(
+        StateStore::resolve_interruptible(settings.state_dir.clone(), &cancelled)?,
+        &interrupt_requested,
+    )?;
     if uses_proxy {
         ensure_process_routes_supported()?;
         validate_process_routes(settings, &specs)?;
-        preflight_process_routes(&store, &specs)?;
+        preflight_process_routes(&store, &specs, &interrupt_requested)?;
         let hostnames: Vec<String> = specs
             .iter()
             .filter(|spec| spec.proxy)
             .map(|spec| spec.hostname.clone())
             .collect();
-        prepare_certs_for_hosts(settings, &hostnames)?;
-        ensure_proxy_running(settings, current_exe)?;
+        prepare_certs_for_hosts_interruptible(settings, &hostnames, &interrupt_requested)?;
+        lock_outcome_or_interruption(
+            ensure_proxy_running_interruptible(&store, settings, current_exe, &cancelled)?,
+            &interrupt_requested,
+        )?;
     }
-    ensure_not_interrupted()?;
+    ensure_not_interrupted_with(&interrupt_requested)?;
     let mut children = Vec::new();
+    let route_cleanup_deadline = new_route_cleanup_deadline();
     let mut routes = Vec::new();
     let mut assigned_ports = HashSet::new();
     let mut display_rows = Vec::new();
@@ -286,16 +579,28 @@ pub(crate) fn run_apps(
             argv,
         });
     }
-    let dev_env = dev_app_environment(
-        prepared_apps
-            .iter()
-            .map(|prepared| (&prepared.spec, prepared.port)),
-        settings,
-        &store,
+    let dev_env = lock_outcome_or_interruption(
+        dev_app_environment_interruptible(
+            prepared_apps
+                .iter()
+                .map(|prepared| (&prepared.spec, prepared.port)),
+            settings,
+            &store,
+            &cancelled,
+        )?,
+        &interrupt_requested,
     )?;
 
+    arm_owned_resources()?;
     for prepared in prepared_apps {
-        ensure_not_interrupted()?;
+        if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
+            select_interruption();
+            cleanup_children(&mut children);
+            for running in &mut children {
+                running.output.discard();
+            }
+            return Err(error);
+        }
         let PreparedApp {
             spec,
             route_parts,
@@ -305,9 +610,11 @@ pub(crate) fn run_apps(
         let SpawnedChild {
             mut child,
             mut output,
+            process_lease,
         } = match spawn_child(&spec, &argv, port, settings, &dev_env) {
             Ok(spawned) => spawned,
             Err(error) => {
+                select_primary_outcome();
                 cleanup_children(&mut children);
                 return Err(error);
             }
@@ -317,6 +624,11 @@ pub(crate) fn run_apps(
             match wait_for_app_ready(&spec, port, &mut child) {
                 Ok(token) => token,
                 Err(error) => {
+                    if is_interruption(&error) {
+                        select_interruption();
+                    } else {
+                        select_primary_outcome();
+                    }
                     terminate_and_reap_logged(
                         &mut child,
                         "could not clean up app after readiness failure",
@@ -334,18 +646,21 @@ pub(crate) fn run_apps(
             None
         };
         output.finish_progress();
-        if spec.proxy && owner_start_token.is_none() {
-            terminate_and_reap_logged(
-                &mut child,
-                "could not clean up app after missing owner identity",
-            );
-            cleanup_children(&mut children);
-            bail!(
-                "Could not verify start identity for child process {child_pid}; refusing to publish process route"
-            );
-        }
+        let mut route_ownership = None;
         if spec.proxy {
+            let Some(owner_start_token) = owner_start_token else {
+                select_primary_outcome();
+                terminate_and_reap_logged(
+                    &mut child,
+                    "could not clean up app after missing owner identity",
+                );
+                cleanup_children(&mut children);
+                bail!(
+                    "Could not verify start identity for child process {child_pid}; refusing to publish process route"
+                );
+            };
             let Some((hostname, target_host)) = route_parts else {
+                select_primary_outcome();
                 terminate_and_reap_logged(
                     &mut child,
                     "could not clean up app after route preparation failure",
@@ -360,51 +675,111 @@ pub(crate) fn run_apps(
                 target_host,
                 target_port: port,
                 owner_pid: Some(child_pid),
-                owner_start_token,
+                owner_start_token: Some(owner_start_token.clone()),
                 mode: RouteMode::Process,
                 created_at_ms: now_ms(),
             };
-            if let Err(error) = store.add_verified_route(route.clone(), || {
-                verify_process_route_owner(
-                    &spec.name,
-                    &spec.target_host,
-                    port,
-                    child_pid,
-                    route.owner_start_token.as_deref(),
-                )
-            }) {
-                terminate_and_reap_logged(
-                    &mut child,
-                    "could not clean up app after route verification failure",
-                );
+            let ownership =
+                ProcessRouteOwnership::new(route.hostname.clone(), child_pid, owner_start_token);
+            if let Err(error) = publish_process_route_interruptible(
+                &store,
+                route.clone(),
+                &spec,
+                port,
+                child_pid,
+                route.owner_start_token.as_deref(),
+                &interrupt_requested,
+            ) {
+                let interrupted = is_interruption(&error);
+                if interrupted {
+                    select_interruption();
+                } else {
+                    select_primary_outcome();
+                }
+                children.push(RunningChild {
+                    name: spec.name,
+                    store: store.clone(),
+                    child,
+                    output,
+                    _process_lease: process_lease,
+                    process_cleanup_armed: true,
+                    route_ownership: Some(ownership),
+                    route_cleanup_armed: true,
+                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                });
                 cleanup_children(&mut children);
+                if interrupted {
+                    for running in &mut children {
+                        running.output.discard();
+                    }
+                }
                 return Err(error);
             }
+            if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
+                select_interruption();
+                children.push(RunningChild {
+                    name: spec.name,
+                    store: store.clone(),
+                    child,
+                    output,
+                    _process_lease: process_lease,
+                    process_cleanup_armed: true,
+                    route_ownership: Some(ownership),
+                    route_cleanup_armed: true,
+                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                });
+                cleanup_children(&mut children);
+                for running in &mut children {
+                    running.output.discard();
+                }
+                return Err(error);
+            }
+            route_ownership = Some(ownership);
             routes.push(route);
         }
-        let display = match app_display(&spec, settings, port, child_pid, &store) {
+        let display_result =
+            app_display_interruptible(&spec, settings, port, child_pid, &store, &cancelled)
+                .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
+        let display = match display_result {
             Ok(display) => display,
             Err(error) => {
-                terminate_and_reap_logged(
-                    &mut child,
-                    "could not clean up app after display failure",
-                );
-                if spec.proxy {
-                    remove_route_best_effort(&store, &spec.hostname, &spec.name);
+                let interrupted = is_interruption(&error);
+                if interrupted {
+                    select_interruption();
+                } else {
+                    select_primary_outcome();
                 }
+                children.push(RunningChild {
+                    name: spec.name,
+                    store: store.clone(),
+                    child,
+                    output,
+                    _process_lease: process_lease,
+                    process_cleanup_armed: true,
+                    route_cleanup_armed: route_ownership.is_some(),
+                    route_ownership,
+                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                });
                 cleanup_children(&mut children);
+                if interrupted {
+                    for running in &mut children {
+                        running.output.discard();
+                    }
+                }
                 return Err(error);
             }
         };
         display_rows.push(display);
         children.push(RunningChild {
             name: spec.name,
-            hostname: spec.hostname,
-            proxied: spec.proxy,
             store: store.clone(),
             child,
             output,
-            cleanup_armed: true,
+            _process_lease: process_lease,
+            process_cleanup_armed: true,
+            route_cleanup_armed: route_ownership.is_some(),
+            route_ownership,
+            route_cleanup_deadline: route_cleanup_deadline.clone(),
         });
     }
 
@@ -412,44 +787,93 @@ pub(crate) fn run_apps(
 
     let mut first_exit = None;
     let mut proxy_stopped = false;
-    let mut interrupted = false;
+    let mut interrupted = None;
     let mut failed_child = None;
     let mut proxy_health_misses = 0u8;
     let mut next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
     while first_exit.is_none() {
-        if ctrl_c_requested() {
-            first_exit = Some(("interrupt".to_string(), 130));
-            interrupted = true;
-            break;
-        }
         for (index, running) in children.iter_mut().enumerate() {
-            match running.child.try_wait() {
+            match try_wait_preserving_process_group(&mut running.child) {
                 Ok(Some(status)) => {
                     if !status.success() {
                         failed_child = Some(index);
                     }
-                    first_exit = Some((running.name.clone(), status.code().unwrap_or(1)));
+                    first_exit = Some((running.name.clone(), child_exit_status(&status)));
                     break;
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    select_primary_outcome();
                     cleanup_children(&mut children);
                     return Err(error.into());
                 }
             }
         }
+        if first_exit.is_some() {
+            select_primary_outcome();
+            break;
+        }
+        if let Some(reason) = interrupt_requested() {
+            // Close the small observation race by checking every child once
+            // more before accepting interruption as the terminal outcome.
+            for (index, running) in children.iter_mut().enumerate() {
+                match try_wait_preserving_process_group(&mut running.child) {
+                    Ok(Some(status)) => {
+                        if !status.success() {
+                            failed_child = Some(index);
+                        }
+                        first_exit = Some((running.name.clone(), child_exit_status(&status)));
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        select_primary_outcome();
+                        cleanup_children(&mut children);
+                        return Err(error.into());
+                    }
+                }
+            }
+            if first_exit.is_some() {
+                select_primary_outcome();
+                break;
+            }
+            select_interruption();
+            interrupted = Some(reason);
+            break;
+        }
         if first_exit.is_none() && uses_proxy && Instant::now() >= next_proxy_health_check {
             next_proxy_health_check = Instant::now() + PROXY_HEALTH_CHECK_INTERVAL;
-            if proxy_health_failed(&mut proxy_health_misses, proxy_ready(&store, settings)?) {
+            let proxy_is_ready = match proxy_ready_interruptible(&store, settings, &cancelled) {
+                Ok(LockOutcome::Acquired(ready)) => ready,
+                Ok(LockOutcome::Cancelled) => {
+                    let Some(reason) = interrupt_requested() else {
+                        select_primary_outcome();
+                        cleanup_children(&mut children);
+                        bail!(
+                            "foreground runtime-state wait was cancelled without a termination request"
+                        );
+                    };
+                    select_interruption();
+                    interrupted = Some(reason);
+                    break;
+                }
+                Err(error) => {
+                    select_primary_outcome();
+                    cleanup_children(&mut children);
+                    return Err(error);
+                }
+            };
+            if proxy_health_failed(&mut proxy_health_misses, proxy_is_ready) {
                 first_exit = Some(("jig proxy".to_string(), 1));
                 proxy_stopped = true;
+                select_primary_outcome();
                 break;
             }
         }
         thread::sleep(Duration::from_millis(100));
     }
-    cleanup_children(&mut children);
-    if interrupted {
+    let cleanup_complete = cleanup_children(&mut children);
+    if interrupted.is_some() {
         for running in &mut children {
             running.output.discard();
         }
@@ -460,15 +884,21 @@ pub(crate) fn run_apps(
 
     if proxy_stopped {
         eprintln!("Jig proxy stopped responding; shutting down development session");
-    } else if interrupted {
-        eprintln!("Interrupted; stopping development session");
-    } else if let Some((name, code)) = &first_exit {
-        eprintln!("{name} exited with status {code}; stopping development session");
+    } else if interrupted.is_none() {
+        if let Some((name, code)) = &first_exit {
+            eprintln!("{name} exited with status {code}; stopping development session");
+        }
     }
 
-    if interrupted {
-        return Err(interruption_error());
+    if let Some(reason) = interrupted {
+        return Err(interruption_error(reason));
     }
+
+    let primary_failed = proxy_stopped
+        || first_exit
+            .as_ref()
+            .is_some_and(|(_, exit_status)| *exit_status != 0);
+    require_cleanup_for_success(cleanup_complete, primary_failed)?;
 
     Ok(json!({
         "ok": first_exit.as_ref().map(|(_, code)| *code == 0).unwrap_or(false),
@@ -478,14 +908,39 @@ pub(crate) fn run_apps(
     }))
 }
 
-fn prepare_certs_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<()> {
+fn require_cleanup_for_success(cleanup_complete: bool, primary_failed: bool) -> Result<()> {
+    if cleanup_complete || primary_failed {
+        return Ok(());
+    }
+    bail!(
+        "Development session apps exited successfully, but one or more owned process trees or routes could not be cleaned up after bounded retries"
+    )
+}
+
+fn terminate_and_reap_with_retry_logged(child: &mut Child, context: &str) -> bool {
+    terminate_and_reap_logged(child, context) || terminate_and_reap_logged(child, context)
+}
+
+fn prepare_certs_for_hosts_interruptible(
+    settings: &ProxySettings,
+    hostnames: &[String],
+    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
+) -> Result<()> {
     if !settings.https {
         return Ok(());
     }
-    certs::ensure_for_hosts(settings, hostnames).with_context(|| {
-        "Failed to prepare HTTPS proxy certificates. Likely fix: run `scripts/jig proxy cert generate --force`, trust the CA with `scripts/jig proxy cert trust --accept-trust-scope`, or disable [dev].https for HTTP-only local development."
-    })?;
+    let cancelled = || interrupt_requested().is_some();
+    let outcome = certs::ensure_for_hosts_interruptible(settings, hostnames, &cancelled)
+        .with_context(|| {
+            "Failed to prepare HTTPS proxy certificates. Likely fix: run `scripts/jig proxy cert generate --force`, trust the CA with `scripts/jig proxy cert trust --accept-trust-scope`, or disable [dev].https for HTTP-only local development."
+        })?;
+    lock_outcome_or_interruption(outcome, interrupt_requested)?;
     Ok(())
+}
+
+#[cfg(test)]
+fn prepare_certs_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<()> {
+    prepare_certs_for_hosts_interruptible(settings, hostnames, &|| None)
 }
 
 fn validate_explicit_ports(specs: &[AppRunSpec]) -> Result<()> {
@@ -526,25 +981,79 @@ fn validate_process_routes(settings: &ProxySettings, specs: &[AppRunSpec]) -> Re
     Ok(())
 }
 
-fn preflight_process_routes(store: &StateStore, specs: &[AppRunSpec]) -> Result<()> {
+fn preflight_process_routes(
+    store: &StateStore,
+    specs: &[AppRunSpec],
+    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
+) -> Result<()> {
     ensure_unique_process_route_hostnames(specs)?;
-    store.ensure_no_live_process_routes_for_hostnames(
+    let cancelled = || interrupt_requested().is_some();
+    let outcome = store.ensure_no_live_process_routes_for_hostnames_interruptible(
         specs
             .iter()
             .filter(|spec| spec.proxy)
             .map(|spec| spec.hostname.as_str()),
-    )
+        &cancelled,
+    )?;
+    lock_outcome_or_interruption(outcome, interrupt_requested)
 }
 
-fn ensure_not_interrupted() -> Result<()> {
-    ensure_not_interrupted_with(ctrl_c_requested)
+fn publish_process_route_interruptible(
+    store: &StateStore,
+    route: Route,
+    spec: &AppRunSpec,
+    port: u16,
+    child_pid: u32,
+    owner_start_token: Option<&str>,
+    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
+) -> Result<()> {
+    let cancelled = || interrupt_requested().is_some();
+    let outcome = store.add_verified_route_interruptible(route, &cancelled, || {
+        verify_process_route_owner(
+            &spec.name,
+            &spec.target_host,
+            port,
+            child_pid,
+            owner_start_token,
+        )
+    })?;
+    lock_outcome_or_interruption(outcome, interrupt_requested)
 }
 
-fn ensure_not_interrupted_with(interrupted: impl FnOnce() -> bool) -> Result<()> {
-    if interrupted() {
-        return Err(interruption_error());
+fn lock_outcome_or_interruption<T>(
+    outcome: LockOutcome<T>,
+    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
+) -> Result<T> {
+    match outcome {
+        LockOutcome::Acquired(value) => Ok(value),
+        LockOutcome::Cancelled => match interrupt_requested() {
+            Some(reason) => {
+                select_interruption();
+                Err(interruption_error(reason))
+            }
+            None => bail!("foreground state wait was cancelled without a termination request"),
+        },
+    }
+}
+
+fn ensure_not_interrupted_with(
+    interrupted: impl FnOnce() -> Option<TerminationReason>,
+) -> Result<()> {
+    if let Some(reason) = interrupted() {
+        return Err(interruption_error(reason));
     }
     Ok(())
+}
+
+fn child_exit_status(status: &ExitStatus) -> i32 {
+    if let Some(status) = status.code() {
+        return status;
+    }
+    #[cfg(unix)]
+    if let Some(signal) = status.signal() {
+        return 128 + signal;
+    }
+    1
 }
 
 fn ensure_unique_process_route_hostnames(specs: &[AppRunSpec]) -> Result<()> {
@@ -591,13 +1100,36 @@ fn spawn_child(
     settings: &ProxySettings,
     dev_env: &[(String, String)],
 ) -> Result<SpawnedChild> {
+    ensure_app_supervision_supported(cfg!(unix), cfg!(windows))?;
     // App commands are trusted repo-configured dev processes and intentionally
-    // inherit the caller's environment; only the background proxy clears env.
-    let mut command = Command::new(&argv[0]);
+    // inherit the caller's environment. Derived app coordinates are replaced
+    // below; only the background proxy clears the broader environment.
+    let working_directory = child_working_directory(&spec.dir).with_context(|| {
+        format!(
+            "Development app '{}' directory {} cannot be represented safely for a child process",
+            spec.name,
+            spec.dir.display()
+        )
+    })?;
+    let mut command =
+        build_app_child_command(argv, &working_directory, dev_env).with_context(|| {
+            format!(
+                "Failed to prepare command '{}' for dev app '{}'",
+                argv[0], spec.name
+            )
+        })?;
+    command.current_dir(&working_directory);
+    apply_dev_child_environment(
+        &mut command,
+        argv,
+        std::env::vars_os().map(|(key, _)| key),
+        dev_env,
+    );
     command
-        .args(&argv[1..])
-        .current_dir(&spec.dir)
-        .envs(dev_env.iter().map(|(key, value)| (key, value)))
+        // Astro 7 detects agent environments and may background its dev server.
+        // Its documented zero value keeps Jig's child in the foreground-owned
+        // process group; non-Astro commands ignore it.
+        .env("ASTRO_DEV_BACKGROUND", "0")
         .env("PORT", port.to_string())
         .env("HOST", &spec.target_host);
     configure_app_child_process_group(&mut command);
@@ -635,15 +1167,178 @@ fn spawn_child(
             ))
         }
     })?;
+    let process_lease = match register_app_child(&mut child) {
+        Ok(lease) => lease,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to establish an owned process-tree boundary for dev app '{}'",
+                    spec.name
+                )
+            });
+        }
+    };
     let output = CapturedAppOutput::from_child(&mut child, &spec.name)?;
-    Ok(SpawnedChild { child, output })
+    Ok(SpawnedChild {
+        child,
+        output,
+        process_lease,
+    })
 }
 
-fn remove_route_best_effort(store: &StateStore, hostname: &str, app_name: &str) {
-    if let Err(error) = store.remove_route(hostname) {
-        eprintln!(
-            "jig proxy could not remove route '{hostname}' while cleaning up app '{app_name}': {error}"
-        );
+fn apply_dev_app_environment(
+    command: &mut Command,
+    inherited_keys: impl IntoIterator<Item = OsString>,
+    dev_env: &[(String, String)],
+) {
+    // Derived app coordinates describe only the current Jig selection. Do not
+    // let a value inherited from an earlier or narrower session impersonate a
+    // currently managed app. Other caller environment remains project-owned.
+    for key in inherited_keys {
+        if is_runtime_owned_dev_app_environment_key(&key) {
+            command.env_remove(key);
+        }
+    }
+    command.envs(dev_env.iter().map(|(key, value)| (key, value)));
+}
+
+fn apply_dev_child_environment(
+    command: &mut Command,
+    argv: &[String],
+    inherited_keys: impl IntoIterator<Item = OsString>,
+    dev_env: &[(String, String)],
+) {
+    let inherited_keys = inherited_keys.into_iter().collect::<Vec<_>>();
+    apply_dev_app_environment(command, inherited_keys.iter().cloned(), dev_env);
+    if !is_generated_npm_dev_argv(argv) {
+        return;
+    }
+    for key in inherited_keys {
+        if is_managed_npm_run_environment_key(&key) {
+            command.env_remove(key);
+        }
+    }
+}
+
+pub(crate) fn is_generated_npm_dev_argv(argv: &[String]) -> bool {
+    if argv.len() < GENERATED_NPM_DEV_ARGV_PREFIX.len()
+        || !argv
+            .iter()
+            .zip(GENERATED_NPM_DEV_ARGV_PREFIX)
+            .all(|(actual, expected)| actual == expected)
+    {
+        return false;
+    }
+    let suffix = &argv[GENERATED_NPM_DEV_ARGV_PREFIX.len()..];
+    suffix.is_empty()
+        || (suffix.len() == 6
+            && suffix[0] == "--"
+            && suffix[1] == "--port"
+            && suffix[2].parse::<u16>().is_ok_and(|port| port > 0)
+            && suffix[3] == "--strictPort"
+            && suffix[4] == "--host"
+            && suffix[5] == "127.0.0.1")
+}
+
+fn is_managed_npm_run_environment_key(key: &OsStr) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    let prefix_len = "npm_config_".len();
+    let Some(prefix) = key.get(..prefix_len) else {
+        return false;
+    };
+    if !prefix.eq_ignore_ascii_case("npm_config_") {
+        return false;
+    }
+    let config_key = key[prefix_len..].replace('_', "-").to_ascii_lowercase();
+    MANAGED_NPM_RUN_CONFIG_KEYS.contains(&config_key.as_str())
+}
+
+fn is_runtime_owned_dev_app_environment_key(key: &OsStr) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    #[cfg(windows)]
+    let normalized = key.to_ascii_uppercase();
+    #[cfg(not(windows))]
+    let normalized = key;
+    let Some(derived) = normalized.strip_prefix("JIG_DEV_") else {
+        return false;
+    };
+
+    ["_HOST", "_PORT", "_ORIGIN", "_URL"]
+        .into_iter()
+        .filter_map(|suffix| derived.strip_suffix(suffix))
+        .any(|app| {
+            !app.is_empty()
+                && app
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+}
+
+fn ensure_app_supervision_supported(unix: bool, windows: bool) -> Result<()> {
+    if unix || windows {
+        return Ok(());
+    }
+    bail!(
+        "Development app process-tree supervision is unsupported on this platform; refusing to spawn an app that Jig cannot reliably clean up"
+    )
+}
+
+#[cfg(windows)]
+fn child_working_directory(path: &Path) -> Result<std::path::PathBuf> {
+    windows_launch::windows_command_compatible_path(path).map_err(anyhow::Error::new)
+}
+
+#[cfg(not(windows))]
+fn child_working_directory(path: &Path) -> Result<std::path::PathBuf> {
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+fn build_app_child_command(
+    argv: &[String],
+    working_directory: &Path,
+    dev_env: &[(String, String)],
+) -> Result<Command> {
+    windows_launch::build_windows_app_command(argv, working_directory, dev_env)
+}
+
+#[cfg(not(windows))]
+fn build_app_child_command(
+    argv: &[String],
+    _working_directory: &Path,
+    _dev_env: &[(String, String)],
+) -> Result<Command> {
+    let mut command = Command::new(&argv[0]);
+    command.args(&argv[1..]);
+    Ok(command)
+}
+
+fn remove_route_best_effort(
+    store: &StateStore,
+    ownership: &ProcessRouteOwnership,
+    app_name: &str,
+    process_cleaned: bool,
+) {
+    match store.remove_process_route_if_owned_cancelable(ownership, || {
+        process_cleaned && force_cleanup_requested()
+    }) {
+        Ok(true) => {}
+        Ok(false) => eprintln!(
+            "jig proxy skipped a contended route rewrite for '{}' after forced cleanup; the dead process route is inert and can be pruned later",
+            ownership.hostname()
+        ),
+        Err(error) => {
+            eprintln!(
+                "jig proxy could not remove route '{}' while cleaning up app '{app_name}': {error}",
+                ownership.hostname()
+            );
+        }
     }
 }
 
@@ -665,7 +1360,8 @@ fn configure_app_child_process_group(command: &mut Command) {
 #[cfg(windows)]
 fn configure_app_child_process_group(command: &mut Command) {
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -712,6 +1408,7 @@ struct AppDisplay {
     lan_note: Option<String>,
 }
 
+#[cfg(test)]
 fn app_display(
     spec: &AppRunSpec,
     settings: &ProxySettings,
@@ -719,8 +1416,25 @@ fn app_display(
     pid: u32,
     store: &StateStore,
 ) -> Result<AppDisplay> {
+    match app_display_interruptible(spec, settings, port, pid, store, &|| false)? {
+        LockOutcome::Acquired(display) => Ok(display),
+        LockOutcome::Cancelled => bail!("uncancelled app display preparation was cancelled"),
+    }
+}
+
+fn app_display_interruptible(
+    spec: &AppRunSpec,
+    settings: &ProxySettings,
+    port: u16,
+    pid: u32,
+    store: &StateStore,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<AppDisplay>> {
     if spec.proxy {
-        let (scheme, proxy_port) = proxy_origin(settings, store)?;
+        let (scheme, proxy_port) = match proxy_origin_interruptible(settings, store, cancelled)? {
+            LockOutcome::Acquired(origin) => origin,
+            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        };
         let lan_note = if settings.lan {
             if let Some(ip) = local_lan_ip_for_ipv4_listener() {
                 Some(format!(
@@ -736,26 +1450,39 @@ fn app_display(
         } else {
             None
         };
-        return Ok(AppDisplay {
+        return Ok(LockOutcome::Acquired(AppDisplay {
             name: spec.name.clone(),
             url: format!("{scheme}://{}:{proxy_port}", spec.hostname),
             pid,
             lan_note,
-        });
+        }));
     }
-    Ok(AppDisplay {
+    Ok(LockOutcome::Acquired(AppDisplay {
         name: spec.name.clone(),
         url: format!("http://{}:{port}", spec.target_host),
         pid,
         lan_note: None,
-    })
+    }))
 }
 
+#[cfg(test)]
 fn dev_app_environment<'a>(
     apps: impl IntoIterator<Item = (&'a AppRunSpec, u16)>,
     settings: &ProxySettings,
     store: &StateStore,
 ) -> Result<Vec<(String, String)>> {
+    match dev_app_environment_interruptible(apps, settings, store, &|| false)? {
+        LockOutcome::Acquired(environment) => Ok(environment),
+        LockOutcome::Cancelled => bail!("uncancelled app environment preparation was cancelled"),
+    }
+}
+
+fn dev_app_environment_interruptible<'a>(
+    apps: impl IntoIterator<Item = (&'a AppRunSpec, u16)>,
+    settings: &ProxySettings,
+    store: &StateStore,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<Vec<(String, String)>>> {
     let mut env = Vec::new();
     let mut prefixes = HashMap::new();
     for (spec, port) in apps {
@@ -769,37 +1496,75 @@ fn dev_app_environment<'a>(
         }
         env.push((format!("{prefix}_HOST"), spec.target_host.clone()));
         env.push((format!("{prefix}_PORT"), port.to_string()));
-        let origin = app_origin(spec, settings, port, store)?;
+        let origin = match app_origin_interruptible(spec, settings, port, store, cancelled)? {
+            LockOutcome::Acquired(origin) => origin,
+            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        };
         env.push((format!("{prefix}_ORIGIN"), origin.clone()));
         env.push((format!("{prefix}_URL"), origin));
     }
-    Ok(env)
+    Ok(LockOutcome::Acquired(env))
 }
 
+#[cfg(test)]
 fn app_origin(
     spec: &AppRunSpec,
     settings: &ProxySettings,
     port: u16,
     store: &StateStore,
 ) -> Result<String> {
-    if !spec.proxy {
-        return Ok(format!("http://{}:{port}", spec.target_host));
+    match app_origin_interruptible(spec, settings, port, store, &|| false)? {
+        LockOutcome::Acquired(origin) => Ok(origin),
+        LockOutcome::Cancelled => bail!("uncancelled app origin preparation was cancelled"),
     }
-
-    let (scheme, proxy_port) = proxy_origin(settings, store)?;
-    Ok(format!("{scheme}://{}:{proxy_port}", spec.hostname))
 }
 
-fn proxy_origin(settings: &ProxySettings, store: &StateStore) -> Result<(&'static str, u16)> {
-    if settings.https
-        && let Some(port) = store.read_https_port()?
-    {
-        return Ok(("https", port));
+fn app_origin_interruptible(
+    spec: &AppRunSpec,
+    settings: &ProxySettings,
+    port: u16,
+    store: &StateStore,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<String>> {
+    if !spec.proxy {
+        return Ok(LockOutcome::Acquired(format!(
+            "http://{}:{port}",
+            spec.target_host
+        )));
     }
-    Ok((
+
+    let (scheme, proxy_port) = match proxy_origin_interruptible(settings, store, cancelled)? {
+        LockOutcome::Acquired(origin) => origin,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    Ok(LockOutcome::Acquired(format!(
+        "{scheme}://{}:{proxy_port}",
+        spec.hostname
+    )))
+}
+
+fn proxy_origin_interruptible(
+    settings: &ProxySettings,
+    store: &StateStore,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<(&'static str, u16)>> {
+    if settings.https {
+        let port = match store.read_https_port_interruptible(cancelled)? {
+            LockOutcome::Acquired(port) => port,
+            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        };
+        if let Some(port) = port {
+            return Ok(LockOutcome::Acquired(("https", port)));
+        }
+    }
+    let port = match store.read_http_port_interruptible(cancelled)? {
+        LockOutcome::Acquired(port) => port,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    Ok(LockOutcome::Acquired((
         "http",
-        store.read_http_port()?.unwrap_or(settings.http_port),
-    ))
+        port.unwrap_or(settings.http_port),
+    )))
 }
 
 fn print_dev_table(rows: &[AppDisplay]) {

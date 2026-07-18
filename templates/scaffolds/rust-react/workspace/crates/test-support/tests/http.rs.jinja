@@ -1,6 +1,6 @@
+use ::<<[ module_name ]>>_core as app_core_crate;
+use ::<<[ module_name ]>>_test_support::TestApp;
 use axum::http::StatusCode;
-use <<[ module_name ]>>_core::{APP_NAME, AppVersion};
-use <<[ module_name ]>>_test_support::TestApp;
 
 #[tokio::test]
 async fn health_returns_ok() {
@@ -38,7 +38,7 @@ async fn responses_include_request_id() {
 async fn version_returns_json() {
     let app = TestApp::new();
 
-    let version: AppVersion = app.get_json("/api/version").await;
+    let version: app_core_crate::AppVersion = app.get_json("/api/version").await;
 
-    assert_eq!(version.name, APP_NAME);
+    assert_eq!(version.name, app_core_crate::APP_NAME);
 }

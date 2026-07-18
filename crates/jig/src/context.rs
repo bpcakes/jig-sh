@@ -7,6 +7,8 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{FeatureContext, ManifestTool};
 use serde::Deserialize;
 
+use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
+
 mod loop_config;
 mod work_config;
 
@@ -139,6 +141,10 @@ pub(crate) struct FrontendAppConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) coverage_threshold: u32,
+    #[serde(default)]
+    pub(crate) kind: Option<String>,
+    #[serde(default)]
+    pub(crate) role: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -483,6 +489,14 @@ impl RepoContext {
         &self.config.frontend_apps
     }
 
+    pub(crate) fn frontend_app_role<'a>(&'a self, app: &'a FrontendAppConfig) -> &'a str {
+        configured_frontend_app_metadata(&self.config, app).role
+    }
+
+    pub(crate) fn frontend_app_kind<'a>(&'a self, app: &'a FrontendAppConfig) -> &'a str {
+        configured_frontend_app_metadata(&self.config, app).kind
+    }
+
     pub(crate) fn vault_config(&self) -> &VaultConfig {
         &self.config.vault
     }
@@ -603,6 +617,30 @@ fn default_web_package_manager() -> String {
     "bun".into()
 }
 
+fn configured_frontend_app_metadata<'a>(
+    config: &'a RepoConfig,
+    app: &'a FrontendAppConfig,
+) -> ResolvedFrontendMetadata<'a> {
+    let matching_dev_kind = config
+        .dev
+        .apps
+        .iter()
+        .find(|dev_app| {
+            dev_app.name == app.name
+                && dev_app
+                    .dir
+                    .as_deref()
+                    .is_some_and(|dev_dir| config_app_dirs_match(dev_dir, &app.dir))
+        })
+        .map(|dev_app| dev_app.kind.as_str());
+    resolve_frontend_metadata(
+        &app.name,
+        app.kind.as_deref(),
+        app.role.as_deref(),
+        matching_dev_kind,
+    )
+}
+
 fn default_codex_marketplaces() -> Vec<CodexMarketplaceConfig> {
     vec![CodexMarketplaceConfig {
         id: DEFAULT_CODEX_MARKETPLACE_ID.into(),
@@ -621,9 +659,42 @@ pub(crate) fn default_codex_marketplace_plugins() -> Vec<String> {
 fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_command_map(&config.commands)?;
     validate_web_package_manager(&config.web_package_manager)?;
+    validate_frontend_app_roles(config)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
     validate_runtime_config(config)
+}
+
+fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
+    for app in &config.frontend_apps {
+        normalize_config_app_dir(
+            &app.dir,
+            &format!("dir for frontend app '{}' in [[frontend_apps]]", app.name),
+        )?;
+        if app
+            .kind
+            .as_deref()
+            .is_some_and(|kind| !is_supported_frontend_kind(kind))
+        {
+            bail!(
+                "Invalid frontend app kind '{}' for '{}'. Expected 'vite' or 'env-port'.",
+                app.kind.as_deref().unwrap_or_default(),
+                app.name
+            );
+        }
+        if app
+            .role
+            .as_deref()
+            .is_some_and(|role| !matches!(role, "spa" | "admin" | "astro"))
+        {
+            bail!(
+                "Invalid frontend app role '{}' for '{}'. Expected 'spa', 'admin', or 'astro'.",
+                app.role.as_deref().unwrap_or_default(),
+                app.name
+            );
+        }
+    }
+    Ok(())
 }
 
 fn validate_command_map(commands: &BTreeMap<String, String>) -> Result<()> {
@@ -689,6 +760,19 @@ fn validate_vault_scope_id(scope_id: &str) -> Result<()> {
 fn validate_dev_config(config: &RepoConfig) -> Result<()> {
     let mut app_names = HashSet::new();
     for app in &config.dev.apps {
+        if let Some(dir) = app.dir.as_deref() {
+            normalize_config_app_dir(
+                dir,
+                &format!("dir for dev app '{}' in [[dev.apps]]", app.name),
+            )?;
+        }
+        if !is_supported_frontend_kind(&app.kind) {
+            bail!(
+                "Invalid dev app kind '{}' for '{}' in [[dev.apps]]. Expected 'vite' or 'env-port'.",
+                app.kind,
+                app.name
+            );
+        }
         if !app_names.insert(app.name.as_str()) {
             bail!("Duplicate dev app name '{}' in [[dev.apps]]", app.name);
         }
@@ -718,7 +802,7 @@ fn validate_dev_config(config: &RepoConfig) -> Result<()> {
                 );
             };
             match dev_app.dir.as_deref() {
-                Some(dev_dir) if dev_dir == frontend_app.dir => {}
+                Some(dev_dir) if config_app_dirs_match(dev_dir, &frontend_app.dir) => {}
                 Some(dev_dir) => {
                     bail!(
                         "[dev.apps] entry '{}' uses dir '{}' but matching [[frontend_apps]] uses '{}'. Keep them aligned because [dev.apps] takes precedence for scripts/jig dev.",
@@ -738,6 +822,52 @@ fn validate_dev_config(config: &RepoConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn config_app_dirs_match(left: &str, right: &str) -> bool {
+    match (
+        normalize_config_app_dir(left, "configured app dir"),
+        normalize_config_app_dir(right, "configured app dir"),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+pub(crate) fn normalize_config_app_dir(value: &str, label: &str) -> Result<String> {
+    let bytes = value.as_bytes();
+    if value.is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if value.starts_with('/')
+        || value.starts_with('\\')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        bail!("{label} must be a portable repository-relative path: {value}");
+    }
+    if value.contains('\\') {
+        bail!("{label} must use portable '/' separators and stay repository-relative: {value}");
+    }
+
+    let mut normalized = Vec::new();
+    for component in value.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                bail!("{label} must not contain '..' and must stay inside the repository: {value}")
+            }
+            component => normalized.push(component),
+        }
+    }
+    if normalized.is_empty() {
+        Ok(".".into())
+    } else {
+        Ok(normalized.join("/"))
+    }
+}
+
+fn is_supported_frontend_kind(kind: &str) -> bool {
+    matches!(kind, "vite" | "env-port")
 }
 
 fn validate_dev_app_env_prefixes<'a>(

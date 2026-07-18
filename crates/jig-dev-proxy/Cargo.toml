@@ -20,7 +20,6 @@ doc = false
 anyhow.workspace = true
 base64.workspace = true
 bytes.workspace = true
-ctrlc.workspace = true
 dirs.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
@@ -44,6 +43,9 @@ tokio-rustls.workspace = true
 unicode-width.workspace = true
 x509-parser.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
+ctrlc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

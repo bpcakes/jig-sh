@@ -1,9 +1,16 @@
-use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+
+use crate::bootstrap::path::{
+    RepositoryFileCommit, RepositoryFileLeaf, read_repository_regular_file,
+    validate_portable_planned_file_collisions, validate_repository_regular_file_leaf,
+    write_repository_file_atomic, write_repository_file_atomic_guarded,
+    write_repository_file_atomic_staged,
+};
+
+use crate::bootstrap::InitMutationTransaction;
 
 use super::{InitScaffoldPlan, ScaffoldDb, ScaffoldPreset};
 
@@ -15,9 +22,9 @@ pub(super) struct ScaffoldReport {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ScaffoldFile {
-    relative: String,
-    contents: String,
+pub(in crate::bootstrap) struct ScaffoldFile {
+    pub(in crate::bootstrap) relative: String,
+    pub(in crate::bootstrap) contents: String,
 }
 
 #[derive(Clone, Debug)]
@@ -38,54 +45,63 @@ pub(super) fn scaffold_file(
 }
 
 impl ScaffoldReport {
+    pub(super) fn preflight_files(
+        destination: &Path,
+        files: Vec<ScaffoldFile>,
+        force: bool,
+    ) -> Result<()> {
+        preflight_scaffold_writes(destination, files, force).map(|_| ())
+    }
+
+    #[cfg(test)]
     pub(super) fn write_files(
         destination: &Path,
         files: Vec<ScaffoldFile>,
         force: bool,
     ) -> Result<Self> {
+        Self::write_files_with_transaction(destination, files, force, None)
+    }
+
+    pub(super) fn write_files_with_transaction(
+        destination: &Path,
+        files: Vec<ScaffoldFile>,
+        force: bool,
+        mut transaction: Option<&mut InitMutationTransaction>,
+    ) -> Result<Self> {
         let mut report = Self::default();
-        let mut seen = HashSet::new();
-        let mut conflicts = Vec::new();
-        let mut writes = Vec::new();
-
-        for file in files {
-            if !seen.insert(file.relative.clone()) {
-                bail!(
-                    "Scaffold rendered duplicate output path {}; this is a Jig scaffold bug",
-                    file.relative
-                );
-            }
-            let path = destination.join(&file.relative);
-            if !path.exists() {
-                writes.push(ScaffoldWrite::Create(file));
-                continue;
-            }
-            let existing = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read {}", path.display()))?;
-            if existing != file.contents && !force {
-                conflicts.push(file.relative.clone());
-            } else if existing == file.contents {
-                writes.push(ScaffoldWrite::Unchanged(file.relative));
-            } else {
-                writes.push(ScaffoldWrite::Modify(file));
-            }
-        }
-
-        if !conflicts.is_empty() {
-            conflicts.sort();
-            bail!(
-                "Scaffold paths already exist and differ; pass --force to overwrite them in place:\n  {}",
-                conflicts.join("\n  ")
-            );
-        }
+        let writes = preflight_scaffold_writes(destination, files, force)?;
 
         for write in writes {
             match write {
                 ScaffoldWrite::Create(file) => {
-                    write_scaffold_file(destination, file, &mut report.files_created)?;
+                    let relative = file.relative.clone();
+                    prepare_transaction(transaction.as_deref_mut(), Path::new(&relative))?;
+                    let commit = write_scaffold_file(
+                        destination,
+                        file,
+                        transaction.as_deref_mut(),
+                        &mut report.files_created,
+                    )?;
+                    record_transaction_commit(
+                        transaction.as_deref_mut(),
+                        Path::new(&relative),
+                        commit,
+                    )?;
                 }
                 ScaffoldWrite::Modify(file) => {
-                    write_scaffold_file(destination, file, &mut report.files_modified)?;
+                    let relative = file.relative.clone();
+                    prepare_transaction(transaction.as_deref_mut(), Path::new(&relative))?;
+                    let commit = write_scaffold_file(
+                        destination,
+                        file,
+                        transaction.as_deref_mut(),
+                        &mut report.files_modified,
+                    )?;
+                    record_transaction_commit(
+                        transaction.as_deref_mut(),
+                        Path::new(&relative),
+                        commit,
+                    )?;
                 }
                 ScaffoldWrite::Unchanged(relative) => report.files_unchanged.push(relative),
             }
@@ -97,6 +113,7 @@ impl ScaffoldReport {
         json!({
             "preset": match plan.preset {
                 ScaffoldPreset::RustReact => "rust-react",
+                ScaffoldPreset::HarnessOnly => unreachable!("harness-only has no scaffold report"),
             },
             "repo_name": &plan.repo_name,
             "repo_name_sanitized_from": (plan.requested_repo_name != plan.repo_name).then_some(&plan.requested_repo_name),
@@ -109,9 +126,12 @@ impl ScaffoldReport {
                 json!({
                     "name": frontend.name,
                     "dir": frontend.dir,
-                    "kind": frontend.kind.as_str(),
+                    "kind": frontend.dev_kind,
+                    "role": frontend.kind.as_str(),
+                    "ui": frontend.ui_provenance(),
                 })
             }).collect::<Vec<_>>(),
+            "frontend_notices": &plan.custom_frontend_notices,
             "files_created": self.files_created,
             "files_modified": self.files_modified,
             "files_unchanged": self.files_unchanged,
@@ -119,18 +139,110 @@ impl ScaffoldReport {
     }
 }
 
+fn preflight_scaffold_writes(
+    destination: &Path,
+    files: Vec<ScaffoldFile>,
+    force: bool,
+) -> Result<Vec<ScaffoldWrite>> {
+    let mut conflicts = Vec::new();
+    let mut writes = Vec::new();
+
+    validate_portable_planned_file_collisions(files.iter().map(|file| Path::new(&file.relative)))?;
+
+    for file in files {
+        let relative = Path::new(&file.relative);
+        match validate_repository_regular_file_leaf(destination, relative)? {
+            RepositoryFileLeaf::Missing => writes.push(ScaffoldWrite::Create(file)),
+            RepositoryFileLeaf::RegularFile => {
+                let existing = read_repository_regular_file(destination, relative)?;
+                if existing != file.contents && !force {
+                    conflicts.push(file.relative.clone());
+                } else if existing == file.contents {
+                    writes.push(ScaffoldWrite::Unchanged(file.relative));
+                } else {
+                    writes.push(ScaffoldWrite::Modify(file));
+                }
+            }
+            RepositoryFileLeaf::Symlink => {
+                unreachable!("repository regular-file validation rejects symlink leaves")
+            }
+        }
+    }
+
+    if !conflicts.is_empty() {
+        conflicts.sort();
+        bail!(
+            "Scaffold paths already exist and differ; pass --force to overwrite them in place:\n  {}",
+            conflicts.join("\n  ")
+        );
+    }
+    Ok(writes)
+}
+
 fn write_scaffold_file(
     destination: &Path,
     file: ScaffoldFile,
+    transaction: Option<&mut InitMutationTransaction>,
     completed: &mut Vec<String>,
-) -> Result<()> {
-    let path = destination.join(&file.relative);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(&path, file.contents)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+) -> Result<RepositoryFileCommit> {
+    let relative = Path::new(&file.relative);
+    let commit = if transaction
+        .as_ref()
+        .is_some_and(|transaction| transaction.is_privately_staged())
+    {
+        let expected_leaf = validate_repository_regular_file_leaf(destination, relative)?;
+        let transaction = transaction.expect("checked above");
+        write_repository_file_atomic_staged(
+            destination,
+            relative,
+            file.contents.as_bytes(),
+            expected_leaf,
+            || transaction.verify_destination_identity(),
+        )?
+    } else if let Some(transaction) = transaction {
+        let desired_permissions = transaction.publication_permissions(relative)?;
+        let temporary_directory = transaction
+            .write_staging_path(relative)
+            .context("Existing-destination init write staging is unavailable")?
+            .to_path_buf();
+        write_repository_file_atomic_guarded(
+            destination,
+            relative,
+            file.contents.as_bytes(),
+            desired_permissions,
+            &temporary_directory,
+            || transaction.verify_destination_identity(),
+        )?
+    } else {
+        let expected_leaf = validate_repository_regular_file_leaf(destination, relative)?;
+        write_repository_file_atomic(
+            destination,
+            relative,
+            file.contents.as_bytes(),
+            expected_leaf,
+        )?
+    };
     completed.push(file.relative);
+    Ok(commit)
+}
+
+fn prepare_transaction(
+    transaction: Option<&mut InitMutationTransaction>,
+    relative: &Path,
+) -> Result<()> {
+    if let Some(transaction) = transaction {
+        transaction.prepare_file_publication(relative)?;
+    }
+    Ok(())
+}
+
+fn record_transaction_commit(
+    transaction: Option<&mut InitMutationTransaction>,
+    relative: &Path,
+    commit: RepositoryFileCommit,
+) -> Result<()> {
+    if let Some(transaction) = transaction {
+        transaction.record_regular_commit(relative, commit)?;
+    }
     Ok(())
 }

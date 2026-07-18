@@ -4,29 +4,29 @@ on:
   pull_request:
     paths:
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
 [% if sqlx_enabled %]
-      - "<<[ rust_migration_dir ]>>/**"
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
 [% endif %]
       - ".github/workflows/repo-policy.yml"
   push:
     branches:
-      - <<[ default_branch ]>>
+      - <<[ default_branch | tojson ]>>
     paths:
 [% for root in rust_crate_roots %]
-      - "<<[ root ]>>/**"
+      - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
 [% if sqlx_enabled %]
-      - "<<[ rust_migration_dir ]>>/**"
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
 [% endif %]
       - ".github/workflows/repo-policy.yml"
   merge_group:
@@ -44,7 +44,10 @@ concurrency:
 jobs:
   no-mod-rs:
     name: Check for disallowed mod.rs files
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -59,7 +62,10 @@ jobs:
 
   rust-file-loc:
     name: Enforce agentic-first Rust file size policy
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -71,10 +77,12 @@ jobs:
           cache: false
           rustflags: ""
       - name: Check Rust file LOC policy
+        env:
+          JIG_DEFAULT_BRANCH: <<[ default_branch | tojson ]>>
         run: |
           set -euo pipefail
-          if git rev-parse --verify "origin/<<[ default_branch ]>>" >/dev/null 2>&1; then
-            base_ref="$(git merge-base HEAD "origin/<<[ default_branch ]>>")"
+          if git rev-parse --verify "origin/$JIG_DEFAULT_BRANCH" >/dev/null 2>&1; then
+            base_ref="$(git merge-base HEAD "origin/$JIG_DEFAULT_BRANCH")"
           elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
             base_ref="HEAD^"
           else
@@ -86,7 +94,10 @@ jobs:
 [% if sqlx_enabled %]
   sqlx-unchecked-queries:
     name: Verify non-test SQLx queries are compile-time checked
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -101,7 +112,10 @@ jobs:
 
   migration-immutability:
     name: Enforce migration immutability
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -115,6 +129,8 @@ jobs:
       - name: Determine base ref
         id: base_ref
         shell: bash
+        env:
+          JIG_DEFAULT_BRANCH: <<[ default_branch | tojson ]>>
         run: |
           set -euo pipefail
 
@@ -133,8 +149,8 @@ jobs:
           fi
 
           if [[ -z "$ref" ]]; then
-            if git rev-parse --verify origin/<<[ default_branch ]>> >/dev/null 2>&1; then
-              ref="$(git merge-base HEAD origin/<<[ default_branch ]>>)"
+            if git rev-parse --verify "origin/$JIG_DEFAULT_BRANCH" >/dev/null 2>&1; then
+              ref="$(git merge-base HEAD "origin/$JIG_DEFAULT_BRANCH")"
             elif git rev-parse --verify HEAD^ >/dev/null 2>&1; then
               ref="HEAD^"
             else

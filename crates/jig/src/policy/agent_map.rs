@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::agent_guides::is_ignored_guide_component;
+use crate::bootstrap::path::{validate_repository_regular_file_leaf, write_repository_file_atomic};
 use crate::context::RepoContext;
 use crate::policy::AgentMapInput;
 
@@ -27,9 +28,14 @@ pub(super) fn check(ctx: &RepoContext, opts: &AgentMapInput) -> Result<Value> {
 }
 
 pub(crate) fn write(root: &Path, map_path: &Path) -> Result<()> {
+    let body = render(root, map_path)?;
+    write_rendered(root, map_path, &body)
+}
+
+pub(crate) fn render(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     // Normalize here as the boundary guard for both CLI generation and
     // renderer post-processing callers.
-    let map_path = normalize_map_path(map_path)?;
+    let _map_path = normalize_map_path(map_path)?;
     let guides = list_guides(root)?;
     let mut body = String::new();
     body.push_str("# Agent Map\n\n");
@@ -51,8 +57,13 @@ pub(crate) fn write(root: &Path, map_path: &Path) -> Result<()> {
     body.push_str("1. Start with the root [AGENTS.md](./AGENTS.md).\n");
     body.push_str("2. Open the nearest guide for the area you will change.\n");
     body.push_str("3. Follow that guide's entrypoint map before editing.\n");
-    fs::write(root.join(&map_path), body)
-        .with_context(|| format!("Failed to write {}", root.join(&map_path).display()))
+    Ok(body.into_bytes())
+}
+
+pub(crate) fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Result<()> {
+    let map_path = normalize_map_path(map_path)?;
+    let expected_leaf = validate_repository_regular_file_leaf(root, &map_path)?;
+    write_repository_file_atomic(root, &map_path, body, expected_leaf).map(|_| ())
 }
 
 pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
@@ -299,6 +310,8 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    #[cfg(unix)]
+    use super::write;
     use super::{check_guides, normalize_map_path, validate};
     use crate::context::RepoContext;
 
@@ -322,6 +335,39 @@ mod tests {
         let error = normalize_map_path(Path::new("/tmp/agent-map.md")).unwrap_err();
 
         assert!(error.to_string().contains("repository-relative"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_rejects_symlink_leaf_and_ancestor_without_writing_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let leaf_root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let outside_map = outside.path().join("outside-map.md");
+        fs::write(&outside_map, "outside sentinel\n").unwrap();
+        symlink(&outside_map, leaf_root.path().join("agent-map.md")).unwrap();
+
+        let error = write(leaf_root.path(), Path::new("agent-map.md"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is a symlink"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&outside_map).unwrap(),
+            "outside sentinel\n"
+        );
+
+        let ancestor_root = tempdir().unwrap();
+        let outside_docs = outside.path().join("docs");
+        fs::create_dir(&outside_docs).unwrap();
+        symlink(&outside_docs, ancestor_root.path().join("docs")).unwrap();
+
+        let error = write(ancestor_root.path(), Path::new("docs/agent-map.md"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ancestor"), "{error}");
+        assert!(error.contains("is a symlink"), "{error}");
+        assert!(!outside_docs.join("agent-map.md").exists());
     }
 
     #[test]

@@ -194,18 +194,20 @@ fn reconcile_work_gates(
         let generated_kind = work_gate_string(generated_table, "kind", "rendered")?;
         let generated_tool = generated_table.get("tool").and_then(toml::Value::as_str);
 
-        if generated_kind == "check"
-            && let Some(generated_tool) = generated_tool
-            && let Some(required) = existing_gates.iter().find_map(|gate| {
-                let gate = gate.as_table()?;
-                (gate.get("id").and_then(toml::Value::as_str) == Some(&generated_id)
-                    && gate.get("kind").and_then(toml::Value::as_str) == Some("check")
-                    && gate.get("tool").and_then(toml::Value::as_str) == Some(generated_tool))
-                .then(|| gate.get("required").and_then(toml::Value::as_bool))
-                .flatten()
-            })
-        {
-            generated_table.insert("required".into(), toml::Value::Boolean(required));
+        if generated_kind == "check" {
+            if let Some(generated_tool) = generated_tool {
+                let required = existing_gates.iter().find_map(|gate| {
+                    let gate = gate.as_table()?;
+                    (gate.get("id").and_then(toml::Value::as_str) == Some(&generated_id)
+                        && gate.get("kind").and_then(toml::Value::as_str) == Some("check")
+                        && gate.get("tool").and_then(toml::Value::as_str) == Some(generated_tool))
+                    .then(|| gate.get("required").and_then(toml::Value::as_bool))
+                    .flatten()
+                });
+                if let Some(required) = required {
+                    generated_table.insert("required".into(), toml::Value::Boolean(required));
+                }
+            }
         }
 
         seen_ids.insert(generated_id);

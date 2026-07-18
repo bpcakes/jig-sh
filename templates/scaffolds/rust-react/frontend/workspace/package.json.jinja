@@ -1,0 +1,9 @@
+{
+  "name": "<<[ package_name ]>>-workspace",
+  "private": true,
+  "packageManager": "<<[ package_manager_spec ]>>",
+  "engines": {
+    "node": ">=<<[ node_version ]>>"
+  },
+  "workspaces": [[% for frontend in frontends %]<<[ frontend.dir | tojson ]>>[% if not loop.last %], [% endif %][% endfor %]]
+}

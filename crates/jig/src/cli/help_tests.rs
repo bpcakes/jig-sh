@@ -13,6 +13,17 @@ fn rendered_help(path: &[&str]) -> String {
     current.render_help().to_string()
 }
 
+fn rendered_long_help(path: &[&str]) -> String {
+    let mut command = Cli::command();
+    let mut current = &mut command;
+    for (index, name) in path.iter().enumerate() {
+        current = current.find_subcommand_mut(name).unwrap_or_else(|| {
+            panic!("missing subcommand {name:?} at index {index} in path {path:?}")
+        });
+    }
+    current.render_long_help().to_string()
+}
+
 fn assert_help_contains(help: &str, expected: &str) {
     assert!(
         help.contains(expected),
@@ -60,6 +71,16 @@ fn info_help_includes_examples_and_alias() {
     assert_help_contains(&info_help, "jig info --json");
     assert_help_contains(&info_help, "jig explain --json");
     assert_help_contains(&info_help, "Human-readable output is the default");
+}
+
+#[test]
+fn presets_help_includes_harness_only_automation_example() {
+    let presets_help = rendered_help(&["presets"]);
+
+    assert_help_contains(
+        &presets_help,
+        "jig init ./my-repo --preset harness-only --no-input --no-vault",
+    );
 }
 
 #[test]
@@ -198,6 +219,49 @@ fn update_help_explains_modes() {
 }
 
 #[test]
+fn init_help_explains_defaults_strict_input_and_harness_only() {
+    let init_help = rendered_long_help(&["init"]);
+
+    assert_help_contains(
+        &init_help,
+        "--defaults uses rust-react, database none, and frontend web",
+    );
+    assert_help_contains(
+        &init_help,
+        "--no-input and non-terminal execution require the project shape to be fully specified",
+    );
+    assert_help_contains(&init_help, "--preset harness-only --no-input --no-vault");
+    assert_help_contains(&init_help, "--sqlx-enabled false --no-input --no-vault");
+    assert_help_contains(
+        &init_help,
+        "--template-mode committed --repo-name new-repo --sqlx-enabled false --no-input --no-vault",
+    );
+    assert_help_contains(
+        &init_help,
+        "resolve omitted project-shape choices to --preset rust-react, --db none, and --frontend web",
+    );
+    assert_help_contains(
+        &init_help,
+        "effective frontend_apps from --answers-file prevent the default web scaffold",
+    );
+    assert_help_contains(
+        &init_help,
+        "The rust-react preset also requires an explicit --db choice",
+    );
+    assert_help_contains(
+        &init_help,
+        "Non-terminal execution without --defaults follows this strict behavior",
+    );
+}
+
+#[test]
+fn template_error_hint_uses_prompt_free_harness_only_init() {
+    assert!(TEMPLATE_ERROR_HINT.contains(
+        "jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault"
+    ));
+}
+
+#[test]
 fn state_archive_help_explains_cutoff() {
     let archive_help = rendered_help(&["state", "archive"]);
     assert_help_contains(&archive_help, "--before");
@@ -211,7 +275,7 @@ fn json_output_flag_is_discoverable() {
     assert_help_contains(&root_help, "--json");
     assert_help_contains(
         &root_help,
-        "Print structured JSON output when a command defaults to human-readable output",
+        "Print structured JSON output; does not disable interactive prompts",
     );
 
     let work_receipts_help = rendered_help(&["work", "receipts"]);

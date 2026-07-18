@@ -18,8 +18,9 @@ use crate::state::{process_start_token, process_start_tokens_supported};
 use crate::types::AppRunSpec;
 
 #[cfg(unix)]
-use super::child_lifecycle::{terminate_and_reap_logged, unix_pid};
-use super::cleanup::ctrl_c_requested;
+use super::child_lifecycle::unix_pid;
+use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
+use super::cleanup::termination_requested;
 use super::interruption_error;
 
 #[cfg(not(test))]
@@ -159,20 +160,26 @@ fn wait_for_app_ready_until_with_probe(
     is_listening: impl Fn(&str, u16) -> bool,
     port_is_free: impl Fn(&str, u16) -> bool,
 ) -> Result<Option<String>> {
-    if let Some(status) = child.try_wait()? {
+    if let Some(status) = try_wait_preserving_process_group(child)? {
         bail!("App '{name}' exited before listening on {target_host}:{port} with status {status}");
     }
     let child_pid = child.id();
     let expected_start_token = owner_start_token_for_child(child_pid)?;
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
     loop {
-        if ctrl_c_requested() {
-            return Err(interruption_error());
-        }
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = try_wait_preserving_process_group(child)? {
             bail!(
                 "App '{name}' exited before listening on {target_host}:{port} with status {status}"
             );
+        }
+        if let Some(reason) = termination_requested() {
+            // Prefer an already-observable child result over a late signal.
+            if let Some(status) = try_wait_preserving_process_group(child)? {
+                bail!(
+                    "App '{name}' exited before listening on {target_host}:{port} with status {status}"
+                );
+            }
+            return Err(interruption_error(reason));
         }
         if is_listening(target_host, port) {
             verify_process_route_owner(

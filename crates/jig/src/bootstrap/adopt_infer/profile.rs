@@ -58,10 +58,10 @@ impl AdoptInference {
         if self.sqlx_enabled == Some(true) {
             stack.push("SQLx".into());
         }
-        if !self.frontend_apps.is_empty()
-            && let Some(package_manager) = self.web_package_manager.as_deref()
-        {
-            stack.push(package_manager.to_string());
+        if !self.frontend_apps.is_empty() {
+            if let Some(package_manager) = self.web_package_manager.as_deref() {
+                stack.push(package_manager.to_string());
+            }
         }
         if self.frontend_apps.iter().any(|app| app.kind == "vite") {
             stack.push("Vite".into());
@@ -194,11 +194,12 @@ impl AdoptInference {
         }
         if let Some(source) =
             explicit_bool_source(explicit_answers.sqlx_enabled, answer_shape, "sqlx_enabled")
-            && let Some(value) = self.sqlx_enabled
         {
-            overrides.push(format!(
-                "sqlx_enabled: inferred {value} ignored because {source} supplied an explicit answer"
-            ));
+            if let Some(value) = self.sqlx_enabled {
+                overrides.push(format!(
+                    "sqlx_enabled: inferred {value} ignored because {source} supplied an explicit answer"
+                ));
+            }
         }
         overrides
     }

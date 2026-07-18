@@ -78,6 +78,23 @@ impl SessionEvent {
             | Self::Unknown { timestamp_ms, .. } => *timestamp_ms,
         }
     }
+
+    pub(super) fn into_summary_reference(self) -> Self {
+        match self {
+            Self::Start {
+                id,
+                session_id,
+                timestamp_ms,
+                ..
+            } => Self::Start {
+                id,
+                session_id,
+                timestamp_ms,
+                summary: Value::Null,
+            },
+            event => event,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -184,7 +201,7 @@ impl PlanEvent {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct LegacySessionEvent {
     id: String,
     session_id: String,
@@ -192,6 +209,20 @@ struct LegacySessionEvent {
     timestamp_ms: u64,
     outcome: Option<String>,
     summary: Option<Value>,
+}
+
+// Start summaries are durable write-time snapshots, but runtime state readers
+// need only the event envelope. Keeping this read model metadata-only makes
+// serde_json validate and skip a legacy `summary` through its iterative
+// ignored-value path instead of materializing recursively embedded snapshots.
+// Never use this lossy type to rewrite the append-only session stream.
+#[derive(Deserialize)]
+struct SessionEventHeader {
+    id: String,
+    session_id: String,
+    event: String,
+    timestamp_ms: u64,
+    outcome: Option<String>,
 }
 
 impl Serialize for SessionEvent {
@@ -249,25 +280,25 @@ impl<'de> Deserialize<'de> for SessionEvent {
     where
         D: Deserializer<'de>,
     {
-        let legacy = LegacySessionEvent::deserialize(deserializer)?;
-        Ok(match legacy.event.as_str() {
+        let header = SessionEventHeader::deserialize(deserializer)?;
+        Ok(match header.event.as_str() {
             "start" => Self::start(
-                legacy.id,
-                legacy.session_id,
-                legacy.timestamp_ms,
-                legacy.summary.unwrap_or(Value::Null),
+                header.id,
+                header.session_id,
+                header.timestamp_ms,
+                Value::Null,
             ),
             "end" => Self::end(
-                legacy.id,
-                legacy.session_id,
-                legacy.timestamp_ms,
-                legacy.outcome,
+                header.id,
+                header.session_id,
+                header.timestamp_ms,
+                header.outcome,
             ),
             _ => Self::Unknown {
-                id: legacy.id,
-                session_id: legacy.session_id,
-                event: legacy.event,
-                timestamp_ms: legacy.timestamp_ms,
+                id: header.id,
+                session_id: header.session_id,
+                event: header.event,
+                timestamp_ms: header.timestamp_ms,
             },
         })
     }

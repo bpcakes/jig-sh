@@ -12,7 +12,7 @@ validate_unpushed_commit_stays_local() {
   local rendered_dir="$TMP_DIR/rendered-from-clone"
 
   create_template_snapshot_repo "$template_snapshot"
-  git clone --bare "$template_snapshot" "$bare_remote" >/dev/null 2>&1
+  git clone --bare --no-local "$template_snapshot" "$bare_remote" >/dev/null 2>&1
   git clone "$bare_remote" "$template_clone" >/dev/null 2>&1
   git -C "$template_clone" config user.name "Fixture"
   git -C "$template_clone" config user.email "fixture@example.com"
@@ -45,7 +45,7 @@ validate_explicit_template_source_url_rewrites_src_path() {
   local rendered_dir="$TMP_DIR/render-explicit-ok"
 
   create_template_snapshot_repo "$template_snapshot"
-  git clone --bare "$template_snapshot" "$bare_remote" >/dev/null 2>&1
+  git clone --bare --no-local "$template_snapshot" "$bare_remote" >/dev/null 2>&1
 
   cp "$ROOT_DIR/tests/fixtures/backend-only.toml" "$answers_file"
   answers_set "$answers_file" template_source_url "$bare_remote"
@@ -102,7 +102,7 @@ validate_template_source_url_installs_from_git_tag() {
   create_template_snapshot_repo "$template_snapshot"
   jig_version="$(answers_get "$template_snapshot/.jig.toml" jig_version)"
   git -C "$template_snapshot" tag -a "v$jig_version" -m "fixture release" >/dev/null
-  git clone --bare "$template_snapshot" "$bare_remote" >/dev/null 2>&1
+  git clone --bare --no-local "$template_snapshot" "$bare_remote" >/dev/null 2>&1
 
   cp "$ROOT_DIR/tests/fixtures/backend-only.toml" "$answers_file"
   answers_set "$answers_file" template_source_url "file://$bare_remote"
@@ -120,7 +120,7 @@ validate_template_source_url_installs_from_git_tag() {
   (
     cd "$rendered_dir"
     rm -rf .git .agent/.cache
-    env -u JIG_DEV_BIN scripts/install-jig.sh >/dev/null
+    env -u JIG_DEV_BIN CARGO_HOME="$TMP_DIR/cargo-home-git-install" scripts/install-jig.sh >/dev/null
     [[ -x ".agent/.cache/jig/$jig_version/bin/jig" ]]
     [[ "$(".agent/.cache/jig/$jig_version/bin/jig" --version)" == "jig $jig_version" ]]
   )
@@ -133,7 +133,7 @@ validate_quoted_template_source_url_rewrites_src_path() {
   local rendered_dir="$TMP_DIR/render-quoted-remote"
 
   create_template_snapshot_repo "$template_snapshot"
-  git clone --bare "$template_snapshot" "$bare_remote" >/dev/null 2>&1
+  git clone --bare --no-local "$template_snapshot" "$bare_remote" >/dev/null 2>&1
 
   cp "$ROOT_DIR/tests/fixtures/backend-only.toml" "$answers_file"
   answers_set "$answers_file" template_source_url "$bare_remote"

@@ -893,6 +893,277 @@ argv = ["npm", "run", "dev"]
 }
 
 #[test]
+fn matched_frontend_and_dev_dirs_use_portable_lexical_identity() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "docs"
+dir = "./apps//docs/./"
+coverage_threshold = 80
+
+[[dev.apps]]
+name = "docs"
+dir = "apps/docs"
+kind = "env-port"
+argv = ["npm", "run", "dev"]
+"#,
+    )
+    .unwrap();
+
+    validate_config(&config).unwrap();
+    assert_eq!(
+        configured_frontend_app_metadata(&config, &config.frontend_apps[0]),
+        ResolvedFrontendMetadata {
+            kind: "env-port",
+            role: "astro"
+        }
+    );
+}
+
+#[test]
+fn configured_app_dirs_reject_non_portable_or_escaping_spellings() {
+    for dir in ["/apps/web", "C:/apps/web", "apps/../web", r"apps\web", ""] {
+        let config: RepoConfig = toml::from_str(&format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "web"
+dir = {dir:?}
+coverage_threshold = 80
+"#,
+        ))
+        .unwrap();
+
+        let error = validate_config(&config).unwrap_err().to_string();
+        assert!(
+            error.contains("portable repository-relative")
+                || error.contains("must not contain '..'")
+                || error.contains("portable '/' separators")
+                || error.contains("must not be empty"),
+            "{dir:?}: {error}"
+        );
+    }
+}
+
+#[test]
+fn configured_app_dir_identity_is_case_sensitive_and_does_not_alias_paths() {
+    for dev_dir in ["Apps/Web", "web-link"] {
+        let config: RepoConfig = toml::from_str(&format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "web"
+dir = "apps/web"
+coverage_threshold = 80
+
+[[dev.apps]]
+name = "web"
+dir = {dev_dir:?}
+kind = "vite"
+argv = ["npm", "run", "dev"]
+"#,
+        ))
+        .unwrap();
+
+        let error = validate_config(&config).unwrap_err().to_string();
+        assert!(error.contains("uses dir"), "{dev_dir:?}: {error}");
+        assert!(error.contains("apps/web"), "{dev_dir:?}: {error}");
+    }
+}
+
+#[test]
+fn frontend_role_defaults_to_spa_for_existing_repositories() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "legacy-web"
+dir = "web"
+coverage_threshold = 80
+"#,
+    )
+    .unwrap();
+
+    validate_config(&config).unwrap();
+    assert_eq!(
+        configured_frontend_app_metadata(&config, &config.frontend_apps[0]).role,
+        "spa"
+    );
+}
+
+#[test]
+fn legacy_frontend_role_uses_known_admin_name_and_matching_dev_kind() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "admin-panel"
+dir = "admin-panel"
+coverage_threshold = 80
+
+[[frontend_apps]]
+name = "docs"
+dir = "apps/docs"
+coverage_threshold = 80
+
+[[frontend_apps]]
+name = "marketing"
+dir = "apps/marketing"
+coverage_threshold = 80
+kind = "vite"
+
+[[dev.apps]]
+name = "admin-panel"
+dir = "admin-panel"
+kind = "vite"
+argv = ["npm", "run", "dev"]
+
+[[dev.apps]]
+name = "docs"
+dir = "apps/docs"
+kind = "env-port"
+argv = ["npm", "run", "dev"]
+
+[[dev.apps]]
+name = "marketing"
+dir = "apps/marketing"
+kind = "env-port"
+argv = ["npm", "run", "dev"]
+"#,
+    )
+    .unwrap();
+
+    validate_config(&config).unwrap();
+    assert_eq!(
+        configured_frontend_app_metadata(&config, &config.frontend_apps[0]).role,
+        "admin"
+    );
+    assert_eq!(
+        configured_frontend_app_metadata(&config, &config.frontend_apps[1]).role,
+        "astro"
+    );
+    assert_eq!(
+        configured_frontend_app_metadata(&config, &config.frontend_apps[2]),
+        ResolvedFrontendMetadata {
+            kind: "vite",
+            role: "spa"
+        }
+    );
+}
+
+#[test]
+fn frontend_role_accepts_known_values_and_rejects_unknown_values() {
+    for role in ["spa", "admin", "astro"] {
+        let config: RepoConfig = toml::from_str(&format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "frontend"
+dir = "frontend"
+coverage_threshold = 80
+role = "{role}"
+"#
+        ))
+        .unwrap();
+        validate_config(&config).unwrap();
+    }
+
+    let invalid: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "frontend"
+dir = "frontend"
+coverage_threshold = 80
+role = "dashboard"
+"#,
+    )
+    .unwrap();
+    let error = validate_config(&invalid).unwrap_err().to_string();
+    assert!(error.contains("Invalid frontend app role 'dashboard'"));
+    assert!(error.contains("spa",));
+    assert!(error.contains("admin"));
+    assert!(error.contains("astro"));
+}
+
+#[test]
+fn invalid_app_kinds_are_attributed_to_the_section_that_declares_them() {
+    let explicit_frontend: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "web"
+dir = "apps/web"
+coverage_threshold = 80
+kind = "webpack"
+"#,
+    )
+    .unwrap();
+    let error = validate_config(&explicit_frontend).unwrap_err().to_string();
+    assert!(error.contains("Invalid frontend app kind 'webpack' for 'web'"));
+    assert!(!error.contains("[[dev.apps]]"));
+
+    let inherited_from_dev: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[frontend_apps]]
+name = "web"
+dir = "apps/web"
+coverage_threshold = 80
+
+[[dev.apps]]
+name = "web"
+dir = "apps/web"
+kind = "webpack"
+argv = ["npm", "run", "dev"]
+"#,
+    )
+    .unwrap();
+    let error = validate_config(&inherited_from_dev)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Invalid dev app kind 'webpack' for 'web' in [[dev.apps]]"));
+    assert!(!error.contains("Invalid frontend app kind"));
+}
+
+#[test]
 fn unsupported_web_package_manager_is_rejected() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".agent")).unwrap();

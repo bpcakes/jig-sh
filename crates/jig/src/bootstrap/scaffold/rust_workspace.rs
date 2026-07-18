@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use super::names::bounded_postgres_identifier;
 use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
@@ -162,10 +163,11 @@ impl InitScaffoldPlan {
     fn rust_workspace_template_context(&self) -> Value {
         let database_url_example = match self.db {
             ScaffoldDb::None => String::new(),
-            ScaffoldDb::Postgres => format!(
-                "postgres://postgres:postgres@localhost:5432/{}_dev",
-                self.module_name
-            ),
+            ScaffoldDb::Postgres => {
+                let database_name =
+                    bounded_postgres_identifier(&format!("{}_dev", self.module_name));
+                format!("postgres://postgres:postgres@localhost:5432/{database_name}")
+            }
             ScaffoldDb::Sqlite => format!("sqlite:{}.db", self.module_name),
         };
 
@@ -183,6 +185,11 @@ impl InitScaffoldPlan {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "PgPool",
                 ScaffoldDb::Sqlite => "SqlitePool",
+            },
+            "db_database": match self.db {
+                ScaffoldDb::None => "",
+                ScaffoldDb::Postgres => "Postgres",
+                ScaffoldDb::Sqlite => "Sqlite",
             },
             "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", self.migration_dir),
             "database_url_example": database_url_example,

@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use super::events::{
-    read_jsonl_with_data_lock, read_jsonl_with_io, read_receipt_window_with_bytes,
+    SessionEvent, read_jsonl_with_data_lock, read_jsonl_with_io, read_receipt_window_with_bytes,
     receipts_for_plan_with_lock, state_lock_path, with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::*;
@@ -425,6 +425,150 @@ fn session_summary_includes_open_plans() {
 
     let summary = build_summary(&ctx).unwrap();
     assert_eq!(summary["open_plans"][0]["plan_id"], "plan_1");
+}
+
+#[test]
+fn session_summary_reference_discards_an_in_memory_nested_snapshot() {
+    let event = SessionEvent::start(
+        "event".into(),
+        "session".into(),
+        1,
+        json!({
+            "recent_sessions": [{
+                "event": "start",
+                "summary": { "must_not_survive": true },
+            }],
+        }),
+    );
+
+    let reference = serde_json::to_value(event.into_summary_reference()).unwrap();
+
+    assert_eq!(reference["event"], "start");
+    assert_eq!(reference["session_id"], "session");
+    assert!(reference["summary"].is_null());
+}
+
+#[test]
+fn recursive_legacy_session_summaries_stay_readable_and_append_shallow_history() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let sessions_path = ctx.state_file("sessions.jsonl");
+
+    let mut nested_summary = "null".to_string();
+    for index in 0..48 {
+        nested_summary = format!(
+            r#"{{"recent_sessions":[{{"id":"nested-{index}","session_id":"nested-{index}","event":"start","timestamp_ms":{index},"outcome":null,"summary":{nested_summary}}}]}}"#
+        );
+    }
+    let legacy_record = format!(
+        r#"{{"id":"legacy-event","session_id":"legacy-session","event":"start","timestamp_ms":1,"outcome":null,"summary":{nested_summary}}}
+"#
+    );
+    fs::write(&sessions_path, legacy_record.as_bytes()).unwrap();
+    let original = fs::read(&sessions_path).unwrap();
+
+    let status = state_summary(&ctx).unwrap();
+    assert_eq!(status["counts"]["sessions"], 1);
+    let summary = build_summary(&ctx).unwrap();
+    assert_eq!(
+        summary["recent_sessions"][0]["session_id"],
+        "legacy-session"
+    );
+    assert!(summary["recent_sessions"][0]["summary"].is_null());
+    let streams = state_streams(&ctx, 10).unwrap();
+    assert_eq!(streams.session_events.len(), 1);
+    assert_eq!(streams.session_events[0].event, "start");
+    assert_eq!(streams.session_events[0].session_id, "legacy-session");
+    assert_eq!(fs::read(&sessions_path).unwrap(), original);
+
+    let started = session_start(&ctx).unwrap();
+    assert_eq!(
+        started["summary"]["recent_sessions"][0]["session_id"],
+        "legacy-session"
+    );
+    assert!(started["summary"]["recent_sessions"][0]["summary"].is_null());
+
+    let contents = fs::read_to_string(&sessions_path).unwrap();
+    assert!(contents.as_bytes().starts_with(&original));
+    let records = contents.lines().collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    let appended: Value = serde_json::from_str(records[1]).unwrap();
+    assert!(appended["summary"]["recent_sessions"][0]["summary"].is_null());
+    assert!(records[1].len() < 8 * 1024);
+    assert_eq!(state_summary(&ctx).unwrap()["counts"]["sessions"], 2);
+}
+
+#[test]
+fn ignored_legacy_session_summary_is_still_json_validated() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("sessions.jsonl");
+    fs::write(
+        &path,
+        r#"{"id":"broken","session_id":"broken","event":"start","timestamp_ms":1,"summary":{"nested":[1,]}}
+"#,
+    )
+    .unwrap();
+
+    let error = read_jsonl::<SessionEvent>(&path).unwrap_err().to_string();
+
+    assert!(error.contains("Failed to parse JSONL record 1"));
+}
+
+#[test]
+fn repeated_session_snapshots_have_bounded_depth_and_size() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let sessions_path = ctx.state_file("sessions.jsonl");
+
+    for index in 0..150 {
+        let summary = build_summary(&ctx).unwrap();
+        append_jsonl(
+            &sessions_path,
+            &SessionEvent::start(
+                format!("event-{index}"),
+                format!("session-{index}"),
+                index,
+                summary,
+            ),
+        )
+        .unwrap();
+        append_jsonl(
+            &sessions_path,
+            &SessionEvent::end(
+                format!("end-{index}"),
+                format!("session-{index}"),
+                index,
+                Some("done".into()),
+            ),
+        )
+        .unwrap();
+    }
+
+    let contents = fs::read_to_string(&sessions_path).unwrap();
+    let start_records = contents
+        .lines()
+        .filter_map(|record| {
+            let value = serde_json::from_str::<Value>(record).unwrap();
+            (value["event"] == "start").then_some((record.len(), value))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(start_records.len(), 150);
+    assert!(start_records.iter().all(|(len, _)| *len < 8 * 1024));
+    assert!(start_records.iter().skip(1).all(|(_, event)| {
+        event["summary"]["recent_sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|recent| recent["summary"].is_null())
+    }));
+    assert_eq!(
+        read_jsonl::<SessionEvent>(&sessions_path).unwrap().len(),
+        300
+    );
 }
 
 #[test]

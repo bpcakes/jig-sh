@@ -1,0 +1,1 @@
+Reject normalized workspace package collisions and make dependency install reuse lockfile-aware across npm and Yarn PnP, with generated-repository evidence.

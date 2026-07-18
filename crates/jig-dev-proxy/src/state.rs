@@ -14,7 +14,7 @@ use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::file_ops;
-use crate::host::validate_routed_hostname;
+use crate::host::{RouteHostname, validate_routed_hostname};
 use crate::types::{Route, RouteMode};
 
 mod process_identity;
@@ -46,8 +46,8 @@ const REPLACE_BACKUP_RECOVERY_DELAY: Duration = Duration::from_secs(30);
 const REPLACE_BACKUP_RECOVERY_DELAY: Duration = Duration::ZERO;
 const MISSING_FILE_READ_RETRY_DELAY: Duration = Duration::from_millis(25);
 const MISSING_FILE_READ_ATTEMPTS: usize = 3;
-const MAX_ROUTES_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+pub const MAX_ROUTES_FILE_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const STATE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 static CLOCK_WARNING_PRINTED: AtomicBool = AtomicBool::new(false);
@@ -66,8 +66,59 @@ pub(crate) struct StateStore {
     can_chmod_root: bool,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum LockOutcome<T> {
+    Acquired(T),
+    Cancelled,
+}
+
+/// Stable identity for one process-owned route publication.
+///
+/// Cleanup must never identify a route by hostname alone: once the original
+/// owner exits, another session may legitimately publish a replacement before
+/// the old session acquires the route lock.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProcessRouteOwnership {
+    hostname: RouteHostname,
+    owner_pid: u32,
+    owner_start_token: String,
+}
+
+impl ProcessRouteOwnership {
+    pub(crate) fn new(hostname: RouteHostname, owner_pid: u32, owner_start_token: String) -> Self {
+        Self {
+            hostname,
+            owner_pid,
+            owner_start_token,
+        }
+    }
+
+    pub(crate) fn hostname(&self) -> &str {
+        self.hostname.as_str()
+    }
+
+    fn matches(&self, route: &Route) -> bool {
+        route.mode == RouteMode::Process
+            && route.hostname == self.hostname
+            && route.owner_pid == Some(self.owner_pid)
+            && route.owner_start_token.as_deref() == Some(self.owner_start_token.as_str())
+    }
+}
+
 impl StateStore {
     pub(crate) fn resolve(explicit: Option<PathBuf>) -> Result<Self> {
+        match Self::resolve_interruptible(explicit, &|| false)? {
+            LockOutcome::Acquired(store) => Ok(store),
+            LockOutcome::Cancelled => {
+                anyhow::bail!("uncancelled proxy state resolution was cancelled")
+            }
+        }
+    }
+
+    pub(crate) fn resolve_interruptible(
+        explicit: Option<PathBuf>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Self>> {
         let (root, can_chmod_existing) = if let Some(path) = explicit {
             (path, false)
         } else if let Ok(path) = std::env::var("JIG_PROXY_STATE_DIR") {
@@ -111,11 +162,13 @@ impl StateStore {
         // Re-scan after chmod/ACL hardening because Windows `icacls /T` is
         // recursive and must not be applied through a just-created symlink.
         ensure_state_dir_has_no_symlinks(&root)?;
-        recover_replace_backups_with_lock(&root)?;
-        Ok(Self {
+        if !recover_replace_backups_with_lock_interruptible(&root, cancelled)? {
+            return Ok(LockOutcome::Cancelled);
+        }
+        Ok(LockOutcome::Acquired(Self {
             root,
             can_chmod_root,
-        })
+        }))
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -180,6 +233,19 @@ impl StateStore {
         Ok(routes.into_iter().filter(route_is_alive).collect())
     }
 
+    pub(crate) fn read_routes_interruptible(
+        &self,
+        prune_dead: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Vec<Route>>> {
+        match self.with_route_lock_interruptible(cancelled, read_routes_from_path)? {
+            LockOutcome::Acquired(routes) if prune_dead => Ok(LockOutcome::Acquired(
+                routes.into_iter().filter(route_is_alive).collect(),
+            )),
+            outcome => Ok(outcome),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn add_route(&self, route: Route) -> Result<()> {
         if route.mode == RouteMode::Process && !process_start_tokens_supported() {
@@ -190,6 +256,7 @@ impl StateStore {
         self.with_route_lock(|path| add_route_to_path(path, route))
     }
 
+    #[cfg(test)]
     pub(crate) fn add_verified_route<F>(&self, route: Route, mut verify: F) -> Result<()>
     where
         F: FnMut() -> Result<()>,
@@ -202,6 +269,33 @@ impl StateStore {
         self.with_route_lock(|path| add_route_to_path_verified(path, route, &mut verify))
     }
 
+    #[cfg(test)]
+    pub(crate) fn add_route_then_fail_after_write(&self, route: Route) -> Result<()> {
+        self.with_route_lock(|path| {
+            add_route_to_path(path, route)?;
+            anyhow::bail!("injected route publication failure after durable write")
+        })
+    }
+
+    pub(crate) fn add_verified_route_interruptible<F>(
+        &self,
+        route: Route,
+        cancelled: &impl Fn() -> bool,
+        mut verify: F,
+    ) -> Result<LockOutcome<()>>
+    where
+        F: FnMut() -> Result<()>,
+    {
+        if route.mode == RouteMode::Process && !process_start_tokens_supported() {
+            anyhow::bail!(
+                "Process routes require process start-token verification on this platform. Use `scripts/jig proxy alias` for an already-running app, or run with --no-proxy."
+            );
+        }
+        self.with_route_lock_interruptible(cancelled, |path| {
+            add_route_to_path_verified(path, route, &mut verify)
+        })
+    }
+
     pub(crate) fn add_alias_route(&self, route: Route) -> Result<()> {
         if route.mode != RouteMode::Alias {
             anyhow::bail!("add_alias_route requires RouteMode::Alias");
@@ -209,6 +303,7 @@ impl StateStore {
         self.with_route_lock(|path| add_route_to_path(path, route))
     }
 
+    #[cfg(test)]
     pub(crate) fn ensure_no_live_process_routes_for_hostnames<'a>(
         &self,
         hostnames: impl IntoIterator<Item = &'a str>,
@@ -226,14 +321,78 @@ impl StateStore {
         })
     }
 
-    pub(crate) fn remove_route(&self, hostname: &str) -> Result<()> {
-        let hostname = hostname.to_ascii_lowercase();
-        self.with_route_lock(|path| {
-            let mut routes = read_routes_from_path(path)?;
-            routes.retain(|existing| existing.hostname.as_str() != hostname);
-            routes.retain(route_is_alive);
-            write_routes_to_path(path, &routes)
+    pub(crate) fn ensure_no_live_process_routes_for_hostnames_interruptible<'a>(
+        &self,
+        hostnames: impl IntoIterator<Item = &'a str>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        let hostnames = hostnames
+            .into_iter()
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>();
+        self.with_route_lock_interruptible(cancelled, |path| {
+            let routes = read_routes_from_path(path)?;
+            for hostname in &hostnames {
+                ensure_no_live_process_route_for_hostname(&routes, hostname)?;
+            }
+            Ok(())
         })
+    }
+
+    /// Removes a route while allowing forced foreground cleanup to abandon a
+    /// contended lock wait. `Ok(false)` means no mutation occurred.
+    #[cfg(test)]
+    pub(crate) fn remove_route_cancelable(
+        &self,
+        hostname: &str,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<bool> {
+        let hostname = hostname.to_ascii_lowercase();
+        Ok(self
+            .with_route_lock_cancelable(&cancelled, |path| {
+                let mut routes = read_routes_from_path(path)?;
+                routes.retain(|existing| existing.hostname.as_str() != hostname);
+                routes.retain(route_is_alive);
+                write_routes_to_path(path, &routes)
+            })?
+            .is_some())
+    }
+
+    /// Removes only the route publication owned by `ownership`, while allowing
+    /// forced cleanup to abandon an actually contended lock wait. A missing or
+    /// replaced route is already clean and therefore still returns `Ok(true)`
+    /// once the lock-protected check completes.
+    pub(crate) fn remove_process_route_if_owned_cancelable(
+        &self,
+        ownership: &ProcessRouteOwnership,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<bool> {
+        self.remove_process_route_if_owned_cancelable_until(
+            ownership,
+            Instant::now() + STATE_LOCK_TIMEOUT,
+            cancelled,
+        )
+    }
+
+    /// Removes only the route publication owned by `ownership` without waiting
+    /// past the cleanup operation's shared absolute deadline.
+    pub(crate) fn remove_process_route_if_owned_cancelable_until(
+        &self,
+        ownership: &ProcessRouteOwnership,
+        deadline: Instant,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<bool> {
+        Ok(self
+            .with_route_lock_cancelable_until(deadline, &cancelled, |path| {
+                let mut routes = read_routes_from_path(path)?;
+                let route_count = routes.len();
+                routes.retain(|existing| !ownership.matches(existing));
+                if routes.len() == route_count {
+                    return Ok(());
+                }
+                write_routes_to_path(path, &routes)
+            })?
+            .is_some())
     }
 
     pub(crate) fn prune(&self) -> Result<Vec<Route>> {
@@ -257,6 +416,13 @@ impl StateStore {
 
     pub(crate) fn read_pid(&self) -> Result<Option<u32>> {
         self.with_runtime_lock(|| self.read_pid_unlocked())
+    }
+
+    pub(crate) fn read_pid_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Option<u32>>> {
+        self.with_runtime_lock_interruptible(cancelled, || self.read_pid_unlocked())
     }
 
     fn read_pid_unlocked(&self) -> Result<Option<u32>> {
@@ -367,8 +533,26 @@ impl StateStore {
         self.with_runtime_lock(|| Ok(read_port_file(&self.http_port_path())))
     }
 
+    pub(crate) fn read_http_port_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Option<u16>>> {
+        self.with_runtime_lock_interruptible(cancelled, || {
+            Ok(read_port_file(&self.http_port_path()))
+        })
+    }
+
     pub(crate) fn read_https_port(&self) -> Result<Option<u16>> {
         self.with_runtime_lock(|| Ok(read_port_file(&self.https_port_path())))
+    }
+
+    pub(crate) fn read_https_port_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Option<u16>>> {
+        self.with_runtime_lock_interruptible(cancelled, || {
+            Ok(read_port_file(&self.https_port_path()))
+        })
     }
 
     #[cfg(test)]
@@ -385,6 +569,15 @@ impl StateStore {
 
     pub(crate) fn read_health_token(&self) -> Result<Option<String>> {
         self.with_runtime_lock(|| read_health_token_file(&self.health_token_path()))
+    }
+
+    pub(crate) fn read_health_token_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Option<String>>> {
+        self.with_runtime_lock_interruptible(cancelled, || {
+            read_health_token_file(&self.health_token_path())
+        })
     }
 
     pub(crate) fn clear_runtime_files(&self) {
@@ -455,6 +648,30 @@ impl StateStore {
         finish_with_unlock("cert lock", result, unlock_result)
     }
 
+    pub(crate) fn with_cert_lock_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        fs::create_dir_all(&self.root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        ensure_state_dir_permissions(&self.root, self.can_chmod_root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        let _lock_order_guard = enter_lock_order_guard(LockKind::Cert)?;
+        let lock = open_lock_file(self.root.join(CERT_LOCK_FILE))?;
+        if !lock_state_file_interruptible(&lock, "cert lock", cancelled)? {
+            return Ok(LockOutcome::Cancelled);
+        }
+        let lock = LockedFile::new(lock, "cert lock");
+        if cancelled() {
+            lock.unlock()?;
+            return Ok(LockOutcome::Cancelled);
+        }
+        let result = f();
+        let unlock_result = lock.unlock();
+        finish_with_unlock("cert lock", result, unlock_result).map(LockOutcome::Acquired)
+    }
+
     pub(crate) fn routes_signature(&self) -> FileSignature {
         file_signature(&self.routes_path())
     }
@@ -472,13 +689,33 @@ impl StateStore {
     }
 
     fn with_route_lock<T>(&self, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+        self.with_route_lock_cancelable(&|| false, f)?
+            .ok_or_else(|| anyhow::anyhow!("uncancelled route lock acquisition was cancelled"))
+    }
+
+    fn with_route_lock_cancelable<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        f: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<Option<T>> {
+        self.with_route_lock_cancelable_until(Instant::now() + STATE_LOCK_TIMEOUT, cancelled, f)
+    }
+
+    fn with_route_lock_cancelable_until<T>(
+        &self,
+        deadline: Instant,
+        cancelled: &impl Fn() -> bool,
+        f: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<Option<T>> {
         fs::create_dir_all(&self.root)?;
         ensure_state_dir_has_no_symlinks(&self.root)?;
         ensure_state_dir_permissions(&self.root, self.can_chmod_root)?;
         // Keep the post-hardening scan close to every recursive ACL/chmod pass.
         ensure_state_dir_has_no_symlinks(&self.root)?;
         let lock = open_lock_file(self.lock_path())?;
-        lock_state_file(&lock, "route lock")?;
+        if !lock_state_file_cleanup_cancelable_until(&lock, "route lock", deadline, cancelled)? {
+            return Ok(None);
+        }
         let lock = LockedFile::new(lock, "route lock");
         let _lock_order_guard = enter_lock_order_guard(LockKind::Route)?;
         recover_replace_backups(&self.root)?;
@@ -486,7 +723,36 @@ impl StateStore {
         let routes_path = self.routes_path();
         let result = f(&routes_path);
         let unlock_result = lock.unlock();
-        finish_with_unlock("route lock", result, unlock_result)
+        finish_with_unlock("route lock", result, unlock_result).map(Some)
+    }
+
+    fn with_route_lock_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        f: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        fs::create_dir_all(&self.root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        ensure_state_dir_permissions(&self.root, self.can_chmod_root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        let lock = open_lock_file(self.lock_path())?;
+        if !lock_state_file_interruptible(&lock, "route lock", cancelled)? {
+            return Ok(LockOutcome::Cancelled);
+        }
+        let lock = LockedFile::new(lock, "route lock");
+        let _lock_order_guard = enter_lock_order_guard(LockKind::Route)?;
+        if cancelled() {
+            lock.unlock()?;
+            return Ok(LockOutcome::Cancelled);
+        }
+        recover_replace_backups(&self.root)?;
+        if cancelled() {
+            lock.unlock()?;
+            return Ok(LockOutcome::Cancelled);
+        }
+        let result = f(&self.routes_path());
+        let unlock_result = lock.unlock();
+        finish_with_unlock("route lock", result, unlock_result).map(LockOutcome::Acquired)
     }
 
     fn with_runtime_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -502,6 +768,28 @@ impl StateStore {
         let result = f();
         let unlock_result = lock.unlock();
         finish_with_unlock("runtime lock", result, unlock_result)
+    }
+
+    fn with_runtime_lock_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        f: impl FnOnce() -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        fs::create_dir_all(&self.root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        ensure_state_dir_permissions(&self.root, self.can_chmod_root)?;
+        ensure_state_dir_has_no_symlinks(&self.root)?;
+        let lock = open_lock_file(self.runtime_lock_path())?;
+        // Runtime operations used here are read-only. Try an immediately free
+        // lock even after cancellation so a concurrently completed proxy can
+        // still be recognized as shared/ready; abandon only an actual wait.
+        if !lock_state_file_cleanup_cancelable(&lock, "runtime lock", cancelled)? {
+            return Ok(LockOutcome::Cancelled);
+        }
+        let lock = LockedFile::new(lock, "runtime lock");
+        let result = f();
+        let unlock_result = lock.unlock();
+        finish_with_unlock("runtime lock", result, unlock_result).map(LockOutcome::Acquired)
     }
 
     fn remove_runtime_files_unlocked(&self) -> Result<()> {
@@ -669,11 +957,6 @@ pub(crate) fn now_ms() -> u64 {
             0
         }
     }
-}
-
-#[cfg(windows)]
-fn windows_system32_tool(name: &str) -> PathBuf {
-    PathBuf::from(r"C:\Windows\System32").join(name)
 }
 
 fn read_routes_from_file(file: &mut File) -> Result<Vec<Route>> {
@@ -957,10 +1240,23 @@ fn open_lock_file(path: PathBuf) -> Result<File> {
 }
 
 fn lock_state_file(file: &File, label: &str) -> Result<()> {
+    let acquired = lock_state_file_interruptible(file, label, &|| false)?;
+    debug_assert!(acquired, "an uncancelled state lock must be acquired");
+    Ok(())
+}
+
+fn lock_state_file_interruptible(
+    file: &File,
+    label: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<bool> {
     let deadline = Instant::now() + STATE_LOCK_TIMEOUT;
     loop {
+        if cancelled() {
+            return Ok(false);
+        }
         match file.try_lock_exclusive() {
-            Ok(true) => return Ok(()),
+            Ok(true) => return Ok(true),
             Ok(false) => {
                 if Instant::now() >= deadline {
                     anyhow::bail!(
@@ -969,6 +1265,50 @@ fn lock_state_file(file: &File, label: &str) -> Result<()> {
                     );
                 }
                 std::thread::sleep(STATE_LOCK_POLL_INTERVAL);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn lock_state_file_cleanup_cancelable(
+    file: &File,
+    label: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<bool> {
+    lock_state_file_cleanup_cancelable_until(
+        file,
+        label,
+        Instant::now() + STATE_LOCK_TIMEOUT,
+        cancelled,
+    )
+}
+
+fn lock_state_file_cleanup_cancelable_until(
+    file: &File,
+    label: &str,
+    deadline: Instant,
+    cancelled: &impl Fn() -> bool,
+) -> Result<bool> {
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(true) => return Ok(true),
+            Ok(false) => {
+                // Cancellation may abandon an actual lock wait, but it must not
+                // skip an immediately available cleanup mutation.
+                if cancelled() {
+                    return Ok(false);
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    anyhow::bail!(
+                        "Timed out waiting for Jig proxy {label} before the shared cleanup deadline"
+                    );
+                }
+                std::thread::sleep(std::cmp::min(
+                    STATE_LOCK_POLL_INTERVAL,
+                    deadline.saturating_duration_since(now),
+                ));
             }
             Err(error) => return Err(error.into()),
         }
@@ -1008,7 +1348,9 @@ fn ensure_state_dir_permissions(path: &Path, can_chmod: bool) -> Result<()> {
 fn harden_windows_state_dir(path: &Path) -> Result<()> {
     let account = current_windows_account()?;
     let grant = format!("{account}:(OI)(CI)F");
-    let output = Command::new(windows_system32_tool("icacls.exe"))
+    let icacls = crate::windows_system::native_system_executable("icacls.exe")
+        .context("Failed to resolve the native Windows icacls executable")?;
+    let output = Command::new(icacls)
         .arg(path)
         .args([
             "/inheritance:r",
@@ -1183,13 +1525,22 @@ fn recover_replace_backups(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn recover_replace_backups_with_lock(root: &Path) -> Result<()> {
+fn recover_replace_backups_with_lock_interruptible(
+    root: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<bool> {
     let lock = open_lock_file(root.join(LOCK_FILE))?;
-    lock_state_file(&lock, "route recovery lock")?;
+    if !lock_state_file_interruptible(&lock, "route recovery lock", cancelled)? {
+        return Ok(false);
+    }
     let lock = LockedFile::new(lock, "route recovery lock");
+    if cancelled() {
+        lock.unlock()?;
+        return Ok(false);
+    }
     let result = recover_replace_backups(root);
     let unlock_result = lock.unlock();
-    finish_with_unlock("route recovery lock", result, unlock_result)
+    finish_with_unlock("route recovery lock", result, unlock_result).map(|()| true)
 }
 
 fn replace_backup_can_be_promoted(path: &Path, backup_pid: &str) -> bool {

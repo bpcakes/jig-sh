@@ -1,0 +1,1 @@
+Fix Bun lockfile CI path coverage, Yarn patch dependency fingerprints, and frontend app configuration documentation; add regressions, refresh snapshots, run gates, and complete an independent comprehensive review loop.

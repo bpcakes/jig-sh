@@ -63,14 +63,14 @@ impl BrokeredFile {
     pub fn new(var: EnvVarName, secret_name: SecretName) -> Result<Self> {
         #[cfg(not(unix))]
         {
-            return Err(crate::VaultError::new(
+            Err(crate::VaultError::new(
                 crate::VaultErrorKind::InvalidInput,
                 format!(
                     "vault file mapping '{}={}' requires Unix-style owner-only temporary files; use --env on this platform",
                     var.as_str(),
                     secret_name.as_str()
                 ),
-            ));
+            ))
         }
 
         #[cfg(unix)]

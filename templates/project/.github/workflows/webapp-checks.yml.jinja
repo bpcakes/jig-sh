@@ -2,25 +2,110 @@
 name: Webapp Checks
 
 on:
+  # Classic required status checks can remain pending when this path-filtered
+  # workflow is skipped. Prefer repository rules that require this workflow;
+  # otherwise remove pull_request.paths before making its job a required check.
   pull_request:
     paths:
 [% for app in frontend_apps %]
-      - "<<[ app.dir ]>>/**"
+      - <<[ (app.dir ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "package.json"
+      - "**/package.json"
+      - "**/package.json5"
+      - "**/package.yaml"
+      - "**/*.patch"
+      - "**/*.diff"
+      - ".node-version"
+      - ".npmrc"
+      - "**/.node-version"
+      - "**/.npmrc"
+      - ".yarnrc"
+      - ".yarnrc.yml"
+      - "**/.yarnrc"
+      - "**/.yarnrc.yml"
+      - ".yarn/patches/**"
+      - ".yarn/cache/**"
+      - ".yarn/install-state.gz"
+      - ".yarn/plugins/**"
+      - ".yarn/releases/**"
+      - ".yarn/unplugged/**"
+      - "**/.yarn/patches/**"
+      - "**/.yarn/cache/**"
+      - "**/.yarn/install-state.gz"
+      - "**/.yarn/plugins/**"
+      - "**/.yarn/releases/**"
+      - "**/.yarn/unplugged/**"
+      - ".pnp.cjs"
+      - ".pnp.data.json"
+      - ".pnp.js"
+      - ".pnp.loader.mjs"
+      - "patches/**"
+      - "bunfig.toml"
+      - "bun.lock"
+      - "bun.lockb"
+      - "npm-shrinkwrap.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".pnpmfile.cjs"
+      - "pnpmfile.cjs"
+      - "yarn.lock"
       - ".github/workflows/webapp-checks.yml"
   push:
     branches:
-      - <<[ default_branch ]>>
+      - <<[ default_branch | tojson ]>>
     paths:
 [% for app in frontend_apps %]
-      - "<<[ app.dir ]>>/**"
+      - <<[ (app.dir ~ "/**") | tojson ]>>
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
       - "scripts/enforce-coverage.cjs"
+      - "package.json"
+      - "**/package.json"
+      - "**/package.json5"
+      - "**/package.yaml"
+      - "**/*.patch"
+      - "**/*.diff"
+      - ".node-version"
+      - ".npmrc"
+      - "**/.node-version"
+      - "**/.npmrc"
+      - ".yarnrc"
+      - ".yarnrc.yml"
+      - "**/.yarnrc"
+      - "**/.yarnrc.yml"
+      - ".yarn/patches/**"
+      - ".yarn/cache/**"
+      - ".yarn/install-state.gz"
+      - ".yarn/plugins/**"
+      - ".yarn/releases/**"
+      - ".yarn/unplugged/**"
+      - "**/.yarn/patches/**"
+      - "**/.yarn/cache/**"
+      - "**/.yarn/install-state.gz"
+      - "**/.yarn/plugins/**"
+      - "**/.yarn/releases/**"
+      - "**/.yarn/unplugged/**"
+      - ".pnp.cjs"
+      - ".pnp.data.json"
+      - ".pnp.js"
+      - ".pnp.loader.mjs"
+      - "patches/**"
+      - "bunfig.toml"
+      - "bun.lock"
+      - "bun.lockb"
+      - "npm-shrinkwrap.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".pnpmfile.cjs"
+      - "pnpmfile.cjs"
+      - "yarn.lock"
       - ".github/workflows/webapp-checks.yml"
   merge_group:
     types:
@@ -37,26 +122,55 @@ concurrency:
 jobs:
   checks:
     name: webapp checks
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+    env:
+      APP_DIR: ${{ matrix.app.dir }}
     strategy:
       fail-fast: false
       matrix:
         app:
 [% for app in frontend_apps %]
-          - name: <<[ app.name ]>>
-            dir: <<[ app.dir ]>>
+          - name: <<[ app.name | tojson ]>>
+            dir: <<[ app.dir | tojson ]>>
             coverage_threshold: <<[ app.coverage_threshold ]>>
 [% endfor %]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Bootstrap Node for dependency metadata
+        uses: actions/setup-node@v5
+        with:
+          node-version: <<[ node_version | tojson ]>>
+      - name: Resolve Node version file
+        id: node-version
+        shell: bash
+        run: |
+          if node_version_file="$(scripts/check-webapps.sh node-version-file "$APP_DIR")"; then
+            :
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              : "${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}"
+              fallback_node_version_dir="$(umask 077 && mktemp -d "$RUNNER_TEMP/jig-node-version.XXXXXX")" || exit $?
+              node_version_file="$fallback_node_version_dir/node-version"
+              (umask 077; set -o noclobber; printf '%s\n' '<<[ node_version ]>>' > "$node_version_file") || exit $?
+            else
+              exit "$status"
+            fi
+          fi
+          printf 'path=%s\n' "$node_version_file" >> "$GITHUB_OUTPUT"
 [% if web_package_manager == "bun" %]
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: <<[ web_package_manager_version | tojson ]>>
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
       - name: Cache Bun dependencies
         uses: actions/cache@v5
         with:
@@ -70,23 +184,31 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
           cache: <<[ web_package_manager ]>>
           cache-dependency-path: |
+            npm-shrinkwrap.json
             package-lock.json
+            ${{ matrix.app.dir }}/npm-shrinkwrap.json
             ${{ matrix.app.dir }}/package-lock.json
+      - name: Pin npm
+        run: npm install --global npm@<<[ web_package_manager_version ]>>
 [% elif web_package_manager == "pnpm" %]
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
       - name: Enable Corepack
-        run: corepack enable
+        shell: bash
+        run: |
+          corepack enable
+          package_manager_spec="$(scripts/check-webapps.sh package-manager-spec "$APP_DIR")" || exit $?
+          corepack prepare "$package_manager_spec" --activate
       # setup-node cache detection for pnpm needs Corepack shims first.
       - name: Configure Node dependency cache
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
           cache: <<[ web_package_manager ]>>
           cache-dependency-path: |
             pnpm-lock.yaml
@@ -95,14 +217,18 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
       - name: Enable Corepack
-        run: corepack enable
+        shell: bash
+        run: |
+          corepack enable
+          package_manager_spec="$(scripts/check-webapps.sh package-manager-spec "$APP_DIR")" || exit $?
+          corepack prepare "$package_manager_spec" --activate
       # setup-node cache detection for yarn needs Corepack shims first.
       - name: Configure Node dependency cache
         uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version-file: ${{ steps.node-version.outputs.path }}
           cache: <<[ web_package_manager ]>>
           cache-dependency-path: |
             yarn.lock
@@ -110,50 +236,21 @@ jobs:
 [% endif %]
 [% endif %]
       - name: Validate package scripts
-        run: node scripts/check-webapp-scripts.mjs "${{ matrix.app.dir }}" lint typecheck build:bundle test:coverage
+        run: node scripts/check-webapp-scripts.mjs "$APP_DIR" lint typecheck build:bundle test:coverage
       - name: Install dependencies
         shell: bash
-        run: |
-[% if web_package_manager == "bun" %]
-          if [ -f package.json ] && { [ -f bun.lock ] || [ -f bun.lockb ]; }; then
-            <<[ web_install_command ]>>
-          else
-            cd "${{ matrix.app.dir }}"
-            <<[ web_install_command ]>>
-          fi
-[% elif web_package_manager == "npm" %]
-          if [ -f package.json ] && [ -f package-lock.json ]; then
-            <<[ web_install_command ]>>
-          else
-            cd "${{ matrix.app.dir }}"
-            <<[ web_install_command ]>>
-          fi
-[% elif web_package_manager == "pnpm" %]
-          if [ -f package.json ] && [ -f pnpm-lock.yaml ]; then
-            <<[ web_install_command ]>>
-          else
-            cd "${{ matrix.app.dir }}"
-            <<[ web_install_command ]>>
-          fi
-[% elif web_package_manager == "yarn" %]
-          if [ -f package.json ] && [ -f yarn.lock ]; then
-            <<[ web_install_command ]>>
-          else
-            cd "${{ matrix.app.dir }}"
-            <<[ web_install_command ]>>
-          fi
-[% endif %]
+        run: scripts/check-webapps.sh dependencies-install "$APP_DIR"
       - name: Run lint
-        run: cd "${{ matrix.app.dir }}" && <<[ web_run_command ]>> lint
+        run: scripts/check-webapps.sh run-script "$APP_DIR" lint
       - name: Run typecheck
-        run: cd "${{ matrix.app.dir }}" && <<[ web_run_command ]>> typecheck
+        run: scripts/check-webapps.sh run-script "$APP_DIR" typecheck
       - name: Run build
-        run: cd "${{ matrix.app.dir }}" && <<[ web_run_command ]>> build:bundle
+        run: scripts/check-webapps.sh run-script "$APP_DIR" build:bundle
       - name: Run tests with coverage
-        run: cd "${{ matrix.app.dir }}" && <<[ web_run_command ]>> test:coverage
+        run: scripts/check-webapps.sh run-script "$APP_DIR" test:coverage
       - name: Enforce coverage threshold
         run: |
-          COVERAGE_DIR="${{ matrix.app.dir }}/coverage" \
+          COVERAGE_DIR="$APP_DIR/coverage" \
             COVERAGE_THRESHOLD="${{ matrix.app.coverage_threshold }}" \
             node scripts/enforce-coverage.cjs
 [% else %]
@@ -167,7 +264,10 @@ permissions:
 
 jobs:
   disabled:
-    runs-on: <<[ ci_github_runner ]>>
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: No configured web apps
         run: echo "No web apps configured in .jig.toml"

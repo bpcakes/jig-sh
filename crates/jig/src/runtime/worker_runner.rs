@@ -413,11 +413,16 @@ fn codex_bin() -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::process::Command;
+    #[cfg(unix)]
     use std::thread;
+    #[cfg(unix)]
     use std::time::Duration;
 
+    #[cfg(unix)]
     use crate::test_env::{EnvVarGuard, lock_env};
 
     use std::path::Path;

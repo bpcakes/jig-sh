@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 use crate::file_ops;
 use crate::host::{validate_hostname, validate_routed_hostname, validate_tld};
 use crate::ports::local_lan_ip_for_ipv4_listener;
-use crate::state::StateStore;
+use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
 mod trust;
@@ -90,29 +90,68 @@ pub(crate) fn ensure(settings: &ProxySettings) -> Result<Value> {
 pub(crate) fn ensure_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<Value> {
     ensure_certificate_generation_supported()?;
     let store = StateStore::resolve(settings.state_dir.clone())?;
-    store.with_cert_lock(|| {
-        remove_stale_cert_temps(&store)?;
-        let files = cert_file_state(&store);
-        let ca_pair_invalid = ca_pair_invalid(&store, files, settings);
-        if files.ca_pair_is_partial() || ca_pair_invalid {
-            ensure_ca_can_be_replaced(&store)?;
-        }
-        // Existing valid CAs, including ones trusted by Jig, may continue to
-        // issue refreshed leaf certificates. Only CA replacement paths require
-        // untrusting first so old trusted roots are not orphaned.
-        if !files.ca_exists || !files.ca_key_exists || ca_pair_invalid {
-            write_ca(&store, settings)?;
-        }
-        let hosts = certificate_hosts(settings, &store, hostnames)?;
-        ensure_leaf_hosts_within_ca_constraints(&store.ca_path(), &hosts)?;
-        if leaf_matches_hosts(&store, &hosts)? {
-            restrict_private_key(&store.ca_key_path())?;
-            restrict_private_key(&store.leaf_key_path())?;
-            return Ok(certificate_paths(&store));
-        }
-        write_leaf(&store, &hosts)?;
-        Ok(certificate_paths(&store))
-    })
+    store.with_cert_lock(|| ensure_for_hosts_locked(&store, settings, hostnames))
+}
+
+pub(crate) fn ensure_for_hosts_interruptible(
+    settings: &ProxySettings,
+    hostnames: &[String],
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<Value>> {
+    ensure_certificate_generation_supported()?;
+    let store = match StateStore::resolve_interruptible(settings.state_dir.clone(), cancelled)? {
+        LockOutcome::Acquired(store) => store,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    match store.with_cert_lock_interruptible(cancelled, || {
+        ensure_for_hosts_locked_interruptible(&store, settings, hostnames, cancelled)
+    })? {
+        LockOutcome::Acquired(outcome) => Ok(outcome),
+        LockOutcome::Cancelled => Ok(LockOutcome::Cancelled),
+    }
+}
+
+fn ensure_for_hosts_locked(
+    store: &StateStore,
+    settings: &ProxySettings,
+    hostnames: &[String],
+) -> Result<Value> {
+    match ensure_for_hosts_locked_interruptible(store, settings, hostnames, &|| false)? {
+        LockOutcome::Acquired(value) => Ok(value),
+        LockOutcome::Cancelled => bail!("uncancelled certificate preparation was cancelled"),
+    }
+}
+
+fn ensure_for_hosts_locked_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    hostnames: &[String],
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<Value>> {
+    remove_stale_cert_temps(store)?;
+    let files = cert_file_state(store);
+    let ca_pair_invalid = ca_pair_invalid(store, files, settings);
+    if files.ca_pair_is_partial() || ca_pair_invalid {
+        ensure_ca_can_be_replaced(store)?;
+    }
+    // Existing valid CAs, including ones trusted by Jig, may continue to issue
+    // refreshed leaf certificates. Only CA replacement paths require
+    // untrusting first so old trusted roots are not orphaned.
+    if !files.ca_exists || !files.ca_key_exists || ca_pair_invalid {
+        write_ca(store, settings)?;
+    }
+    let hosts = match certificate_hosts_interruptible(settings, store, hostnames, cancelled)? {
+        LockOutcome::Acquired(hosts) => hosts,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    ensure_leaf_hosts_within_ca_constraints(&store.ca_path(), &hosts)?;
+    if leaf_matches_hosts(store, &hosts)? {
+        restrict_private_key(&store.ca_key_path())?;
+        restrict_private_key(&store.leaf_key_path())?;
+        return Ok(LockOutcome::Acquired(certificate_paths(store)));
+    }
+    write_leaf(store, &hosts)?;
+    Ok(LockOutcome::Acquired(certificate_paths(store)))
 }
 
 fn ensure_certificate_generation_supported() -> Result<()> {
@@ -376,6 +415,18 @@ pub(crate) fn certificate_hosts(
     store: &StateStore,
     hostnames: &[String],
 ) -> Result<Vec<String>> {
+    match certificate_hosts_interruptible(settings, store, hostnames, &|| false)? {
+        LockOutcome::Acquired(hosts) => Ok(hosts),
+        LockOutcome::Cancelled => bail!("uncancelled certificate host collection was cancelled"),
+    }
+}
+
+fn certificate_hosts_interruptible(
+    settings: &ProxySettings,
+    store: &StateStore,
+    hostnames: &[String],
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<Vec<String>>> {
     let mut hosts = vec!["localhost".to_string()];
     if settings.lan && settings.tld.eq_ignore_ascii_case("local") {
         eprintln!(
@@ -393,12 +444,11 @@ pub(crate) fn certificate_hosts(
     // Route mutation paths do not acquire the cert lock while holding routes.
     // Do not call certificate generation or certificate refresh from inside a
     // route-lock closure; that would invert this order and can deadlock.
-    hosts.extend(
-        store
-            .read_routes(true)?
-            .into_iter()
-            .map(|route| route.hostname.into_string()),
-    );
+    let routes = match store.read_routes_interruptible(true, cancelled)? {
+        LockOutcome::Acquired(routes) => routes,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    hosts.extend(routes.into_iter().map(|route| route.hostname.into_string()));
     for host in &mut hosts {
         if host.parse::<IpAddr>().is_err() {
             *host = host.to_ascii_lowercase();
@@ -415,7 +465,7 @@ pub(crate) fn certificate_hosts(
     for host in &hosts {
         validate_certificate_host(host)?;
     }
-    Ok(hosts)
+    Ok(LockOutcome::Acquired(hosts))
 }
 
 fn validate_certificate_host(host: &str) -> Result<()> {

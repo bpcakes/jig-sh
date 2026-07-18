@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "<<[ install_command ]>> && astro dev --host ${HOST:-127.0.0.1} --port ${PORT:-4321}",
+    "dev": "astro dev",
     "build": "astro check && astro build",
     "build:bundle": "astro build",
     "typecheck": "astro check",
@@ -13,10 +13,10 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "astro": "^5.0.0"
+    "astro": "7.0.9"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.0",
-    "typescript": "^5.7.0"
+    "@astrojs/check": "0.9.9",
+    "typescript": "6.0.3"
   }
 }

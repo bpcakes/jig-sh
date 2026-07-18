@@ -1,5 +1,7 @@
 use std::thread;
+use std::time::Instant;
 
+use fs4::fs_std::FileExt;
 use tempfile::tempdir;
 
 use super::*;
@@ -60,6 +62,197 @@ fn add_replaces_existing_route() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn already_cancelled_route_removal_uses_an_uncontended_lock() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    store
+        .add_route(Route {
+            hostname: "web.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: None,
+            owner_start_token: None,
+            mode: RouteMode::Alias,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+
+    assert!(
+        store
+            .remove_route_cancelable("web.localhost", || true)
+            .unwrap()
+    );
+    assert!(store.read_routes(false).unwrap().is_empty());
+}
+
+#[test]
+fn already_cancelled_route_removal_skips_a_contended_lock_promptly() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    store
+        .add_route(Route {
+            hostname: "web.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: None,
+            owner_start_token: None,
+            mode: RouteMode::Alias,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+
+    let removed = store
+        .remove_route_cancelable("web.localhost", || true)
+        .unwrap();
+
+    assert!(!removed);
+    FileExt::unlock(&held_lock).unwrap();
+    assert_eq!(store.read_routes(false).unwrap().len(), 1);
+}
+
+#[test]
+fn cancelable_route_removal_does_not_wait_for_the_full_lock_timeout() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    store
+        .add_route(Route {
+            hostname: "web.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: None,
+            owner_start_token: None,
+            mode: RouteMode::Alias,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+    let polls = std::cell::Cell::new(0usize);
+
+    let removed = store
+        .remove_route_cancelable("web.localhost", || {
+            let next = polls.get() + 1;
+            polls.set(next);
+            next >= 2
+        })
+        .unwrap();
+
+    assert!(!removed);
+    assert_eq!(polls.get(), 2);
+    FileExt::unlock(&held_lock).unwrap();
+    assert_eq!(store.read_routes(false).unwrap().len(), 1);
+}
+
+#[test]
+fn resolve_interruptible_abandons_contended_route_recovery_lock() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+
+    let outcome =
+        StateStore::resolve_interruptible(Some(temp.path().to_path_buf()), &|| true).unwrap();
+
+    assert!(matches!(outcome, LockOutcome::Cancelled));
+    FileExt::unlock(&held_lock).unwrap();
+}
+
+#[test]
+fn process_route_preflight_abandons_contended_lock_on_interruption() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+
+    let outcome = store
+        .ensure_no_live_process_routes_for_hostnames_interruptible(["web.localhost"], &|| true)
+        .unwrap();
+
+    assert!(matches!(outcome, LockOutcome::Cancelled));
+    FileExt::unlock(&held_lock).unwrap();
+}
+
+#[test]
+fn verified_route_publication_abandons_contended_lock_without_verifying() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+    let verifier_calls = std::cell::Cell::new(0usize);
+
+    let outcome = store
+        .add_verified_route_interruptible(
+            Route {
+                hostname: "web.localhost".into(),
+                target_host: "127.0.0.1".into(),
+                target_port: 4000,
+                owner_pid: None,
+                owner_start_token: None,
+                mode: RouteMode::Alias,
+                created_at_ms: now_ms(),
+            },
+            &|| true,
+            || {
+                verifier_calls.set(verifier_calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+    assert!(matches!(outcome, LockOutcome::Cancelled));
+    assert_eq!(verifier_calls.get(), 0);
+    FileExt::unlock(&held_lock).unwrap();
+    assert!(store.read_routes(false).unwrap().is_empty());
+}
+
+#[test]
+fn foreground_cert_and_runtime_lock_waits_are_interruptible() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let cert_lock = open_lock_file(store.root.join(CERT_LOCK_FILE)).unwrap();
+    cert_lock.lock_exclusive().unwrap();
+    assert!(matches!(
+        store.with_cert_lock_interruptible(&|| true, || Ok(())),
+        Ok(LockOutcome::Cancelled)
+    ));
+    FileExt::unlock(&cert_lock).unwrap();
+
+    let runtime_lock = open_lock_file(store.runtime_lock_path()).unwrap();
+    runtime_lock.lock_exclusive().unwrap();
+    assert!(matches!(
+        store.read_http_port_interruptible(&|| true),
+        Ok(LockOutcome::Cancelled)
+    ));
+    FileExt::unlock(&runtime_lock).unwrap();
+    store.write_http_port(4321).unwrap();
+    assert!(matches!(
+        store.read_http_port_interruptible(&|| true),
+        Ok(LockOutcome::Acquired(Some(4321)))
+    ));
+}
+
+#[test]
+fn cert_locked_route_read_preserves_foreground_cancellation() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let cancelled = std::cell::Cell::new(false);
+
+    let outcome = store
+        .with_cert_lock_interruptible(&|| cancelled.get(), || {
+            cancelled.set(true);
+            store.read_routes_interruptible(true, &|| cancelled.get())
+        })
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        LockOutcome::Acquired(LockOutcome::Cancelled)
+    ));
 }
 
 #[test]
@@ -186,9 +379,245 @@ fn remove_route_matches_case_insensitively() {
         })
         .unwrap();
 
-    store.remove_route("Web.LocalHost").unwrap();
+    assert!(
+        store
+            .remove_route_cancelable("Web.LocalHost", || false)
+            .unwrap()
+    );
 
     assert!(store.read_routes(false).unwrap().is_empty());
+}
+
+#[test]
+fn exact_process_route_cleanup_removes_matching_publication() {
+    if !process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let hostname = RouteHostname::new("web.localhost").unwrap();
+    let owner_pid = std::process::id();
+    let owner_start_token = process_start_token(owner_pid).unwrap();
+    store
+        .add_route(Route {
+            hostname: hostname.clone(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4000,
+            owner_pid: Some(owner_pid),
+            owner_start_token: Some(owner_start_token.clone()),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let ownership = ProcessRouteOwnership::new(hostname, owner_pid, owner_start_token);
+
+    assert!(
+        store
+            .remove_process_route_if_owned_cancelable(&ownership, || false)
+            .unwrap()
+    );
+    assert!(store.read_routes(false).unwrap().is_empty());
+}
+
+#[test]
+fn stale_process_route_cleanup_preserves_hostname_replacement() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let hostname = RouteHostname::new("web.localhost").unwrap();
+    store
+        .add_alias_route(Route {
+            hostname: hostname.clone(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4001,
+            owner_pid: None,
+            owner_start_token: None,
+            mode: RouteMode::Alias,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let stale_ownership = ProcessRouteOwnership::new(hostname, 4242, "old-owner".into());
+
+    assert!(
+        store
+            .remove_process_route_if_owned_cancelable(&stale_ownership, || false)
+            .unwrap()
+    );
+
+    let routes = store.read_routes(false).unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].mode, RouteMode::Alias);
+    assert_eq!(routes[0].target_port, 4001);
+}
+
+#[test]
+fn shared_cleanup_deadline_bounds_all_lock_attempts_and_preserves_replacements() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let web_hostname = RouteHostname::new("web.localhost").unwrap();
+    let admin_hostname = RouteHostname::new("admin.localhost").unwrap();
+    let docs_hostname = RouteHostname::new("docs.localhost").unwrap();
+    for (hostname, target_port) in [
+        (web_hostname.clone(), 4001),
+        (admin_hostname.clone(), 4002),
+        (docs_hostname.clone(), 4003),
+    ] {
+        store
+            .add_alias_route(Route {
+                hostname,
+                target_host: "127.0.0.1".into(),
+                target_port,
+                owner_pid: None,
+                owner_start_token: None,
+                mode: RouteMode::Alias,
+                created_at_ms: now_ms(),
+            })
+            .unwrap();
+    }
+    let stale_ownerships = [
+        ProcessRouteOwnership::new(web_hostname, 4242, "old-web-owner".into()),
+        ProcessRouteOwnership::new(admin_hostname, 4343, "old-admin-owner".into()),
+        ProcessRouteOwnership::new(docs_hostname, 4444, "old-docs-owner".into()),
+    ];
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+    let shared_deadline = Instant::now();
+
+    for ownership in &stale_ownerships {
+        let error = store
+            .remove_process_route_if_owned_cancelable_until(ownership, shared_deadline, || false)
+            .unwrap_err();
+        assert!(error.to_string().contains("shared cleanup deadline"));
+    }
+
+    FileExt::unlock(&held_lock).unwrap();
+    for ownership in &stale_ownerships {
+        assert!(
+            store
+                .remove_process_route_if_owned_cancelable_until(ownership, shared_deadline, || {
+                    false
+                },)
+                .unwrap(),
+            "an immediately available lock must still verify exact ownership after the deadline"
+        );
+    }
+
+    let routes = store.read_routes(false).unwrap();
+    assert_eq!(routes.len(), 3);
+    assert!(routes.iter().all(|route| route.mode == RouteMode::Alias));
+    assert_eq!(
+        routes
+            .iter()
+            .map(|route| route.target_port)
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([4001, 4002, 4003])
+    );
+}
+
+#[test]
+fn shared_live_cleanup_deadline_removes_exact_owner_after_deterministic_lock_release() {
+    if !process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let exact_hostname = RouteHostname::new("web.localhost").unwrap();
+    let replacement_hostname = RouteHostname::new("admin.localhost").unwrap();
+    let owner_pid = std::process::id();
+    let owner_start_token = process_start_token(owner_pid).unwrap();
+    store
+        .add_route(Route {
+            hostname: exact_hostname.clone(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4101,
+            owner_pid: Some(owner_pid),
+            owner_start_token: Some(owner_start_token.clone()),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    store
+        .add_alias_route(Route {
+            hostname: replacement_hostname.clone(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4102,
+            owner_pid: None,
+            owner_start_token: None,
+            mode: RouteMode::Alias,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let ownership = ProcessRouteOwnership::new(exact_hostname, owner_pid, owner_start_token);
+    let held_lock = open_lock_file(store.lock_path()).unwrap();
+    held_lock.lock_exclusive().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let unlocker = thread::spawn(move || {
+        release_rx.recv().unwrap();
+        FileExt::unlock(&held_lock).unwrap();
+    });
+    let release_sent = std::cell::Cell::new(false);
+    let shared_deadline = Instant::now() + STATE_LOCK_TIMEOUT;
+
+    assert!(
+        store
+            .remove_process_route_if_owned_cancelable_until(&ownership, shared_deadline, || {
+                if !release_sent.replace(true) {
+                    release_tx.send(()).unwrap();
+                }
+                false
+            },)
+            .unwrap()
+    );
+    unlocker.join().unwrap();
+    assert!(
+        release_sent.get(),
+        "cleanup did not observe lock contention"
+    );
+
+    let routes = store.read_routes(false).unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].hostname, replacement_hostname);
+    assert_eq!(routes[0].target_port, 4102);
+    assert_eq!(routes[0].mode, RouteMode::Alias);
+}
+
+#[test]
+fn stale_process_route_cleanup_preserves_new_process_owner_generation() {
+    if !process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let hostname = RouteHostname::new("web.localhost").unwrap();
+    let owner_pid = std::process::id();
+    let replacement_token = process_start_token(owner_pid).unwrap();
+    store
+        .add_route(Route {
+            hostname: hostname.clone(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4002,
+            owner_pid: Some(owner_pid),
+            owner_start_token: Some(replacement_token.clone()),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap();
+    let stale_ownership =
+        ProcessRouteOwnership::new(hostname, owner_pid, format!("old-{replacement_token}"));
+
+    assert!(
+        store
+            .remove_process_route_if_owned_cancelable(&stale_ownership, || false)
+            .unwrap()
+    );
+
+    let routes = store.read_routes(false).unwrap();
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].owner_pid, Some(owner_pid));
+    assert_eq!(
+        routes[0].owner_start_token.as_deref(),
+        Some(replacement_token.as_str())
+    );
+    assert_eq!(routes[0].target_port, 4002);
 }
 
 #[test]

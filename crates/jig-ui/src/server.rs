@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -386,7 +387,11 @@ fn random_capability() -> Result<[u8; CAPABILITY_BYTES]> {
     Ok(capability)
 }
 fn encode_capability(capability: &[u8; CAPABILITY_BYTES]) -> String {
-    capability.iter().map(|b| format!("{b:02x}")).collect()
+    let mut encoded = String::with_capacity(CAPABILITY_BYTES * 2);
+    for byte in capability {
+        write!(&mut encoded, "{byte:02x}").expect("writing a capability into a String cannot fail");
+    }
+    encoded
 }
 fn capability_matches(candidate: &str, expected: &[u8; CAPABILITY_BYTES]) -> bool {
     bool::from(
@@ -510,11 +515,11 @@ fn write_response(mut stream: TcpStream, response: &HttpResponse) -> Result<()> 
         405 => "Method Not Allowed",
         _ => "Internal Server Error",
     };
-    let extra = response
-        .headers
-        .iter()
-        .map(|(n, v)| format!("{n}: {v}\r\n"))
-        .collect::<String>();
+    let mut extra = String::new();
+    for (name, value) in &response.headers {
+        write!(&mut extra, "{name}: {value}\r\n")
+            .expect("writing response headers into a String cannot fail");
+    }
     let head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\r\n{}\r\n",
         response.status,

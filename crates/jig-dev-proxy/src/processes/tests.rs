@@ -2,11 +2,60 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::PathBuf;
 use std::thread;
 
 use super::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::tempdir;
+
+#[cfg(target_os = "linux")]
+fn process_identity_is_alive(pid: u32, start_token: &str) -> bool {
+    crate::state::pid_is_alive(pid)
+        && crate::state::process_start_token(pid).as_deref() == Some(start_token)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct TestStopFile(PathBuf);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl TestStopFile {
+    fn stop(&self) {
+        fs::write(&self.0, b"stop\n").unwrap();
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for TestStopFile {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, b"stop\n");
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn write_process_test_marker(path: &Path, contents: &str) {
+    let temporary = path.with_extension(format!("tmp.{}", std::process::id()));
+    fs::write(&temporary, contents).unwrap();
+    fs::rename(temporary, path).unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn wait_for_process_test_marker(path: &Path, child: &mut Child, label: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if !contents.trim().is_empty() {
+                return contents;
+            }
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("{label} exited before publishing its marker: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("{label} did not publish its marker");
+}
 
 #[test]
 fn injects_vite_port_and_host_flags() {
@@ -20,10 +69,79 @@ fn injects_vite_port_and_host_flags() {
 
 #[test]
 fn ensure_not_interrupted_reports_pending_signal() {
-    let error = ensure_not_interrupted_with(|| true).unwrap_err();
+    let reason = TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGINT
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+    let error = ensure_not_interrupted_with(|| Some(reason)).unwrap_err();
 
-    assert_eq!(error.to_string(), "Interrupted");
+    assert!(error.to_string().starts_with("Interrupted by "));
     assert!(is_interruption(&error));
+    assert_eq!(interruption_reason(&error), Some(reason));
+}
+
+#[test]
+fn typed_preflight_cancellation_requires_a_pending_termination_reason() {
+    let reason = TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGTERM
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+
+    let interrupted =
+        normalize_preflight_result(Err(DevPreflightError::cancelled()), Some(reason)).unwrap_err();
+    assert_eq!(interruption_reason(&interrupted), Some(reason));
+
+    let unconfirmed =
+        normalize_preflight_result(Err(DevPreflightError::cancelled()), None).unwrap_err();
+    assert!(!is_interruption(&unconfirmed));
+    assert!(unconfirmed.to_string().contains("without a pending"));
+}
+
+#[test]
+fn preflight_failure_survives_even_when_termination_is_pending() {
+    let reason = TerminationReason::from_signal({
+        #[cfg(unix)]
+        {
+            libc::SIGINT
+        }
+        #[cfg(not(unix))]
+        {
+            2
+        }
+    });
+    let failure = anyhow::anyhow!("preflight cleanup failure sentinel");
+
+    let error = normalize_preflight_result(Err(DevPreflightError::failed(failure)), Some(reason))
+        .unwrap_err();
+
+    assert!(!is_interruption(&error));
+    assert_eq!(error.to_string(), "preflight cleanup failure sentinel");
+}
+
+#[cfg(unix)]
+#[test]
+fn child_exit_status_preserves_shell_signal_statuses() {
+    for (signal_name, expected) in [("HUP", 129), ("INT", 130), ("TERM", 143)] {
+        let status = Command::new("sh")
+            .args(["-c", &format!("kill -{signal_name} $$")])
+            .status()
+            .unwrap();
+
+        assert_eq!(status.code(), None);
+        assert_eq!(child_exit_status(&status), expected);
+    }
 }
 
 #[test]
@@ -80,9 +198,24 @@ fn linux_tcp_ip_parser_uses_proc_native_endian_words() {
     assert_eq!(parse_linux_tcp_ip("not-hex"), None);
 }
 
+#[test]
+fn termination_test_serialization_recovers_a_poisoned_mutex() {
+    let mutex = std::sync::Mutex::new(());
+    let panic = std::panic::catch_unwind(|| {
+        let _guard = mutex.lock().unwrap();
+        panic!("deliberately poison the local test mutex");
+    });
+
+    assert!(panic.is_err());
+    assert!(mutex.is_poisoned());
+    drop(recover_test_mutex_guard(&mutex));
+    drop(recover_test_mutex_guard(&mutex));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn terminate_child_kills_process_group_grandchild() {
+    let _guard = termination_test_guard();
     let temp = tempdir().unwrap();
     let grandchild_pid_path = temp.path().join("grandchild.pid");
     let mut command = Command::new("sh");
@@ -109,13 +242,18 @@ fn terminate_child_kills_process_group_grandchild() {
         let _ = child.wait();
         panic!("grandchild PID was not written");
     };
+    let Some(grandchild_start_token) = crate::state::process_start_token(grandchild_pid) else {
+        terminate_child(&mut child).unwrap();
+        let _ = child.wait();
+        panic!("grandchild process {grandchild_pid} had no start token");
+    };
 
     terminate_child(&mut child).unwrap();
     let _ = child.wait();
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if !crate::state::pid_is_alive(grandchild_pid) {
+        if !process_identity_is_alive(grandchild_pid, &grandchild_start_token) {
             return;
         }
         thread::sleep(Duration::from_millis(20));
@@ -560,6 +698,277 @@ fn dev_app_environment_exports_assigned_app_origins() {
 }
 
 #[test]
+fn dev_child_environment_replaces_only_runtime_owned_app_coordinates() {
+    let inherited = [
+        ("JIG_DEV_API_ORIGIN", "http://stale.invalid"),
+        ("JIG_DEV_OLD_APP_PORT", "4999"),
+        ("API_ORIGIN", "http://remote.example"),
+        ("JIG_DEV_BIN", "/tmp/jig"),
+        ("JIG_DEV_ALLOW_WORKSPACE_DISCOVERY", "1"),
+        ("JIG_DEV_API_ORIGIN_EXTRA", "keep-me"),
+    ];
+    let mut command = Command::new("unused");
+    for (key, value) in inherited {
+        command.env(key, value);
+    }
+    apply_dev_app_environment(
+        &mut command,
+        inherited.into_iter().map(|(key, _)| OsString::from(key)),
+        &[
+            ("JIG_DEV_API_ORIGIN".into(), "http://127.0.0.1:41001".into()),
+            ("JIG_DEV_WEB_PORT".into(), "41002".into()),
+        ],
+    );
+
+    let configured = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        configured.get("JIG_DEV_API_ORIGIN"),
+        Some(&Some("http://127.0.0.1:41001".into()))
+    );
+    assert_eq!(
+        configured.get("JIG_DEV_WEB_PORT"),
+        Some(&Some("41002".into()))
+    );
+    assert_eq!(configured.get("JIG_DEV_OLD_APP_PORT"), Some(&None));
+    assert_eq!(
+        configured.get("API_ORIGIN"),
+        Some(&Some("http://remote.example".into()))
+    );
+    assert_eq!(
+        configured.get("JIG_DEV_BIN"),
+        Some(&Some("/tmp/jig".into()))
+    );
+    assert_eq!(
+        configured.get("JIG_DEV_ALLOW_WORKSPACE_DISCOVERY"),
+        Some(&Some("1".into()))
+    );
+    assert_eq!(
+        configured.get("JIG_DEV_API_ORIGIN_EXTRA"),
+        Some(&Some("keep-me".into()))
+    );
+}
+
+#[test]
+fn generated_npm_dev_environment_removes_only_execution_shaping_config() {
+    let argv = GENERATED_NPM_DEV_ARGV_PREFIX
+        .into_iter()
+        .map(str::to_owned)
+        .chain([
+            "--".into(),
+            "--port".into(),
+            "41002".into(),
+            "--strictPort".into(),
+            "--host".into(),
+            "127.0.0.1".into(),
+        ])
+        .collect::<Vec<_>>();
+    let inherited = [
+        ("NPM_CONFIG_WORKSPACE", "missing"),
+        ("npm_config_include_workspace_root", "false"),
+        ("NpM_CoNfIg_LoCaTiOn", "global"),
+        ("NPM_CONFIG_IF_PRESENT", "true"),
+        ("NPM_CONFIG_OMIT", "dev"),
+        ("NODE_ENV", "staging"),
+        ("NPM_CONFIG_REGISTRY", "https://registry.example"),
+        ("npm_config_install_strategy", "nested"),
+        ("NPM_CONFIG_IGNORE_SCRIPTS", "true"),
+        ("APP_FEATURE", "enabled"),
+    ];
+    let mut command = Command::new("unused");
+    for (key, value) in inherited {
+        command.env(key, value);
+    }
+
+    apply_dev_child_environment(
+        &mut command,
+        &argv,
+        inherited.into_iter().map(|(key, _)| OsString::from(key)),
+        &[],
+    );
+
+    let configured = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    for removed in [
+        "NPM_CONFIG_WORKSPACE",
+        "npm_config_include_workspace_root",
+        "NpM_CoNfIg_LoCaTiOn",
+        "NPM_CONFIG_IF_PRESENT",
+        "NPM_CONFIG_OMIT",
+    ] {
+        assert_eq!(configured.get(removed), Some(&None), "{removed}");
+    }
+    for (preserved, value) in [
+        ("NODE_ENV", "staging"),
+        ("NPM_CONFIG_REGISTRY", "https://registry.example"),
+        ("npm_config_install_strategy", "nested"),
+        ("NPM_CONFIG_IGNORE_SCRIPTS", "true"),
+        ("APP_FEATURE", "enabled"),
+    ] {
+        assert_eq!(
+            configured.get(preserved),
+            Some(&Some(value.into())),
+            "{preserved}"
+        );
+    }
+}
+
+#[test]
+fn custom_npm_dev_environment_remains_project_owned() {
+    let inherited = [
+        ("NPM_CONFIG_WORKSPACE", "custom-workspace"),
+        ("NPM_CONFIG_OMIT", "optional"),
+        ("NODE_ENV", "production"),
+    ];
+    let mut command = Command::new("unused");
+    for (key, value) in inherited {
+        command.env(key, value);
+    }
+
+    apply_dev_child_environment(
+        &mut command,
+        &["npm".into(), "run".into(), "dev".into()],
+        inherited.into_iter().map(|(key, _)| OsString::from(key)),
+        &[],
+    );
+
+    let configured = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    for (key, value) in inherited {
+        assert_eq!(configured.get(key), Some(&Some(value.into())), "{key}");
+    }
+}
+
+#[test]
+fn canonical_generated_npm_dev_argv_accepts_only_jig_vite_suffix() {
+    let mut argv = GENERATED_NPM_DEV_ARGV_PREFIX
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert!(is_generated_npm_dev_argv(&argv));
+
+    inject_framework_flags(&mut argv, &AppKind::Vite, 4210);
+    assert!(is_generated_npm_dev_argv(&argv));
+    assert_eq!(
+        &argv[GENERATED_NPM_DEV_ARGV_PREFIX.len()..],
+        [
+            "--",
+            "--port",
+            "4210",
+            "--strictPort",
+            "--host",
+            "127.0.0.1"
+        ]
+    );
+
+    let mut noncanonical = GENERATED_NPM_DEV_ARGV_PREFIX
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    noncanonical.push("--mode=custom".into());
+    assert!(!is_generated_npm_dev_argv(&noncanonical));
+    let mut forged_suffix = GENERATED_NPM_DEV_ARGV_PREFIX
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    forged_suffix.extend(["--".into(), "--mode=custom".into()]);
+    assert!(!is_generated_npm_dev_argv(&forged_suffix));
+    assert!(!is_generated_npm_dev_argv(&[
+        "npm".into(),
+        "run".into(),
+        "dev".into()
+    ]));
+}
+
+#[test]
+fn managed_npm_run_environment_key_matching_is_case_insensitive_and_narrow() {
+    for key in MANAGED_NPM_RUN_CONFIG_KEYS {
+        let hyphenated = format!("npm_config_{key}");
+        assert!(
+            is_managed_npm_run_environment_key(OsStr::new(&hyphenated)),
+            "{hyphenated}"
+        );
+        let key = format!("NpM_CoNfIg_{}", key.replace('-', "_"));
+        assert!(
+            is_managed_npm_run_environment_key(OsStr::new(&key)),
+            "{key}"
+        );
+    }
+    for key in [
+        "NODE_ENV",
+        "NPM_CONFIG_REGISTRY",
+        "NPM_CONFIG_NODE_OPTIONS",
+        "NPM_CONFIG_INSTALL_STRATEGY",
+        "NPM_CONFIG_LEGACY_PEER_DEPS",
+        "NPM_CONFIG_STRICT_PEER_DEPS",
+        "NPM_CONFIG_IGNORE_SCRIPTS",
+        "NPM_CONFIG_FOREGROUND_SCRIPTS",
+        "NPM_CONFIG_SCRIPT_SHELL",
+        "NPM_CONFIG_//REGISTRY.EXAMPLE/:_AUTH_TOKEN",
+    ] {
+        assert!(
+            !is_managed_npm_run_environment_key(OsStr::new(key)),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn runtime_owned_app_coordinate_key_matching_is_exact_and_case_insensitive() {
+    for key in [
+        "JIG_DEV_API_HOST",
+        "JIG_DEV_API_PORT",
+        "JIG_DEV_WEB_APP_ORIGIN",
+        "JIG_DEV___PORT",
+    ] {
+        assert!(
+            is_runtime_owned_dev_app_environment_key(OsStr::new(key)),
+            "expected runtime-owned key: {key}"
+        );
+    }
+    assert_eq!(
+        is_runtime_owned_dev_app_environment_key(OsStr::new("jig_dev_web_app_url")),
+        cfg!(windows),
+        "environment key case sensitivity must match the target platform"
+    );
+    for key in [
+        "API_ORIGIN",
+        "JIG_DEV_BIN",
+        "JIG_DEV_ALLOW_WORKSPACE_DISCOVERY",
+        "JIG_DEV_API",
+        "JIG_DEV__ORIGIN",
+        "JIG_DEV_API_ORIGIN_EXTRA",
+        "JIG_DEV_API_origin_suffix",
+    ] {
+        assert!(
+            !is_runtime_owned_dev_app_environment_key(OsStr::new(key)),
+            "unexpected runtime-owned key: {key}"
+        );
+    }
+}
+
+#[test]
 fn dev_app_environment_rejects_duplicate_env_prefixes() {
     let temp = tempfile::tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
@@ -723,7 +1132,75 @@ fn spawn_child_captures_output_without_inheriting_the_terminal() {
 
 #[cfg(not(windows))]
 #[test]
+fn spawn_child_keeps_astro_in_the_supervised_foreground_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings = ProxySettings::default();
+    let spec = AppRunSpec {
+        name: "astro".into(),
+        dir: temp.path().to_path_buf(),
+        command: CommandSpec::Argv(Vec::new()),
+        kind: AppKind::EnvPort,
+        hostname: "astro.example.localhost".into(),
+        target_host: "127.0.0.1".into(),
+        explicit_port: None,
+        proxy: false,
+    };
+    let argv = [
+        "sh".to_string(),
+        "-c".to_string(),
+        "printf '%s' \"$ASTRO_DEV_BACKGROUND\"".to_string(),
+    ];
+    let dev_env = [("ASTRO_DEV_BACKGROUND".to_string(), String::new())];
+
+    let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &dev_env).unwrap();
+    assert!(spawned.child.wait().unwrap().success());
+
+    assert_eq!(spawned.output.captured_bytes(), b"0");
+}
+
+#[test]
+fn unsupported_app_supervision_fails_before_spawn() {
+    let error = ensure_app_supervision_supported(false, false).unwrap_err();
+
+    assert!(error.to_string().contains("supervision is unsupported"));
+    assert!(error.to_string().contains("refusing to spawn"));
+}
+
+#[test]
+fn publication_error_after_write_is_cleaned_by_exact_ownership() {
+    if !process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let hostname = RouteHostname::new("committed.localhost").unwrap();
+    let owner_pid = std::process::id();
+    let owner_start_token = crate::state::process_start_token(owner_pid).unwrap();
+    let ownership =
+        ProcessRouteOwnership::new(hostname.clone(), owner_pid, owner_start_token.clone());
+    let error = store
+        .add_route_then_fail_after_write(Route {
+            hostname,
+            target_host: "127.0.0.1".into(),
+            target_port: 4321,
+            owner_pid: Some(owner_pid),
+            owner_start_token: Some(owner_start_token),
+            mode: RouteMode::Process,
+            created_at_ms: now_ms(),
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("after durable write"));
+    assert_eq!(store.read_routes(false).unwrap().len(), 1);
+
+    remove_route_best_effort(&store, &ownership, "committed", true);
+
+    assert!(store.read_routes(false).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn captured_output_does_not_wait_for_grandchildren_holding_pipes_open() {
+    let _guard = termination_test_guard();
     let temp = tempfile::tempdir().unwrap();
     let settings = ProxySettings::default();
     let spec = AppRunSpec {
@@ -742,19 +1219,119 @@ fn captured_output_does_not_wait_for_grandchildren_holding_pipes_open() {
         "sleep 5 & printf 'failure before wrapper exit\\n'; exit 1".to_string(),
     ];
     let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap();
-    assert!(!spawned.child.wait().unwrap().success());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match try_wait_preserving_process_group(&mut spawned.child).unwrap() {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            None => panic!("wrapper did not exit"),
+        }
+    };
+    assert!(!status.success());
+    assert!(process_group_alive(spawned.child.id()).unwrap());
 
-    let started = Instant::now();
     let output = spawned.output.captured_bytes();
 
-    assert!(started.elapsed() < Duration::from_secs(1));
     assert!(output.ends_with(b"failure before wrapper exit\n"));
-    terminate_child(&mut spawned.child).unwrap();
+    assert!(
+        process_group_alive(spawned.child.id()).unwrap(),
+        "output capture completion must not depend on the pipe-owning grandchild exiting"
+    );
+    terminate_and_reap(&mut spawned.child).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn repeated_silent_escaped_pipe_owners_do_not_leave_capture_threads() {
+    struct EscapedWriterGuard {
+        stop: std::path::PathBuf,
+        armed: bool,
+    }
+
+    impl EscapedWriterGuard {
+        fn stop(mut self, pid: u32, start_token: &str) {
+            fs::write(&self.stop, b"stop\n").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while process_identity_is_alive(pid, start_token) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            self.armed = false;
+            assert!(
+                !process_identity_is_alive(pid, start_token),
+                "escaped writer {pid} did not stop cooperatively"
+            );
+        }
+    }
+
+    impl Drop for EscapedWriterGuard {
+        fn drop(&mut self) {
+            if self.armed {
+                let _ = fs::write(&self.stop, b"stop\n");
+            }
+        }
+    }
+
+    let _guard = termination_test_guard();
+    for iteration in 0..3 {
+        let temp = tempfile::tempdir().unwrap();
+        let pid_path = temp.path().join("escaped-writer.pid");
+        let stop_path = temp.path().join("stop-escaped-writer");
+        let writer_guard = EscapedWriterGuard {
+            stop: stop_path.clone(),
+            armed: true,
+        };
+        let settings = ProxySettings::default();
+        let spec = AppRunSpec {
+            name: format!("captured-{iteration}"),
+            dir: temp.path().to_path_buf(),
+            command: CommandSpec::Argv(Vec::new()),
+            kind: AppKind::EnvPort,
+            hostname: format!("captured-{iteration}.example.localhost"),
+            target_host: "127.0.0.1".into(),
+            explicit_port: None,
+            proxy: false,
+        };
+        let argv = [
+            "sh".to_string(),
+            "-c".to_string(),
+            "setsid sh -c 'printf \"%s\\n\" \"$$\" > \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.05; done' sh \"$1\" \"$2\" & while [ ! -s \"$1\" ]; do sleep 0.01; done; exit 1".to_string(),
+            "sh".to_string(),
+            pid_path.display().to_string(),
+            stop_path.display().to_string(),
+        ];
+        let mut spawned = spawn_child(&spec, &argv, 4321, &settings, &[]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            match try_wait_preserving_process_group(&mut spawned.child).unwrap() {
+                Some(status) => break status,
+                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+                None => panic!("wrapper did not exit after launching escaped writer"),
+            }
+        };
+        assert!(!status.success());
+        let escaped_pid = fs::read_to_string(&pid_path)
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        let escaped_start_token = crate::state::process_start_token(escaped_pid).unwrap();
+        terminate_and_reap(&mut spawned.child).unwrap();
+
+        assert!(spawned.output.captured_bytes().is_empty());
+
+        assert_eq!(spawned.output.active_reader_count(), 0);
+        assert!(
+            process_identity_is_alive(escaped_pid, &escaped_start_token),
+            "capture completion unexpectedly depended on escaped writer exit"
+        );
+        writer_guard.stop(escaped_pid, &escaped_start_token);
+    }
 }
 
 #[cfg(not(windows))]
 #[test]
 fn failure_tail_is_finalized_after_process_group_shutdown() {
+    let _guard = termination_test_guard();
     let temp = tempfile::tempdir().unwrap();
     let ready = temp.path().join("term-trap-ready");
     let release = temp.path().join("release-wrapper");
@@ -790,7 +1367,7 @@ fn failure_tail_is_finalized_after_process_group_shutdown() {
 
     let exit_deadline = Instant::now() + Duration::from_secs(2);
     let status = loop {
-        match spawned.child.try_wait().unwrap() {
+        match try_wait_preserving_process_group(&mut spawned.child).unwrap() {
             Some(status) => break status,
             None if Instant::now() < exit_deadline => {
                 thread::sleep(Duration::from_millis(10));
@@ -833,20 +1410,74 @@ fn remove_route_best_effort_tolerates_cleanup_failure() {
     let temp = tempfile::tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     fs::write(store.root().join("routes.json"), b"{not json").unwrap();
+    let ownership = ProcessRouteOwnership::new(
+        RouteHostname::new("app.example.localhost").unwrap(),
+        4242,
+        "owner".into(),
+    );
 
-    remove_route_best_effort(&store, "app.example.localhost", "app");
+    remove_route_best_effort(&store, &ownership, "app", true);
+}
+
+#[test]
+fn failed_app_output_is_finalized_before_route_cleanup_error_returns() {
+    let finalized = std::cell::Cell::new(false);
+
+    finalize_single_app_cleanup(
+        false,
+        true,
+        Some(anyhow::anyhow!("route cleanup failed")),
+        || finalized.set(true),
+    )
+    .unwrap();
+
+    assert!(finalized.get());
+}
+
+#[test]
+fn successful_app_does_not_print_failure_before_route_cleanup_error() {
+    let finalized = std::cell::Cell::new(false);
+
+    finalize_single_app_cleanup(
+        true,
+        true,
+        Some(anyhow::anyhow!("route cleanup failed")),
+        || finalized.set(true),
+    )
+    .unwrap_err();
+
+    assert!(!finalized.get());
+}
+
+#[test]
+fn successful_app_rejects_unconfirmed_process_cleanup() {
+    let error = finalize_single_app_cleanup(true, false, None, || {}).unwrap_err();
+
+    assert!(error.to_string().contains("process-tree cleanup"));
+}
+
+#[test]
+fn successful_multi_app_session_requires_complete_cleanup() {
+    assert!(require_cleanup_for_success(true, false).is_ok());
+    assert!(require_cleanup_for_success(false, false).is_err());
+}
+
+#[test]
+fn failed_multi_app_session_preserves_primary_failure_when_cleanup_is_incomplete() {
+    assert!(require_cleanup_for_success(false, true).is_ok());
 }
 
 #[cfg(not(windows))]
 #[test]
 fn run_apps_launches_non_proxied_apps_without_routes() {
+    let _guard = termination_test_guard();
     let temp = tempfile::tempdir().unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
         http_port: 0,
         ..ProxySettings::default()
     };
-    let output = run_apps(
+    let output = run_apps_with_interrupt_probe(
         vec![AppRunSpec {
             name: "direct".into(),
             dir: temp.path().to_path_buf(),
@@ -862,6 +1493,7 @@ fn run_apps_launches_non_proxied_apps_without_routes() {
         }],
         &settings,
         Path::new("unused-jig"),
+        || None,
     )
     .unwrap();
 
@@ -871,11 +1503,108 @@ fn run_apps_launches_non_proxied_apps_without_routes() {
     assert!(store.read_routes(false).unwrap().is_empty());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn interrupted_run_apps_reaps_spawned_child_before_returning() {
+    let _guard = termination_test_guard();
+    let temp = tempdir().unwrap();
+    let child_pid_path = temp.path().join("child.pid");
+    let settings = ProxySettings {
+        state_dir: Some(temp.path().join("state")),
+        http_port: 0,
+        ..ProxySettings::default()
+    };
+    let spec = AppRunSpec {
+        name: "direct".into(),
+        dir: temp.path().to_path_buf(),
+        command: CommandSpec::Argv(vec![
+            "sh".into(),
+            "-c".into(),
+            "echo $$ > \"$1\"; sleep 60".into(),
+            "sh".into(),
+            child_pid_path.display().to_string(),
+        ]),
+        kind: AppKind::EnvPort,
+        hostname: "unused.localhost".into(),
+        target_host: "127.0.0.1".into(),
+        explicit_port: None,
+        proxy: false,
+    };
+
+    let child_identity = std::sync::OnceLock::new();
+    let error =
+        run_apps_with_interrupt_probe(vec![spec], &settings, Path::new("unused-jig"), || {
+            if child_identity.get().is_none() {
+                let identity = fs::read_to_string(&child_pid_path)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<u32>().ok())
+                    .and_then(|pid| {
+                        crate::state::process_start_token(pid).map(|token| (pid, token))
+                    });
+                if let Some(identity) = identity {
+                    let _ = child_identity.set(identity);
+                }
+            }
+            child_identity
+                .get()
+                .is_some()
+                .then_some(TerminationReason::from_signal(libc::SIGINT))
+        })
+        .unwrap_err();
+
+    assert!(is_interruption(&error));
+    let (child_pid, child_start_token) = child_identity.into_inner().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if !process_identity_is_alive(child_pid, &child_start_token) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("interrupted child process {child_pid} survived dev-session cleanup");
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn app_readiness_wait_returns_when_child_owns_listener() {
-    let port = find_free_app_port_excluding("127.0.0.1", &HashSet::new()).unwrap();
-    let mut child = spawn_python_listener(port);
+    const HELPER_ENV: &str = "JIG_APP_READINESS_OWN_LISTENER_HELPER";
+    const MARKER_ENV: &str = "JIG_APP_READINESS_OWN_LISTENER_MARKER";
+    const STOP_ENV: &str = "JIG_APP_READINESS_OWN_LISTENER_STOP";
+    const TEST_NAME: &str = "processes::tests::app_readiness_wait_returns_when_child_owns_listener";
+
+    if std::env::var_os(HELPER_ENV).is_some() {
+        let marker = PathBuf::from(std::env::var_os(MARKER_ENV).expect("helper marker path"));
+        let stop = PathBuf::from(std::env::var_os(STOP_ENV).expect("helper stop path"));
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        write_process_test_marker(
+            &marker,
+            &format!("{}\n", listener.local_addr().unwrap().port()),
+        );
+        while !stop.exists() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        return;
+    }
+
+    let _guard = termination_test_guard();
+    let temp = tempdir().unwrap();
+    let marker = temp.path().join("listener.marker");
+    let stop = TestStopFile(temp.path().join("stop-listener"));
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(HELPER_ENV, "1")
+        .env(MARKER_ENV, &marker)
+        .env(STOP_ENV, &stop.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_app_child_process_group(&mut command);
+    let mut child = command.spawn().unwrap();
+    let port = wait_for_process_test_marker(&marker, &mut child, "listener helper")
+        .trim()
+        .parse()
+        .unwrap();
 
     let owner_token = wait_for_app_ready_with_timeout(
         "ready",
@@ -887,13 +1616,14 @@ fn app_readiness_wait_returns_when_child_owns_listener() {
     .unwrap();
 
     assert!(owner_token.is_some());
-    terminate_child(&mut child).unwrap();
-    let _ = child.wait();
+    stop.stop();
+    assert!(child.wait().unwrap().success());
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn run_apps_preflights_live_process_route_before_spawning() {
+    let _guard = termination_test_guard();
     let temp = tempdir().unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
@@ -918,9 +1648,14 @@ fn run_apps_preflights_live_process_route_before_spawning() {
         "api.demo.localhost",
     );
 
-    let error = run_apps(vec![spec], &settings, Path::new("/definitely/not/jig"))
-        .unwrap_err()
-        .to_string();
+    let error = run_apps_with_interrupt_probe(
+        vec![spec],
+        &settings,
+        Path::new("/definitely/not/jig"),
+        || None,
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("would replace a live process route"));
     assert!(error.contains(&std::process::id().to_string()));
@@ -934,6 +1669,7 @@ fn run_apps_preflights_live_process_route_before_spawning() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn run_apps_preflights_duplicate_process_route_hostnames_before_spawning() {
+    let _guard = termination_test_guard();
     let temp = tempdir().unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
@@ -953,10 +1689,11 @@ fn run_apps_preflights_duplicate_process_route_hostnames_before_spawning() {
         "API.demo.localhost",
     );
 
-    let error = run_apps(
+    let error = run_apps_with_interrupt_probe(
         vec![first, second],
         &settings,
         Path::new("/definitely/not/jig"),
+        || None,
     )
     .unwrap_err()
     .to_string();
@@ -973,6 +1710,7 @@ fn run_apps_preflights_duplicate_process_route_hostnames_before_spawning() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn app_readiness_wait_errors_when_child_exits_first() {
+    let _guard = termination_test_guard();
     struct ChildCleanup(Child);
     impl Drop for ChildCleanup {
         fn drop(&mut self) {
@@ -1001,6 +1739,7 @@ fn app_readiness_wait_errors_when_child_exits_first() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn production_readiness_path_times_out_and_reaps_live_non_listener() {
+    let _guard = termination_test_guard();
     struct ChildCleanup(Child);
     impl Drop for ChildCleanup {
         fn drop(&mut self) {
@@ -1036,6 +1775,7 @@ fn production_readiness_path_times_out_and_reaps_live_non_listener() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn app_listener_owner_rejects_external_listener() {
+    let _guard = termination_test_guard();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut command = Command::new("sh");
@@ -1056,6 +1796,7 @@ fn app_listener_owner_rejects_external_listener() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn app_readiness_wait_rejects_port_owned_by_other_process() {
+    let _guard = termination_test_guard();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut command = Command::new("sh");
@@ -1082,31 +1823,77 @@ fn app_readiness_wait_rejects_port_owned_by_other_process() {
 #[cfg(target_os = "linux")]
 #[test]
 fn app_readiness_wait_rejects_listener_in_different_process_group() {
+    const ROLE_ENV: &str = "JIG_APP_READINESS_DETACHED_ROLE";
+    const MARKER_ENV: &str = "JIG_APP_READINESS_DETACHED_MARKER";
+    const STOP_ENV: &str = "JIG_APP_READINESS_DETACHED_STOP";
+    const TEST_NAME: &str =
+        "processes::tests::app_readiness_wait_rejects_listener_in_different_process_group";
+
+    match std::env::var(ROLE_ENV).ok().as_deref() {
+        Some("listener") => {
+            let marker = PathBuf::from(std::env::var_os(MARKER_ENV).expect("helper marker path"));
+            let stop = PathBuf::from(std::env::var_os(STOP_ENV).expect("helper stop path"));
+            let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+            write_process_test_marker(
+                &marker,
+                &format!(
+                    "{} {}\n",
+                    std::process::id(),
+                    listener.local_addr().unwrap().port()
+                ),
+            );
+            while !stop.exists() {
+                thread::sleep(Duration::from_millis(10));
+            }
+            return;
+        }
+        Some("wrapper") => {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROLE_ENV, "listener")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            configure_app_child_process_group(&mut command);
+            let status = command.spawn().unwrap().wait().unwrap();
+            assert!(
+                status.success(),
+                "detached listener helper failed: {status}"
+            );
+            return;
+        }
+        Some(role) => panic!("unexpected detached-listener helper role {role:?}"),
+        None => {}
+    }
+
+    let _guard = termination_test_guard();
     let temp = tempdir().unwrap();
-    let pid_path = temp.path().join("listener.pid");
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let mut command = Command::new("python3");
-    command.arg("-c").arg(
-        "import os, socket, sys, time\n\
-             port = int(sys.argv[1])\n\
-             pid_path = sys.argv[2]\n\
-             pid = os.fork()\n\
-             if pid == 0:\n\
-                 os.setsid()\n\
-                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n\
-                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n\
-                 sock.bind(('127.0.0.1', port))\n\
-                 sock.listen()\n\
-                 time.sleep(5)\n\
-             else:\n\
-                 open(pid_path, 'w').write(str(pid))\n\
-                 time.sleep(5)\n",
-    );
-    command.arg(port.to_string()).arg(&pid_path);
+    let marker_path = temp.path().join("listener.marker");
+    let stop_path = temp.path().join("stop-listener");
+    let detached_stop = TestStopFile(stop_path.clone());
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(ROLE_ENV, "wrapper")
+        .env(MARKER_ENV, &marker_path)
+        .env(STOP_ENV, &stop_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     configure_app_child_process_group(&mut command);
     let mut child = command.spawn().unwrap();
+    let marker =
+        wait_for_process_test_marker(&marker_path, &mut child, "detached listener wrapper");
+    let mut marker_fields = marker.split_whitespace();
+    let detached_pid = marker_fields.next().unwrap().parse::<u32>().unwrap();
+    let port = marker_fields.next().unwrap().parse::<u16>().unwrap();
+    assert!(
+        marker_fields.next().is_none(),
+        "unexpected marker {marker:?}"
+    );
+    let detached_identity =
+        crate::state::process_start_token(detached_pid).map(|token| (detached_pid, token));
 
     let error = wait_for_app_ready_with_timeout(
         "forked",
@@ -1119,31 +1906,24 @@ fn app_readiness_wait_rejects_listener_in_different_process_group() {
     .to_string();
 
     assert!(error.contains("refusing to publish process route"));
-    if let Ok(pid) = fs::read_to_string(&pid_path)
-        .unwrap_or_default()
-        .trim()
-        .parse::<u32>()
-    {
-        terminate_pid(pid);
-    }
+    detached_stop.stop();
     terminate_child(&mut child).unwrap();
     let _ = child.wait();
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn spawn_python_listener(port: u16) -> Child {
-    let mut command = Command::new("python3");
-    command.arg("-c").arg(
-        "import socket, sys, time\n\
-             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n\
-             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n\
-             sock.bind(('127.0.0.1', int(sys.argv[1])))\n\
-             sock.listen()\n\
-             time.sleep(5)\n",
-    );
-    command.arg(port.to_string());
-    configure_app_child_process_group(&mut command);
-    command.spawn().unwrap()
+    if let Some((pid, token)) = detached_identity {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while crate::state::pid_is_alive(pid)
+            && crate::state::process_start_token(pid).as_deref() == Some(token.as_str())
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !crate::state::pid_is_alive(pid)
+                || crate::state::process_start_token(pid).as_deref() != Some(token.as_str()),
+            "detached listener did not stop cooperatively"
+        );
+    }
+    drop(detached_stop);
 }
 
 #[test]
@@ -1287,9 +2067,11 @@ fn ensure_proxy_running_rejects_proxy_from_other_state_dir() {
         ..ProxySettings::default()
     };
 
-    let error = ensure_proxy_running(&settings, Path::new("unused-jig"))
-        .unwrap_err()
-        .to_string();
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let error =
+        ensure_proxy_running_interruptible(&store, &settings, Path::new("unused-jig"), &|| false)
+            .unwrap_err()
+            .to_string();
     handle.join().unwrap();
 
     assert!(error.contains("already running on HTTP port"));
@@ -1317,11 +2099,134 @@ fn ensure_proxy_running_identifies_foreign_jig_proxy_without_health_token() {
         ..ProxySettings::default()
     };
 
-    let error = ensure_proxy_running(&settings, Path::new("unused-jig"))
-        .unwrap_err()
-        .to_string();
+    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let error =
+        ensure_proxy_running_interruptible(&store, &settings, Path::new("unused-jig"), &|| false)
+            .unwrap_err()
+            .to_string();
     handle.join().unwrap();
 
     assert!(error.contains("cannot authenticate"));
     assert!(error.contains(temp.path().to_string_lossy().as_ref()));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn direct_proxy_start_sigint_reaps_unready_background_process_group() {
+    const HELPER_ENV: &str = "JIG_PROXY_START_SIGNAL_HELPER";
+    const SCRIPT_ENV: &str = "JIG_PROXY_START_SIGNAL_SCRIPT";
+    const STATE_ENV: &str = "JIG_PROXY_START_SIGNAL_STATE";
+    const TEST_NAME: &str =
+        "processes::tests::direct_proxy_start_sigint_reaps_unready_background_process_group";
+
+    if std::env::var_os(HELPER_ENV).is_some() {
+        let settings = ProxySettings {
+            state_dir: Some(PathBuf::from(
+                std::env::var_os(STATE_ENV).expect("helper state dir"),
+            )),
+            http_port: 0,
+            ..ProxySettings::default()
+        };
+        let script = PathBuf::from(std::env::var_os(SCRIPT_ENV).expect("helper script path"));
+        let error = ensure_proxy_running(&settings, &script)
+            .expect_err("sleeping proxy helper must be interrupted");
+        let reason = interruption_reason(&error).expect("SIGINT remains the primary outcome");
+        std::process::exit(reason.exit_status());
+    }
+
+    let temp = tempdir().unwrap();
+    let script = temp.path().join("sleeping-proxy");
+    let marker = temp.path().join("sleeping-proxy.marker");
+    fs::write(
+        &script,
+        "#!/bin/sh\ntrap '' HUP INT TERM\nsleep 60 &\nchild=$!\nmarker=\"$0.marker\"\ntemporary=\"$marker.tmp.$$\"\nprintf '%s %s\\n' \"$$\" \"$child\" > \"$temporary\"\n/bin/mv \"$temporary\" \"$marker\"\nwait \"$child\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let state_dir = temp.path().join("state");
+
+    let mut launcher = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(HELPER_ENV, "1")
+        .env(SCRIPT_ENV, &script)
+        .env(STATE_ENV, &state_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let marker_deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() && Instant::now() < marker_deadline {
+        if let Some(status) = launcher.try_wait().unwrap() {
+            panic!("direct proxy-start helper exited before spawn marker: {status}");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if !marker.exists() {
+        let _ = launcher.kill();
+        let _ = launcher.wait();
+        panic!("direct proxy-start helper did not spawn its background child");
+    }
+
+    let marker = fs::read_to_string(&marker).unwrap();
+    let mut fields = marker.split_whitespace();
+    let leader_pid = fields.next().unwrap().parse::<u32>().unwrap();
+    let descendant_pid = fields.next().unwrap().parse::<u32>().unwrap();
+    assert!(
+        fields.next().is_none(),
+        "unexpected proxy marker: {marker:?}"
+    );
+    let leader_token = crate::state::process_start_token(leader_pid).unwrap();
+    let descendant_token = crate::state::process_start_token(descendant_pid).unwrap();
+    let identity_is_alive = |pid, token: &str| {
+        crate::state::pid_is_alive(pid)
+            && crate::state::process_start_token(pid).as_deref() == Some(token)
+    };
+    assert!(identity_is_alive(leader_pid, &leader_token));
+    assert!(identity_is_alive(descendant_pid, &descendant_token));
+
+    assert_eq!(
+        unsafe { libc::kill(launcher.id() as libc::pid_t, libc::SIGINT) },
+        0
+    );
+    let exit_deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = launcher.try_wait().unwrap() {
+            break Some(status);
+        }
+        if Instant::now() >= exit_deadline {
+            break None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    if status.is_none() {
+        let _ = launcher.kill();
+        let _ = launcher.wait();
+    }
+
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    while (identity_is_alive(leader_pid, &leader_token)
+        || identity_is_alive(descendant_pid, &descendant_token))
+        && Instant::now() < cleanup_deadline
+    {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let leader_survived = identity_is_alive(leader_pid, &leader_token);
+    let descendant_survived = identity_is_alive(descendant_pid, &descendant_token);
+    if leader_survived {
+        let _ = unsafe { libc::kill(-(leader_pid as libc::pid_t), libc::SIGKILL) };
+    } else if descendant_survived {
+        let _ = unsafe { libc::kill(descendant_pid as libc::pid_t, libc::SIGKILL) };
+    }
+
+    assert_eq!(status.and_then(|status| status.code()), Some(130));
+    assert!(
+        !leader_survived,
+        "unfinished proxy launcher survived SIGINT"
+    );
+    assert!(
+        !descendant_survived,
+        "unfinished proxy launcher descendant survived SIGINT"
+    );
 }

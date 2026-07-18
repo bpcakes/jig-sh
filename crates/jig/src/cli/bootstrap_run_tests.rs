@@ -28,17 +28,111 @@ fn bootstrap_vault_capture_is_deferred_only_for_interactive_prompts() {
 }
 
 #[test]
-fn no_input_bootstrap_vault_requires_env_passphrase() {
-    reject_missing_no_input_vault_passphrase(true, true, true).unwrap();
-    reject_missing_no_input_vault_passphrase(false, true, false).unwrap();
-    reject_missing_no_input_vault_passphrase(true, false, false).unwrap();
+fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
+    reject_missing_bootstrap_vault_passphrase(true, true, true, false, BootstrapVaultCommand::Init)
+        .unwrap();
+    reject_missing_bootstrap_vault_passphrase(
+        false,
+        true,
+        false,
+        false,
+        BootstrapVaultCommand::Init,
+    )
+    .unwrap();
+    reject_missing_bootstrap_vault_passphrase(
+        true,
+        false,
+        false,
+        true,
+        BootstrapVaultCommand::Init,
+    )
+    .unwrap();
 
-    let error = reject_missing_no_input_vault_passphrase(true, true, false)
-        .unwrap_err()
-        .to_string();
+    let error = reject_missing_bootstrap_vault_passphrase(
+        true,
+        false,
+        false,
+        false,
+        BootstrapVaultCommand::Init,
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("JIG_VAULT_PASSPHRASE is required"));
+    assert!(error.contains("`jig init`"));
     assert!(error.contains("--no-vault"));
+    assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
+
+    let no_input_error = reject_missing_bootstrap_vault_passphrase(
+        true,
+        true,
+        false,
+        true,
+        BootstrapVaultCommand::Adopt,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(no_input_error.contains("`jig adopt --write`"));
+}
+
+#[test]
+fn unresolved_no_input_init_fails_before_vault_or_destination_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("repo");
+
+    let error = run_init_command(
+        bootstrap::InitOpts {
+            path: destination.clone(),
+            scaffold: bootstrap::ScaffoldOpts::default(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: false,
+            no_input: true,
+            no_vault: false,
+            answers: bootstrap::AnswerOpts::default(),
+        },
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("--no-input was supplied"));
+    assert!(!error.contains("JIG_VAULT_PASSPHRASE"));
+    assert!(!destination.exists());
+}
+
+#[test]
+fn invalid_init_destination_fails_before_shape_or_vault_interaction() {
+    let _env = lock_env();
+    let _passphrase = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
+    let temp = tempfile::tempdir().unwrap();
+    let destination = temp.path().join("repo");
+    std::fs::create_dir(&destination).unwrap();
+    std::fs::write(destination.join("existing.txt"), "project-owned\n").unwrap();
+
+    let error = run_init_command(
+        bootstrap::InitOpts {
+            path: destination,
+            scaffold: bootstrap::ScaffoldOpts::default(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: false,
+            no_input: true,
+            no_vault: false,
+            answers: bootstrap::AnswerOpts::default(),
+        },
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Init destination is not empty"), "{error}");
+    assert!(!error.contains("--no-input was supplied"), "{error}");
+    assert!(!error.contains("JIG_VAULT_PASSPHRASE"), "{error}");
 }
 
 #[test]
@@ -172,10 +266,50 @@ fn presets_summary_explains_defaults_and_ownership() {
     assert!(summary.contains("rust-react"));
     assert!(summary.contains("Rust crate roots default to apps and crates."));
     assert!(summary.contains("apps/<repo>-api"));
-    assert!(summary.contains("admin: Vite React admin app in admin-panel/"));
+    assert!(summary.contains("web: shadcn Vite React product app in web/"));
+    assert!(summary.contains("admin: shadcn Vite React admin app in admin-panel/"));
+    assert!(summary.contains("React frontends ship tested shadcn 4 sources and provenance"));
     assert!(summary.contains("jig init ./my-app --preset rust-react"));
+    assert!(summary.contains("harness-only"));
+    assert!(summary.contains("jig init ./my-repo --preset harness-only --no-input --no-vault"));
+    assert!(summary.contains("without starter application code"));
+    assert!(summary.contains("does not create Rust crates, databases, or frontend applications"));
     assert!(summary.contains("project-owned after creation"));
     assert!(summary.contains("Presets are starter shapes, not long-term application frameworks."));
+}
+
+#[test]
+fn init_summary_calls_out_custom_bare_frontend_names() {
+    let output = json!({
+        "destination": "/tmp/demo",
+        "template": "embedded",
+        "render_report": {
+            "files_created": [],
+            "files_modified": [],
+            "files_removed": []
+        },
+        "scaffold": {
+            "preset": "rust-react",
+            "repo_name": "demo",
+            "db": "none",
+            "frontends": [{ "name": "dashboard" }],
+            "frontend_notices": [
+                "'dashboard' isn't a preset shorthand — scaffolding a custom Vite SPA in dashboard/."
+            ],
+            "files_created": [],
+            "files_modified": [],
+            "files_unchanged": []
+        },
+        "git_initialized": true,
+        "vault": { "requested": false },
+        "notes": [],
+        "next_steps": []
+    });
+
+    let summary = format_init_human_summary(&output);
+
+    assert!(summary.contains("frontend notes:"));
+    assert!(summary.contains("'dashboard' isn't a preset shorthand"));
 }
 
 #[test]

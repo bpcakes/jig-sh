@@ -2,6 +2,32 @@ use std::path::{Component, Path};
 
 use anyhow::{Result, bail};
 
+const POSTGRES_IDENTIFIER_LIMIT: usize = 63;
+const DNS_LABEL_LIMIT: usize = 63;
+const HASH_SUFFIX_LENGTH: usize = 17;
+const RUST_REACT_PACKAGE_STEM_LIMIT: usize = 216;
+
+pub(super) fn bounded_postgres_identifier(value: &str) -> String {
+    if value.len() <= POSTGRES_IDENTIFIER_LIMIT {
+        return value.to_string();
+    }
+
+    let hash = stable_hash(value.as_bytes());
+    let max_prefix_bytes = POSTGRES_IDENTIFIER_LIMIT - HASH_SUFFIX_LENGTH;
+    let prefix_end = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= max_prefix_bytes)
+        .last()
+        .unwrap_or(0);
+    let prefix_end = if value.is_char_boundary(max_prefix_bytes) {
+        max_prefix_bytes
+    } else {
+        prefix_end
+    };
+    format!("{}_{hash:016x}", &value[..prefix_end])
+}
+
 pub(super) fn default_repo_name(destination: &Path) -> String {
     destination
         .file_name()
@@ -38,6 +64,34 @@ pub(super) fn sanitize_package_name(value: &str) -> Result<String> {
         package = format!("app-{package}");
     }
     Ok(package)
+}
+
+pub(super) fn normalize_rust_react_package_name(value: &str) -> Result<String> {
+    let package = sanitize_package_name(value)?;
+    if package.len() > RUST_REACT_PACKAGE_STEM_LIMIT {
+        bail!(
+            "Rust-react repo name normalizes to a {}-byte Cargo package stem, but generated workspaces support at most {RUST_REACT_PACKAGE_STEM_LIMIT} bytes. Shorten --repo-name so Cargo can create the generated '<stem>-test-support' crate artifact (lib<stem>_test_support-<hash>.rmeta) within a filesystem component.",
+            package.len()
+        );
+    }
+    Ok(package)
+}
+
+pub(super) fn rust_react_repo_dns_label(package_name: &str) -> String {
+    if package_name.len() <= DNS_LABEL_LIMIT {
+        return package_name.to_string();
+    }
+
+    debug_assert!(package_name.is_ascii());
+    package_name[..DNS_LABEL_LIMIT]
+        .trim_end_matches('-')
+        .to_string()
+}
+
+fn stable_hash(value: &[u8]) -> u64 {
+    value.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
 }
 
 pub(super) fn validate_scaffold_name(label: &str, value: &str) -> Result<()> {
@@ -150,4 +204,90 @@ pub(super) fn validate_scaffold_relative_path(label: &str, value: &str) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_react_package_stem_limit_applies_after_normalization() {
+        let accepted = format!("1{}", "a".repeat(211));
+        let rejected = format!("1{}", "a".repeat(212));
+
+        let normalized = normalize_rust_react_package_name(&accepted).unwrap();
+        assert_eq!(normalized.len(), RUST_REACT_PACKAGE_STEM_LIMIT);
+        assert!(normalized.starts_with("app-1"));
+
+        let error = normalize_rust_react_package_name(&rejected)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("217-byte Cargo package stem"));
+        assert!(error.contains("at most 216 bytes"));
+        assert!(error.contains("<stem>-test-support"));
+        assert!(error.contains("lib<stem>_test_support-<hash>.rmeta"));
+    }
+
+    #[test]
+    fn rust_react_repo_dns_label_matches_proxy_label_rules() {
+        let vectors = [
+            ("my-app".to_string(), "my-app".to_string()),
+            ("a".repeat(64), "a".repeat(63)),
+            (
+                format!("{}project", "project-".repeat(26)),
+                "project-project-project-project-project-project-project-project".to_string(),
+            ),
+        ];
+
+        for (input, expected) in vectors {
+            let label = rust_react_repo_dns_label(&input);
+            assert_eq!(label, expected);
+            assert!(label.len() <= DNS_LABEL_LIMIT);
+            assert!(
+                label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            );
+        }
+
+        assert_eq!(
+            rust_react_repo_dns_label(&format!("{}-", "a".repeat(63))),
+            "a".repeat(63)
+        );
+    }
+
+    #[cfg(feature = "dev-proxy")]
+    #[test]
+    fn rust_react_repo_dns_label_equals_dev_proxy_output() {
+        for package_name in [
+            "my-app".to_string(),
+            "a".repeat(64),
+            format!("{}project", "project-".repeat(26)),
+            "a".repeat(RUST_REACT_PACKAGE_STEM_LIMIT),
+        ] {
+            assert_eq!(
+                rust_react_repo_dns_label(&package_name),
+                jig_dev_proxy::dns_label(&package_name).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_identifiers_are_short_stable_and_collision_resistant() {
+        assert_eq!(bounded_postgres_identifier("demo_dev"), "demo_dev");
+
+        let shared_prefix = "project".repeat(12);
+        let first = bounded_postgres_identifier(&format!("{shared_prefix}_one_dev"));
+        let second = bounded_postgres_identifier(&format!("{shared_prefix}_two_dev"));
+        assert_eq!(first.len(), POSTGRES_IDENTIFIER_LIMIT);
+        assert_eq!(second.len(), POSTGRES_IDENTIFIER_LIMIT);
+        assert_eq!(
+            first,
+            bounded_postgres_identifier(&format!("{shared_prefix}_one_dev"))
+        );
+        assert_ne!(first, second);
+
+        let unicode = bounded_postgres_identifier(&"é".repeat(40));
+        assert!(unicode.len() <= POSTGRES_IDENTIFIER_LIMIT);
+    }
 }

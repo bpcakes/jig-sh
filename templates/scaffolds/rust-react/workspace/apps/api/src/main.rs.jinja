@@ -1,7 +1,8 @@
 use std::{net::SocketAddr, process::ExitCode};
 
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_http as app_http_crate;
 use anyhow::Context;
-use <<[ module_name ]>>::AppConfig;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -27,16 +28,65 @@ fn load_dotenv() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    let config = AppConfig::from_env().context("Failed to load application config")?;
+[% if db_enabled %]
+    let command = parse_command()?;
+[% else %]
+    parse_command()?;
+[% endif %]
+    let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
+[% if db_enabled %]
+    if command == Command::BootstrapDatabase {
+        let created = app_crate::AppState::bootstrap_database(&config)
+            .await
+            .context("Failed to bootstrap the database")?;
+        if created {
+            tracing::info!("created database and applied migrations");
+        } else {
+            tracing::info!("database already exists; applied migrations");
+        }
+        return Ok(());
+    }
+[% endif %]
     let addr: SocketAddr = config.bind_addr();
-    let state = <<[ module_name ]>>::AppState::from_config(config)
+    let state = app_crate::AppState::from_config(config)
         .await
         .context("Failed to initialize application state")?;
 
     serve(addr, state).await
 }
 
-async fn serve(addr: SocketAddr, state: <<[ module_name ]>>::AppState) -> anyhow::Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Command {
+    Serve,
+[% if db_enabled %]
+    BootstrapDatabase,
+[% endif %]
+}
+
+fn parse_command() -> anyhow::Result<Command> {
+    let mut arguments = std::env::args_os().skip(1);
+    match (arguments.next(), arguments.next()) {
+        (None, None) => Ok(Command::Serve),
+[% if db_enabled %]
+        (Some(argument), None) if argument == "--bootstrap-database" => {
+            Ok(Command::BootstrapDatabase)
+        }
+[% endif %]
+        (Some(argument), trailing) => anyhow::bail!(
+            "unexpected API argument {argument:?}{}",
+            if trailing.is_some() {
+                " (and trailing arguments)"
+            } else {
+                ""
+            }
+        ),
+        (None, Some(_)) => {
+            unreachable!("an iterator cannot yield a second argument without a first")
+        }
+    }
+}
+
+async fn serve(addr: SocketAddr, state: app_crate::AppState) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("Failed to bind API listener to {addr}"))?;
@@ -45,7 +95,7 @@ async fn serve(addr: SocketAddr, state: <<[ module_name ]>>::AppState) -> anyhow
         .context("Failed to read API listener address after bind")?;
     tracing::info!(%bound_addr, "listening");
 
-    axum::serve(listener, <<[ module_name ]>>_http::router(state))
+    axum::serve(listener, app_http_crate::router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("API server exited with an error")?;
@@ -53,10 +103,16 @@ async fn serve(addr: SocketAddr, state: <<[ module_name ]>>::AppState) -> anyhow
 }
 
 fn init_tracing() {
-    let default_filter = "<<[ module_name ]>>=info,tower_http=info";
+    #[allow(clippy::useless_concat)]
+    let default_filter = concat!(
+        // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+        "<<[ module_name ]>>=info,",
+        "<<[ module_name ]>>_api=info,",
+        "tower_http=info",
+    );
     tracing_subscriber::fmt()
         .with_env_filter(
-            // If you rename the application crate, update this default filter too.
+            // If you rename the application library or API binary, update this filter too.
             std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.into()),
         )
         .init();

@@ -27,6 +27,7 @@ pub(super) fn infer_package_manager_with_metadata(
         ("pnpm-lock.yaml", "pnpm"),
         ("bun.lock", "bun"),
         ("bun.lockb", "bun"),
+        ("npm-shrinkwrap.json", "npm"),
         ("package-lock.json", "npm"),
         ("yarn.lock", "yarn"),
     ];

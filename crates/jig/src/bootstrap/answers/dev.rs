@@ -7,8 +7,9 @@ use super::{
     DevApp, FrontendApp, is_safe_frontend_app_name, is_supported_frontend_app_kind,
     validate_frontend_app_dir,
 };
+use crate::context::config_app_dirs_match;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub(super) struct RawDevAnswers {
     pub(super) apps: Option<Vec<DevApp>>,
 }
@@ -97,7 +98,7 @@ fn validate_matching_frontend_dev_app_dirs(
             continue;
         };
         match dev_app.dir.as_deref() {
-            Some(dev_dir) if dev_dir == frontend_app.dir => {}
+            Some(dev_dir) if config_app_dirs_match(dev_dir, &frontend_app.dir) => {}
             Some(dev_dir) => {
                 bail!(
                     "[dev.apps] entry '{}' uses dir '{}' but matching [[frontend_apps]] uses '{}'. Keep them aligned because [dev.apps] takes precedence for scripts/jig dev.",

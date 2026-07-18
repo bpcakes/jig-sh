@@ -1,4 +1,7 @@
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -31,23 +34,37 @@ pub(crate) mod commands {
         let settings = progress.log_blocked_on_err(settings(ctx, &opts.proxy))?;
         progress.step("collect apps", "configured frontend and [dev] entries");
         let apps = progress.log_blocked_on_err(configured_apps(ctx, &settings))?;
-        progress.step(
-            "start session",
-            dev_session_message(apps.len(), discover_workspace),
-        );
-        let output = progress.log_blocked_on_err(jig_dev_proxy::dev(
-            jig_dev_proxy::DevRequest::new(
-                ctx.repo_name(),
-                ctx.root().to_path_buf(),
-                ctx.web_package_manager(),
-                settings,
-            )
-            .with_apps(apps)
-            .with_selected_apps(opts.apps)
-            .with_discover_workspace(discover_workspace)
-            .with_no_proxy(opts.no_proxy),
+        let request = jig_dev_proxy::DevRequest::new(
+            ctx.repo_name(),
+            ctx.root().to_path_buf(),
+            ctx.web_package_manager(),
+            settings,
+        )
+        .with_apps(apps)
+        .with_selected_apps(opts.apps)
+        .with_discover_workspace(discover_workspace)
+        .with_no_proxy(opts.no_proxy);
+        let request = progress.log_blocked_on_err(jig_dev_proxy::resolve_dev_request(request))?;
+        progress.step("check dependencies", "selected frontend bootstrap state");
+        let output = progress.log_blocked_on_err(jig_dev_proxy::dev_resolved_with_preflight(
+            request,
+            |apps, cancelled| {
+                if let Err(error) = ensure_frontend_dependencies(ctx, apps, cancelled) {
+                    if error.is::<FrontendDependencyPreflightCancelled>() {
+                        return Err(jig_dev_proxy::DevPreflightError::cancelled());
+                    }
+                    return Err(jig_dev_proxy::DevPreflightError::failed(error));
+                }
+                progress.step(
+                    "start session",
+                    dev_session_message(apps.len(), discover_workspace),
+                );
+                Ok(())
+            },
         ))?;
-        if json_ok(&output) {
+        if dev_interrupted(&output) {
+            progress.done("dev session stopped");
+        } else if json_ok(&output) {
             progress.done("dev session complete");
         } else {
             progress.blocked("dev session ended with ok=false");
@@ -304,6 +321,311 @@ fn dev_session_message(configured_app_count: usize, discover_workspace: bool) ->
     }
 }
 
+const FRONTEND_DEPENDENCY_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn ensure_frontend_dependencies(
+    ctx: &RepoContext,
+    apps: &[jig_dev_proxy::AppRunSpec],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let root = ctx
+        .root()
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize repo root {}", ctx.root().display()))?;
+    let mut configured_missing = Vec::new();
+    let mut recoverable_missing = Vec::new();
+    let mut unmanaged_missing = Vec::new();
+    for app in apps {
+        let matching_frontend = ctx
+            .frontend_apps()
+            .iter()
+            .any(|frontend| frontend.name == app.name);
+        let package_manager_dev_app =
+            package_manager_manifest_exists(&app.dir, ctx.web_package_manager())
+                && matches!(
+                    &app.command,
+                    jig_dev_proxy::CommandSpec::Argv(argv)
+                        if argv.as_slice()
+                            == [ctx.web_package_manager(), "run", "dev"]
+                );
+        if app.kind != jig_dev_proxy::AppKind::Vite
+            && !matching_frontend
+            && !package_manager_dev_app
+        {
+            continue;
+        }
+        let relative_dir = app.dir.strip_prefix(&root).with_context(|| {
+            format!(
+                "development app '{}' directory {} resolves outside repo root {}",
+                app.name,
+                app.dir.display(),
+                root.display()
+            )
+        })?;
+        let app_dir = if relative_dir.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            relative_dir.to_string_lossy().replace('\\', "/")
+        };
+        match frontend_dependency_readiness(&root, &app_dir, cancelled)? {
+            FrontendDependencyReadiness::Ready | FrontendDependencyReadiness::Unsupported => {}
+            FrontendDependencyReadiness::MissingOrStale if matching_frontend => {
+                configured_missing.push(app.name.as_str());
+            }
+            FrontendDependencyReadiness::MissingOrStale
+                if package_manager_manifest_exists(&app.dir, ctx.web_package_manager()) =>
+            {
+                recoverable_missing.push((app.name.as_str(), app_dir));
+            }
+            FrontendDependencyReadiness::MissingOrStale => {
+                unmanaged_missing.push(app.name.as_str());
+            }
+        }
+    }
+    if configured_missing.is_empty()
+        && recoverable_missing.is_empty()
+        && unmanaged_missing.is_empty()
+    {
+        return Ok(());
+    }
+
+    let mut diagnostics = Vec::new();
+    if !configured_missing.is_empty() {
+        diagnostics.push(format!(
+            "Frontend dependencies are missing or stale for {}. Run `scripts/jig bootstrap` before `scripts/jig dev`.",
+            configured_missing.join(", ")
+        ));
+    }
+    for (name, app_dir) in recoverable_missing {
+        diagnostics.push(format!(
+            "Frontend dependencies are missing or stale for {name}. Run `scripts/check-webapps.sh dependencies-bootstrap {}` before `scripts/jig dev`.",
+            shell_quote(&app_dir)
+        ));
+    }
+    if !unmanaged_missing.is_empty() {
+        diagnostics.push(format!(
+            "Frontend dependency readiness failed for {}, but the selected directories have no {}-owned package manifest, so Jig cannot offer a dependency bootstrap command.",
+            unmanaged_missing.join(", "),
+            ctx.web_package_manager()
+        ));
+    }
+    diagnostics.push("dev does not install packages implicitly.".to_string());
+    bail!(diagnostics.join(" "))
+}
+
+fn package_manager_manifest_exists(app_dir: &Path, package_manager: &str) -> bool {
+    let candidates: &[&str] = if package_manager == "pnpm" {
+        &["package.json", "package.json5", "package.yaml"]
+    } else {
+        &["package.json"]
+    };
+    candidates
+        .iter()
+        .any(|candidate| app_dir.join(candidate).is_file())
+}
+
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_+-./".contains(&byte))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrontendDependencyReadiness {
+    Ready,
+    MissingOrStale,
+    Unsupported,
+}
+
+#[derive(Debug)]
+struct FrontendDependencyPreflightCancelled {
+    app_dir: String,
+}
+
+impl std::fmt::Display for FrontendDependencyPreflightCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Frontend dependency readiness check was cancelled for {}",
+            self.app_dir
+        )
+    }
+}
+
+impl std::error::Error for FrontendDependencyPreflightCancelled {}
+
+fn frontend_dependency_readiness(
+    repo_root: &Path,
+    app_dir: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<FrontendDependencyReadiness> {
+    frontend_dependency_readiness_with_shell_and_timeout(
+        repo_root,
+        app_dir,
+        OsStr::new("bash"),
+        FRONTEND_DEPENDENCY_READINESS_TIMEOUT,
+        cancelled,
+    )
+}
+
+#[cfg(test)]
+fn frontend_dependency_readiness_with_shell(
+    repo_root: &Path,
+    app_dir: &str,
+    shell: &OsStr,
+) -> Result<FrontendDependencyReadiness> {
+    frontend_dependency_readiness_with_shell_and_timeout(
+        repo_root,
+        app_dir,
+        shell,
+        FRONTEND_DEPENDENCY_READINESS_TIMEOUT,
+        &|| false,
+    )
+}
+
+fn frontend_dependency_readiness_with_shell_and_timeout(
+    repo_root: &Path,
+    app_dir: &str,
+    shell: &OsStr,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<FrontendDependencyReadiness> {
+    frontend_dependency_readiness_with_shell_timeout_and_environment(
+        repo_root,
+        app_dir,
+        shell,
+        timeout,
+        cancelled,
+        &[],
+    )
+}
+
+fn frontend_dependency_readiness_with_shell_timeout_and_environment(
+    repo_root: &Path,
+    app_dir: &str,
+    shell: &OsStr,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+    command_environment: &[(OsString, OsString)],
+) -> Result<FrontendDependencyReadiness> {
+    let checker = repo_root.join("scripts/check-webapps.sh");
+    if !checker.is_file() {
+        // Older adopted repositories predate dependency receipts and did not
+        // have a dev preflight. Preserve that behavior until their managed
+        // harness is refreshed instead of guessing from partial artifacts.
+        return Ok(FrontendDependencyReadiness::Unsupported);
+    }
+
+    let mut command = Command::new(shell);
+    command
+        .arg(&checker)
+        .arg("dependencies-ready")
+        .arg(app_dir)
+        .current_dir(repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    for (key, value) in command_environment {
+        command.env(key, value);
+    }
+    crate::shell::sanitize_bash_environment(&mut command);
+    let output = match crate::doctor::run_owned_process_tree_with_output(
+        &mut command,
+        timeout,
+        cancelled,
+    ) {
+        Ok(output) => output,
+        Err(crate::doctor::OwnedProcessTreeError::Start(error)) => {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Err(anyhow::anyhow!(
+                    "Failed to run dependency readiness check {} with Bash: {error}. {}",
+                    checker.display(),
+                    bash_requirement_hint()
+                ));
+            }
+            return Err(anyhow::anyhow!(
+                "Failed to start dependency readiness check {} with Bash: {error}",
+                checker.display(),
+            ));
+        }
+        Err(crate::doctor::OwnedProcessTreeError::TimedOut) => bail!(
+            "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
+            timeout.as_secs_f64()
+        ),
+        Err(crate::doctor::OwnedProcessTreeError::Cancelled) => {
+            return Err(FrontendDependencyPreflightCancelled {
+                app_dir: app_dir.to_string(),
+            }
+            .into());
+        }
+        Err(crate::doctor::OwnedProcessTreeError::Await) => {
+            bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
+        }
+        Err(crate::doctor::OwnedProcessTreeError::Cleanup) => bail!(
+            "Frontend dependency readiness check process tree could not be cleaned up safely for {app_dir}"
+        ),
+    };
+    let stderr = output.stderr.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("Frontend dependency readiness diagnostic output was not captured")
+    })?;
+    if !stderr.complete {
+        bail!(
+            "Frontend dependency readiness diagnostic output capture did not complete for {app_dir}"
+        );
+    }
+    let status = output.status;
+    if status.success() {
+        // A successful checker has no diagnostic payload to interpret. Its
+        // exit status is authoritative even when advisory stderr exceeded the
+        // bounded capture; incomplete capture remains an I/O failure above.
+        return Ok(FrontendDependencyReadiness::Ready);
+    }
+    if stderr.truncated {
+        bail!(
+            "Frontend dependency readiness diagnostic output exceeded the capture limit for {app_dir}"
+        );
+    }
+    if status.code() == Some(1) {
+        return Ok(FrontendDependencyReadiness::MissingOrStale);
+    }
+
+    let stderr = stderr.to_string_lossy();
+    if status.code() == Some(2) && dependency_readiness_usage_is_legacy(stderr.as_ref()) {
+        return Ok(FrontendDependencyReadiness::Unsupported);
+    }
+
+    let detail = stderr.trim();
+    if detail.is_empty() {
+        bail!(
+            "Frontend dependency readiness check failed for {app_dir} with status {}",
+            status
+        );
+    }
+    bail!(
+        "Frontend dependency readiness check failed for {app_dir} with status {}: {detail}",
+        status
+    )
+}
+
+fn dependency_readiness_usage_is_legacy(stderr: &str) -> bool {
+    stderr.contains("Usage: scripts/check-webapps.sh") && !stderr.contains("dependencies-ready")
+}
+
+#[cfg(windows)]
+fn bash_requirement_hint() -> &'static str {
+    "Bash is required for generated web-app checks; run Jig from Git Bash or WSL and ensure `bash` is on PATH."
+}
+
+#[cfg(not(windows))]
+fn bash_requirement_hint() -> &'static str {
+    "Bash is required for generated web-app checks; install Bash and ensure `bash` is on PATH."
+}
+
 fn service_action(command: &ProxyServiceCommand) -> &'static str {
     match command {
         ProxyServiceCommand::Install(_) => "install user service",
@@ -343,6 +665,13 @@ fn finish_service_progress(
 
 fn json_ok(output: &Value) -> bool {
     output.get("ok").and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn dev_interrupted(output: &Value) -> bool {
+    output
+        .get("interrupted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn service_blocked_detail(output: &Value, fallback: &str) -> String {
@@ -455,11 +784,13 @@ fn configured_apps(
             );
         }
         for frontend in ctx.frontend_apps() {
+            let configured_kind = ctx.frontend_app_kind(frontend);
+            let kind = jig_dev_proxy::AppKind::from_config(configured_kind)?;
             eprintln!(
-                "Legacy [[frontend_apps]] entry '{}' is being launched as a proxied Vite dev app; move it to [[dev.apps]] to make this explicit.",
-                frontend.name
+                "Legacy [[frontend_apps]] entry '{}' is being launched as a proxied {} dev app; move it to [[dev.apps]] to make this explicit.",
+                frontend.name, configured_kind
             );
-            let dir = repo_dir(ctx.root(), Path::new(&frontend.dir), "frontend app dir")?;
+            let dir = unresolved_repo_dir(ctx.root(), Path::new(&frontend.dir));
             let hostname =
                 jig_dev_proxy::app_hostname(&frontend.name, ctx.repo_name(), &settings.tld)?;
             apps.push(
@@ -473,7 +804,7 @@ fn configured_apps(
                     ]),
                     hostname,
                 )
-                .with_kind(jig_dev_proxy::AppKind::Vite),
+                .with_kind(kind),
             );
         }
     }
@@ -499,8 +830,7 @@ fn app_from_dev_config(
     let dir = app
         .dir
         .as_deref()
-        .map(|dir| repo_dir(ctx.root(), Path::new(dir), "dev app dir"))
-        .transpose()?
+        .map(|dir| unresolved_repo_dir(ctx.root(), Path::new(dir)))
         .unwrap_or_else(|| ctx.root().to_path_buf());
     let kind = jig_dev_proxy::AppKind::from_config(&app.kind)?;
     let command = if !app.argv.is_empty() {
@@ -617,7 +947,7 @@ fn build_settings(
         .to_ascii_lowercase();
     jig_dev_proxy::validate_tld(&tld)?;
     let http_port = opts.http_port.unwrap_or(defaults.http_port);
-    if http_port == 0 {
+    if http_port == 0 && opts.http_port.is_none() {
         bail!("proxy HTTP port must be greater than 0");
     }
     let https_port = opts.https_port.or(defaults.https_port);
@@ -725,6 +1055,14 @@ fn repo_dir(root: &Path, input: &Path, label: &str) -> Result<PathBuf> {
         );
     }
     Ok(canonical)
+}
+
+fn unresolved_repo_dir(root: &Path, input: &Path) -> PathBuf {
+    if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        root.join(input)
+    }
 }
 
 fn repo_certificate_names(ctx: &RepoContext, tld: &str) -> Result<Vec<String>> {

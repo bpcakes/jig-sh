@@ -1,5 +1,7 @@
 use std::fs;
+#[cfg(unix)]
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 
 use serde_json::json;
@@ -8,10 +10,15 @@ use tempfile::tempdir;
 use crate::command::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
-use crate::runtime::tests::common::{write_codex_stub, write_fixture_repo};
+#[cfg(unix)]
+use crate::runtime::tests::common::write_codex_stub;
+use crate::runtime::tests::common::write_fixture_repo;
 use crate::state::now_ms;
+#[cfg(unix)]
 use crate::test_env::{EnvVarGuard, lock_env};
-use crate::tool_defs::{LOOP_TICK_TOOL, WORKER_RUN_TOOL};
+use crate::tool_defs::LOOP_TICK_TOOL;
+#[cfg(unix)]
+use crate::tool_defs::WORKER_RUN_TOOL;
 
 use super::*;
 
@@ -1663,6 +1670,7 @@ esac
     assert!(output["attempts"].as_array().unwrap().is_empty());
 }
 
+#[cfg(unix)]
 fn append_github_pr_status_workflow(root: &Path) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     fs::write(
@@ -1678,6 +1686,7 @@ kind = "github_pr_status"
     .unwrap();
 }
 
+#[cfg(unix)]
 fn append_pr_manager_workflow(root: &Path) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
     fs::write(
@@ -1693,6 +1702,7 @@ kind = "pr_manager"
     .unwrap();
 }
 
+#[cfg(unix)]
 fn setup_origin_with_pr_branch(root: &Path) -> std::path::PathBuf {
     let origin = root.join(".tmp-origin.git");
     git_ok(root, ["init"]);
@@ -1714,6 +1724,7 @@ fn setup_origin_with_pr_branch(root: &Path) -> std::path::PathBuf {
     origin
 }
 
+#[cfg(unix)]
 fn setup_origin_with_conflicting_pr_branch(root: &Path) -> std::path::PathBuf {
     let origin = root.join(".tmp-conflict-origin.git");
     git_ok(root, ["init"]);
@@ -1739,6 +1750,7 @@ fn setup_origin_with_conflicting_pr_branch(root: &Path) -> std::path::PathBuf {
     origin
 }
 
+#[cfg(unix)]
 fn git_ok<const N: usize>(cwd: &Path, args: [&str; N]) {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -1754,6 +1766,7 @@ fn git_ok<const N: usize>(cwd: &Path, args: [&str; N]) {
     );
 }
 
+#[cfg(unix)]
 fn git_stdout<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)

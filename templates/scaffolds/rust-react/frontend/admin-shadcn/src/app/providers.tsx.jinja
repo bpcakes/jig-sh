@@ -1,0 +1,20 @@
+import type { ReactNode } from "react"
+
+import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/sonner"
+import { TooltipProvider } from "@/components/ui/tooltip"
+
+// Renderer values are not length-bounded.
+// prettier-ignore
+const themeStorageKey = "<<[ package_name ]>>-theme"
+
+export function AppProviders({ children }: { children: ReactNode }) {
+  return (
+    <ThemeProvider defaultTheme="system" storageKey={themeStorageKey}>
+      <TooltipProvider>
+        {children}
+        <Toaster />
+      </TooltipProvider>
+    </ThemeProvider>
+  )
+}

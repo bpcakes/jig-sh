@@ -167,16 +167,21 @@ impl NormalizedRemoteCommittedFixture {
         let remote_url = format!("file://{}", remote.display());
 
         write_test_crate_guide(&repo);
+        // Build the fixture remote through Git's normal receive path. A local
+        // `clone --bare --no-hardlinks` intermittently loses its temporary pack
+        // index under parallel test load, even though these repositories are
+        // independent.
         git(
             template.path(),
             [
-                "clone",
+                "init",
                 "--bare",
-                &template.path().display().to_string(),
+                "--initial-branch=main",
                 &remote.display().to_string(),
             ],
         )
         .unwrap();
+        push_template_main(template.path(), &remote_url);
 
         adopt_repo_for_test(&repo, template.path(), TemplateMode::Committed);
         init_git_repo_for_test(&repo);
@@ -208,3 +213,4 @@ mod committed;
 mod frontend_adoption;
 mod template_mode;
 mod template_source;
+mod windows_dependency_checker;

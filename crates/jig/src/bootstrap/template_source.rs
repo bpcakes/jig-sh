@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -6,7 +7,10 @@ use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 use toml::{Table, Value as TomlValue};
 
-use super::git::{ensure_clean_git_work_tree, git_stdout, is_git_work_tree};
+use super::git::{
+    disable_git_worktree_integrations, ensure_clean_git_work_tree, git_stdout, is_git_work_tree,
+    scrub_known_repository_git_environment, scrub_remote_template_git_environment,
+};
 use super::path::absolute_path_from;
 use super::{
     ANSWERS_FILE, GIT_BIN_ENV, REMOTE_TEMPLATE_MODE_ERROR, TEMPLATE_LOCAL_PATH_KEY,
@@ -322,14 +326,16 @@ fn prepare_committed_template_source(
 fn clone_template_source(template: &str) -> Result<TempDir> {
     let checkout = TempDir::new().context("Failed to create template checkout directory")?;
     let destination = checkout.path().join("template");
+    let empty_git_template = checkout.path().join("empty-git-template");
+    fs::create_dir(&empty_git_template).context("Failed to create private empty Git template")?;
     let git_program = external_program(GIT_BIN_ENV, "git");
-    let output = Command::new(&git_program)
-        .args([
-            "clone",
-            "--quiet",
-            template,
-            &destination.display().to_string(),
-        ])
+    let mut command = Command::new(&git_program);
+    scrub_remote_template_git_environment(&mut command);
+    disable_git_worktree_integrations(&mut command);
+    command.env("GIT_TEMPLATE_DIR", &empty_git_template);
+    let output = command
+        .args(["--no-replace-objects", "clone", "--quiet", template])
+        .arg(destination.as_os_str())
         .output()
         .with_context(|| format!("Failed to start {}", git_program))?;
     require_success(&output, |output| {
@@ -344,9 +350,11 @@ fn clone_template_source(template: &str) -> Result<TempDir> {
 
 fn git_checkout(repo: &Path, vcs_ref: &str) -> Result<()> {
     let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    scrub_known_repository_git_environment(&mut command);
+    disable_git_worktree_integrations(&mut command);
     command
         .current_dir(repo)
-        .args(["checkout", "--quiet", vcs_ref]);
+        .args(["--no-replace-objects", "checkout", "--quiet", vcs_ref]);
     run_checked_output(&mut command, |output| {
         format!(
             "git checkout {vcs_ref} failed in {}\nstdout:\n{}\nstderr:\n{}",

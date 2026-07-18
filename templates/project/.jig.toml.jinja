@@ -43,6 +43,8 @@ frontend_apps = []
 name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 dir = "<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 coverage_threshold = <<[ app.coverage_threshold ]>>
+kind = "<<[ app.kind | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+role = "<<[ app.role | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endfor %]
 [% endif %]
 
@@ -95,7 +97,11 @@ name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 dir = "<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 kind = "<<[ app.kind | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if web_package_manager == "npm" %]
+argv = ["npm", "--prefix=.", "--workspace=.", "--workspaces=true", "--include-workspace-root=true", "--global=false", "--location=project", "--if-present=false", "--include=dev", "--include=optional", "--include=peer", "run", "dev"]
+[% else %]
 argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", "run", "dev"]
+[% endif %]
 [% endfor %]
 
 [[work.gates]]

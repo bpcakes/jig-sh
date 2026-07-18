@@ -152,7 +152,7 @@ pub struct AnswerOpts {
         help_heading = "Common Answers",
         value_parser = parse_frontend_app,
         help = "Existing frontend app to wire into CI and dev checks",
-        long_help = "Frontend CI app as name:dir:coverage_threshold[:kind]. Kind defaults to vite. Example: --frontend-app web:web:80:vite. package.json must expose lint, typecheck, build:bundle, and test:coverage; may be repeated."
+        long_help = "Frontend CI app as name:dir:coverage_threshold[:kind[:role]]. Kind defaults to vite; an omitted role defaults to astro for env-port, admin for the historical admin/admin-panel names, and spa otherwise. Roles accept spa, admin, or astro. Example: --frontend-app console:console:80:vite:admin. package.json must expose lint, typecheck, build:bundle, and test:coverage; may be repeated."
     )]
     pub frontend_apps: Vec<FrontendApp>,
     #[arg(skip)]

@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_yaml_ng::Value as YamlValue;
 
+use crate::frontend_metadata::resolve_frontend_metadata;
+
 use super::super::FrontendApp;
 use super::repo::safe_name;
 use super::scan::{
@@ -107,11 +109,14 @@ pub(super) fn infer_frontend_apps_with_metadata(
                 .to_string()
         };
         let name = unique_frontend_name(safe_frontend_name(&base_name), &mut names);
-        let kind = if script_looks_like_vite(dev_script) {
-            "vite"
+        let (kind, explicit_role) = if script_looks_like_vite(dev_script) {
+            ("vite", None)
+        } else if script_looks_like_astro(dev_script) {
+            ("env-port", Some("astro"))
         } else {
-            "env-port"
+            ("env-port", Some("spa"))
         };
+        let role = resolve_frontend_metadata(&name, Some(kind), explicit_role, None).role;
         let source = format!(
             "{} scripts: dev, {}",
             relative_path_string(package_path.strip_prefix(root).unwrap_or(&package_path)),
@@ -134,6 +139,7 @@ pub(super) fn infer_frontend_apps_with_metadata(
             dir: dir_value.clone(),
             coverage_threshold: FRONTEND_COVERAGE_THRESHOLD,
             kind: kind.into(),
+            role: role.into(),
         });
         profiles.push(FrontendAppProfile {
             name,
@@ -288,11 +294,11 @@ fn yaml_workspace_glob(value: &YamlValue) -> Option<String> {
             // Unquoted YAML entries like `!packages/private` parse as a tag
             // with a null value. Recover that shape as the pnpm exclusion glob
             // the user wrote.
-            if let YamlValue::Tagged(tagged) = value
-                && matches!(tagged.value, YamlValue::Null)
-            {
-                let tag = tagged.tag.to_string();
-                return tag.starts_with('!').then_some(tag);
+            if let YamlValue::Tagged(tagged) = value {
+                if matches!(tagged.value, YamlValue::Null) {
+                    let tag = tagged.tag.to_string();
+                    return tag.starts_with('!').then_some(tag);
+                }
             }
             None
         })
@@ -400,6 +406,24 @@ pub(super) fn script_looks_like_vite(value: &str) -> bool {
     !tokens[vite_index + 1..]
         .iter()
         .any(|token| matches!(*token, "build" | "preview" | "optimize"))
+}
+
+fn script_looks_like_astro(value: &str) -> bool {
+    let tokens = value
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '&' | '|' | ';' | '(' | ')'))
+        .map(|token| token.trim_matches(['"', '\'']))
+        .filter(|token| !token.is_empty())
+        .map(|token| token.rsplit('/').next().unwrap_or(token))
+        .collect::<Vec<_>>();
+    let Some(astro_index) = tokens
+        .iter()
+        .position(|token| *token == "astro" || token.starts_with("astro@"))
+    else {
+        return false;
+    };
+    !tokens[astro_index + 1..]
+        .iter()
+        .any(|token| matches!(*token, "build" | "check" | "preview" | "sync"))
 }
 
 fn infer_dev_port(
@@ -514,13 +538,13 @@ pub(super) fn segment_matches(pattern: &str, name: &str) -> bool {
     };
     let mut remaining = name;
     let mut parts = pattern.split('*').peekable();
-    if let Some(first) = parts.next()
-        && !first.is_empty()
-    {
-        let Some(stripped) = remaining.strip_prefix(first) else {
-            return false;
-        };
-        remaining = stripped;
+    if let Some(first) = parts.next() {
+        if !first.is_empty() {
+            let Some(stripped) = remaining.strip_prefix(first) else {
+                return false;
+            };
+            remaining = stripped;
+        }
     }
     while let Some(part) = parts.next() {
         if part.is_empty() {

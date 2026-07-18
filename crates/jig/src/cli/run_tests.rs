@@ -87,6 +87,9 @@ fn missing_init_path_gets_actionable_hint() {
     let hint = missing_init_path_hint(&error).unwrap();
 
     assert!(hint.contains("jig init /path/to/new-repo"));
+    assert!(hint.contains(
+        "--preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault"
+    ));
     assert!(hint.contains("--preset rust-react"));
     assert!(hint.contains("jig adopt ."));
     assert!(hint.contains("jig adopt . --write"));
@@ -98,10 +101,14 @@ fn missing_init_path_hint_examples_parse() {
         "jig",
         "init",
         "/path/to/new-repo",
+        "--preset",
+        "harness-only",
         "--repo-name",
         "new-repo",
         "--sqlx-enabled",
         "false",
+        "--no-input",
+        "--no-vault",
     ])
     .unwrap();
     Cli::try_parse_from([
@@ -164,4 +171,35 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     assert!(!test_command_reports_failure_with_ok(&CommandKind::Vault(
         VaultCommand::Status(VaultStatusOpts::default())
     )));
+}
+
+#[test]
+fn dev_interruption_exit_status_comes_from_the_runtime_result() {
+    for exit_status in [129, 130, 143] {
+        let error = require_foreground_status(&serde_json::json!({
+            "ok": false,
+            "interrupted": true,
+            "exit_status": exit_status
+        }))
+        .unwrap_err();
+
+        assert!(is_structured_json_failure(&error));
+        assert_eq!(structured_error_exit_code(&error), Some(exit_status));
+    }
+
+    require_foreground_status(&serde_json::json!({ "ok": true })).unwrap();
+    let ordinary_failure =
+        require_foreground_status(&serde_json::json!({ "ok": false })).unwrap_err();
+    assert!(is_structured_json_failure(&ordinary_failure));
+    assert_eq!(structured_error_exit_code(&ordinary_failure), None);
+
+    for malformed in [
+        serde_json::json!({ "ok": false, "interrupted": true }),
+        serde_json::json!({ "ok": false, "interrupted": true, "exit_status": 0 }),
+        serde_json::json!({ "ok": false, "interrupted": true, "exit_status": 256 }),
+    ] {
+        let error = require_foreground_status(&malformed).unwrap_err();
+        assert!(!is_structured_json_failure(&error));
+        assert_eq!(structured_error_exit_code(&error), None);
+    }
 }

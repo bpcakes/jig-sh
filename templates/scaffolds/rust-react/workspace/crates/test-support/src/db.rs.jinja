@@ -1,6 +1,7 @@
+use ::<<[ module_name ]>>_db as app_db_crate;
 use anyhow::{Context, bail};
 
-pub type TestDbPool = <<[ module_name ]>>_db::DbPool;
+pub type TestDbPool = app_db_crate::DbPool;
 
 #[derive(Clone, Debug)]
 pub struct DatabaseTestConfig {
@@ -27,12 +28,12 @@ impl DatabaseTestConfig {
 }
 
 pub struct TestDatabase {
-    db: <<[ module_name ]>>_db::Db,
+    db: app_db_crate::Db,
 }
 
 impl TestDatabase {
     pub async fn connect(config: &DatabaseTestConfig) -> anyhow::Result<Self> {
-        let db = <<[ module_name ]>>_db::Db::connect(config.database_url()).await?;
+        let db = app_db_crate::Db::connect(config.database_url()).await?;
         Ok(Self { db })
     }
 

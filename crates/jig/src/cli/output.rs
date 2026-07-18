@@ -355,10 +355,10 @@ fn work_check_summary_output_note(
     check: &serde_json::Value,
     exit_status: Option<i64>,
 ) -> Option<String> {
-    if exit_status == Some(0)
-        && let Some(output) = work_check_summary_harness_skip_output(check)
-    {
-        return Some(concise_preview(output, 120));
+    if exit_status == Some(0) {
+        if let Some(output) = work_check_summary_harness_skip_output(check) {
+            return Some(concise_preview(output, 120));
+        }
     }
 
     let result = &check["result"];
@@ -1102,8 +1102,17 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
 }
 
 pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
-    let ok = value_bool(value, "ok").unwrap_or(false);
     let routes = value["routes"].as_array().map(Vec::len).unwrap_or(0);
+    if value_bool(value, "interrupted").unwrap_or(false) {
+        let signal = value_str(value, "termination_signal").unwrap_or("signal");
+        return [
+            format!("Dev: stopped ({signal})"),
+            "  full report: rerun with --json".into(),
+        ]
+        .join("\n");
+    }
+
+    let ok = value_bool(value, "ok").unwrap_or(false);
     let mut lines = vec![
         format!("Dev: {}", if ok { "ok" } else { "failed" }),
         format!("  Routes: {routes}"),
@@ -1122,6 +1131,16 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
 }
 
 pub(super) fn format_proxy_summary(value: &serde_json::Value) -> String {
+    if value_bool(value, "interrupted").unwrap_or(false) {
+        let signal = value_str(value, "termination_signal").unwrap_or("signal");
+        let mut lines = vec![format!("Proxy: stopped ({signal})")];
+        if let Some(app) = value_str(value, "app") {
+            lines.push(format!("  App: {app}"));
+        }
+        lines.push("  full report: rerun with --json".into());
+        return lines.join("\n");
+    }
+
     let ok = value_bool(value, "ok").unwrap_or(false);
     let mut lines = vec![format!("Proxy: {}", if ok { "ok" } else { "failed" })];
     if let Some(running) = value_bool(value, "running") {

@@ -18,4 +18,10 @@ coverage do not drift.
 - `adopted-custom-commands.toml`: adopted existing repo with custom commands.
 
 Copy an example, adjust repository names, paths, and commands, then run
-`jig init` or `jig adopt` with `--answers-file`.
+`jig init` or `jig adopt` with `--answers-file`. For example, render only the
+configured harness without unattended vault setup:
+
+```sh
+jig init /path/to/new-repo --preset harness-only \
+  --answers-file examples/tooling-only.toml --no-input --no-vault
+```

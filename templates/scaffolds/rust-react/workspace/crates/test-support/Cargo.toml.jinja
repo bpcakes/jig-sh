@@ -3,6 +3,7 @@ name = "<<[ package_name ]>>-test-support"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 <<[ package_name ]>> = { path = "../<<[ package_name ]>>"[% if db_enabled %], features = ["db"][% endif %] }

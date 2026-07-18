@@ -26,8 +26,9 @@ base64 = "0.22.1"
 bytes = "1.10.1"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.50", features = ["derive"] }
-ctrlc = { version = "3.5.0", features = ["termination"] }
+ctrlc = "3.5.0"
 dirs = "6.0.0"
+dotenvy = "0.15.7"
 fs4 = "0.13.1"
 getrandom = "0.3.4"
 hkdf = "0.12.4"
@@ -46,7 +47,9 @@ jig-ui = { path = "crates/jig-ui", version = "=0.2.0-beta.1" }
 jig-vault = { path = "crates/jig-vault", version = "=0.2.0-beta.1" }
 libc = "0.2.177"
 rcgen = { version = "0.14", features = ["x509-parser"] }
-rpassword = "7.5.2"
+# rpassword 7.5.2 uses let-chains that require newer Rust despite its declared
+# MSRV. Keep this exact pin so the workspace remains buildable on Rust 1.85.
+rpassword = "=7.4.0"
 rustls = { version = "0.23.35", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pemfile = "2.2.0"
 secrecy = "0.10.3"
@@ -65,6 +68,6 @@ toml = "0.9.8"
 ulid = "1.2.1"
 unicode-width = "0.2.2"
 wait-timeout = "0.2.1"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 x509-parser = { version = "0.18.1", features = ["verify"] }
 zeroize = "1.8.2"

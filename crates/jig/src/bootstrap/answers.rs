@@ -1,15 +1,19 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{AnswerOpts, DevApp, FrontendApp};
-use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE,
-    default_codex_marketplace_plugins, validate_web_package_manager,
+use super::{
+    AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
+    generated_package_manager_version,
 };
+use crate::context::{
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, config_app_dirs_match,
+    default_codex_marketplace_plugins, normalize_config_app_dir, validate_web_package_manager,
+};
+use crate::frontend_metadata::resolve_frontend_metadata;
 
 mod dev;
 mod vault;
@@ -57,6 +61,9 @@ pub(super) struct RenderAnswers {
     rust_test_command: String,
     rust_test_locked_command: String,
     web_package_manager: String,
+    web_package_manager_spec: String,
+    web_package_manager_version: String,
+    node_version: String,
     web_install_command: String,
     web_run_command: String,
     typescript_lint_command: String,
@@ -107,6 +114,21 @@ impl AnswerInput {
         Self::from_file(path)
     }
 
+    pub(super) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
+        let Some(path) = opts.answers_file.as_deref() else {
+            return Ok(Self {
+                raw: RawAnswers::default(),
+                shape: AnswerInputShape::default(),
+            });
+        };
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            path_base.join(path)
+        };
+        Self::from_file(&path)
+    }
+
     pub(super) fn from_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -116,9 +138,11 @@ impl AnswerInput {
             .as_table()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
-        let raw = value
+        let mut raw = value
             .try_into::<RawAnswers>()
             .with_context(|| format!("Failed to parse {}", path.display()))?;
+        raw.normalize_app_dirs()?;
+        raw.normalize_legacy_frontend_metadata(&table);
         Ok(Self {
             raw,
             shape: AnswerInputShape::from_table(&table),
@@ -128,16 +152,31 @@ impl AnswerInput {
     pub(super) fn shape(&self) -> &AnswerInputShape {
         &self.shape
     }
+
+    pub(super) fn effective_opts(&self, cli: &AnswerOpts) -> Result<AnswerOpts> {
+        let mut raw = self.raw.clone();
+        raw.merge_opts(cli);
+        raw.normalize_app_dirs()?;
+        Ok(raw.into_answer_opts(cli.answers_file.clone()))
+    }
 }
 
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
+        let mut keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        if table
+            .get("rust_migration_dir")
+            .and_then(toml::Value::as_str)
+            == Some("")
+        {
+            keys.remove("rust_migration_dir");
+        }
         Self {
             sqlx_enabled: table.get("sqlx_enabled").and_then(toml::Value::as_bool),
             schema_dump_enabled: table
                 .get("schema_dump_enabled")
                 .and_then(toml::Value::as_bool),
-            keys: table.keys().cloned().collect(),
+            keys,
         }
     }
 
@@ -277,7 +316,7 @@ impl RenderAnswers {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct RawAnswers {
     repo_name: Option<String>,
     default_branch: Option<String>,
@@ -341,7 +380,62 @@ impl RawAnswers {
     fn from_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("Failed to parse {}", path.display()))
+        let value = toml::from_str::<toml::Value>(&text)
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        let table = value
+            .as_table()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
+        let mut raw = value
+            .try_into::<Self>()
+            .with_context(|| format!("Failed to parse {}", path.display()))?;
+        raw.normalize_app_dirs()?;
+        raw.normalize_legacy_frontend_metadata(&table);
+        Ok(raw)
+    }
+
+    fn normalize_legacy_frontend_metadata(&mut self, table: &toml::Table) {
+        let Some(frontend_apps) = self.frontend_apps.as_mut() else {
+            return;
+        };
+        let Some(frontend_tables) = table.get("frontend_apps").and_then(toml::Value::as_array)
+        else {
+            return;
+        };
+        let dev_apps = self
+            .dev
+            .as_ref()
+            .and_then(|dev| dev.apps.as_deref())
+            .unwrap_or_default();
+
+        for (frontend, source) in frontend_apps.iter_mut().zip(frontend_tables) {
+            let Some(source) = source.as_table() else {
+                continue;
+            };
+            let configured_kind = source.get("kind").and_then(toml::Value::as_str);
+            let configured_role = source.get("role").and_then(toml::Value::as_str);
+            let matching_dev_kind = if configured_kind.is_none() {
+                dev_apps
+                    .iter()
+                    .find(|dev_app| {
+                        dev_app.name == frontend.name
+                            && dev_app.dir.as_deref().is_some_and(|dev_dir| {
+                                config_app_dirs_match(dev_dir, &frontend.dir)
+                            })
+                    })
+                    .map(|dev_app| dev_app.kind.as_str())
+            } else {
+                None
+            };
+            let metadata = resolve_frontend_metadata(
+                &frontend.name,
+                configured_kind,
+                configured_role,
+                matching_dev_kind,
+            );
+            frontend.kind = metadata.kind.into();
+            frontend.role = metadata.role.into();
+        }
     }
 
     fn merge_opts(&mut self, opts: &AnswerOpts) {
@@ -416,6 +510,57 @@ impl RawAnswers {
         }
     }
 
+    fn normalize_app_dirs(&mut self) -> Result<()> {
+        if let Some(frontend_apps) = self.frontend_apps.as_mut() {
+            for app in frontend_apps {
+                app.dir = normalize_config_app_dir(
+                    &app.dir,
+                    &format!("frontend app '{}' dir", app.name),
+                )?;
+            }
+        }
+        if let Some(dev_apps) = self.dev.as_mut().and_then(|dev| dev.apps.as_mut()) {
+            for app in dev_apps {
+                if let Some(dir) = app.dir.as_mut() {
+                    *dir = normalize_config_app_dir(dir, &format!("dev app '{}' dir", app.name))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn into_answer_opts(self, answers_file: Option<PathBuf>) -> AnswerOpts {
+        let dev_apps = self.dev.and_then(|dev| dev.apps).unwrap_or_default();
+        AnswerOpts {
+            answers_file,
+            repo_name: self.repo_name.filter(|value| !value.is_empty()),
+            default_branch: self.default_branch,
+            ci_github_runner: self.ci_github_runner,
+            jig_version: self.jig_version,
+            template_source_url: self.template_source_url,
+            harness_footprint: self.harness_footprint,
+            sqlx_enabled: self.sqlx_enabled,
+            rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
+            rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),
+            rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
+            schema_dump_enabled: self.schema_dump_enabled,
+            schema_dump_command: self.schema_dump_command,
+            schema_check_command: self.schema_check_command,
+            sqlx_check_command: self.sqlx_check_command,
+            migration_add_command: self.migration_add_command,
+            bootstrap_command: self.bootstrap_command,
+            contract_check_command: self.contract_check_command,
+            dev_command: self.dev_command,
+            rust_fmt_check_command: self.rust_fmt_check_command,
+            rust_clippy_command: self.rust_clippy_command,
+            rust_test_command: self.rust_test_command,
+            rust_test_locked_command: self.rust_test_locked_command,
+            web_package_manager: self.web_package_manager,
+            frontend_apps: self.frontend_apps.unwrap_or_default(),
+            dev_apps,
+        }
+    }
+
     fn normalize_legacy_sqlx_disabled_schema_dump(&mut self) {
         if self.sqlx_enabled == Some(false) && self.schema_dump_enabled == Some(true) {
             self.schema_dump_enabled = Some(false);
@@ -423,6 +568,12 @@ impl RawAnswers {
     }
 
     fn normalize_legacy_generated_cargo_command_defaults(&mut self) {
+        let sqlx_metadata_dir = self.rust_sqlx_metadata_dir.as_deref().unwrap_or(".sqlx");
+        let legacy_sqlx_check_command = format!(
+            "SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} cargo sqlx prepare --check --workspace -- --workspace --all-targets",
+            shell_quote(sqlx_metadata_dir)
+        );
+        normalize_legacy_command_default(&mut self.sqlx_check_command, &legacy_sqlx_check_command);
         normalize_legacy_command_default(&mut self.bootstrap_command, "cargo fetch");
         normalize_legacy_command_default(
             &mut self.rust_fmt_check_command,
@@ -460,7 +611,8 @@ impl RawAnswers {
         vault::apply_existing_default(&mut self.vault, destination)
     }
 
-    fn resolve(self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
+    fn resolve(mut self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
+        self.normalize_app_dirs()?;
         let repo_name = self
             .repo_name
             .filter(|value| !value.is_empty())
@@ -493,6 +645,9 @@ impl RawAnswers {
         validate_web_package_manager(&web_package_manager)?;
         let web_install_command = web_install_command(&web_package_manager).to_string();
         let web_run_command = web_run_command(&web_package_manager).to_string();
+        let web_package_manager_spec = generated_package_manager_spec(&web_package_manager).into();
+        let web_package_manager_version =
+            generated_package_manager_version(&web_package_manager).into();
         let schema_dump_command_configured = self.schema_dump_command.is_some();
         let schema_dump_enabled = if sqlx_enabled {
             self.schema_dump_enabled
@@ -507,7 +662,7 @@ impl RawAnswers {
         let sqlx_check_command = self.sqlx_check_command.unwrap_or_else(|| {
             let metadata_dir = rust_sqlx_metadata_dir.as_deref().unwrap_or(".sqlx");
             format!(
-                "SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} cargo sqlx prepare --check --workspace -- --workspace --all-targets",
+                "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} sqlx prepare --check --workspace -- --workspace --all-targets",
                 shell_quote(metadata_dir)
             )
         });
@@ -556,6 +711,9 @@ impl RawAnswers {
                 optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
             web_package_manager,
+            web_package_manager_spec,
+            web_package_manager_version,
+            node_version: GENERATED_NODE_VERSION.into(),
             web_install_command,
             web_run_command,
             typescript_lint_command: "scripts/check-webapps.sh lint".into(),
@@ -573,7 +731,10 @@ impl RawAnswers {
 
 fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
     SQLX_SHAPED_ANSWER_KEYS.iter().any(|key| match *key {
-        "rust_migration_dir" => answers.rust_migration_dir.is_some(),
+        "rust_migration_dir" => answers
+            .rust_migration_dir
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
         "rust_sqlx_metadata_dir" => answers.rust_sqlx_metadata_dir.is_some(),
         "schema_dump_command" => answers.schema_dump_command.is_some(),
         "schema_check_command" => answers.schema_check_command.is_some(),
@@ -581,6 +742,12 @@ fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
         "migration_add_command" => answers.migration_add_command.is_some(),
         _ => false,
     })
+}
+
+pub(super) fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {
+    answers.sqlx_enabled.is_none()
+        && answers.schema_dump_enabled != Some(true)
+        && !answer_opts_has_sqlx_shape(answers)
 }
 
 fn normalize_legacy_command_default(command: &mut Option<String>, legacy_default: &str) {
@@ -602,7 +769,7 @@ fn optional_cargo_command(command: &str, label: &str) -> String {
     )
 }
 
-fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
+pub(super) fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
     let mut names = HashSet::new();
     for app in apps {
         if !is_safe_frontend_app_name(&app.name) {
@@ -620,6 +787,12 @@ fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
                 app.kind
             );
         }
+        if !is_supported_frontend_app_role(&app.role) {
+            bail!(
+                "Invalid frontend app role '{}'. Expected 'spa', 'admin', or 'astro'.",
+                app.role
+            );
+        }
         validate_frontend_app_dir(&app.name, &app.dir)?;
     }
     Ok(())
@@ -635,6 +808,10 @@ fn is_safe_frontend_app_name(value: &str) -> bool {
 
 fn is_supported_frontend_app_kind(value: &str) -> bool {
     matches!(value, "vite" | "env-port")
+}
+
+fn is_supported_frontend_app_role(value: &str) -> bool {
+    matches!(value, "spa" | "admin" | "astro")
 }
 
 fn validate_frontend_app_dir(app_name: &str, value: &str) -> Result<()> {
@@ -694,17 +871,19 @@ fn validate_frontend_app_dir(app_name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn web_install_command(package_manager: &str) -> &'static str {
+pub(super) fn web_install_command(package_manager: &str) -> &'static str {
     match package_manager {
         "bun" => "bun install --frozen-lockfile",
         "pnpm" => "pnpm install --frozen-lockfile",
-        "npm" => "npm ci",
+        "npm" => {
+            "npm ci --include=dev --include=optional --include=peer --bin-links=true --dry-run=false --package-lock-only=false --package-lock=true --global=false"
+        }
         "yarn" => "yarn install --frozen-lockfile",
         _ => unreachable!("web package manager was already validated"),
     }
 }
 
-fn web_run_command(package_manager: &str) -> &'static str {
+pub(super) fn web_run_command(package_manager: &str) -> &'static str {
     match package_manager {
         "bun" => "bun run",
         "pnpm" => "pnpm run",
@@ -748,4 +927,49 @@ fn default_repo_name(destination: &Path) -> Option<String> {
         .and_then(|name| name.to_str())
         .map(str::to_string)
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recopy_normalizes_exact_former_generated_sqlx_default() {
+        let metadata_dir = "db/sqlx metadata";
+        let former_default = format!(
+            "SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} cargo sqlx prepare --check --workspace -- --workspace --all-targets",
+            shell_quote(metadata_dir)
+        );
+        let mut raw = RawAnswers {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("migrations".into()),
+            rust_sqlx_metadata_dir: Some(metadata_dir.into()),
+            schema_dump_enabled: Some(false),
+            sqlx_check_command: Some(former_default.clone()),
+            ..RawAnswers::default()
+        };
+
+        raw.normalize_legacy_generated_cargo_command_defaults();
+        assert_eq!(raw.sqlx_check_command, None);
+        let rendered = raw.resolve(None).unwrap();
+        assert_eq!(
+            rendered.sqlx_check_command,
+            format!(
+                "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} sqlx prepare --check --workspace -- --workspace --all-targets",
+                shell_quote(metadata_dir)
+            )
+        );
+
+        let mut customized = RawAnswers {
+            rust_sqlx_metadata_dir: Some(metadata_dir.into()),
+            sqlx_check_command: Some(format!("{former_default} --custom")),
+            ..RawAnswers::default()
+        };
+        customized.normalize_legacy_generated_cargo_command_defaults();
+        assert_eq!(
+            customized.sqlx_check_command.as_deref(),
+            Some(format!("{former_default} --custom").as_str())
+        );
+    }
 }

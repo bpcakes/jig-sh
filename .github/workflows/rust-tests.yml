@@ -6,6 +6,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".clippy.toml"
       - "clippy.toml"
@@ -22,6 +23,7 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain"
       - "rust-toolchain.toml"
       - ".clippy.toml"
       - "clippy.toml"
@@ -112,7 +114,7 @@ jobs:
         run: scripts/jig check test-locked
 
   msrv:
-    name: cargo check --workspace (MSRV 1.85)
+    name: cargo check --workspace --all-targets --all-features (MSRV 1.85)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -129,7 +131,7 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run MSRV check
-        run: cargo check --workspace --locked
+        run: cargo check --workspace --all-targets --all-features --locked
 
   no-default-features:
     name: cargo test -p jig-sh --no-default-features
@@ -215,17 +217,50 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Node used by Windows command-shim tests
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.22.2"
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
           cache: false
           rustflags: ""
+          components: clippy
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
         run: cargo test -p jig-sh --no-default-features --locked
+      - name: Run no-default-features all-targets clippy
+        run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
+
+  vault-platforms:
+    name: cargo test -p jig-vault (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+          components: clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Run vault tests
+        run: cargo test -p jig-vault --locked
+      - name: Run vault clippy
+        run: cargo clippy -p jig-vault --all-targets --locked -- -D warnings
 
   no-default-features-clippy-macos:
     name: cargo clippy -p jig-sh --no-default-features (macOS)
@@ -345,6 +380,7 @@ jobs:
         with:
           cache: false
           rustflags: ""
+          components: clippy
       # NASM is a Windows CI build dependency for aws-lc-sys only. Pin the
       # upstream installer checksums published by the Chocolatey nasm 3.1.0
       # package; it is not bundled into Jig release artifacts.
@@ -365,3 +401,5 @@ jobs:
       # those fixtures have native .cmd or Rust test-double equivalents.
       - name: Run jig-sh build
         run: cargo build -p jig-sh --locked
+      - name: Run jig-sh all-targets clippy
+        run: cargo clippy -p jig-sh --all-targets --locked -- -D warnings

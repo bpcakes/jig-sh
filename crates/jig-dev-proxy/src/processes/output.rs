@@ -1,5 +1,9 @@
 use std::collections::VecDeque;
 use std::io::{self, IsTerminal, Read, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,12 +13,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use terminal_size::{Width, terminal_size_of};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA};
+#[cfg(windows)]
+use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
 use super::child_lifecycle::terminate_and_reap_logged;
 
 pub(super) const MAX_APP_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_millis(80);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(100);
+const OUTPUT_STOP_GRACE: Duration = Duration::from_millis(100);
 const DEFAULT_TERMINAL_WIDTH: usize = 100;
 
 pub(super) struct CapturedAppOutput {
@@ -35,6 +44,22 @@ impl CapturedAppOutput {
             drop(stdout);
             cleanup_failed_capture_start(child, None, Vec::new());
             return Err(anyhow::anyhow!("Failed to capture development app stderr"));
+        };
+        let stdout = match CancellableChildPipe::new(stdout) {
+            Ok(stdout) => stdout,
+            Err(error) => {
+                drop(stderr);
+                cleanup_failed_capture_start(child, None, Vec::new());
+                return Err(error).context("Failed to configure development app stdout capture");
+            }
+        };
+        let stderr = match CancellableChildPipe::new(stderr) {
+            Ok(stderr) => stderr,
+            Err(error) => {
+                drop(stdout);
+                cleanup_failed_capture_start(child, None, Vec::new());
+                return Err(error).context("Failed to configure development app stderr capture");
+            }
         };
         let buffer = Arc::new(Mutex::new(TailBuffer::default()));
         let mut progress = match LiveAppProgress::new(app_name) {
@@ -85,7 +110,7 @@ impl CapturedAppOutput {
             Err(_) => {
                 self.diagnostics
                     .push("capture buffer mutex was poisoned".to_string());
-                print_capture_diagnostics(app_name, &self.diagnostics);
+                print_capture_diagnostics(app_name, &mut self.diagnostics);
                 eprintln!("App '{app_name}' failed; its captured output could not be read");
                 return;
             }
@@ -93,7 +118,7 @@ impl CapturedAppOutput {
         let bytes = buffer.bytes.iter().copied().collect::<Vec<_>>();
         let truncated = buffer.truncated;
         drop(buffer);
-        print_capture_diagnostics(app_name, &self.diagnostics);
+        print_capture_diagnostics(app_name, &mut self.diagnostics);
         if bytes.is_empty() {
             return;
         }
@@ -111,7 +136,7 @@ impl CapturedAppOutput {
     pub(super) fn discard(&mut self) {
         self.finish_progress();
         self.finish_readers();
-        print_capture_diagnostics(&self.app_name, &self.diagnostics);
+        print_capture_diagnostics(&self.app_name, &mut self.diagnostics);
     }
 
     fn finish_readers(&mut self) {
@@ -126,6 +151,19 @@ impl CapturedAppOutput {
         self.finish_progress();
         self.finish_readers();
         self.buffer.lock().unwrap().bytes.iter().copied().collect()
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn active_reader_count(&self) -> usize {
+        self.readers.len()
+    }
+}
+
+impl Drop for CapturedAppOutput {
+    fn drop(&mut self) {
+        self.finish_progress();
+        self.finish_readers();
+        print_capture_diagnostics(&self.app_name, &mut self.diagnostics);
     }
 }
 
@@ -152,6 +190,7 @@ fn cleanup_failed_capture_start(
 
 struct OutputReader {
     stream_name: &'static str,
+    stop: Arc<AtomicBool>,
     handle: thread::JoinHandle<ReaderResult>,
 }
 
@@ -171,26 +210,43 @@ fn finish_output_readers(readers: &mut Vec<OutputReader>, diagnostics: &mut Vec<
     while readers.iter().any(|reader| !reader.handle.is_finished()) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
+    for reader in readers.iter() {
+        if !reader.handle.is_finished() {
+            reader.stop.store(true, Ordering::SeqCst);
+        }
+    }
+    let stop_deadline = Instant::now() + OUTPUT_STOP_GRACE;
+    while readers.iter().any(|reader| !reader.handle.is_finished())
+        && Instant::now() < stop_deadline
+    {
+        thread::sleep(Duration::from_millis(5));
+    }
     for reader in readers.drain(..) {
+        let stopped_early = reader.stop.load(Ordering::SeqCst);
+        if stopped_early {
+            diagnostics.push(format!(
+                "{} capture did not finish within {:?}; output may be incomplete",
+                reader.stream_name, OUTPUT_DRAIN_GRACE
+            ));
+        }
         if reader.handle.is_finished() {
             if let Some(diagnostic) = reader_diagnostic(reader) {
                 diagnostics.push(diagnostic);
             }
         } else {
             diagnostics.push(format!(
-                "{} capture did not finish within {:?}; output may be incomplete",
-                reader.stream_name, OUTPUT_DRAIN_GRACE
+                "{} capture did not stop within {:?}; capture thread was detached",
+                reader.stream_name, OUTPUT_STOP_GRACE
             ));
-            // Dropping a JoinHandle detaches the still-blocked reader. The
-            // child process group has already been terminated on cleanup
-            // paths, but a descendant may retain an inherited pipe forever;
-            // never turn capture cleanup into an unbounded join.
+            // JoinHandle::drop detaches the still-blocked reader. It retains
+            // only its own Arc-backed capture state, and no caller cleanup is
+            // allowed to wait without a bound on a platform read primitive.
         }
     }
 }
 
-fn print_capture_diagnostics(app_name: &str, diagnostics: &[String]) {
-    for diagnostic in diagnostics {
+fn print_capture_diagnostics(app_name: &str, diagnostics: &mut Vec<String>) {
+    for diagnostic in diagnostics.drain(..) {
         eprintln!("App '{app_name}' output capture was incomplete: {diagnostic}");
     }
 }
@@ -423,22 +479,124 @@ fn color_enabled() -> bool {
         && std::env::var("TERM").map_or(true, |term| term != "dumb")
 }
 
+struct CancellableChildPipe<R> {
+    inner: R,
+}
+
+#[cfg(unix)]
+impl<R: AsRawFd> CancellableChildPipe<R> {
+    fn new(inner: R) -> io::Result<Self> {
+        let descriptor = inner.as_raw_fd();
+        let flags = unsafe {
+            // SAFETY: descriptor is borrowed from the live pipe and F_GETFL
+            // does not mutate Rust-owned memory.
+            libc::fcntl(descriptor, libc::F_GETFL)
+        };
+        if flags == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe {
+            // SAFETY: descriptor remains live and F_SETFL updates only its
+            // kernel file status flags.
+            libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK)
+        } == -1
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { inner })
+    }
+}
+
+#[cfg(windows)]
+impl<R> CancellableChildPipe<R> {
+    fn new(inner: R) -> io::Result<Self> {
+        Ok(Self { inner })
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl<R> CancellableChildPipe<R> {
+    fn new(inner: R) -> io::Result<Self> {
+        Ok(Self { inner })
+    }
+}
+
+#[cfg(unix)]
+impl<R: Read> Read for CancellableChildPipe<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buffer)
+    }
+}
+
+#[cfg(windows)]
+impl<R: Read + AsRawHandle> Read for CancellableChildPipe<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let mut available = 0u32;
+        let result = unsafe {
+            // SAFETY: the handle belongs to the live child pipe, all optional
+            // output buffers are null, and available points to writable u32
+            // storage for the duration of the call.
+            PeekNamedPipe(
+                self.inner.as_raw_handle() as _,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if result == 0 {
+            let error = io::Error::last_os_error();
+            return match error.raw_os_error() {
+                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32 => {
+                    Ok(0)
+                }
+                _ => Err(error),
+            };
+        }
+        if available == 0 {
+            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+        }
+        let read_length = buffer.len().min(available as usize);
+        self.inner.read(&mut buffer[..read_length])
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+impl<R: Read> Read for CancellableChildPipe<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buffer)
+    }
+}
+
 fn spawn_output_reader(
     mut output: impl Read + Send + 'static,
     buffer: Arc<Mutex<TailBuffer>>,
     progress: Arc<ProgressState>,
     stream_name: &'static str,
 ) -> io::Result<OutputReader> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader_stop = Arc::clone(&stop);
     let handle = thread::Builder::new()
         .name(format!("jig-app-{stream_name}"))
         .spawn(move || {
             let mut chunk = [0_u8; 8192];
             let mut progress_line = Vec::new();
             loop {
+                if reader_stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
                 match output.read(&mut chunk) {
                     Ok(0) => {
                         progress.update(&progress_line);
                         return Ok(());
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
                     }
                     Err(error) => return Err(format!("{stream_name} read failed: {error}")),
                     Ok(read) => {
@@ -460,6 +618,7 @@ fn spawn_output_reader(
         })?;
     Ok(OutputReader {
         stream_name,
+        stop,
         handle,
     })
 }
@@ -563,6 +722,7 @@ mod tests {
     fn reader_diagnostic_reports_panics() {
         let reader = OutputReader {
             stream_name: "stderr",
+            stop: Arc::new(AtomicBool::new(false)),
             handle: thread::spawn(|| -> ReaderResult { panic!("fixture panic") }),
         };
         assert_eq!(
@@ -572,17 +732,22 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_reader_is_bounded_and_reports_partial_capture() {
-        struct BlockingReader(std::sync::mpsc::Receiver<()>);
+    fn unfinished_reader_is_stopped_joined_and_reports_partial_capture() {
+        struct PendingReader(Arc<AtomicBool>);
 
-        impl Read for BlockingReader {
+        impl Read for PendingReader {
             fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                let _ = self.0.recv();
-                Ok(0)
+                Err(io::Error::from(io::ErrorKind::WouldBlock))
             }
         }
 
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        impl Drop for PendingReader {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let reader_dropped = Arc::new(AtomicBool::new(false));
         let state = Arc::new(ProgressState {
             app_name: "test".into(),
             detail: Mutex::new("starting".into()),
@@ -592,7 +757,7 @@ mod tests {
         });
         let mut readers = vec![
             spawn_output_reader(
-                BlockingReader(release_rx),
+                PendingReader(Arc::clone(&reader_dropped)),
                 Arc::new(Mutex::new(TailBuffer::default())),
                 state,
                 "stdout",
@@ -600,12 +765,11 @@ mod tests {
             .unwrap(),
         ];
         let mut diagnostics = Vec::new();
-        let started = Instant::now();
 
         finish_output_readers(&mut readers, &mut diagnostics);
 
-        assert!(started.elapsed() < Duration::from_secs(1));
         assert!(readers.is_empty());
+        assert!(reader_dropped.load(Ordering::SeqCst));
         assert_eq!(
             diagnostics,
             [format!(
@@ -613,6 +777,59 @@ mod tests {
                 OUTPUT_DRAIN_GRACE
             )]
         );
-        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn blocked_reader_is_detached_after_bounded_stop_wait() {
+        struct BlockingReader {
+            release: std::sync::mpsc::Receiver<()>,
+        }
+
+        impl Read for BlockingReader {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                let _ = self.release.recv();
+                Ok(0)
+            }
+        }
+
+        let (release, wait_for_release) = std::sync::mpsc::channel();
+        let state = Arc::new(ProgressState {
+            app_name: "test".into(),
+            detail: Mutex::new("starting".into()),
+            stopped: AtomicBool::new(false),
+            color: false,
+            started_at: Instant::now(),
+        });
+        let mut readers = vec![
+            spawn_output_reader(
+                BlockingReader {
+                    release: wait_for_release,
+                },
+                Arc::new(Mutex::new(TailBuffer::default())),
+                state,
+                "stderr",
+            )
+            .unwrap(),
+        ];
+        let mut diagnostics = Vec::new();
+
+        finish_output_readers(&mut readers, &mut diagnostics);
+
+        assert!(readers.is_empty());
+        assert_eq!(
+            diagnostics,
+            [
+                format!(
+                    "stderr capture did not finish within {:?}; output may be incomplete",
+                    OUTPUT_DRAIN_GRACE
+                ),
+                format!(
+                    "stderr capture did not stop within {:?}; capture thread was detached",
+                    OUTPUT_STOP_GRACE
+                ),
+            ]
+        );
+
+        release.send(()).unwrap();
     }
 }

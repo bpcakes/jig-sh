@@ -1,0 +1,39 @@
+export type AppVersion = {
+  name: string
+  version: string
+}
+
+export type AppStatus = {
+  version: AppVersion
+  ready: boolean
+}
+
+function isAppVersion(value: unknown): value is AppVersion {
+  if (typeof value !== "object" || value === null) return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.name === "string" && typeof candidate.version === "string"
+  )
+}
+
+export async function fetchAppStatus(signal?: AbortSignal): Promise<AppStatus> {
+  const [versionResponse, readinessResponse] = await Promise.all([
+    fetch("/api/version", { signal, headers: { Accept: "application/json" } }),
+    fetch("/health/ready", { signal }),
+  ])
+
+  if (!versionResponse.ok) {
+    throw new Error(
+      `API version request failed with status ${versionResponse.status}`
+    )
+  }
+
+  const version: unknown = await versionResponse.json()
+  if (!isAppVersion(version)) {
+    throw new Error(
+      "API version response did not contain string name and version fields"
+    )
+  }
+
+  return { version, ready: readinessResponse.ok }
+}

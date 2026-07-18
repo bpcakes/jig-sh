@@ -1,3 +1,20 @@
 import { defineConfig } from 'astro/config';
 
-export default defineConfig({});
+const host = process.env.HOST?.trim() || '127.0.0.1';
+const port = Number(process.env.PORT || '4321');
+
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error('PORT must be an integer between 1 and 65535');
+}
+
+export default defineConfig({
+  server: {
+    host,
+    port,
+  },
+  vite: {
+    server: {
+      strictPort: true,
+    },
+  },
+});

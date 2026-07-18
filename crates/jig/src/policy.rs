@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::fmt;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -107,14 +108,15 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
 
 pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
     if let Err(error) = validate_contract(ctx) {
+        let mut stderr = String::new();
+        for error in error.errors {
+            writeln!(&mut stderr, "ERROR: {error}")
+                .expect("writing contract errors to a String cannot fail");
+        }
         return Ok(NativeToolOutput {
             exit_status: 1,
             stdout: String::new(),
-            stderr: error
-                .errors
-                .into_iter()
-                .map(|error| format!("ERROR: {error}\n"))
-                .collect(),
+            stderr,
         });
     }
 
@@ -334,6 +336,10 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
     agent_map::write(root, map_path)
+}
+
+pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
+    agent_map::render(root, map_path)
 }
 
 pub(super) fn normalize_repo_relative_path(path: &Path, label: &str) -> Result<PathBuf> {

@@ -1,18 +1,23 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
+use crate::doctor::{OwnedProcessTreeError, run_owned_process_tree_with_output};
 use crate::process::{format_exit_status, require_success};
 use crate::progress::CliProgress;
+use crate::runtime::CodexSupportProbeResult;
 
 const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const JIG_SKILLS_MARKETPLACE_ENV: &str = "JIG_SKILLS_MARKETPLACE";
+const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn dispatch(ctx: &RepoContext, command: AgentCommand) -> Result<JsonValue> {
     // Agent tooling commands describe or mutate local client setup, not repo
@@ -24,6 +29,13 @@ pub(super) fn dispatch(ctx: &RepoContext, command: AgentCommand) -> Result<JsonV
 }
 
 pub(super) fn doctor(ctx: &RepoContext) -> Result<JsonValue> {
+    doctor_with_codex_support_probe(ctx, codex_supports_plugin_marketplaces)
+}
+
+pub(super) fn doctor_with_codex_support_probe(
+    ctx: &RepoContext,
+    mut probe: impl FnMut(&str) -> CodexSupportProbeResult,
+) -> Result<JsonValue> {
     let progress = CliProgress::new("agent doctor");
     progress.header("inspect local Codex tooling");
     progress.info("repo", ctx.root().display());
@@ -36,18 +48,23 @@ pub(super) fn doctor(ctx: &RepoContext) -> Result<JsonValue> {
     );
     // Empty marketplace config intentionally means this repo has no Codex skill requirement.
     let codex_required = !configured_marketplaces.is_empty();
-    let codex_available = if codex_required {
+    let codex_probe = if codex_required {
         // We only probe Codex when this repo declares Codex marketplace requirements.
         progress.step("probe codex", "plugin marketplace support");
-        Some(codex_supports_plugin_marketplaces(&codex_bin))
+        Some(probe(&codex_bin))
     } else {
         None
     };
-    let codex_ready = if let Some(available) = codex_available {
-        progress.info("codex support", codex_probe_message(available));
-        available
-    } else {
-        true
+    let (codex_available, codex_probe_error, codex_ready) = match codex_probe {
+        Some(Ok(available)) => {
+            progress.info("codex support", codex_probe_message(available));
+            (Some(available), None, available)
+        }
+        Some(Err(error)) => {
+            progress.info("codex support", "plugin marketplace probe incomplete");
+            (None, Some(error), false)
+        }
+        None => (None, None, true),
     };
     let config_path = codex_config_path();
     progress.step(
@@ -93,13 +110,17 @@ pub(super) fn doctor(ctx: &RepoContext) -> Result<JsonValue> {
         "check marketplaces",
         readiness_message(codex_required, all_marketplaces_ready),
     );
-    let next_steps = doctor_next_steps(
-        &codex_bin,
-        codex_required,
-        codex_ready,
-        configured_marketplaces.len(),
-        &unregistered_marketplaces,
-    );
+    let next_steps = if codex_probe_error.is_some() {
+        vec!["Run `scripts/jig agent doctor` after process supervision is available.".into()]
+    } else {
+        doctor_next_steps(
+            &codex_bin,
+            codex_required,
+            codex_ready,
+            configured_marketplaces.len(),
+            &unregistered_marketplaces,
+        )
+    };
     if codex_ready && all_marketplaces_ready {
         progress.done("agent doctor complete");
     } else {
@@ -114,6 +135,7 @@ pub(super) fn doctor(ctx: &RepoContext) -> Result<JsonValue> {
             "required": codex_required,
             "available": codex_available,
             "probe_skipped": !codex_required,
+            "probe_error": codex_probe_error,
             "config_path": config_path.map(|path| path.display().to_string()),
             "config_read": config.is_some()
         },
@@ -471,13 +493,59 @@ fn normalized_github_marketplace(source: &str) -> Option<String> {
     Some(format!("github:{owner}/{repo}"))
 }
 
-fn codex_supports_plugin_marketplaces(codex_bin: &str) -> bool {
+fn codex_supports_plugin_marketplaces(codex_bin: &str) -> CodexSupportProbeResult {
     // Codex does not expose a machine-readable feature probe for plugin
     // marketplaces, so doctor checks the concrete subcommand it later needs.
-    Command::new(codex_bin)
+    crate::doctor::standalone_codex_support_probe(codex_bin, CODEX_SUPPORT_PROBE_TIMEOUT)
+}
+
+pub(super) fn codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+    codex_bin: &str,
+    timeout: Duration,
+    cancelled: impl FnMut() -> bool,
+) -> CodexSupportProbeResult {
+    codex_supports_plugin_marketplaces_with_environment_and_cancellation(
+        codex_bin,
+        timeout,
+        &[],
+        cancelled,
+    )
+}
+
+fn codex_supports_plugin_marketplaces_with_environment_and_cancellation(
+    codex_bin: &str,
+    timeout: Duration,
+    environment: &[(OsString, OsString)],
+    cancelled: impl FnMut() -> bool,
+) -> CodexSupportProbeResult {
+    let mut command = Command::new(codex_bin);
+    command
         .args(["plugin", "marketplace", "add", "--help"])
-        .output()
-        .is_ok_and(|output| output.status.success())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .envs(environment.iter().map(|(key, value)| (key, value)));
+    crate::shell::sanitize_bash_environment(&mut command);
+    let output = match run_owned_process_tree_with_output(&mut command, timeout, cancelled) {
+        Ok(output) => output,
+        Err(OwnedProcessTreeError::Start(_)) => return Ok(false),
+        Err(error) => return Err(format!("Codex marketplace support probe {error}")),
+    };
+    let Some(stdout) = output.stdout else {
+        return Err("Codex marketplace support probe stdout was not captured".into());
+    };
+    let Some(stderr) = output.stderr else {
+        return Err("Codex marketplace support probe stderr was not captured".into());
+    };
+    if !stdout.complete || !stderr.complete {
+        return Err("Codex marketplace support probe output capture did not complete".into());
+    }
+    if stdout.truncated || stderr.truncated {
+        return Err(
+            "Codex marketplace support probe output exceeded the diagnostic capture limit".into(),
+        );
+    }
+    Ok(output.status.success())
 }
 
 fn codex_bin() -> String {
@@ -494,6 +562,17 @@ fn codex_config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::shell_single_quote;
+    #[cfg(unix)]
+    use super::{
+        codex_supports_plugin_marketplaces_with_environment_and_cancellation,
+        codex_supports_plugin_marketplaces_with_timeout_and_cancellation,
+    };
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::time::Duration;
 
     #[test]
     fn shell_single_quote_handles_edge_cases() {
@@ -505,5 +584,95 @@ mod tests {
             shell_single_quote("./team's-skills"),
             "'./team'\\''s-skills'"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_support_probe_has_a_finite_owned_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex = temp.path().join("codex");
+        fs::write(&codex, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+            codex.to_str().unwrap(),
+            Duration::from_millis(20),
+            || false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("timed out"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_support_probe_sanitizes_bash_controls_and_preserves_ordinary_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex = temp.path().join("codex");
+        let startup = temp.path().join("startup-poison.sh");
+        let startup_marker = temp.path().join("startup-poison-ran");
+        let trace_marker = temp.path().join("trace-poison-ran");
+        fs::write(
+            &startup,
+            "printf poison > \"$JIG_CODEX_PROBE_STARTUP_MARKER\"\nexit 91\n",
+        )
+        .unwrap();
+        fs::write(
+            &codex,
+            r#"#!/usr/bin/env bash
+if [ -n "${BASH_ENV+x}" ] || [ -n "${ENV+x}" ] || [ -n "${CDPATH+x}" ] || [ -n "${BASH_XTRACEFD+x}" ]; then
+  exit 70
+fi
+if declare -F jig_codex_probe_poison >/dev/null; then
+  exit 71
+fi
+case "$-" in *x*|*v*) exit 72 ;; esac
+shopt -q extglob && exit 73
+case "$PS4" in *JIG_CODEX_PROBE_PS4_POISON*) exit 74 ;; esac
+[ "$JIG_CODEX_PROBE_ORDINARY" = preserved ] || exit 75
+[ "$*" = "plugin marketplace add --help" ] || exit 76
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let environment = vec![
+            ("BASH_ENV".into(), startup.clone().into_os_string()),
+            ("ENV".into(), startup.into_os_string()),
+            ("CDPATH".into(), temp.path().as_os_str().to_owned()),
+            ("SHELLOPTS".into(), "xtrace:verbose".into()),
+            ("BASHOPTS".into(), "extglob".into()),
+            (
+                "PS4".into(),
+                "JIG_CODEX_PROBE_PS4_POISON$(printf poison > \"$JIG_CODEX_PROBE_TRACE_MARKER\")"
+                    .into(),
+            ),
+            ("BASH_XTRACEFD".into(), "2".into()),
+            (
+                "BASH_FUNC_jig_codex_probe_poison%%".into(),
+                "() { printf poison > \"$JIG_CODEX_PROBE_STARTUP_MARKER\"; }".into(),
+            ),
+            (
+                "JIG_CODEX_PROBE_STARTUP_MARKER".into(),
+                startup_marker.as_os_str().to_owned(),
+            ),
+            (
+                "JIG_CODEX_PROBE_TRACE_MARKER".into(),
+                trace_marker.as_os_str().to_owned(),
+            ),
+            ("JIG_CODEX_PROBE_ORDINARY".into(), "preserved".into()),
+        ];
+
+        let available = codex_supports_plugin_marketplaces_with_environment_and_cancellation(
+            codex.to_str().unwrap(),
+            Duration::from_secs(2),
+            &environment,
+            || false,
+        )
+        .unwrap();
+
+        assert!(available);
+        assert!(!startup_marker.exists(), "Bash startup poison executed");
+        assert!(!trace_marker.exists(), "Bash trace poison executed");
     }
 }

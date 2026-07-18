@@ -7,7 +7,7 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -15,10 +15,11 @@ use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
 
 use crate::ports::{is_any_jig_proxy_http, is_jig_proxy_http, is_port_free, is_tcp_listening};
-use crate::state::StateStore;
+use crate::state::{LockOutcome, StateStore};
 use crate::types::ProxySettings;
 
-use super::child_lifecycle::terminate_and_reap_logged;
+use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
+use super::cleanup::arm_owned_resources;
 
 pub(super) const MAX_PROXY_LOG_BYTES: u64 = 2 * 1024 * 1024;
 const PROXY_START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,15 +27,19 @@ const PROXY_START_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 const PROXY_HEALTH_MISSES_BEFORE_STOP: u8 = 3;
 const DEFAULT_HTTPS_PORT: u16 = 1443;
 
-pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path) -> Result<()> {
-    let store = StateStore::resolve(settings.state_dir.clone())?;
-    if proxy_ready(&store, settings)? {
-        ensure_requested_https(&store, settings)?;
-        return Ok(());
+pub(super) fn ensure_proxy_running_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<()>> {
+    match proxy_ready_interruptible(store, settings, cancelled)? {
+        LockOutcome::Acquired(true) => return Ok(LockOutcome::Acquired(())),
+        LockOutcome::Acquired(false) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
-
-    with_proxy_start_lock(&store, || {
-        ensure_proxy_running_after_lock(&store, settings, current_exe)
+    with_proxy_start_lock_interruptible(store, cancelled, || {
+        ensure_proxy_running_after_lock(store, settings, current_exe, cancelled)
     })
 }
 
@@ -42,12 +47,18 @@ fn ensure_proxy_running_after_lock(
     store: &StateStore,
     settings: &ProxySettings,
     current_exe: &Path,
-) -> Result<()> {
-    if proxy_ready(store, settings)? {
-        ensure_requested_https(store, settings)?;
-        return Ok(());
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<()>> {
+    match proxy_ready_interruptible(store, settings, cancelled)? {
+        LockOutcome::Acquired(true) => return Ok(LockOutcome::Acquired(())),
+        LockOutcome::Acquired(false) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     }
-    ensure_no_unregistered_proxy_on_requested_port(store, settings)?;
+    match ensure_no_unregistered_proxy_on_requested_port_interruptible(store, settings, cancelled)?
+    {
+        LockOutcome::Acquired(()) => {}
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    }
 
     let log = open_proxy_log(store)?;
     let log2 = log.try_clone()?;
@@ -83,32 +94,88 @@ fn ensure_proxy_running_after_lock(
         command.arg("--lan");
     }
     detach_background_proxy(&mut command);
-    let mut child = command
-        .spawn()
+    let mut child = spawn_armed_proxy_child(&mut command, arm_owned_resources)
         .with_context(|| format!("Failed to spawn proxy from {}", current_exe.display()))?;
 
     let deadline = Instant::now() + PROXY_START_TIMEOUT;
     while Instant::now() < deadline {
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = try_wait_preserving_process_group(child.child_mut())? {
             bail!("Proxy process exited before listening with status {status}");
         }
-        if proxy_ready(store, settings)? {
-            // The foreground command only supervises startup. After the proxy
-            // has published its own PID and ports, lifecycle checks go through
-            // the state files and health endpoint. The proxy was
-            // session-detached at spawn, so normal orphan reparenting is the
-            // intended long-running background behavior.
-            drop(child);
-            return Ok(());
+        match proxy_ready_interruptible(store, settings, cancelled)? {
+            LockOutcome::Acquired(true) => {
+                // The foreground command only supervises startup. After the proxy
+                // has published its own PID and ports, lifecycle checks go through
+                // the state files and health endpoint. The proxy was
+                // session-detached at spawn, so normal orphan reparenting is the
+                // intended long-running background behavior.
+                child.detach();
+                return Ok(LockOutcome::Acquired(()));
+            }
+            LockOutcome::Acquired(false) => {}
+            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        }
+        if cancelled() {
+            return Ok(LockOutcome::Cancelled);
         }
         thread::sleep(Duration::from_millis(100));
     }
 
-    terminate_and_reap_logged(&mut child, "could not clean up after proxy startup timeout");
     bail!(
         "Timed out waiting for Jig proxy to listen. Logs: {}. Likely fix: inspect the proxy log for bind or certificate errors, stop any process using the requested proxy port, or run `scripts/jig proxy cert generate --force` for HTTPS certificate issues.",
         store.log_path().display()
     )
+}
+
+/// Owns a not-yet-authenticated background proxy process. Every early return
+/// from startup runs bounded process-tree cleanup; only the authenticated
+/// ready path intentionally detaches the shared proxy.
+struct ProxyStartupChild {
+    child: Option<Child>,
+}
+
+impl ProxyStartupChild {
+    fn child_mut(&mut self) -> &mut Child {
+        self.child
+            .as_mut()
+            .expect("proxy startup child is present until authenticated readiness")
+    }
+
+    fn detach(mut self) {
+        // Dropping Child does not terminate it. Clear the guard only after the
+        // authenticated health check has established shared proxy ownership.
+        drop(self.child.take());
+    }
+
+    fn cleanup(&mut self) -> bool {
+        let Some(child) = self.child.as_mut() else {
+            return true;
+        };
+        if terminate_and_reap_logged(child, "could not clean up unfinished proxy startup") {
+            self.child = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Drop for ProxyStartupChild {
+    fn drop(&mut self) {
+        let _ = self.cleanup();
+    }
+}
+
+fn spawn_armed_proxy_child(
+    command: &mut Command,
+    arm: impl FnOnce() -> Result<()>,
+) -> Result<ProxyStartupChild> {
+    // Keep the arm immediately adjacent to spawn. A signal that arrives after
+    // this point must choose cleanup rather than the no-owned-resources exit.
+    arm()?;
+    Ok(ProxyStartupChild {
+        child: Some(command.spawn()?),
+    })
 }
 
 struct ProxyStartLock {
@@ -117,7 +184,10 @@ struct ProxyStartLock {
 }
 
 impl ProxyStartLock {
-    fn lock(store: &StateStore) -> Result<Self> {
+    fn lock_interruptible(
+        store: &StateStore,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Self>> {
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -133,11 +203,13 @@ impl ProxyStartLock {
                 bail!("proxy start lock permissions are {:o}; expected 600", mode);
             }
         }
-        lock_proxy_start_file(&file)?;
-        Ok(Self {
+        if !lock_proxy_start_file_interruptible(&file, cancelled)? {
+            return Ok(LockOutcome::Cancelled);
+        }
+        Ok(LockOutcome::Acquired(Self {
             file,
             unlocked: false,
-        })
+        }))
     }
 
     fn unlock(mut self) -> std::io::Result<()> {
@@ -161,8 +233,19 @@ impl Drop for ProxyStartLock {
     }
 }
 
-fn with_proxy_start_lock<T>(store: &StateStore, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let lock = ProxyStartLock::lock(store)?;
+fn with_proxy_start_lock_interruptible<T>(
+    store: &StateStore,
+    cancelled: &impl Fn() -> bool,
+    f: impl FnOnce() -> Result<LockOutcome<T>>,
+) -> Result<LockOutcome<T>> {
+    let lock = match ProxyStartLock::lock_interruptible(store, cancelled)? {
+        LockOutcome::Acquired(lock) => lock,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    if cancelled() {
+        lock.unlock()?;
+        return Ok(LockOutcome::Cancelled);
+    }
     let result = f();
     let unlock_result = lock.unlock();
     match (result, unlock_result) {
@@ -235,11 +318,14 @@ pub(super) fn open_proxy_log(store: &StateStore) -> Result<File> {
     Ok(file)
 }
 
-fn lock_proxy_start_file(file: &File) -> Result<()> {
+fn lock_proxy_start_file_interruptible(file: &File, cancelled: &impl Fn() -> bool) -> Result<bool> {
     let deadline = Instant::now() + PROXY_START_LOCK_TIMEOUT;
     loop {
+        if cancelled() {
+            return Ok(false);
+        }
         match file.try_lock_exclusive() {
-            Ok(true) => return Ok(()),
+            Ok(true) => return Ok(true),
             Ok(false) => {
                 if Instant::now() >= deadline {
                     bail!(
@@ -305,6 +391,7 @@ fn detach_background_proxy(command: &mut Command) {
 #[cfg(not(any(unix, windows)))]
 fn detach_background_proxy(_command: &mut Command) {}
 
+#[cfg(test)]
 pub(super) fn proxy_ready(store: &StateStore, settings: &ProxySettings) -> Result<bool> {
     let Some(http_port) = store.read_http_port()? else {
         return Ok(false);
@@ -325,6 +412,44 @@ pub(super) fn proxy_ready(store: &StateStore, settings: &ProxySettings) -> Resul
     Ok(true)
 }
 
+pub(super) fn proxy_ready_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<bool>> {
+    let http_port = match store.read_http_port_interruptible(cancelled)? {
+        LockOutcome::Acquired(port) => port,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    let Some(http_port) = http_port else {
+        return Ok(LockOutcome::Acquired(false));
+    };
+    let health_token = match store.read_health_token_interruptible(cancelled)? {
+        LockOutcome::Acquired(token) => token,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    let Some(health_token) = health_token else {
+        return Ok(LockOutcome::Acquired(false));
+    };
+    let Some(health_pid) =
+        crate::ports::jig_proxy_http_pid("127.0.0.1", http_port, Some(&health_token))
+    else {
+        return Ok(LockOutcome::Acquired(false));
+    };
+    let pid = match store.read_pid_interruptible(cancelled)? {
+        LockOutcome::Acquired(pid) => pid,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    if pid != Some(health_pid) {
+        return Ok(LockOutcome::Acquired(false));
+    }
+    ensure_requested_http_port(store, settings, http_port)?;
+    match ensure_requested_https_interruptible(store, settings, cancelled)? {
+        LockOutcome::Acquired(()) => Ok(LockOutcome::Acquired(true)),
+        LockOutcome::Cancelled => Ok(LockOutcome::Cancelled),
+    }
+}
+
 fn ensure_requested_http_port(
     store: &StateStore,
     settings: &ProxySettings,
@@ -343,6 +468,7 @@ fn ensure_requested_http_port(
     )
 }
 
+#[cfg(test)]
 pub(super) fn ensure_requested_https(store: &StateStore, settings: &ProxySettings) -> Result<()> {
     if !settings.https {
         return Ok(());
@@ -379,15 +505,55 @@ pub(super) fn ensure_requested_https(store: &StateStore, settings: &ProxySetting
     Ok(())
 }
 
+fn ensure_requested_https_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<()>> {
+    if !settings.https {
+        return Ok(LockOutcome::Acquired(()));
+    }
+    let requested_port = requested_https_port(settings);
+    let actual_port = match store.read_https_port_interruptible(cancelled)? {
+        LockOutcome::Acquired(port) => port,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    let Some(actual_port) = actual_port else {
+        bail!(
+            "A Jig proxy is already running without the requested HTTPS listener in state dir {}. Likely fix: run `scripts/jig proxy stop && scripts/jig proxy start --https --https-port {}` with the same JIG_PROXY_STATE_DIR, then retry the dev command.",
+            store.root().display(),
+            requested_port
+        )
+    };
+    if actual_port != requested_port {
+        bail!(
+            "A Jig proxy is already running in state dir {} on HTTPS port {}, but this command requested HTTPS port {}. Likely fix: run `scripts/jig proxy stop && scripts/jig proxy start --https --https-port {}` with the same JIG_PROXY_STATE_DIR, or retry with --https-port {}.",
+            store.root().display(),
+            actual_port,
+            requested_port,
+            requested_port,
+            actual_port
+        )
+    }
+    if !is_tcp_listening("127.0.0.1", actual_port) {
+        bail!(
+            "A Jig proxy is already running without the requested HTTPS listener in state dir {}. Likely fix: run `scripts/jig proxy stop && scripts/jig proxy start --https --https-port {}` with the same JIG_PROXY_STATE_DIR, then retry the dev command.",
+            store.root().display(),
+            requested_port
+        )
+    }
+    Ok(LockOutcome::Acquired(()))
+}
+
 fn requested_https_port(settings: &ProxySettings) -> u16 {
     settings.https_port.unwrap_or(DEFAULT_HTTPS_PORT)
 }
 
-fn ensure_no_unregistered_proxy_on_requested_port(
+fn ensure_no_unregistered_proxy_on_requested_port_with_token(
     store: &StateStore,
     settings: &ProxySettings,
+    health_token: Option<String>,
 ) -> Result<()> {
-    let health_token = store.read_health_token()?;
     if settings.http_port != 0 && !is_port_free("127.0.0.1", settings.http_port) {
         if health_token
             .as_deref()
@@ -417,6 +583,19 @@ fn ensure_no_unregistered_proxy_on_requested_port(
     Ok(())
 }
 
+fn ensure_no_unregistered_proxy_on_requested_port_interruptible(
+    store: &StateStore,
+    settings: &ProxySettings,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<()>> {
+    let health_token = match store.read_health_token_interruptible(cancelled)? {
+        LockOutcome::Acquired(token) => token,
+        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+    };
+    ensure_no_unregistered_proxy_on_requested_port_with_token(store, settings, health_token)?;
+    Ok(LockOutcome::Acquired(()))
+}
+
 pub(super) fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
     if ready {
         *misses = 0;
@@ -443,5 +622,101 @@ fn preserve_proxy_child_env(command: &mut Command) {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
+    }
+}
+
+#[cfg(test)]
+mod interruptible_lock_tests {
+    use super::*;
+
+    #[test]
+    fn proxy_start_lock_wait_is_interruptible() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+        let held = match ProxyStartLock::lock_interruptible(&store, &|| false).unwrap() {
+            LockOutcome::Acquired(lock) => lock,
+            LockOutcome::Cancelled => panic!("uncontended lock unexpectedly cancelled"),
+        };
+
+        let outcome = ProxyStartLock::lock_interruptible(&store, &|| true).unwrap();
+
+        assert!(matches!(outcome, LockOutcome::Cancelled));
+        held.unlock().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proxy_child_is_not_spawned_when_resource_arm_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("spawned");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("printf spawned > \"$JIG_TEST_MARKER\"")
+            .env("JIG_TEST_MARKER", &marker);
+
+        let result = spawn_armed_proxy_child(&mut command, || bail!("fixture resource arm failed"));
+
+        assert!(result.is_err());
+        assert!(!marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unfinished_proxy_startup_guard_reaps_detached_process_group() {
+        struct ReleaseGuard {
+            path: std::path::PathBuf,
+            armed: bool,
+        }
+
+        impl Drop for ReleaseGuard {
+            fn drop(&mut self) {
+                if self.armed {
+                    let _ = fs::write(&self.path, b"release");
+                }
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let ready = temp.path().join("proxy-startup.ready");
+        let release = temp.path().join("proxy-startup.release");
+        let leaked = temp.path().join("proxy-startup.leaked");
+        let mut release_guard = ReleaseGuard {
+            path: release.clone(),
+            armed: true,
+        };
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(
+                "printf ready > \"$1\"; while [ ! -e \"$2\" ]; do sleep 0.01; done; printf leaked > \"$3\"",
+            )
+            .arg("sh")
+            .arg(&ready)
+            .arg(&release)
+            .arg(&leaked)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_background_proxy(&mut command);
+        let child = spawn_armed_proxy_child(&mut command, || Ok(())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ready.exists(), "proxy startup fixture did not become ready");
+
+        drop(child);
+        fs::write(&release, b"release").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !leaked.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !leaked.exists(),
+            "unfinished proxy startup child survived Drop"
+        );
+        release_guard.armed = false;
     }
 }

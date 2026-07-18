@@ -1,0 +1,1 @@
+Add init-aware non-TTY vault guidance, guide omitted project-shape choices interactively, and surface or confirm custom frontend names. Validate focused tests plus configured runtime gates.

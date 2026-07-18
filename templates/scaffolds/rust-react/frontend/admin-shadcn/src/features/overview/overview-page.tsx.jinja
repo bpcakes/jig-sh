@@ -1,0 +1,176 @@
+import { useEffect, useState } from "react"
+import {
+  ActivityIcon,
+  RefreshCwIcon,
+  ServerIcon,
+  TriangleAlertIcon,
+} from "lucide-react"
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { type AppStatus, fetchAppStatus } from "@/lib/api"
+
+type LoadState =
+  | { phase: "loading" }
+  | { phase: "ready"; status: AppStatus }
+  | { phase: "error"; message: string }
+
+export function OverviewPage() {
+  const [attempt, setAttempt] = useState(0)
+  const [state, setState] = useState<LoadState>({ phase: "loading" })
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchAppStatus(controller.signal).then(
+      (status) => setState({ phase: "ready", status }),
+      (error: unknown) => {
+        if (controller.signal.aborted) return
+        setState({
+          phase: "error",
+          message: error instanceof Error ? error.message : "Unknown API error",
+        })
+      }
+    )
+    return () => controller.abort()
+  }, [attempt])
+
+  return (
+    <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
+      <div>
+        <p className="text-sm font-medium text-muted-foreground">Overview</p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Application status
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Live information from the generated Rust API boundary.
+        </p>
+      </div>
+
+      {state.phase === "loading" && <OverviewSkeleton />}
+      {state.phase === "error" && (
+        <Alert variant="destructive">
+          <TriangleAlertIcon />
+          <AlertTitle>Could not reach the application API</AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-3">
+            <span>{state.message}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setState({ phase: "loading" })
+                setAttempt((value) => value + 1)
+              }}
+            >
+              <RefreshCwIcon /> Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {state.phase === "ready" && <StatusContent status={state.status} />}
+    </section>
+  )
+}
+
+function OverviewSkeleton() {
+  return (
+    <div
+      aria-label="Loading application status"
+      className="grid gap-4 md:grid-cols-2"
+    >
+      <Skeleton className="h-36" />
+      <Skeleton className="h-36" />
+    </div>
+  )
+}
+
+function StatusContent({ status }: { status: AppStatus }) {
+  return (
+    <>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <div>
+              <CardDescription>Application</CardDescription>
+              <CardTitle>{status.version.name}</CardTitle>
+            </div>
+            <ServerIcon className="size-5 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            Version{" "}
+            <span className="font-mono text-foreground">
+              {status.version.version}
+            </span>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
+            <div>
+              <CardDescription>Readiness</CardDescription>
+              <CardTitle>API service</CardTitle>
+            </div>
+            <ActivityIcon className="size-5 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <Badge variant={status.ready ? "default" : "secondary"}>
+              {status.ready ? "Ready" : "Not ready"}
+            </Badge>
+          </CardContent>
+        </Card>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Service endpoints</CardTitle>
+          <CardDescription>
+            Relative routes proxied to the Rust API during development.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Endpoint</TableHead>
+                <TableHead>Purpose</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow>
+                <TableCell className="font-mono">/api/version</TableCell>
+                <TableCell>Build identity</TableCell>
+                <TableCell>
+                  <Badge variant="outline">Connected</Badge>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell className="font-mono">/health/ready</TableCell>
+                <TableCell>Dependency readiness</TableCell>
+                <TableCell>
+                  <Badge variant="outline">
+                    {status.ready ? "200" : "Unavailable"}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </>
+  )
+}

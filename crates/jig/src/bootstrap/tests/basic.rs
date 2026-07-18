@@ -1,6 +1,36 @@
 use super::*;
 use crate::test_env::CurrentDirGuard;
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(unix)]
+use std::process::Command;
+
+fn numeric_semver_major_minor(version: &str) -> (u64, u64) {
+    let components = version
+        .split('.')
+        .map(|component| component.parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        components.len(),
+        3,
+        "generated Node versions must be exact numeric semver pins"
+    );
+    (components[0], components[1])
+}
+
+#[test]
+fn generated_node_typings_do_not_exceed_the_runtime_floor() {
+    let (runtime_major, runtime_minor) = numeric_semver_major_minor(GENERATED_NODE_VERSION);
+    let (types_major, types_minor) = numeric_semver_major_minor(GENERATED_NODE_TYPES_VERSION);
+
+    assert_eq!(
+        types_major, runtime_major,
+        "generated Node typings must match the runtime major"
+    );
+    assert!(
+        types_minor <= runtime_minor,
+        "generated Node typings must not expose APIs newer than the minimum runtime"
+    );
+}
 
 fn regular_file_tree_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn visit(root: &Path, current: &Path, snapshot: &mut BTreeMap<PathBuf, Vec<u8>>) {
@@ -22,6 +52,38 @@ fn regular_file_tree_snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut snapshot = BTreeMap::new();
     visit(root, root, &mut snapshot);
     snapshot
+}
+
+#[cfg(unix)]
+fn write_executable_test_script(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::write(path, body).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn rollback_test_init_opts(path: PathBuf, force: bool) -> InitOpts {
+    InitOpts {
+        path,
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("rollback-demo".into()),
+            ..AnswerOpts::default()
+        },
+    }
 }
 
 fn rendered_vault_scope_id(repo: &std::path::Path) -> String {
@@ -153,6 +215,7 @@ fn frontend_app() -> FrontendApp {
         dir: "apps/web".into(),
         coverage_threshold: 80,
         kind: "vite".into(),
+        role: "spa".into(),
     }
 }
 
@@ -205,11 +268,59 @@ fn parses_frontend_app_flag() {
             dir: "web".into(),
             coverage_threshold: 40,
             kind: "vite".into(),
+            role: "spa".into(),
         }
     );
 
     let app = parse_frontend_app("frontend:web:40:env-port").unwrap();
     assert_eq!(app.kind, "env-port");
+    assert_eq!(app.role, "astro");
+
+    let admin = parse_frontend_app("console:console:80:vite:admin").unwrap();
+    assert_eq!(admin.kind, "vite");
+    assert_eq!(admin.role, "admin");
+
+    let legacy_admin = parse_frontend_app("admin-panel:admin-panel:80").unwrap();
+    assert_eq!(legacy_admin.kind, "vite");
+    assert_eq!(legacy_admin.role, "admin");
+
+    let explicit_kind_legacy_admin = parse_frontend_app("admin-panel:admin-panel:80:vite").unwrap();
+    assert_eq!(explicit_kind_legacy_admin.kind, "vite");
+    assert_eq!(explicit_kind_legacy_admin.role, "admin");
+
+    let explicit_marketing = parse_frontend_app("marketing:marketing:80:vite").unwrap();
+    assert_eq!(explicit_marketing.kind, "vite");
+    assert_eq!(explicit_marketing.role, "spa");
+
+    let answers_marketing: FrontendApp = toml::from_str(
+        r#"name = "marketing"
+dir = "marketing"
+coverage_threshold = 80
+kind = "vite"
+"#,
+    )
+    .unwrap();
+    assert_eq!(explicit_marketing, answers_marketing);
+
+    let answers_admin: FrontendApp = toml::from_str(
+        r#"name = "admin-panel"
+dir = "admin-panel"
+coverage_threshold = 80
+"#,
+    )
+    .unwrap();
+    assert_eq!(legacy_admin, answers_admin);
+    assert_eq!(explicit_kind_legacy_admin, answers_admin);
+
+    for (value, expected) in [
+        ("bad/name:web:40", "Invalid frontend app name"),
+        ("frontend:/outside:40", "must be relative"),
+        ("frontend:web:40:unknown", "Invalid frontend app kind"),
+        ("frontend:web:40:vite:unknown", "Invalid frontend app role"),
+    ] {
+        let error = parse_frontend_app(value).unwrap_err();
+        assert!(error.contains(expected), "{value}: {error}");
+    }
 }
 
 #[test]
@@ -229,6 +340,23 @@ fn parses_scaffold_frontend_aliases_and_explicit_kinds() {
     let billing = parse_scaffold_frontend("billing").unwrap();
     assert_eq!(billing.name, "billing");
     assert_eq!(billing.kind, ScaffoldFrontendKind::Spa);
+
+    for alias in [
+        "web",
+        "admin",
+        "admin-panel",
+        "landing",
+        "marketing",
+        "astro",
+    ] {
+        assert_eq!(
+            parse_scaffold_frontend(alias)
+                .unwrap()
+                .custom_default_name_notice(),
+            None,
+            "{alias}"
+        );
+    }
 
     assert!(
         parse_scaffold_frontend("bad/name")
@@ -259,6 +387,7 @@ fn seed_answers_only_serializes_provided_values() {
                 dir: "web".into(),
                 coverage_threshold: 40,
                 kind: "vite".into(),
+                role: "spa".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -299,7 +428,7 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
         notes: Vec::new(),
     };
 
-    let steps = initial_next_steps(InitialCommand::Adopt, &destination, &result);
+    let steps = initial_next_steps(InitialCommand::Adopt, &destination, &result, false);
     let command_report = initial_command_report(&result);
 
     assert_eq!(steps[0], "cd /tmp/demo");
@@ -369,6 +498,7 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
             },
             notes: Vec::new(),
         },
+        false,
     );
     assert!(
         preview_steps
@@ -403,6 +533,7 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
             apply_report: sync::ApplyRenderReport::default(),
             notes: Vec::new(),
         },
+        false,
     );
     assert_eq!(quoted_steps[0], "cd '/tmp/demo repo'");
 
@@ -423,6 +554,7 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
             apply_report: sync::ApplyRenderReport::default(),
             notes: Vec::new(),
         },
+        false,
     );
     assert!(
         !no_bootstrap_steps
@@ -565,6 +697,7 @@ fn apply_staged_render_does_not_rewrite_preserved_files() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -615,6 +748,7 @@ fn apply_staged_render_writes_the_managed_path_manifest_last() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -658,6 +792,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -677,6 +812,7 @@ fn apply_staged_render_reports_managed_block_insertions_only_when_inserted() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -723,6 +859,7 @@ fn apply_staged_render_allows_root_agents_managed_block_update_without_force() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -763,6 +900,7 @@ fn apply_staged_render_hard_fails_on_blocking_ancestors_before_preview_or_write(
                 backup_root: None,
                 conflict_message: "conflict",
                 progress: CliProgress::new("test"),
+                init_transaction: None,
             },
         )
         .unwrap_err()
@@ -835,13 +973,15 @@ fn apply_staged_render_rejects_reserved_git_metadata_aliases_before_any_operatio
                     backup_root: None,
                     conflict_message: "re-run with --force",
                     progress: CliProgress::new("test"),
+                    init_transaction: None,
                 },
             )
             .unwrap_err()
             .to_string();
 
             assert!(
-                error.contains("reserved Git metadata component"),
+                error.contains("reserved Git metadata component")
+                    || error.contains("not portable to Windows"),
                 "{alias}/{operation}/{force}/{dry_run}: {error}"
             );
             assert!(
@@ -914,6 +1054,7 @@ fn apply_staged_render_rejects_active_and_retired_directory_leaves_before_any_op
                 backup_root: None,
                 conflict_message: "re-run with --force",
                 progress: CliProgress::new("test"),
+                init_transaction: None,
             },
         )
         .unwrap_err()
@@ -971,6 +1112,7 @@ fn apply_staged_render_retires_leaf_symlink_without_touching_its_target() {
             backup_root: None,
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap();
@@ -1022,6 +1164,7 @@ fn apply_staged_render_rejects_unsafe_backup_leaves_before_managed_mutation() {
                 backup_root: Some(&destination.path().join("backups")),
                 conflict_message: "conflict",
                 progress: CliProgress::new("test"),
+                init_transaction: None,
             },
         )
         .unwrap_err()
@@ -1080,6 +1223,7 @@ fn apply_staged_render_rejects_unsafe_backup_ancestors_before_managed_mutation()
             backup_root: Some(&backup_root),
             conflict_message: "conflict",
             progress: CliProgress::new("test"),
+            init_transaction: None,
         },
     )
     .unwrap_err()
@@ -1204,7 +1348,7 @@ fn run_init_uses_native_renderer_and_git() {
     fs::write(
         &git_path,
         format!(
-            "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nexit 0\n",
+            "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nexec git \"$@\"\n",
             log_path.display()
         ),
     )
@@ -1239,17 +1383,24 @@ fn run_init_uses_native_renderer_and_git() {
 
     assert_eq!(output["git_initialized"], true);
     let log = fs::read_to_string(&log_path).unwrap();
-    assert!(log.contains("git init -b main"));
+    assert!(log.contains(" init -b main"));
     assert!(destination.exists());
     assert!(destination.join(".jig.toml").exists());
     let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(answers.contains("[vault]"));
     assert!(answers.contains("scope = \"repo\""));
     assert!(answers.contains("allow_global = false"));
+    assert!(answers.contains(
+        "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR='.sqlx' sqlx prepare --check --workspace -- --workspace --all-targets"
+    ));
+    assert!(!answers.contains("cargo sqlx prepare --check"));
     let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
     assert!(gitignore.contains("node_modules/"));
+    assert!(gitignore.contains(".pnp.*"));
+    assert!(gitignore.contains("!.yarn/patches"));
     assert!(gitignore.contains("target/"));
     assert!(gitignore.contains(".agent/.cache/*"));
+    assert!(gitignore.contains(".agent/tmp/"));
     assert!(gitignore.contains("# BEGIN JIG MANAGED BLOCK"));
     let attributes = fs::read_to_string(destination.join(".gitattributes")).unwrap();
     assert!(attributes.contains(".agent/state/*.jsonl merge=union"));
@@ -1301,6 +1452,386 @@ fn run_init_sqlx_disabled_defaults_to_harness_only_safe_commands() {
 }
 
 #[test]
+fn run_init_explicit_harness_only_writes_no_starter_application() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("repo");
+
+    let output = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::HarnessOnly),
+            ..ScaffoldOpts::default()
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(output["scaffold"].is_null());
+    assert!(!destination.join("Cargo.toml").exists());
+    assert!(!destination.join("package.json").exists());
+    let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(answers.contains("sqlx_enabled = false"));
+}
+
+#[test]
+fn run_init_rejects_minimal_answers_with_rust_react_before_writes() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("repo");
+    let error = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            harness_footprint: Some(HarnessFootprint::Minimal),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cannot combine harness_footprint = \"minimal\""));
+    assert!(error.contains("Rust React scaffold"));
+    assert!(!destination.exists());
+}
+
+#[test]
+fn run_init_normalizes_minimal_answers_to_harness_only() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("repo");
+
+    let output = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts::default(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            harness_footprint: Some(HarnessFootprint::Minimal),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(output["scaffold"].is_null());
+    assert!(destination.join(".agent/jig-contract.json").is_file());
+    assert!(
+        fs::read_to_string(destination.join(".jig.toml"))
+            .unwrap()
+            .contains("harness_footprint = \"minimal\"")
+    );
+    assert!(!destination.join("scripts/jig").exists());
+    assert!(!destination.join("Cargo.toml").exists());
+}
+
+#[test]
+fn run_init_applies_relative_answers_file_before_scaffold_defaults() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let invocation = temp.path().join("caller");
+    let other = temp.path().join("other");
+    let template = invocation.join("template");
+    fs::create_dir_all(&invocation).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    copy_dir_recursive(
+        &template_repo_root().join("templates"),
+        &template.join("templates"),
+    );
+    fs::write(
+        invocation.join("answers.toml"),
+        r#"repo_name = "file-app"
+default_branch = "trunk"
+sqlx_enabled = false
+schema_dump_enabled = false
+bootstrap_command = "printf file-bootstrap"
+web_package_manager = "pnpm"
+
+[[frontend_apps]]
+name = "portal"
+dir = "clients/portal"
+coverage_threshold = 77
+kind = "vite"
+role = "spa"
+
+[dev]
+[[dev.apps]]
+name = "worker"
+kind = "env-port"
+command = "cargo run -p worker"
+proxy = false
+"#,
+    )
+    .unwrap();
+    let _invocation_cwd = EnvVarGuard::set(path::INVOCATION_CWD_ENV, invocation.as_os_str());
+    let _cwd = CurrentDirGuard::set(&other);
+    let destination = invocation.join("generated");
+
+    let output = run_init(InitOpts {
+        path: PathBuf::from("generated"),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: Some("template".into()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(PathBuf::from("answers.toml")),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(destination.join("apps/file-app-api").is_dir());
+    assert!(destination.join("clients/portal/package.json").is_file());
+    assert!(!destination.join("web").exists());
+    assert_eq!(output["scaffold"]["frontends"][0]["name"], "portal");
+    let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
+    assert!(workspace_package.contains(r#""packageManager": "pnpm@"#));
+    assert!(destination.join("pnpm-workspace.yaml").is_file());
+    let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(answers.contains("repo_name = \"file-app\""));
+    assert!(answers.contains("default_branch = \"trunk\""));
+    assert!(answers.contains("bootstrap_command = \"printf file-bootstrap\""));
+    assert!(answers.contains("name = \"worker\""));
+    assert!(answers.contains("command = \"cargo run -p worker\""));
+    assert!(!answers.contains("[[dev.apps]]\nname = \"api\""));
+    assert!(!answers.contains("cargo run -p file-app-api -- --bootstrap-database"));
+    let workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    assert!(workflow.contains("      - \"trunk\""));
+    assert_eq!(
+        git_stdout(&destination, ["symbolic-ref", "--short", "HEAD"]).unwrap(),
+        "trunk"
+    );
+}
+
+#[test]
+fn run_init_cli_answers_override_answers_file_before_scaffold_defaults() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let answers_file = temp.path().join("answers.toml");
+    fs::write(
+        &answers_file,
+        r#"repo_name = "file-app"
+default_branch = "file-branch"
+sqlx_enabled = false
+schema_dump_enabled = false
+bootstrap_command = "printf file-bootstrap"
+web_package_manager = "pnpm"
+"#,
+    )
+    .unwrap();
+    let destination = temp.path().join("generated");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            repo_name: Some("cli-app".into()),
+            default_branch: Some("cli-branch".into()),
+            bootstrap_command: Some("printf cli-bootstrap".into()),
+            web_package_manager: Some("npm".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    assert!(destination.join("apps/cli-app-api").is_dir());
+    assert!(!destination.join("apps/file-app-api").exists());
+    let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
+    assert!(workspace_package.contains(r#""packageManager": "npm@"#));
+    assert!(!destination.join("pnpm-workspace.yaml").exists());
+    let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(answers.contains("repo_name = \"cli-app\""));
+    assert!(answers.contains("default_branch = \"cli-branch\""));
+    assert!(answers.contains("bootstrap_command = \"printf cli-bootstrap\""));
+    assert!(!answers.contains("printf file-bootstrap"));
+    assert_eq!(
+        git_stdout(&destination, ["symbolic-ref", "--short", "HEAD"]).unwrap(),
+        "cli-branch"
+    );
+}
+
+#[test]
+fn run_init_rejects_malformed_or_conflicting_answers_before_destination_writes() {
+    let temp = tempdir().unwrap();
+    let malformed_answers = temp.path().join("malformed.toml");
+    fs::write(&malformed_answers, "repo_name = [\n").unwrap();
+    let malformed_destination = temp.path().join("malformed-repo");
+
+    let error = run_init(InitOpts {
+        path: malformed_destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(malformed_answers),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Failed to parse"));
+    assert!(!malformed_destination.exists());
+
+    let conflicting_answers = temp.path().join("conflicting.toml");
+    fs::write(
+        &conflicting_answers,
+        r#"repo_name = "demo"
+sqlx_enabled = false
+schema_dump_enabled = false
+
+[[frontend_apps]]
+name = "portal"
+dir = "portal"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+"#,
+    )
+    .unwrap();
+    let conflicting_destination = temp.path().join("conflicting-repo");
+    let error = run_init(InitOpts {
+        path: conflicting_destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(conflicting_answers),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("cannot be combined with --frontend-app answers"));
+    assert!(!conflicting_destination.exists());
+
+    let unsafe_metadata_destination = temp.path().join("unsafe-metadata-repo");
+    let error = run_init(InitOpts {
+        path: unsafe_metadata_destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            rust_sqlx_metadata_dir: Some("../sqlx-cache".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Scaffold SQLx metadata dir must not contain '.' or '..'"));
+    assert!(!unsafe_metadata_destination.exists());
+
+    let custom_metadata_destination = temp.path().join("custom-metadata-repo");
+    let error = run_init(InitOpts {
+        path: custom_metadata_destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        template: None,
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            rust_sqlx_metadata_dir: Some("db/sqlx-cache".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("pin SQLx 0.8"));
+    assert!(error.contains("rust_sqlx_metadata_dir = '.sqlx'"));
+    assert!(error.contains("jig adopt"));
+    assert!(error.contains("sqlx_check_command"));
+    assert!(!custom_metadata_destination.exists());
+}
+
+#[test]
 fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -1326,12 +1857,73 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         defaults: true,
         no_input: true,
         no_vault: true,
-        answers: AnswerOpts::default(),
+        answers: AnswerOpts {
+            ci_github_runner: Some("macos-14".into()),
+            ..AnswerOpts::default()
+        },
     })
     .unwrap();
 
+    let next_steps = output["next_steps"].as_array().unwrap();
+    let database_config = next_steps
+        .iter()
+        .position(|step| {
+            step.as_str()
+                .is_some_and(|step| step.contains("Export DATABASE_URL"))
+        })
+        .unwrap();
+    let bootstrap = next_steps
+        .iter()
+        .position(|step| step.as_str() == Some("scripts/jig bootstrap"))
+        .unwrap();
+    assert!(database_config < bootstrap);
+
+    let context = crate::context::RepoContext::load_from(&destination).unwrap();
+    let agent_map_check = crate::policy::run_check(
+        &context,
+        crate::policy::PolicyCheckCommand::AgentMap(crate::policy::AgentMapInput {
+            map_path: PathBuf::from("agent-map.md"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(agent_map_check["ok"], true);
+    assert_eq!(agent_map_check["agents"], 5);
+    assert!(
+        agent_map_check["missing_agents"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        agent_map_check["broken_links"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let agent_guides_check =
+        crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
+    assert_eq!(agent_guides_check["ok"], true);
+    assert_eq!(agent_guides_check["guide_count"], 4);
+    assert!(
+        agent_guides_check["missing_entry_ref"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
     assert_eq!(output["scaffold"]["preset"], "rust-react");
     assert_eq!(output["scaffold"]["db"], "postgres");
+    assert_eq!(output["scaffold"]["frontends"][0]["role"], "spa");
+    assert_eq!(
+        output["scaffold"]["frontends"][0]["ui"]["style"],
+        "radix-nova"
+    );
+    assert_eq!(output["scaffold"]["frontends"][2]["role"], "admin");
+    assert_eq!(
+        output["scaffold"]["frontends"][2]["ui"]["cli_version"],
+        "4.13.0"
+    );
     assert!(destination.join(".env.example").exists());
     assert!(destination.join("Cargo.toml").exists());
     assert!(destination.join("apps/my-app-api/src/main.rs").exists());
@@ -1378,37 +1970,390 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             .exists()
     );
     assert!(destination.join("web/package.json").exists());
+    let web_gitignore = fs::read_to_string(destination.join("web/.gitignore")).unwrap();
+    assert!(web_gitignore.contains("playwright-report/"));
+    assert!(web_gitignore.contains("test-results/"));
+    assert!(web_gitignore.contains("blob-report/"));
+    assert!(web_gitignore.contains("*.tsbuildinfo"));
     assert!(destination.join("landing/astro.config.mjs").exists());
     assert!(destination.join("admin-panel/package.json").exists());
+    let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
+    let workspace_package_json: serde_json::Value =
+        serde_json::from_str(&workspace_package).unwrap();
+    let expected_node_engine = format!(">={GENERATED_NODE_VERSION}");
+    assert!(workspace_package.contains(r#""packageManager": "bun@1.3.14""#));
+    assert_eq!(
+        workspace_package_json["engines"]["node"].as_str(),
+        Some(expected_node_engine.as_str())
+    );
+    assert!(workspace_package.contains(r#""admin-panel""#));
+    assert_eq!(
+        fs::read_to_string(destination.join(".node-version")).unwrap(),
+        format!("{GENERATED_NODE_VERSION}\n")
+    );
     let web_package = fs::read_to_string(destination.join("web/package.json")).unwrap();
-    assert!(web_package.contains(r#""dev": "bun install && vite""#));
+    let web_package_json: serde_json::Value = serde_json::from_str(&web_package).unwrap();
+    assert_eq!(
+        web_package_json["devDependencies"]["@types/node"].as_str(),
+        Some(GENERATED_NODE_TYPES_VERSION)
+    );
+    assert!(web_package.contains(r#""dev": "vite""#));
+    assert!(web_package.contains(r#""shadcn": "4.13.0""#));
+    assert!(web_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(web_package.contains(r#""@testing-library/dom": "10.4.1""#));
+    assert!(web_package.contains(r#""@playwright/test": "1.61.1""#));
+    assert!(web_package.contains(r#""test:e2e": "playwright test""#));
+    assert!(web_package.contains(r#""test:e2e:install": "playwright install chromium""#));
+    assert!(
+        web_package.contains(r#""test:e2e:install:ci": "playwright install --with-deps chromium""#)
+    );
+    assert!(!web_package.contains(" install && "));
+    assert!(destination.join("web/src/api.ts").exists());
+    assert!(destination.join("web/playwright.config.ts").exists());
+    assert!(destination.join("web/e2e/app.spec.ts").exists());
+    assert!(destination.join("web/tsconfig.app.json").exists());
+    assert!(destination.join("web/tsconfig.node.json").exists());
+    let web_tsconfig_app = fs::read_to_string(destination.join("web/tsconfig.app.json")).unwrap();
+    assert!(web_tsconfig_app.contains(r#""types": ["vite/client", "vitest/globals"]"#));
+    assert!(!web_tsconfig_app.contains(r#""node""#));
+    assert!(web_tsconfig_app.contains(r#""include": ["src"]"#));
+    let web_tsconfig_node = fs::read_to_string(destination.join("web/tsconfig.node.json")).unwrap();
+    assert!(web_tsconfig_node.contains(r#""types": ["node"]"#));
+    assert!(web_tsconfig_node.contains(r#""playwright.config.ts""#));
+    assert!(web_tsconfig_node.contains(r#""e2e""#));
+    assert!(destination.join("web/components.json").exists());
+    assert!(
+        destination
+            .join("web/src/components/ui/button.tsx")
+            .exists()
+    );
+    assert!(destination.join("web/src/components/ui/card.tsx").exists());
+    assert!(destination.join("web/src/lib/utils.ts").exists());
+    let web_components = fs::read_to_string(destination.join("web/components.json")).unwrap();
+    assert!(web_components.contains(r#""style": "radix-nova""#));
+    let web_css = fs::read_to_string(destination.join("web/src/index.css")).unwrap();
+    assert!(web_css.contains(r#"@import "tailwindcss";"#));
+    assert!(web_css.contains(r#"@import "shadcn/tailwind.css";"#));
+    let web_app = fs::read_to_string(destination.join("web/src/App.tsx")).unwrap();
+    assert!(web_app.contains(r#"from "@/components/ui/card""#));
     let web_vite_config = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
     assert!(web_vite_config.contains("const devPort = Number(process.env.PORT);"));
+    assert!(web_vite_config.contains("port: devPort"));
     assert!(web_vite_config.contains("process.env.API_ORIGIN"));
     assert!(web_vite_config.contains("process.env.JIG_DEV_API_ORIGIN"));
+    assert!(
+        web_vite_config
+            .contains("firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN)")
+    );
+    assert!(
+        !web_vite_config
+            .contains("firstNonEmpty(process.env.API_ORIGIN, process.env.JIG_DEV_API_ORIGIN)")
+    );
     assert!(web_vite_config.contains(r#""http://api.my-app.localhost:1355""#));
     assert!(web_vite_config.contains(r#""/api""#));
     assert!(web_vite_config.contains(r#"target: apiOrigin"#));
+    assert!(!web_vite_config.contains("apiOrigin ?"));
     assert!(web_vite_config.contains(r#"host: "127.0.0.1""#));
+    assert!(web_vite_config.contains("strictPort: true"));
     assert!(web_vite_config.contains("clientPort: devPort"));
-    let landing_package = fs::read_to_string(destination.join("landing/package.json")).unwrap();
-    assert!(landing_package.contains(
-        r#""dev": "bun install && astro dev --host ${HOST:-127.0.0.1} --port ${PORT:-4321}""#
+    assert!(
+        web_vite_config.contains(r#"include: ["src/**/*.test.{ts,tsx}"]"#),
+        "Vitest must not collect Playwright specs"
+    );
+    assert!(web_vite_config.contains(r#"include: ["src/**/*.{ts,tsx}"]"#));
+    for excluded in [
+        "src/**/*.d.ts",
+        "src/**/*.test.{ts,tsx}",
+        "src/test-setup.ts",
+        "src/main.tsx",
+        "src/components/ui/**/*.{ts,tsx}",
+        "src/lib/utils.ts",
+    ] {
+        assert!(
+            web_vite_config.contains(&format!(r#""{excluded}""#)),
+            "SPA coverage must explicitly exclude {excluded}"
+        );
+    }
+    assert!(
+        !web_vite_config.contains(r#"include: ["src/App.tsx", "src/api.ts"]"#),
+        "future production modules must not escape the coverage denominator"
+    );
+    let web_playwright = fs::read_to_string(destination.join("web/playwright.config.ts")).unwrap();
+    assert!(web_playwright.contains("cargo run --locked -p my-app-api"));
+    assert!(web_playwright.contains("-- --bootstrap-database"));
+    assert!(web_playwright.contains("my_app_web_e2e"));
+    assert!(web_playwright.contains(r#"url: `${apiOrigin}/health/ready`"#));
+    assert!(web_playwright.contains("reuseExistingServer: false"));
+    assert!(web_playwright.contains("E2E_SERVER_TIMEOUT_MS"));
+    assert!(web_playwright.contains("E2E_GLOBAL_TIMEOUT_MS"));
+    assert!(web_playwright.contains("managedWebServerCount * serverTimeout + 5 * 60_000"));
+    assert!(web_playwright.contains("const configured = process.env[name]?.trim()"));
+    assert!(web_playwright.contains("E2E_WEB_PORT and E2E_API_PORT must use different ports"));
+    assert!(web_playwright.contains("failOnFlakyTests keeps a recovered retry red"));
+    assert!(web_playwright.contains(r#"gracefulShutdown: { signal: "SIGTERM""#));
+    assert!(web_playwright.contains(r#"command: "vite --host 127.0.0.1 --strictPort""#));
+    assert!(web_playwright.contains("API_ORIGIN: apiOrigin"));
+    assert!(web_playwright.contains("JIG_DEV_API_ORIGIN: apiOrigin"));
+    let web_e2e = fs::read_to_string(destination.join("web/e2e/app.spec.ts")).unwrap();
+    assert!(web_e2e.contains("page.waitForResponse"));
+    assert!(web_e2e.contains(r#"versionResponse.headers()["x-request-id"]"#));
+    assert!(web_e2e.contains(r#"name: "my-app""#));
+    assert!(web_e2e.contains(r#"getByRole("group", { name: "Application", exact: true })"#));
+    assert!(web_e2e.contains(r#"locator('[data-slot="card-title"]')"#));
+    assert!(web_e2e.contains(r#"getByRole("group", { name: "Rust API", exact: true })"#));
+    assert!(web_e2e.contains(r#"serviceStatusCard.getByText("Ready", { exact: true })"#));
+    assert!(!web_e2e.contains("page.route"));
+    let e2e_workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    let e2e_workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&e2e_workflow)
+        .expect("generated Postgres E2E workflow must be valid YAML");
+    assert_eq!(e2e_workflow_yaml["jobs"]["e2e"]["runs-on"], "ubuntu-latest");
+    assert_eq!(
+        e2e_workflow_yaml["jobs"]["e2e"]["env"]["SQLX_OFFLINE_DIR"],
+        "${{ github.workspace }}/.sqlx"
+    );
+    assert!(e2e_workflow.contains("name: Browser E2E"));
+    assert!(e2e_workflow.contains("timeout-minutes: 30"));
+    assert!(e2e_workflow.contains("outside Playwright's 15-minute default CI suite budget"));
+    assert_eq!(e2e_workflow.matches(r#"- "rust-toolchain""#).count(), 2);
+    assert_eq!(
+        e2e_workflow.matches(r#"- "npm-shrinkwrap.json""#).count(),
+        2
+    );
+    assert!(e2e_workflow.contains("E2E_SERVER_TIMEOUT_MS: \"300000\""));
+    assert!(e2e_workflow.contains("- name: \"web\"\n            dir: \"web\""));
+    assert!(!e2e_workflow.contains("dir: landing"));
+    assert!(!e2e_workflow.contains("dir: admin-panel"));
+    assert!(e2e_workflow.contains(r#"- "migrations/**""#));
+    assert!(e2e_workflow.contains(r#"- ".sqlx/**""#));
+    assert!(e2e_workflow.contains("image: postgres:18"));
+    assert!(e2e_workflow.contains(
+        "postgres://postgres:postgres@127.0.0.1:5432/jig_e2e_${{ github.run_id }}_${{ github.run_attempt }}"
     ));
+    assert!(e2e_workflow.contains(r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#));
+    assert!(
+        e2e_workflow
+            .contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci"#)
+    );
+    assert!(e2e_workflow.contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e"#));
+    assert!(!e2e_workflow.contains("bun run test:e2e"));
+    assert!(e2e_workflow.contains("actions/upload-artifact@v6"));
+    let rust_workflow =
+        fs::read_to_string(destination.join(".github/workflows/rust-tests.yml")).unwrap();
+    let rust_workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&rust_workflow).unwrap();
+    for job in ["fmt", "clippy", "test"] {
+        assert_eq!(rust_workflow_yaml["jobs"][job]["runs-on"], "macos-14");
+    }
+    for event in ["pull_request", "push"] {
+        let paths = rust_workflow_yaml["on"][event]["paths"].as_array().unwrap();
+        assert!(paths.iter().any(|path| path == "migrations/**"));
+        assert!(paths.iter().any(|path| path == ".sqlx/**"));
+    }
+    assert_eq!(
+        rust_workflow_yaml["jobs"]["clippy"]["env"]["SQLX_OFFLINE_DIR"],
+        "${{ github.workspace }}/.sqlx"
+    );
+    assert_eq!(
+        rust_workflow_yaml["jobs"]["test"]["env"]["SQLX_OFFLINE_DIR"],
+        "${{ github.workspace }}/.sqlx"
+    );
+    assert!(rust_workflow_yaml["jobs"]["fmt"]["env"].is_null());
+    for (workflow_name, jobs) in [
+        ("agent-map-check.yml", &["agent-map-check"][..]),
+        (
+            "repo-policy.yml",
+            &[
+                "no-mod-rs",
+                "rust-file-loc",
+                "sqlx-unchecked-queries",
+                "migration-immutability",
+            ][..],
+        ),
+    ] {
+        let workflow =
+            fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
+        let workflow = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+        for job in jobs {
+            assert_eq!(workflow["jobs"][job]["runs-on"], "macos-14");
+        }
+    }
+    let landing_package = fs::read_to_string(destination.join("landing/package.json")).unwrap();
+    assert!(landing_package.contains(r#""dev": "astro dev""#));
+    assert!(!landing_package.contains(" install && "));
+    let landing_config = fs::read_to_string(destination.join("landing/astro.config.mjs")).unwrap();
+    assert!(landing_config.contains("process.env.HOST?.trim() || '127.0.0.1'"));
+    assert!(landing_config.contains("strictPort: true"));
+    assert!(landing_config.contains("Number(process.env.PORT || '4321')"));
+    assert!(landing_config.contains("port < 1 || port > 65_535"));
+    assert!(!destination.join("landing/playwright.config.ts").exists());
+    let admin_package = fs::read_to_string(destination.join("admin-panel/package.json")).unwrap();
+    let admin_package_json: serde_json::Value = serde_json::from_str(&admin_package).unwrap();
+    assert_eq!(
+        admin_package_json["devDependencies"]["@types/node"].as_str(),
+        Some(GENERATED_NODE_TYPES_VERSION)
+    );
+    assert!(admin_package.contains(r#""shadcn": "4.13.0""#));
+    assert!(admin_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(admin_package.contains(r#""@testing-library/dom": "10.4.1""#));
+    assert!(admin_package.contains(r#""lint": "eslint . && prettier --check .""#));
+    assert!(admin_package.contains(r#""format": "prettier --write .""#));
+    assert!(admin_package.contains(r#""format:check": "prettier --check .""#));
+    assert!(!admin_package.contains("@playwright/test"));
+    let admin_readme = fs::read_to_string(destination.join("admin-panel/README.md")).unwrap();
+    assert!(admin_readme.contains("real-backend Playwright starter for product SPA roles only"));
+    let admin_vite_config =
+        fs::read_to_string(destination.join("admin-panel/vite.config.ts")).unwrap();
+    assert!(admin_vite_config.contains("const devPort = Number(process.env.PORT)"));
+    assert!(admin_vite_config.contains("port: devPort"));
+    assert!(admin_vite_config.contains("strictPort: true"));
+    assert!(admin_vite_config.contains("clientPort: devPort"));
+    assert!(
+        admin_vite_config
+            .contains("firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN)")
+    );
+    assert!(
+        !admin_vite_config
+            .contains("firstNonEmpty(process.env.API_ORIGIN, process.env.JIG_DEV_API_ORIGIN)")
+    );
+    let admin_index = fs::read_to_string(destination.join("admin-panel/index.html")).unwrap();
+    let theme_storage_key = "admin-panel-theme";
+    let theme_bootstrap = admin_index
+        .find(&format!("const themeStorageKey = \"{theme_storage_key}\""))
+        .unwrap();
+    let react_entry = admin_index.find("/src/main.tsx").unwrap();
+    assert!(theme_bootstrap < react_entry);
+    assert_eq!(admin_index.matches(theme_storage_key).count(), 1);
+    assert!(admin_index.contains("localStorage.getItem(themeStorageKey)"));
+    assert!(admin_index.contains("<!-- prettier-ignore -->\n    <title>Admin Panel</title>"));
+    assert!(admin_index.contains("prefers-color-scheme: dark"));
+    assert!(admin_index.contains("root.style.colorScheme = resolved"));
+    let theme_provider =
+        fs::read_to_string(destination.join("admin-panel/src/components/theme-provider.tsx"))
+            .unwrap();
+    assert!(theme_provider.contains("storage = window.localStorage"));
+    assert!(theme_provider.contains("if (event.storageArea !== storage)"));
+    let providers =
+        fs::read_to_string(destination.join("admin-panel/src/app/providers.tsx")).unwrap();
+    assert!(providers.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
+    assert_eq!(providers.matches(theme_storage_key).count(), 1);
+    assert!(providers.contains("storageKey={themeStorageKey}"));
+    let admin_shell =
+        fs::read_to_string(destination.join("admin-panel/src/app/shell.tsx")).unwrap();
+    assert!(admin_shell.contains("const appTitle = \"Admin Panel\""));
+    assert!(admin_shell.contains(">{appTitle}</p>"));
+    let admin_sidebar =
+        fs::read_to_string(destination.join("admin-panel/src/components/app-sidebar.tsx")).unwrap();
+    assert!(admin_sidebar.contains("const appName = \"my-app\""));
+    assert_eq!(admin_sidebar.matches("\"my-app\"").count(), 1);
+    assert!(admin_sidebar.contains(">{appName}</span>"));
+    let admin_overview_test = fs::read_to_string(
+        destination.join("admin-panel/src/features/overview/overview-page.test.tsx"),
+    )
+    .unwrap();
+    assert!(admin_overview_test.contains("const expectedAppName = \"my-app\""));
+    assert_eq!(admin_overview_test.matches("\"my-app\"").count(), 1);
+    assert!(admin_overview_test.contains("name: expectedAppName"));
+    assert!(admin_overview_test.contains("screen.findByText(expectedAppName)"));
+    let admin_prettierignore =
+        fs::read_to_string(destination.join("admin-panel/.prettierignore")).unwrap();
+    assert_eq!(admin_prettierignore.matches("dist/\n").count(), 1);
+    assert_eq!(admin_prettierignore.matches("pnpm-lock.yaml").count(), 1);
+    assert_eq!(
+        admin_prettierignore.matches("npm-shrinkwrap.json").count(),
+        1
+    );
+    assert!(admin_prettierignore.contains("bun.lock\nbun.lockb\n"));
+    let admin_empty =
+        fs::read_to_string(destination.join("admin-panel/src/components/ui/empty.tsx")).unwrap();
+    assert!(admin_empty.contains(r#"import type { ComponentProps } from "react""#));
+    assert!(!admin_empty.contains("React.ComponentProps"));
+    let admin_skeleton =
+        fs::read_to_string(destination.join("admin-panel/src/components/ui/skeleton.tsx")).unwrap();
+    assert!(admin_skeleton.contains(r#"import type { ComponentProps } from "react""#));
+    assert!(!admin_skeleton.contains("React.ComponentProps"));
+    let admin_sonner =
+        fs::read_to_string(destination.join("admin-panel/src/components/ui/sonner.tsx")).unwrap();
+    assert!(admin_sonner.contains(r#"import type { CSSProperties } from "react""#));
+    assert!(!admin_sonner.contains("React.CSSProperties"));
+    let components = fs::read_to_string(destination.join("admin-panel/components.json")).unwrap();
+    assert!(components.contains(r#""style": "radix-nova""#));
+    assert!(
+        destination
+            .join("admin-panel/src/components/ui/sidebar.tsx")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/features/overview/overview-page.tsx")
+            .exists()
+    );
+    assert!(destination.join("admin-panel/src/lib/api.ts").exists());
+
+    let agent_map = fs::read_to_string(destination.join("agent-map.md")).unwrap();
+    for guide in [
+        "crates/my-app/AGENTS.md",
+        "crates/my-app-db/AGENTS.md",
+        "crates/my-app-http/AGENTS.md",
+        "crates/my-app-test-support/AGENTS.md",
+    ] {
+        assert!(agent_map.contains(guide), "agent map is missing {guide}");
+    }
+
+    let root_gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
+    assert!(root_gitignore.contains("/my_app.db\n"));
+    assert!(root_gitignore.contains("/my_app.db-*\n"));
+    for database_file in [
+        "my_app.db",
+        "my_app.db-wal",
+        "my_app.db-shm",
+        "my_app.db-journal",
+        "my_app.db-jig-migrate.lock",
+    ] {
+        fs::write(destination.join(database_file), "local database artifact").unwrap();
+    }
+    assert_eq!(
+        git_stdout(
+            &destination,
+            [
+                "check-ignore",
+                "--",
+                "my_app.db",
+                "my_app.db-wal",
+                "my_app.db-shm",
+                "my_app.db-journal",
+                "my_app.db-jig-migrate.lock",
+            ],
+        )
+        .unwrap(),
+        "my_app.db\nmy_app.db-wal\nmy_app.db-shm\nmy_app.db-journal\nmy_app.db-jig-migrate.lock"
+    );
 
     let api_main = fs::read_to_string(destination.join("apps/my-app-api/src/main.rs")).unwrap();
     assert!(api_main.contains("use anyhow::Context;"));
-    assert!(api_main.contains("use my_app::AppConfig;"));
+    assert!(api_main.contains("use ::my_app as app_crate;"));
+    assert!(api_main.contains("use ::my_app_http as app_http_crate;"));
     assert!(api_main.contains("load_dotenv();"));
     assert!(api_main.contains("warning: failed to load .env"));
     assert!(api_main.contains("let bound_addr = listener"));
     assert!(api_main.contains("Failed to read API listener address after bind"));
     assert!(api_main.contains("tracing::info!(%bound_addr, \"listening\")"));
-    assert!(api_main.contains("my_app_http::router"));
-    assert!(api_main.contains("AppConfig::from_env()"));
-    assert!(api_main.contains("AppState::from_config(config)"));
+    assert!(api_main.contains("app_http_crate::router"));
+    assert!(api_main.contains("app_crate::AppConfig::from_env()"));
+    assert!(api_main.contains("app_crate::AppState::from_config(config)"));
+    assert!(api_main.contains("--bootstrap-database"));
+    assert!(api_main.contains(
+        "    let command = parse_command()?;\n    let config = app_crate::AppConfig::from_env()"
+    ));
+    assert!(api_main.contains("match (arguments.next(), arguments.next())"));
+    assert!(api_main.contains("unexpected API argument"));
+    assert!(!api_main.contains("args_os().any"));
+    assert!(api_main.contains("app_crate::AppState::bootstrap_database(&config)"));
     assert!(api_main.contains("install_panic_hook"));
     assert!(api_main.contains("tracing::error!(error = ?error, \"API server failed\")"));
+    assert!(api_main.contains("#[allow(clippy::useless_concat)]\n    let default_filter"));
+    assert!(api_main.contains("let default_filter = concat!("));
+    assert!(api_main.contains("\"my_app=info,\","));
+    assert!(api_main.contains("\"my_app_api=info,\","));
+    assert!(api_main.contains("\"tower_http=info\","));
     assert!(api_main.contains("Failed to bind API listener"));
     assert!(api_main.contains("API server exited with an error"));
     assert!(api_main.contains("SignalKind::terminate"));
@@ -1417,14 +2362,12 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(jig_toml.contains("[[dev.apps]]\nname = \"api\""));
     assert!(jig_toml.contains("kind = \"env-port\""));
     assert!(!jig_toml.contains("proxy = false"));
-    assert!(
-        jig_toml
-            .contains("command = \"BIND_ADDR=\\\"${HOST}:${PORT}\\\" cargo run -p my-app-api\"")
-    );
+    assert!(jig_toml.contains("argv = [\"cargo\", \"run\", \"-p\", \"my-app-api\"]"));
+    assert!(!jig_toml.contains("BIND_ADDR=\"${HOST}:${PORT}\""));
     assert!(!jig_toml.contains("port = 3000"));
     assert_eq!(
         fs::read_to_string(destination.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
     );
     let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
@@ -1433,11 +2376,19 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert!(app_lib.contains("pub struct AppConfig"));
     assert!(app_lib.contains("pub fn from_env() -> Result<Self>"));
+    assert!(app_lib.contains("std::env::var(\"HOST\")"));
+    assert!(app_lib.contains("std::env::var(\"PORT\")"));
+    assert!(app_lib.contains("fn resolve_bind_addr("));
+    assert!(app_lib.contains("injected_host_and_port_override_the_dotenv_bind_address"));
+    assert!(app_lib.contains("partial_jig_bind_values_fall_back_to_bind_addr"));
     assert!(app_lib.contains("DATABASE_URL is required when the db feature is enabled"));
     assert!(app_lib.contains("pub async fn from_config(config: AppConfig) -> Result<Self>"));
+    assert!(app_lib.contains("pub async fn bootstrap_database(config: &AppConfig)"));
     assert!(app_lib.contains("pub fn new_with_version(version: impl Into<String>)"));
     assert!(app_lib.contains("pub fn version(&self) -> &AppVersion"));
     assert!(app_lib.contains("pub fn is_ready(&self) -> bool"));
+    assert!(!app_lib.contains("return Ok(Self"));
+    assert!(!app_lib.contains("return self.db.is_some()"));
     assert!(!app_lib.contains("use axum::"));
     assert!(!app_lib.contains("pub fn router"));
     let http_lib = fs::read_to_string(destination.join("crates/my-app-http/src/lib.rs")).unwrap();
@@ -1464,7 +2415,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(test_support_response.contains("pub fn assert_error"));
     let test_support_http_test =
         fs::read_to_string(destination.join("crates/my-app-test-support/tests/http.rs")).unwrap();
-    assert!(test_support_http_test.contains("use my_app_test_support::TestApp;"));
+    assert!(test_support_http_test.contains("use ::my_app_test_support::TestApp;"));
     assert!(test_support_http_test.contains("async fn health_returns_ok()"));
     assert!(test_support_http_test.contains("async fn readiness_reflects_state()"));
     assert!(test_support_http_test.contains("StatusCode::SERVICE_UNAVAILABLE"));
@@ -1472,6 +2423,10 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(test_support_http_test.contains("async fn version_returns_json()"));
     let db_lib = fs::read_to_string(destination.join("crates/my-app-db/src/lib.rs")).unwrap();
     assert!(db_lib.contains("PgPool"));
+    assert!(db_lib.contains("sqlx::Postgres::database_exists"));
+    assert!(db_lib.contains("sqlx::Postgres::create_database"));
+    assert!(db_lib.contains("Could not confirm database existence after creation failed"));
+    assert!(db_lib.contains("create_if_missing"));
     assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
     assert!(db_lib.contains("connect_with_timeout"));
     assert!(db_lib.contains("migrate_with_timeout"));
@@ -1492,14 +2447,185 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(answers.contains("schema_dump_enabled = false"));
     assert!(answers.contains("rust_crate_roots = [\"apps\", \"crates\"]"));
     assert!(answers.contains("web_package_manager = \"bun\""));
-    assert!(answers.contains("bootstrap_command = \"if [ -f Cargo.toml ]; then cargo fetch;"));
-    assert!(answers.contains("&& (cd web && bun install)"));
-    assert!(answers.contains("&& (cd landing && bun install)"));
-    assert!(answers.contains("&& (cd admin-panel && bun install)"));
+    assert!(answers.contains("if [ -f Cargo.toml ]; then cargo fetch;"));
+    assert!(answers.contains("cargo run -p my-app-api -- --bootstrap-database"));
+    assert!(answers.contains("export it or copy .env.example to .env before bootstrap"));
+    assert!(answers.contains("${DATABASE_URL:-}"));
+    assert!(answers.contains(
+        "cargo run -p my-app-api -- --bootstrap-database && scripts/check-webapps.sh bootstrap"
+    ));
+    assert!(!answers.contains("(cd web && bun install)"));
     assert!(answers.contains("name = \"web\""));
     assert!(answers.contains("dir = \"landing\""));
     assert!(answers.contains("kind = \"env-port\""));
     assert!(answers.contains("name = \"admin-panel\""));
+    assert!(answers.contains("role = \"spa\""));
+    assert!(answers.contains("role = \"astro\""));
+    assert!(answers.contains("role = \"admin\""));
+}
+
+// Repeat the dependency-backed proof with:
+// cargo test -p jig-sh bootstrap::tests::basic::generated_spa_coverage_counts_uncovered_future_production_modules -- --ignored --exact --nocapture
+#[cfg(unix)]
+#[test]
+#[ignore = "requires npm registry access and a local Node/npm toolchain"]
+fn generated_spa_coverage_counts_uncovered_future_production_modules() {
+    use std::fmt::Write as _;
+
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("coverage-proof");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: vec![parse_scaffold_frontend("web").unwrap()],
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            web_package_manager: Some("npm".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let dependencies = Command::new("scripts/check-webapps.sh")
+        .args(["dependencies-bootstrap", "web"])
+        .env("NODE_ENV", "production")
+        .env("NPM_CONFIG_OMIT", "dev")
+        .current_dir(&destination)
+        .output()
+        .unwrap();
+    assert!(
+        dependencies.status.success(),
+        "generated dependency bootstrap could not prepare the coverage fixture:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dependencies.stdout),
+        String::from_utf8_lossy(&dependencies.stderr)
+    );
+
+    let run_coverage = || {
+        Command::new("scripts/check-webapps.sh")
+            .arg("coverage")
+            .current_dir(&destination)
+            .output()
+            .unwrap()
+    };
+    let statement_coverage = || {
+        serde_json::from_str::<serde_json::Value>(
+            &fs::read_to_string(destination.join("web/coverage/coverage-summary.json")).unwrap(),
+        )
+        .unwrap()["total"]["statements"]["pct"]
+            .as_f64()
+            .unwrap()
+    };
+
+    let baseline = run_coverage();
+    assert!(
+        baseline.status.success(),
+        "generated SPA coverage baseline failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&baseline.stdout),
+        String::from_utf8_lossy(&baseline.stderr)
+    );
+    let baseline_statements = statement_coverage();
+    assert!(baseline_statements >= 80.0);
+
+    let mut uncovered_module = String::new();
+    for index in 0..20 {
+        write!(
+            uncovered_module,
+            "export function uncovered{index}(value: number): number {{\n  const shifted = value + {index};\n  const doubled = shifted * 2;\n  return doubled > 10 ? doubled : 10;\n}}\n\n"
+        )
+        .unwrap();
+    }
+    fs::write(
+        destination.join("web/src/uncovered-production.ts"),
+        uncovered_module,
+    )
+    .unwrap();
+
+    let negative = run_coverage();
+    assert!(!negative.status.success());
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&negative.stdout),
+        String::from_utf8_lossy(&negative.stderr)
+    );
+    assert!(diagnostics.contains("Coverage below threshold 80%"));
+    let uncovered_statements = statement_coverage();
+    assert!(
+        uncovered_statements < 80.0,
+        "future production module stayed outside the coverage denominator: baseline {baseline_statements}%, after addition {uncovered_statements}%"
+    );
+}
+
+#[test]
+fn rust_react_admin_dynamic_values_use_formatter_stable_boundaries() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo_name = "r".repeat(120);
+    let frontend_name = format!("admin-{}", "x".repeat(100));
+    let destination = temp.path().join(&repo_name);
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: vec![
+                parse_scaffold_frontend(&format!("{frontend_name}:admin")).unwrap(),
+            ],
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts::default(),
+    })
+    .unwrap();
+
+    let admin = destination.join(&frontend_name);
+    let theme_storage_key = format!("{frontend_name}-theme");
+    let index = fs::read_to_string(admin.join("index.html")).unwrap();
+    assert!(index.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
+    assert_eq!(index.matches(&theme_storage_key).count(), 1);
+    assert!(index.contains("localStorage.getItem(themeStorageKey)"));
+    assert!(index.contains("<!-- prettier-ignore -->\n    <title>"));
+
+    let providers = fs::read_to_string(admin.join("src/app/providers.tsx")).unwrap();
+    assert!(providers.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
+    assert_eq!(providers.matches(&theme_storage_key).count(), 1);
+    assert!(providers.contains("storageKey={themeStorageKey}"));
+
+    let shell = fs::read_to_string(admin.join("src/app/shell.tsx")).unwrap();
+    assert!(shell.contains("const appTitle = \""));
+    assert!(shell.contains(">{appTitle}</p>"));
+
+    let sidebar = fs::read_to_string(admin.join("src/components/app-sidebar.tsx")).unwrap();
+    assert!(sidebar.contains(&format!("const appName = \"{repo_name}\"")));
+    assert_eq!(sidebar.matches(&repo_name).count(), 1);
+    assert!(sidebar.contains(">{appName}</span>"));
+
+    let overview_test =
+        fs::read_to_string(admin.join("src/features/overview/overview-page.test.tsx")).unwrap();
+    assert!(overview_test.contains(&format!("const expectedAppName = \"{repo_name}\"")));
+    assert_eq!(overview_test.matches(&repo_name).count(), 1);
+    assert!(overview_test.contains("name: expectedAppName"));
+    assert!(overview_test.contains("screen.findByText(expectedAppName)"));
 }
 
 #[test]
@@ -1522,6 +2648,148 @@ fn scaffold_options_require_preset() {
 }
 
 #[test]
+fn rust_react_reserves_backend_dev_identity_across_frontend_sources() {
+    let cases = vec![
+        (
+            "--frontend",
+            ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: vec![parse_scaffold_frontend("api:spa").unwrap()],
+                frontend_list: Vec::new(),
+            },
+            AnswerOpts::default(),
+            "api",
+        ),
+        (
+            "--frontends",
+            ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: Vec::new(),
+                frontend_list: vec![parse_scaffold_frontend("API:admin").unwrap()],
+            },
+            AnswerOpts::default(),
+            "API",
+        ),
+        (
+            "frontend_apps",
+            ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                ..ScaffoldOpts::default()
+            },
+            AnswerOpts {
+                frontend_apps: vec![FrontendApp {
+                    name: "Api".into(),
+                    dir: "site".into(),
+                    coverage_threshold: 80,
+                    kind: "env-port".into(),
+                    role: "astro".into(),
+                }],
+                ..AnswerOpts::default()
+            },
+            "Api",
+        ),
+    ];
+
+    for (source, opts, answers, supplied_name) in cases {
+        let error = opts
+            .validate_init_invariants(&answers)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!("frontend app name '{supplied_name}'")),
+            "{source}: {error}"
+        );
+        assert!(
+            error.contains("reserved backend dev app 'api'"),
+            "{source}: {error}"
+        );
+        assert!(error.contains("JIG_DEV_API"), "{source}: {error}");
+        assert!(
+            error.contains("choose another frontend name"),
+            "{source}: {error}"
+        );
+    }
+}
+
+#[test]
+fn reserved_backend_dev_identity_is_scoped_to_rust_react() {
+    let api_frontend = FrontendApp {
+        name: "api".into(),
+        dir: "api".into(),
+        coverage_threshold: 80,
+        kind: "vite".into(),
+        role: "spa".into(),
+    };
+    let answers = AnswerOpts {
+        frontend_apps: vec![api_frontend],
+        ..AnswerOpts::default()
+    };
+
+    for preset in [None, Some(ScaffoldPreset::HarnessOnly)] {
+        ScaffoldOpts {
+            preset,
+            ..ScaffoldOpts::default()
+        }
+        .validate_init_invariants(&answers)
+        .unwrap();
+    }
+
+    ScaffoldOpts {
+        preset: Some(ScaffoldPreset::RustReact),
+        frontends: vec![parse_scaffold_frontend("api-client:spa").unwrap()],
+        ..ScaffoldOpts::default()
+    }
+    .validate_init_invariants(&AnswerOpts::default())
+    .unwrap();
+}
+
+#[test]
+fn run_init_rejects_merged_backend_named_frontend_before_template_or_destination_writes() {
+    let temp = tempdir().unwrap();
+    let answers_file = temp.path().join("answers.toml");
+    fs::write(
+        &answers_file,
+        r#"[[frontend_apps]]
+name = "Api"
+dir = "site"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+"#,
+    )
+    .unwrap();
+    let destination = temp.path().join("repo");
+
+    let error = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        template: Some(temp.path().join("missing-template").display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: false,
+        answers: AnswerOpts {
+            answers_file: Some(answers_file),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("frontend app name 'Api'"));
+    assert!(error.contains("reserved backend dev app 'api'"));
+    assert!(!destination.exists());
+}
+
+#[test]
 fn run_init_rejects_invalid_frontend_package_names_before_writes() {
     let temp = tempdir().unwrap();
     let destination = temp.path().join("repo");
@@ -1534,6 +2802,7 @@ fn run_init_rejects_invalid_frontend_package_names_before_writes() {
             frontends: vec![ScaffoldFrontend {
                 name: "-".into(),
                 kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
             }],
             frontend_list: Vec::new(),
         },
@@ -1556,6 +2825,209 @@ fn run_init_rejects_invalid_frontend_package_names_before_writes() {
     assert!(!destination.exists());
 }
 
+#[cfg(unix)]
+fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan, case: &str) {
+    let rendered = plan.render_files().unwrap();
+    let temp = tempdir().unwrap();
+    let mut rust_paths = Vec::new();
+
+    for (index, file) in rendered
+        .into_iter()
+        .filter(|file| file.relative.ends_with(".rs"))
+        .enumerate()
+    {
+        let path = temp.path().join(format!("rendered-{index}.rs"));
+        fs::write(&path, file.contents).unwrap();
+        rust_paths.push(path);
+    }
+
+    assert!(!rust_paths.is_empty(), "{case}: scaffold rendered no Rust");
+    let output = Command::new("rustfmt")
+        .args([
+            "--edition",
+            "2024",
+            "--check",
+            "--config",
+            "skip_children=true",
+        ])
+        .args(&rust_paths)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rendered Rust was not rustfmt-stable for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+
+    let accepted_name = "r".repeat(216);
+    let accepted_destination = temp.path().join("accepted");
+    fs::create_dir(&accepted_destination).unwrap();
+    let accepted_plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some(accepted_name.clone()),
+            ..AnswerOpts::default()
+        },
+        &accepted_destination,
+    )
+    .unwrap()
+    .unwrap();
+    accepted_plan.write(&accepted_destination, false).unwrap();
+
+    assert!(
+        accepted_destination
+            .join(format!("crates/{accepted_name}-test-support/Cargo.toml"))
+            .is_file()
+    );
+    let vite_config = fs::read_to_string(accepted_destination.join("web/vite.config.ts")).unwrap();
+    let repo_label = vite_config
+        .split_once("http://api.")
+        .unwrap()
+        .1
+        .split_once(".localhost:1355")
+        .unwrap()
+        .0;
+    assert_eq!(repo_label.len(), 63);
+    assert_eq!(repo_label, "r".repeat(63));
+
+    let metadata = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(&accepted_destination)
+        .output()
+        .unwrap();
+    assert!(
+        metadata.status.success(),
+        "maximum supported scaffold has invalid Cargo metadata\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&metadata.stdout),
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+
+    let rejected_destination = temp.path().join("rejected");
+    let error = run_init(InitOpts {
+        path: rejected_destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        template: Some(materialize_template_worktree().path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("r".repeat(217)),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("217-byte Cargo package stem"), "{error}");
+    assert!(error.contains("at most 216 bytes"), "{error}");
+    assert!(
+        error.contains("lib<stem>_test_support-<hash>.rmeta"),
+        "{error}"
+    );
+    assert!(!rejected_destination.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_paths() {
+    let planning_root = tempdir().unwrap();
+    let names = [
+        ("manual-qa", "node22-npm12-sqlite-web".to_string()),
+        ("width-40", format!("r{}", "a".repeat(39))),
+        ("width-52", format!("r{}", "a".repeat(51))),
+        ("width-71", format!("r{}", "a".repeat(70))),
+        ("supported-max-216", format!("r{}", "a".repeat(215))),
+    ];
+    for (label, name) in &names {
+        let expected_len = match *label {
+            "manual-qa" => 23,
+            "width-40" => 40,
+            "width-52" => 52,
+            "width-71" => 71,
+            "supported-max-216" => 216,
+            _ => unreachable!(),
+        };
+        assert_eq!(name.len(), expected_len, "{label}");
+    }
+
+    for db in [ScaffoldDb::None, ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+        let db_label = match db {
+            ScaffoldDb::None => "none",
+            ScaffoldDb::Sqlite => "sqlite",
+            ScaffoldDb::Postgres => "postgres",
+        };
+        for (name_label, repo_name) in &names {
+            let plan = scaffold::InitScaffoldPlan::from_opts(
+                &ScaffoldOpts {
+                    preset: Some(ScaffoldPreset::RustReact),
+                    db: Some(db),
+                    frontends: Vec::new(),
+                    frontend_list: Vec::new(),
+                },
+                &AnswerOpts {
+                    repo_name: Some(repo_name.clone()),
+                    ..AnswerOpts::default()
+                },
+                planning_root.path(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_rendered_scaffold_rust_is_formatted(&plan, &format!("{db_label}/{name_label}"));
+        }
+    }
+
+    for db in [ScaffoldDb::Sqlite, ScaffoldDb::Postgres] {
+        let db_label = match db {
+            ScaffoldDb::Sqlite => "sqlite",
+            ScaffoldDb::Postgres => "postgres",
+            ScaffoldDb::None => unreachable!(),
+        };
+        for migration_len in [13, 80, 216] {
+            let plan = scaffold::InitScaffoldPlan::from_opts(
+                &ScaffoldOpts {
+                    preset: Some(ScaffoldPreset::RustReact),
+                    db: Some(db),
+                    frontends: Vec::new(),
+                    frontend_list: Vec::new(),
+                },
+                &AnswerOpts {
+                    repo_name: Some("demo".into()),
+                    rust_migration_dir: Some("m".repeat(migration_len)),
+                    ..AnswerOpts::default()
+                },
+                planning_root.path(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_rendered_scaffold_rust_is_formatted(
+                &plan,
+                &format!("{db_label}/migration-width-{migration_len}"),
+            );
+        }
+    }
+}
+
 #[test]
 fn scaffold_defaults_to_web_frontend_and_no_db() {
     let temp = tempdir().unwrap();
@@ -1576,7 +3048,8 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
 
     assert_eq!(report["db"], "none");
     assert_eq!(report["frontends"][0]["name"], "web");
-    assert_eq!(report["frontends"][0]["kind"], "spa");
+    assert_eq!(report["frontends"][0]["kind"], "vite");
+    assert_eq!(report["frontends"][0]["role"], "spa");
     assert!(temp.path().join("web/package.json").exists());
     let has_db_crate = fs::read_dir(temp.path().join("crates"))
         .unwrap()
@@ -1592,11 +3065,370 @@ fn scaffold_defaults_to_web_frontend_and_no_db() {
     assert!(!cargo_toml.contains("sqlx ="));
     assert!(cargo_toml.contains("\"signal\", \"time\""));
     assert!(cargo_toml.ends_with('\n'));
+    let repo_name = report["repo_name"].as_str().unwrap();
+    let module_name = repo_name.replace('-', "_");
     let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
-    assert!(env_example.starts_with("BIND_ADDR=127.0.0.1:3000\nRUST_LOG="));
-    assert!(env_example.ends_with("=info,tower_http=info\n"));
-    assert!(!env_example.contains("DATABASE_URL"));
-    assert_eq!(env_example.lines().count(), 2);
+    assert_eq!(
+        env_example,
+        format!(
+            "BIND_ADDR=127.0.0.1:3000\nRUST_LOG={module_name}=info,{module_name}_api=info,tower_http=info\n"
+        )
+    );
+    let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
+    assert!(playwright.contains("const backendCommand = \"cargo run --locked"));
+    assert!(!playwright.contains("-- --bootstrap-database"));
+    assert!(!playwright.contains("E2E_DATABASE_URL"));
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
+    assert!(!workflow.contains("image: postgres"));
+    assert!(!workflow.contains("E2E_DATABASE_URL"));
+    assert!(!workflow.contains("SQLX_OFFLINE"));
+    let api_main = fs::read_to_string(
+        temp.path()
+            .join("apps")
+            .join(format!("{repo_name}-api/src/main.rs")),
+    )
+    .unwrap();
+    assert!(
+        api_main
+            .contains("    parse_command()?;\n    let config = app_crate::AppConfig::from_env()")
+    );
+    assert!(!api_main.contains("let command = parse_command()?;"));
+    assert!(!api_main.contains("--bootstrap-database"));
+    assert!(api_main.contains("match (arguments.next(), arguments.next())"));
+    assert!(api_main.contains("unexpected API argument"));
+    assert!(!api_main.contains("args_os().any"));
+
+    let output = std::process::Command::new("cargo")
+        .args(["fmt", "--all", "--", "--check"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "cargo fmt failed for the no-database scaffold\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    plan.write(temp.path(), false).unwrap();
+
+    let config = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
+    let api_server_config = config
+        .split_once(r#"name: "Rust API""#)
+        .unwrap()
+        .1
+        .split_once(r#"name: "Vite web""#)
+        .unwrap()
+        .0;
+    for fixed_binding in [
+        r#"HOST: "127.0.0.1""#,
+        "PORT: String(apiPort)",
+        r#"BIND_ADDR: `127.0.0.1:${apiPort}`"#,
+    ] {
+        assert!(
+            api_server_config.contains(fixed_binding),
+            "hostile inherited bindings must be replaced by {fixed_binding}"
+        );
+    }
+    assert!(!api_server_config.contains("process.env.HOST"));
+    assert!(!api_server_config.contains("process.env.PORT"));
+}
+
+#[test]
+fn scaffold_e2e_workflow_uses_each_package_manager_portably() {
+    let temp = tempdir().unwrap();
+    for (package_manager, setup, run, root_cache_locks, app_cache_locks) in [
+        (
+            "bun",
+            "oven-sh/setup-bun@v2",
+            "bun run",
+            "'bun.lock', 'bun.lockb'",
+            "format('{0}/bun.lock', matrix.app.dir), format('{0}/bun.lockb', matrix.app.dir)",
+        ),
+        (
+            "npm",
+            "npm install --global npm@",
+            "npm run",
+            "'npm-shrinkwrap.json', 'package-lock.json'",
+            "format('{0}/npm-shrinkwrap.json', matrix.app.dir), format('{0}/package-lock.json', matrix.app.dir)",
+        ),
+        (
+            "pnpm",
+            r#"package_manager_spec="$(scripts/check-webapps.sh package-manager-spec"#,
+            "pnpm run",
+            "'pnpm-lock.yaml'",
+            "format('{0}/pnpm-lock.yaml', matrix.app.dir)",
+        ),
+        (
+            "yarn",
+            r#"package_manager_spec="$(scripts/check-webapps.sh package-manager-spec"#,
+            "yarn run",
+            "'yarn.lock'",
+            "format('{0}/yarn.lock', matrix.app.dir)",
+        ),
+    ] {
+        let destination = temp.path().join(package_manager);
+        fs::create_dir(&destination).unwrap();
+        let plan = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                repo_name: Some("demo".into()),
+                ci_github_runner: Some("macos-14".into()),
+                web_package_manager: Some(package_manager.into()),
+                ..AnswerOpts::default()
+            },
+            &destination,
+        )
+        .unwrap()
+        .unwrap();
+
+        plan.write(&destination, false).unwrap();
+
+        let workflow = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+        let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow)
+            .expect("generated E2E workflow must be valid YAML");
+        assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
+        assert_eq!(
+            workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
+            "bash"
+        );
+        assert!(workflow.contains(setup), "missing {package_manager} setup");
+        assert!(workflow.contains("Classic required status checks can remain pending"));
+        assert!(workflow.contains("Bootstrap Node for dependency metadata"));
+        assert!(workflow.contains("scripts/check-webapps.sh node-version-file"));
+        assert!(workflow.contains("status=$?"));
+        assert!(workflow.contains("if [ \"$status\" -eq 1 ]"));
+        assert!(workflow.contains("exit \"$status\""));
+        assert!(!workflow.contains("if ! node_version_file="));
+        assert!(workflow.contains("${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}"));
+        assert!(workflow.contains("mktemp -d \"$RUNNER_TEMP/jig-node-version.XXXXXX\""));
+        assert!(workflow.contains("set -o noclobber"));
+        assert!(!workflow.contains("> .node-version"));
+        assert!(workflow.contains("APP_DIR: ${{ matrix.app.dir }}"));
+        assert_eq!(workflow.matches(r#"- "rust-toolchain""#).count(), 2);
+        assert!(workflow.contains(r#"scripts/check-webapps.sh dependencies-install "$APP_DIR""#));
+        assert!(workflow.contains(
+            "PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright"
+        ));
+        assert!(workflow.contains("- name: Cache Playwright Chromium"));
+        assert!(workflow.contains("path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}"));
+        assert!(workflow.contains("playwright-chromium-${{ hashFiles("));
+        assert!(
+            workflow
+                .contains("hashFiles('package.json', format('{0}/package.json', matrix.app.dir),")
+        );
+        assert!(
+            workflow.contains(root_cache_locks),
+            "Playwright cache key is missing root {package_manager} lockfiles"
+        );
+        assert!(
+            workflow.contains(app_cache_locks),
+            "Playwright cache key is missing app {package_manager} lockfiles"
+        );
+        if package_manager == "npm" {
+            for cache_path in [
+                "            npm-shrinkwrap.json",
+                "            package-lock.json",
+                "            ${{ matrix.app.dir }}/npm-shrinkwrap.json",
+                "            ${{ matrix.app.dir }}/package-lock.json",
+            ] {
+                assert!(
+                    workflow.contains(cache_path),
+                    "npm dependency cache is missing {cache_path}"
+                );
+            }
+            assert_eq!(workflow.matches(r#"- "npm-shrinkwrap.json""#).count(), 2);
+        }
+        assert!(workflow.contains(r#"- "**/.yarnrc.yml""#));
+        assert!(workflow.contains(r#"- "**/.yarn/**""#));
+        assert!(workflow.contains(r#"- "**/.node-version""#));
+        assert!(workflow.contains(r#"- "**/.npmrc""#));
+        assert!(workflow.contains("${{ matrix.app.dir }}/"));
+        assert!(
+            workflow
+                .contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e:install:ci"#)
+        );
+        assert!(workflow.contains(r#"scripts/check-webapps.sh run-script "$APP_DIR" test:e2e"#));
+        assert!(
+            !workflow.contains(&format!("{run} test:e2e")),
+            "{package_manager} E2E must use the managed checker launcher"
+        );
+        assert!(!workflow.contains(r#"cd "$APP_DIR" &&"#));
+        assert!(!workflow.contains("test:e2e:install --"));
+    }
+}
+
+#[test]
+fn scaffold_omits_e2e_workflow_without_spa_frontends() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![
+                parse_scaffold_frontend("docs:astro").unwrap(),
+                parse_scaffold_frontend("operations:admin").unwrap(),
+            ],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(
+        !plan
+            .output_paths()
+            .iter()
+            .any(|path| path == Path::new(".github/workflows/e2e.yml"))
+    );
+    plan.write(temp.path(), false).unwrap();
+    assert!(!temp.path().join(".github/workflows/e2e.yml").exists());
+}
+
+#[test]
+fn scaffold_named_ready_scopes_the_live_status_badge() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![parse_scaffold_frontend("ready:spa").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+    let app = fs::read_to_string(temp.path().join("ready/src/App.tsx")).unwrap();
+    let spec = fs::read_to_string(temp.path().join("ready/e2e/app.spec.ts")).unwrap();
+
+    assert!(app.contains(r#"aria-labelledby="service-status-card-label""#));
+    assert!(app.contains(r#"id="service-status-card-label">Rust API"#));
+    assert!(spec.contains(r#"getByRole("heading", { name: "Ready" })"#));
+    assert!(spec.contains(r#"getByRole("group", { name: "Rust API", exact: true })"#));
+    assert!(spec.contains(r#"serviceStatusCard.getByText("Ready", { exact: true })"#));
+    assert!(!spec.contains(r#"page.getByText("Ready", { exact: true })"#));
+}
+
+#[test]
+fn scaffold_e2e_workflow_serializes_dynamic_yaml_scalars() {
+    let temp = tempdir().unwrap();
+    let default_branch = r#"release/"quoted"\branch"#;
+    let runner = "self-hosted # e2e";
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![parse_scaffold_frontend("null:spa").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            default_branch: Some(default_branch.into()),
+            ci_github_runner: Some(runner.into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    assert_eq!(workflow_yaml["on"]["push"]["branches"][0], default_branch);
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], runner);
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["defaults"]["run"]["shell"],
+        "bash"
+    );
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["strategy"]["matrix"]["app"][0]["name"],
+        "null"
+    );
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["strategy"]["matrix"]["app"][0]["dir"],
+        "null"
+    );
+    assert_eq!(
+        workflow_yaml["on"]["pull_request"]["paths"], workflow_yaml["on"]["push"]["paths"],
+        "pull and push must render from one E2E path authority"
+    );
+    let setup_bun = workflow_yaml["jobs"]["e2e"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|step| step["name"] == "Setup Bun")
+        .unwrap();
+    assert_eq!(setup_bun["with"]["bun-version"], "1.3.14");
+}
+
+#[test]
+fn scaffold_postgres_development_database_name_respects_identifier_limit() {
+    let temp = tempdir().unwrap();
+    let repo_name = "project".repeat(12);
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some(repo_name),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let env_example = fs::read_to_string(temp.path().join(".env.example")).unwrap();
+    let database_name = env_example
+        .lines()
+        .find_map(|line| line.strip_prefix("DATABASE_URL="))
+        .and_then(|url| url.rsplit('/').next())
+        .unwrap();
+    assert_eq!(database_name.len(), 63);
+    assert!(database_name.contains('_'));
 }
 
 #[test]
@@ -1623,7 +3455,7 @@ fn scaffold_db_defaults_set_sqlx_metadata_and_disable_schema_dump() {
 }
 
 #[test]
-fn scaffold_bootstrap_command_uses_configured_frontend_package_managers() {
+fn scaffold_bootstrap_command_records_shared_web_dependency_state() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -1644,20 +3476,22 @@ fn scaffold_bootstrap_command_uses_configured_frontend_package_managers() {
     .unwrap()
     .unwrap();
 
-    for (package_manager, install_command) in [
-        ("bun", "bun install"),
-        ("npm", "npm install"),
-        ("pnpm", "pnpm install"),
-        ("yarn", "yarn install"),
-    ] {
+    for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         let mut answers = AnswerOpts {
             web_package_manager: Some(package_manager.into()),
             ..AnswerOpts::default()
         };
         plan.apply_answer_defaults(&mut answers);
         let bootstrap_command = answers.bootstrap_command.unwrap();
-        assert!(bootstrap_command.contains(&format!("(cd web && {install_command})")));
-        assert!(bootstrap_command.contains(&format!("(cd landing && {install_command})")));
+        assert!(bootstrap_command.ends_with("&& scripts/check-webapps.sh bootstrap"));
+        assert_eq!(
+            bootstrap_command
+                .matches("scripts/check-webapps.sh bootstrap")
+                .count(),
+            1
+        );
+        assert!(!bootstrap_command.contains("cd web"));
+        assert!(!bootstrap_command.contains("cd landing"));
     }
 
     let mut default_answers = AnswerOpts::default();
@@ -1667,18 +3501,51 @@ fn scaffold_bootstrap_command_uses_configured_frontend_package_managers() {
         default_answers
             .bootstrap_command
             .unwrap()
-            .contains("(cd web && bun install)")
+            .ends_with("&& scripts/check-webapps.sh bootstrap")
     );
 }
 
 #[test]
-fn scaffold_frontend_dev_scripts_install_dependencies_before_launch() {
-    for (package_manager, install_command) in [
-        ("bun", "bun install"),
-        ("npm", "npm install"),
-        ("pnpm", "pnpm install"),
-        ("yarn", "yarn install"),
-    ] {
+fn scaffold_database_bootstrap_validates_env_then_creates_and_migrates_database() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut answers = AnswerOpts::default();
+
+    plan.apply_answer_defaults(&mut answers);
+
+    let command = answers.bootstrap_command.unwrap();
+    let env_check = command
+        .find("if [ -z \"${DATABASE_URL:-}\" ] && ! awk")
+        .unwrap();
+    assert!(command.contains("export it or copy .env.example to .env"));
+    assert!(command.contains("export[[:space:]]+)?DATABASE_URL"));
+    let cargo_fetch = command.find("cargo fetch").unwrap();
+    let database_bootstrap = command
+        .find("cargo run -p demo-api -- --bootstrap-database")
+        .unwrap();
+    let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
+    assert!(env_check < cargo_fetch);
+    assert!(cargo_fetch < database_bootstrap);
+    assert!(database_bootstrap < frontend_bootstrap);
+}
+
+#[test]
+fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
+    for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         let temp = tempdir().unwrap();
         let plan = scaffold::InitScaffoldPlan::from_opts(
             &ScaffoldOpts {
@@ -1700,25 +3567,152 @@ fn scaffold_frontend_dev_scripts_install_dependencies_before_launch() {
         .unwrap()
         .unwrap();
 
+        assert_eq!(
+            plan.output_paths()
+                .iter()
+                .any(|path| path == Path::new(".yarnrc.yml")),
+            package_manager == "yarn"
+        );
         plan.write(temp.path(), false).unwrap();
 
         let web_package = fs::read_to_string(temp.path().join("web/package.json")).unwrap();
-        assert!(
-            web_package.contains(&format!(r#""dev": "{install_command} && vite""#)),
-            "missing Vite dev install command for {package_manager}"
-        );
+        assert!(web_package.contains(r#""dev": "vite""#));
+        assert!(!web_package.contains(" install && "));
         let landing_package = fs::read_to_string(temp.path().join("landing/package.json")).unwrap();
-        assert!(
-            landing_package.contains(&format!(
-                r#""dev": "{install_command} && astro dev --host ${{HOST:-127.0.0.1}} --port ${{PORT:-4321}}""#
-            )),
-            "missing Astro dev install command for {package_manager}"
+        assert!(landing_package.contains(r#""dev": "astro dev""#));
+        assert!(!landing_package.contains(" install && "));
+        let landing_config =
+            fs::read_to_string(temp.path().join("landing/astro.config.mjs")).unwrap();
+        assert!(landing_config.contains("process.env.HOST?.trim()"));
+        assert!(landing_config.contains("process.env.PORT"));
+        assert!(landing_config.contains("strictPort: true"));
+        let workspace_package = fs::read_to_string(temp.path().join("package.json")).unwrap();
+        assert!(workspace_package.contains(&format!(r#""packageManager": "{package_manager}@"#)));
+        assert_eq!(
+            temp.path().join("pnpm-workspace.yaml").exists(),
+            package_manager == "pnpm"
         );
+        assert_eq!(
+            temp.path().join(".yarnrc.yml").exists(),
+            package_manager == "yarn"
+        );
+        if package_manager == "pnpm" {
+            let pnpm_workspace =
+                fs::read_to_string(temp.path().join("pnpm-workspace.yaml")).unwrap();
+            let pnpm_workspace_yaml: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(&pnpm_workspace).unwrap();
+            assert_eq!(
+                pnpm_workspace_yaml["enableGlobalVirtualStore"].as_bool(),
+                Some(false)
+            );
+            assert!(
+                pnpm_workspace.contains("pre-run validation rewrite installed executable shims")
+            );
+            assert!(pnpm_workspace.contains("Keep\n# this allowlist narrow"));
+            assert!(pnpm_workspace.contains("authorizes dependency code execution"));
+            assert!(pnpm_workspace.contains("\nallowBuilds:\n  esbuild: true\n"));
+        }
+        if package_manager == "yarn" {
+            assert_eq!(
+                fs::read_to_string(temp.path().join(".yarnrc.yml")).unwrap(),
+                "nodeLinker: node-modules\n"
+            );
+        }
     }
 }
 
 #[test]
-fn scaffold_uses_existing_frontend_app_kind() {
+fn scaffold_preserves_legacy_frontend_kind_role_inference() {
+    let temp = tempdir().unwrap();
+    let legacy_astro = toml::from_str::<FrontendApp>(
+        r#"name = "docs"
+dir = "docs-site"
+coverage_threshold = 0
+kind = "env-port"
+"#,
+    )
+    .unwrap();
+    assert_eq!(legacy_astro.role, "astro");
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![
+                legacy_astro,
+                FrontendApp {
+                    name: "marketing".into(),
+                    dir: "marketing".into(),
+                    coverage_threshold: 0,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+            ],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let report = plan.write(temp.path(), false).unwrap();
+    assert_eq!(report["frontends"][0]["kind"], "env-port");
+    assert_eq!(report["frontends"][0]["role"], "astro");
+    assert_eq!(report["frontends"][1]["kind"], "vite");
+    assert_eq!(report["frontends"][1]["role"], "spa");
+    assert!(temp.path().join("docs-site/astro.config.mjs").exists());
+    assert!(temp.path().join("marketing/vite.config.ts").exists());
+
+    let mut answers = AnswerOpts::default();
+    plan.apply_answer_defaults(&mut answers);
+    assert_eq!(answers.frontend_apps[0].name, "docs");
+    assert_eq!(answers.frontend_apps[0].dir, "docs-site");
+    assert_eq!(answers.frontend_apps[0].kind, "env-port");
+    assert_eq!(answers.frontend_apps[0].role, "astro");
+    assert_eq!(answers.frontend_apps[1].name, "marketing");
+    assert_eq!(answers.frontend_apps[1].dir, "marketing");
+    assert_eq!(answers.frontend_apps[1].kind, "vite");
+    assert_eq!(answers.frontend_apps[1].role, "spa");
+}
+
+#[test]
+fn scaffold_playwright_resolves_repo_root_from_nested_spa_dir() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "web".into(),
+                dir: "clients/web".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "spa".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    plan.write(temp.path(), false).unwrap();
+
+    let config = fs::read_to_string(temp.path().join("clients/web/playwright.config.ts")).unwrap();
+    assert!(config.contains(r#"path.resolve(appDir, "../..")"#));
+}
+
+#[test]
+fn scaffold_uses_explicit_frontend_role_without_name_inference() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -1731,16 +3725,18 @@ fn scaffold_uses_existing_frontend_app_kind() {
             repo_name: Some("demo".into()),
             frontend_apps: vec![
                 FrontendApp {
-                    name: "docs".into(),
-                    dir: "docs-site".into(),
-                    coverage_threshold: 0,
-                    kind: "env-port".into(),
+                    name: "admin".into(),
+                    dir: "plain-admin-name".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
                 },
                 FrontendApp {
-                    name: "marketing".into(),
-                    dir: "marketing".into(),
-                    coverage_threshold: 0,
+                    name: "operations".into(),
+                    dir: "operations".into(),
+                    coverage_threshold: 80,
                     kind: "vite".into(),
+                    role: "admin".into(),
                 },
             ],
             ..AnswerOpts::default()
@@ -1751,19 +3747,84 @@ fn scaffold_uses_existing_frontend_app_kind() {
     .unwrap();
 
     let report = plan.write(temp.path(), false).unwrap();
-    assert_eq!(report["frontends"][0]["kind"], "astro");
-    assert_eq!(report["frontends"][1]["kind"], "spa");
-    assert!(temp.path().join("docs-site/astro.config.mjs").exists());
-    assert!(temp.path().join("marketing/vite.config.ts").exists());
 
-    let mut answers = AnswerOpts::default();
-    plan.apply_answer_defaults(&mut answers);
-    assert_eq!(answers.frontend_apps[0].name, "docs");
-    assert_eq!(answers.frontend_apps[0].dir, "docs-site");
-    assert_eq!(answers.frontend_apps[0].kind, "env-port");
-    assert_eq!(answers.frontend_apps[1].name, "marketing");
-    assert_eq!(answers.frontend_apps[1].dir, "marketing");
-    assert_eq!(answers.frontend_apps[1].kind, "vite");
+    assert_eq!(report["frontends"][0]["role"], "spa");
+    assert_eq!(report["frontends"][0]["ui"]["style"], "radix-nova");
+    assert!(temp.path().join("plain-admin-name/src/App.tsx").exists());
+    assert!(
+        temp.path()
+            .join("plain-admin-name/components.json")
+            .exists()
+    );
+    assert!(
+        !temp
+            .path()
+            .join("plain-admin-name/src/components/ui/sidebar.tsx")
+            .exists()
+    );
+    assert_eq!(report["frontends"][1]["role"], "admin");
+    assert_eq!(report["frontends"][1]["ui"]["style"], "radix-nova");
+    assert!(temp.path().join("operations/components.json").exists());
+    assert!(
+        temp.path()
+            .join("operations/src/components/ui/sidebar.tsx")
+            .exists()
+    );
+
+    for (index, dir) in [(0, "plain-admin-name"), (1, "operations")] {
+        let ui = &report["frontends"][index]["ui"];
+        let package: serde_json::Value =
+            serde_json::from_slice(&fs::read(temp.path().join(dir).join("package.json")).unwrap())
+                .unwrap();
+        let components: serde_json::Value = serde_json::from_slice(
+            &fs::read(temp.path().join(dir).join("components.json")).unwrap(),
+        )
+        .unwrap();
+        let readme = fs::read_to_string(temp.path().join(dir).join("README.md")).unwrap();
+        let cli_version = ui["cli_version"].as_str().unwrap();
+        let preset = ui["preset"].as_str().unwrap();
+        let base = ui["base"].as_str().unwrap();
+        let base_display = format!("{}{}", base[..1].to_ascii_uppercase(), &base[1..]);
+        let tailwind_major = ui["tailwind_major"].as_u64().unwrap();
+
+        assert_eq!(package["dependencies"]["shadcn"], cli_version);
+        assert_eq!(components["style"], ui["style"]);
+        assert!(readme.contains(&format!("shadcn CLI {cli_version}")));
+        assert!(readme.contains(&format!("`{preset}` preset")));
+        assert!(readme.contains(&format!("{base_display} primitives")));
+        assert!(readme.contains(&format!("Tailwind CSS {tailwind_major}")));
+        assert!(readme.contains(&format!("shadcn@{cli_version} info")));
+    }
+}
+
+#[test]
+fn scaffold_rejects_unknown_frontend_role() {
+    let temp = tempdir().unwrap();
+    let error = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "console".into(),
+                dir: "console".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "dashboard".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Unsupported frontend app role 'dashboard'"));
+    assert!(error.contains("spa, admin, or astro"));
 }
 
 #[test]
@@ -1797,12 +3858,14 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
                     dir: "shared".into(),
                     coverage_threshold: 0,
                     kind: "env-port".into(),
+                    role: "spa".into(),
                 },
                 FrontendApp {
                     name: "marketing".into(),
                     dir: "shared".into(),
                     coverage_threshold: 0,
                     kind: "env-port".into(),
+                    role: "spa".into(),
                 },
             ],
             ..AnswerOpts::default()
@@ -1812,6 +3875,39 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
     .unwrap_err()
     .to_string();
     assert!(duplicate_dir.contains("Duplicate scaffold frontend dir 'shared'"));
+
+    let duplicate_package_name = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            frontend_apps: vec![
+                FrontendApp {
+                    name: "foo_bar".into(),
+                    dir: "foo_bar".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+                FrontendApp {
+                    name: "foo-bar".into(),
+                    dir: "foo-bar".into(),
+                    coverage_threshold: 80,
+                    kind: "vite".into(),
+                    role: "spa".into(),
+                },
+            ],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(duplicate_package_name.contains("names 'foo_bar' and 'foo-bar' normalize"));
+    assert!(duplicate_package_name.contains("workspace package name 'foo-bar'"));
 
     let unsafe_dir = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -1826,6 +3922,7 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
                 dir: "../web".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
+                role: "spa".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -1848,6 +3945,7 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
                 dir: "web//app".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
+                role: "spa".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -1870,6 +3968,7 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
                 dir: "crates/ui".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
+                role: "spa".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -1878,6 +3977,29 @@ fn scaffold_rejects_duplicate_and_unsafe_frontend_app_dirs() {
     .unwrap_err()
     .to_string();
     assert!(rust_root_dir.contains("uses reserved directory 'crates/ui'"));
+}
+
+#[test]
+fn scaffold_rejects_frontend_package_name_reserved_by_root_workspace() {
+    let temp = tempdir().unwrap();
+    let error = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: None,
+            frontends: vec![parse_scaffold_frontend("demo_workspace").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("frontend 'demo_workspace'"));
+    assert!(error.contains("reserved root workspace package name 'demo-workspace'"));
 }
 
 #[test]
@@ -1896,6 +4018,7 @@ fn scaffold_rejects_mixed_scaffold_and_existing_frontend_app_inputs() {
                 dir: "admin".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
+                role: "spa".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -1982,10 +4105,13 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
     );
     let main_rs =
         fs::read_to_string(temp.path().join("apps/app-123-type-api/src/main.rs")).unwrap();
-    assert!(main_rs.contains("app_123_type_http::router"));
+    assert!(main_rs.contains("use ::app_123_type_http as app_http_crate;"));
+    assert!(main_rs.contains("app_http_crate::router"));
     let core_lib =
         fs::read_to_string(temp.path().join("crates/app-123-type-core/src/lib.rs")).unwrap();
-    assert!(core_lib.contains("APP_NAME: &str = \"app-123-type\""));
+    assert!(core_lib.contains("#[allow(clippy::useless_concat)]\npub const APP_NAME"));
+    assert!(core_lib.contains("pub const APP_NAME: &str = concat!("));
+    assert!(core_lib.contains("\"app-123-type\","));
 
     let mixed_case = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -2011,7 +4137,7 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
 }
 
 #[test]
-fn run_init_scaffold_writes_sanitized_repo_name_answer() {
+fn run_init_sqlite_scaffold_keeps_sanitized_database_names_and_ignores_aligned() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
@@ -2021,7 +4147,7 @@ fn run_init_scaffold_writes_sanitized_repo_name_answer() {
         path: destination.clone(),
         scaffold: ScaffoldOpts {
             preset: Some(ScaffoldPreset::RustReact),
-            db: None,
+            db: Some(ScaffoldDb::Sqlite),
             frontends: Vec::new(),
             frontend_list: Vec::new(),
         },
@@ -2048,6 +4174,38 @@ fn run_init_scaffold_writes_sanitized_repo_name_answer() {
     }));
     let answers = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(answers.contains("repo_name = \"app-123-type\""));
+    assert_eq!(
+        fs::read_to_string(destination.join(".env.example")).unwrap(),
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=app_123_type=info,app_123_type_api=info,tower_http=info\nDATABASE_URL=sqlite:app_123_type.db\n"
+    );
+    let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
+    assert!(gitignore.contains("/app_123_type.db\n"));
+    assert!(gitignore.contains("/app_123_type.db-*\n"));
+    for database_file in [
+        "app_123_type.db",
+        "app_123_type.db-wal",
+        "app_123_type.db-shm",
+        "app_123_type.db-journal",
+        "app_123_type.db-jig-migrate.lock",
+    ] {
+        fs::write(destination.join(database_file), "local database artifact").unwrap();
+    }
+    assert_eq!(
+        git_stdout(
+            &destination,
+            [
+                "check-ignore",
+                "--",
+                "app_123_type.db",
+                "app_123_type.db-wal",
+                "app_123_type.db-shm",
+                "app_123_type.db-journal",
+                "app_123_type.db-jig-migrate.lock",
+            ],
+        )
+        .unwrap(),
+        "app_123_type.db\napp_123_type.db-wal\napp_123_type.db-shm\napp_123_type.db-journal\napp_123_type.db-jig-migrate.lock"
+    );
     assert!(
         destination
             .join("apps/app-123-type-api/src/main.rs")
@@ -2068,6 +4226,7 @@ fn scaffold_sqlite_branch_generates_sqlite_db_helper() {
         &AnswerOpts {
             repo_name: Some("demo".into()),
             rust_migration_dir: Some("db/migrations".into()),
+            ci_github_runner: Some("macos-14".into()),
             ..AnswerOpts::default()
         },
         temp.path(),
@@ -2080,22 +4239,107 @@ fn scaffold_sqlite_branch_generates_sqlite_db_helper() {
     assert_eq!(report["db"], "sqlite");
     let cargo_toml = fs::read_to_string(temp.path().join("Cargo.toml")).unwrap();
     assert!(cargo_toml.contains("\"sqlite\""));
-    assert!(cargo_toml.contains("\"signal\", \"time\""));
+    assert!(cargo_toml.contains("\"signal\", \"sync\", \"time\""));
+    assert!(cargo_toml.contains("fs4 = \"0.13.1\""));
+    assert!(cargo_toml.contains("url = \"2\""));
     assert!(cargo_toml.ends_with('\n'));
     assert_eq!(
         fs::read_to_string(temp.path().join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,tower_http=info\nDATABASE_URL=sqlite:demo.db\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=demo=info,demo_api=info,tower_http=info\nDATABASE_URL=sqlite:demo.db\n"
     );
     let db_cargo = fs::read_to_string(temp.path().join("crates/demo-db/Cargo.toml")).unwrap();
     assert!(db_cargo.contains("anyhow.workspace = true"));
+    assert!(db_cargo.contains("fs4.workspace = true"));
+    assert!(db_cargo.contains("url.workspace = true"));
     assert!(db_cargo.contains("tokio.workspace = true"));
     let db_lib = fs::read_to_string(temp.path().join("crates/demo-db/src/lib.rs")).unwrap();
     assert!(db_lib.contains("SqlitePool"));
-    assert!(db_lib.contains(r#"sqlx::migrate!("../../db/migrations")"#));
+    assert!(db_lib.contains("sqlx::Sqlite::database_exists"));
+    assert!(db_lib.contains("OpenOptions::new()"));
+    assert!(db_lib.contains(".create_new(true)"));
+    assert!(db_lib.contains("options.get_filename()"));
+    assert!(db_lib.contains("fs::create_dir_all(parent)"));
+    assert!(!db_lib.contains("sqlx::Sqlite::create_database"));
+    assert!(db_lib.contains("create_if_missing"));
+    assert!(db_lib.contains("concurrent_create_if_missing_calls_are_idempotent"));
+    assert!(db_lib.contains("sqlx::migrate!(\n"));
+    assert!(db_lib.contains("\"../../db/migrations\"\n        )"));
     assert!(db_lib.contains("DEFAULT_DB_TIMEOUT"));
     assert!(db_lib.contains("connect_with_timeout"));
+    assert!(db_lib.contains("fs::canonicalize(&database_filename)"));
+    assert!(db_lib.contains("sqlite_database_url_is_in_memory"));
+    assert!(db_lib.contains("sqlite_database_url_semantics"));
+    assert!(db_lib.contains("requires_single_connection_pool"));
+    assert!(db_lib.contains("SqlitePoolOptions::new()"));
+    assert!(db_lib.contains(".max_connections(1)"));
+    assert!(db_lib.contains(".min_connections(1)"));
+    assert!(db_lib.contains(".idle_timeout(None)"));
+    assert!(db_lib.contains(".max_lifetime(None)"));
+    assert!(db_lib.contains(".test_before_acquire(false)"));
+    assert!(!db_lib.contains("num_idle()"));
+    assert!(db_lib.contains("mirrors_sqlx_ordered_in_memory_cache_semantics"));
+    assert!(db_lib.contains("in_memory_mode_ignores_an_existing_filename_for_locking"));
+    assert!(db_lib.contains("create_if_missing_does_not_materialize_an_in_memory_filename"));
+    assert!(db_lib.contains("symlink_aliases_share_the_canonical_migration_lock"));
     assert!(db_lib.contains("migrate_with_timeout"));
+    assert!(db_lib.contains("static SQLITE_MIGRATION_LOCK"));
+    assert!(db_lib.contains("fs4::fs_std::FileExt::try_lock_exclusive(&file)"));
+    assert!(db_lib.contains("Ok(true) => return Ok(Some(file))"));
+    assert!(db_lib.contains("Ok(false) =>"));
+    assert!(!db_lib.contains("fs4::lock_contended_error"));
+    assert!(db_lib.contains("in_memory_database_connects_and_migrates_without_a_file_lock"));
+    assert!(db_lib.contains("private_cache_in_memory_pool_waits_for_the_active_checkout"));
+    assert!(db_lib.contains("shared_in_memory_urls_keep_multiple_schema_aware_connections"));
+    assert!(db_lib.contains("ordinary_file_pool_keeps_multiple_schema_aware_connections"));
+    assert!(db_lib.contains("migration_mutex_is_shared_by_separate_in_memory_connections"));
     assert!(temp.path().join("db/migrations/.gitkeep").exists());
+    let playwright = fs::read_to_string(temp.path().join("web/playwright.config.ts")).unwrap();
+    assert!(playwright.contains("E2E_DATABASE_URL"));
+    assert!(playwright.contains("sqlite:${defaultDatabasePath}"));
+    assert!(playwright.contains("demo_web_e2e.sqlite"));
+    assert!(playwright.contains("-- --bootstrap-database"));
+    assert!(playwright.contains("['','-shm','-wal','-journal']"));
+    #[cfg(unix)]
+    {
+        let reset_line = playwright
+            .lines()
+            .find(|line| line.contains("node -e") && line.contains("fs.rmSync"))
+            .unwrap()
+            .trim();
+        let reset_command = reset_line
+            .strip_prefix('`')
+            .and_then(|line| line.strip_suffix("`,"))
+            .unwrap()
+            .replace("${defaultDatabasePath}", ".agent/tmp/demo_web_e2e.sqlite");
+        let database = temp.path().join(".agent/tmp/demo_web_e2e.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            fs::write(format!("{}{}", database.display(), suffix), "stale\n").unwrap();
+        }
+        assert!(
+            std::process::Command::new("bash")
+                .args(["-c", &reset_command])
+                .current_dir(temp.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            assert!(!Path::new(&format!("{}{}", database.display(), suffix)).exists());
+        }
+    }
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/e2e.yml")).unwrap();
+    let workflow_yaml = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    assert_eq!(workflow_yaml["jobs"]["e2e"]["runs-on"], "macos-14");
+    assert_eq!(
+        workflow_yaml["jobs"]["e2e"]["env"]["SQLX_OFFLINE_DIR"],
+        "${{ github.workspace }}/.sqlx"
+    );
+    assert!(!workflow.contains("image: postgres"));
+    assert!(!workflow.contains("E2E_DATABASE_URL"));
+    assert!(workflow.contains(r#"- "db/migrations/**""#));
+    assert!(workflow.contains(r#"- ".sqlx/**""#));
+    assert!(workflow.contains(r#"SQLX_OFFLINE: "true""#));
 }
 
 #[test]
@@ -2137,12 +4381,25 @@ fn scaffold_output_paths_include_template_collision_candidates() {
         "crates/demo-test-support/src/db.rs",
         "crates/demo-test-support/tests/http.rs",
         "migrations/.gitkeep",
+        "package.json",
+        ".node-version",
+        ".github/workflows/e2e.yml",
         "web/package.json",
+        "web/.gitignore",
+        "web/playwright.config.ts",
+        "web/e2e/app.spec.ts",
+        "web/components.json",
         "web/src/App.tsx",
+        "web/src/api.ts",
+        "web/src/components/ui/button.tsx",
+        "web/src/lib/utils.ts",
         "landing/package.json",
         "landing/src/pages/index.astro",
         "admin-panel/package.json",
-        "admin-panel/src/App.tsx",
+        "admin-panel/components.json",
+        "admin-panel/src/app/router.tsx",
+        "admin-panel/src/components/ui/sidebar.tsx",
+        "admin-panel/src/features/overview/overview-page.tsx",
     ] {
         assert!(
             paths.iter().any(|path| path == Path::new(expected)),
@@ -2228,6 +4485,69 @@ fn scaffold_generated_rust_workspace_has_valid_cargo_metadata() {
 }
 
 #[test]
+fn scaffold_test_support_uses_absolute_paths_for_local_module_name_collisions() {
+    let temp = tempdir().unwrap();
+
+    for repo_name in ["app", "db", "http", "responses"] {
+        let destination = temp.path().join(repo_name);
+        fs::create_dir(&destination).unwrap();
+        let plan = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: Some(ScaffoldDb::Sqlite),
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                repo_name: Some(repo_name.into()),
+                ..AnswerOpts::default()
+            },
+            &destination,
+        )
+        .unwrap()
+        .unwrap();
+        plan.write(&destination, false).unwrap();
+
+        let module_name = repo_name.replace('-', "_");
+        let test_support = destination
+            .join("crates")
+            .join(format!("{repo_name}-test-support"));
+        let lib = fs::read_to_string(test_support.join("src/lib.rs")).unwrap();
+        assert!(
+            lib.contains(&format!("use ::{module_name} as app_crate;"))
+                && lib.contains("app_crate::AppState::new()"),
+            "application crate path was ambiguous for {repo_name}:\n{lib}"
+        );
+        let app = fs::read_to_string(test_support.join("src/app.rs")).unwrap();
+        assert!(
+            app.contains(&format!("use ::{module_name} as app_crate;"))
+                && app.contains("app_crate::AppState::for_tests()"),
+            "application crate path was ambiguous for {repo_name}:\n{app}"
+        );
+        let db = fs::read_to_string(test_support.join("src/db.rs")).unwrap();
+        assert!(
+            db.contains(&format!("use ::{module_name}_db as app_db_crate;"))
+                && db.contains("pub type TestDbPool = app_db_crate::DbPool;"),
+            "database crate path was ambiguous for {repo_name}:\n{db}"
+        );
+
+        if repo_name == "app" {
+            let output = std::process::Command::new("cargo")
+                .args(["fmt", "--all", "--", "--check"])
+                .current_dir(&destination)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "cargo fmt failed for the colliding-name database scaffold\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
@@ -2283,6 +4603,1303 @@ fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
             .iter()
             .any(|path| path == "Cargo.toml")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn scaffold_preflight_rejects_symlink_boundaries_without_partial_or_outside_writes() {
+    use std::os::unix::fs::symlink;
+
+    fn plan_for(destination: &Path) -> scaffold::InitScaffoldPlan {
+        scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                repo_name: Some("demo".into()),
+                ..AnswerOpts::default()
+            },
+            destination,
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    for force in [false, true] {
+        let outside = tempdir().unwrap();
+        let outside_file = outside.path().join(format!("outside-{force}.toml"));
+        fs::write(&outside_file, "outside sentinel\n").unwrap();
+        let destination = tempdir().unwrap();
+        symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
+
+        let error = plan_for(destination.path())
+            .write(destination.path(), force)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("is a symlink"), "{error}");
+        assert_eq!(
+            fs::read_to_string(&outside_file).unwrap(),
+            "outside sentinel\n"
+        );
+        assert!(!destination.path().join("apps").exists());
+        assert!(!destination.path().join("web").exists());
+    }
+
+    for force in [false, true] {
+        let outside = tempdir().unwrap();
+        let outside_file = outside.path().join(format!("missing-{force}.toml"));
+        let destination = tempdir().unwrap();
+        symlink(&outside_file, destination.path().join("Cargo.toml")).unwrap();
+
+        let error = plan_for(destination.path())
+            .write(destination.path(), force)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("is a symlink"), "{error}");
+        assert!(!outside_file.exists(), "broken link target was created");
+        assert!(!destination.path().join("apps").exists());
+        assert!(!destination.path().join("web").exists());
+    }
+
+    for force in [false, true] {
+        let outside = tempdir().unwrap();
+        let destination = tempdir().unwrap();
+        symlink(outside.path(), destination.path().join("web")).unwrap();
+
+        let error = plan_for(destination.path())
+            .write(destination.path(), force)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("ancestor"), "{error}");
+        assert!(error.contains("is a symlink"), "{error}");
+        assert!(
+            !destination.path().join("Cargo.toml").exists(),
+            "a late unsafe output must fail before earlier scaffold files are published"
+        );
+        assert!(
+            fs::read_dir(outside.path()).unwrap().next().is_none(),
+            "scaffold wrote through a symlinked output ancestor"
+        );
+    }
+
+    for force in [false, true] {
+        let destination = tempdir().unwrap();
+        fs::create_dir(destination.path().join("Cargo.toml")).unwrap();
+
+        let error = plan_for(destination.path())
+            .write(destination.path(), force)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("destination leaf"), "{error}");
+        assert!(error.contains("is a directory"), "{error}");
+        assert!(!destination.path().join("apps").exists());
+        assert!(!destination.path().join("web").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn init_preflights_scaffold_and_agent_map_outputs_before_rendering_the_harness() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    for relative in ["Cargo.toml", managed_paths::AGENT_MAP_PATH] {
+        let destination = temp.path().join(relative.replace(['/', '.'], "-"));
+        fs::create_dir(&destination).unwrap();
+        let outside = temp
+            .path()
+            .join(format!("outside-{}", relative.replace('/', "-")));
+        fs::write(&outside, "outside sentinel\n").unwrap();
+        symlink(&outside, destination.join(relative)).unwrap();
+
+        let error = run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: Some(ScaffoldDb::None),
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            template: Some(template.path().display().to_string()),
+            template_mode: None,
+            vcs_ref: None,
+            force: true,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("is a symlink"), "{relative}: {error}");
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "outside sentinel\n");
+        assert!(
+            !destination.join(".jig.toml").exists(),
+            "managed rendering started before {relative} was rejected"
+        );
+        assert!(!destination.join("scripts/jig").exists());
+    }
+}
+
+#[test]
+fn init_rejects_portable_scaffold_output_collisions_before_any_repository_write() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    let app = |name: &str, dir: &str| FrontendApp {
+        name: name.into(),
+        dir: dir.into(),
+        coverage_threshold: 80,
+        kind: "vite".into(),
+        role: "spa".into(),
+    };
+
+    for force in [false, true] {
+        for (case_name, frontend_apps, expected_paths) in [
+            (
+                "scaffold-file-ancestor",
+                vec![app("client", "package.json")],
+                ["package.json", "package.json/.gitignore"],
+            ),
+            (
+                "template-file-ancestor",
+                vec![app("client", "scripts/jig")],
+                ["scripts/jig", "scripts/jig/.gitignore"],
+            ),
+            (
+                "case-folded-frontends",
+                vec![app("first", "Web"), app("second", "web")],
+                ["Web/", "web/"],
+            ),
+        ] {
+            let destination = temp.path().join(format!("{case_name}-{force}"));
+            fs::create_dir(&destination).unwrap();
+            let outside = temp.path().join(format!("outside-{case_name}-{force}"));
+            fs::write(&outside, "outside sentinel\n").unwrap();
+
+            let error = run_init(InitOpts {
+                path: destination.clone(),
+                scaffold: ScaffoldOpts {
+                    preset: Some(ScaffoldPreset::RustReact),
+                    db: Some(ScaffoldDb::None),
+                    frontends: Vec::new(),
+                    frontend_list: Vec::new(),
+                },
+                template: Some(template.path().display().to_string()),
+                template_mode: None,
+                vcs_ref: None,
+                force,
+                defaults: false,
+                no_input: true,
+                no_vault: true,
+                answers: AnswerOpts {
+                    repo_name: Some("demo".into()),
+                    frontend_apps,
+                    ..AnswerOpts::default()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+
+            assert!(
+                error.contains("Portable planned repository file collision"),
+                "{case_name}/{force}: {error}"
+            );
+            for expected in expected_paths {
+                assert!(
+                    error.contains(expected),
+                    "{case_name}/{force}: missing {expected:?} in {error}"
+                );
+            }
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "outside sentinel\n");
+            assert!(
+                destination.is_dir(),
+                "{case_name}/{force}: a pre-existing empty destination must remain"
+            );
+            assert!(
+                fs::read_dir(&destination).unwrap().next().is_none(),
+                "{case_name}/{force}: collision preflight partially mutated the destination"
+            );
+            assert!(!destination.join(".jig.toml").exists());
+            assert!(!destination.join("scripts/jig").exists());
+            assert!(!destination.join("Cargo.toml").exists());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn harness_only_init_rejects_win32_forbidden_managed_template_paths_before_publication() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    fs::write(
+        template.path().join("templates/project/bad:name.jinja"),
+        "nonportable\n",
+    )
+    .unwrap();
+    let destination = temp.path().join("repo");
+
+    let error = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::HarnessOnly),
+            ..ScaffoldOpts::default()
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("not portable to Windows"), "{error}");
+    assert!(error.contains("bad:name"), "{error}");
+    assert!(!destination.exists());
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn harness_only_init_rejects_non_unicode_managed_parent_before_publication() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let invalid_parent =
+        template
+            .path()
+            .join("templates/project")
+            .join(std::ffi::OsString::from_vec(
+                b"invalid-\xff-parent".to_vec(),
+            ));
+    fs::create_dir(&invalid_parent).unwrap();
+    fs::write(invalid_parent.join("valid-leaf.jinja"), "nonportable\n").unwrap();
+    let destination = temp.path().join("repo");
+
+    let error = run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::HarnessOnly),
+            ..ScaffoldOpts::default()
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("valid Unicode"), "{error}");
+    assert!(error.contains("valid-leaf"), "{error}");
+    assert!(!destination.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn adopt_rejects_win32_forbidden_managed_template_paths_before_repository_mutation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    fs::write(
+        template.path().join("templates/project/bad?name.jinja"),
+        "nonportable\n",
+    )
+    .unwrap();
+    let repo = temp.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    fs::write(repo.join("sentinel"), "preserve\n").unwrap();
+
+    let error = run_adopt(AdoptOpts {
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("not portable to Windows"), "{error}");
+    assert_eq!(
+        fs::read_to_string(repo.join("sentinel")).unwrap(),
+        "preserve\n"
+    );
+    assert!(!repo.join("bad?name").exists());
+    assert!(!repo.join(".jig.toml").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn update_rejects_new_control_bearing_managed_template_paths_before_repository_mutation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    fs::write(repo.join("sentinel"), "preserve\n").unwrap();
+    let template_path = template.path().display().to_string();
+
+    run_adopt(AdoptOpts {
+        path: repo.clone(),
+        template: Some(template_path.clone()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+    let answers_before = fs::read(repo.join(".jig.toml")).unwrap();
+    fs::write(
+        template
+            .path()
+            .join("templates/project/bad\u{1f}name.jinja"),
+        "nonportable\n",
+    )
+    .unwrap();
+
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: Some(template_path),
+        template_mode: None,
+        recopy: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("not portable to Windows"), "{error}");
+    assert_eq!(fs::read(repo.join(".jig.toml")).unwrap(), answers_before);
+    assert_eq!(
+        fs::read_to_string(repo.join("sentinel")).unwrap(),
+        "preserve\n"
+    );
+    assert!(!repo.join("bad\u{1f}name").exists());
+}
+
+#[test]
+fn init_rolls_back_new_destination_after_planned_output_collision() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    let app = |name: &str, dir: &str| FrontendApp {
+        name: name.into(),
+        dir: dir.into(),
+        coverage_threshold: 80,
+        kind: "vite".into(),
+        role: "spa".into(),
+    };
+
+    for force in [false, true] {
+        for (case_name, frontend_apps) in [
+            (
+                "internal-case-folded-frontends",
+                vec![app("first", "Web"), app("second", "web")],
+            ),
+            (
+                "managed-scaffold-ancestor",
+                vec![app("client", "scripts/jig")],
+            ),
+        ] {
+            let created_ancestor = temp.path().join(format!("{case_name}-{force}"));
+            let destination = created_ancestor.join("nested/new-repo");
+            assert!(!destination.exists());
+
+            let error = run_init(InitOpts {
+                path: destination.clone(),
+                scaffold: ScaffoldOpts {
+                    preset: Some(ScaffoldPreset::RustReact),
+                    db: Some(ScaffoldDb::None),
+                    frontends: Vec::new(),
+                    frontend_list: Vec::new(),
+                },
+                template: Some(template.path().display().to_string()),
+                template_mode: None,
+                vcs_ref: None,
+                force,
+                defaults: false,
+                no_input: true,
+                no_vault: true,
+                answers: AnswerOpts {
+                    repo_name: Some("demo".into()),
+                    frontend_apps,
+                    ..AnswerOpts::default()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+
+            assert!(
+                error.contains("Portable planned repository file collision"),
+                "{case_name}/{force}: {error}"
+            );
+            assert!(
+                !destination.exists(),
+                "{case_name}/{force}: failed init left its new destination behind"
+            );
+            assert!(
+                !created_ancestor.exists(),
+                "{case_name}/{force}: failed init left created parent directories behind"
+            );
+        }
+    }
+}
+
+#[test]
+fn init_destination_rollback_preserves_existing_and_concurrently_created_destinations() {
+    let temp = tempdir().unwrap();
+
+    let pre_existing = temp.path().join("pre-existing");
+    fs::create_dir(&pre_existing).unwrap();
+    InitMutationTransaction::create(&pre_existing)
+        .unwrap()
+        .rollback()
+        .unwrap();
+    assert!(pre_existing.is_dir());
+
+    let with_content = temp.path().join("created/with-content");
+    let mut rollback = InitMutationTransaction::create(&with_content).unwrap();
+    fs::create_dir_all(&with_content).unwrap();
+    fs::write(with_content.join("concurrent.txt"), "preserve\n").unwrap();
+    rollback.rollback().unwrap();
+    assert_eq!(
+        fs::read_to_string(with_content.join("concurrent.txt")).unwrap(),
+        "preserve\n"
+    );
+    assert!(temp.path().join("created").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn init_rejects_an_existing_final_symlink_destination() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target");
+    let link = temp.path().join("link");
+    fs::create_dir(&target).unwrap();
+    symlink(&target, &link).unwrap();
+    let resolved = path::resolve_init_destination(&link, temp.path()).unwrap();
+    assert_eq!(resolved, link);
+    let error = validate_init_destination(&resolved, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not a real directory"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_init_tree_is_private_then_published_with_normal_directory_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let probe = temp.path().join("mode-probe");
+    fs::create_dir(&probe).unwrap();
+    let expected_mode = fs::metadata(&probe).unwrap().permissions().mode() & 0o777;
+    fs::remove_dir(&probe).unwrap();
+
+    let destination = temp.path().join("new-top/nested/repo");
+    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
+    let staging = transaction
+        .staged_publication
+        .as_ref()
+        .unwrap()
+        .publish_source
+        .clone();
+    assert_eq!(
+        fs::metadata(&staging).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    fs::write(
+        transaction.work_destination().join("sentinel"),
+        "complete\n",
+    )
+    .unwrap();
+    assert!(!destination.exists());
+
+    transaction.commit().unwrap();
+    assert_eq!(
+        fs::metadata(temp.path().join("new-top"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        expected_mode
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join("sentinel")).unwrap(),
+        "complete\n"
+    );
+    assert!(!staging.exists());
+}
+
+#[test]
+fn missing_init_tree_publication_never_replaces_concurrent_top_component() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("contended/nested/repo");
+    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
+    let staging = transaction
+        .staged_publication
+        .as_ref()
+        .unwrap()
+        .publish_source
+        .clone();
+    fs::write(transaction.work_destination().join("generated"), "jig\n").unwrap();
+    fs::create_dir(temp.path().join("contended")).unwrap();
+    fs::write(temp.path().join("contended/foreign"), "preserve\n").unwrap();
+
+    let error = transaction.commit().unwrap_err().to_string();
+    assert!(
+        error.contains("without replacing concurrent path"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("contended/foreign")).unwrap(),
+        "preserve\n"
+    );
+    assert!(!destination.exists());
+    assert!(!staging.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_init_tree_rejects_an_intermediate_symlink_swap_before_file_publication() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("new-top/nested/repo");
+    let mut transaction = InitMutationTransaction::create(&destination).unwrap();
+    let relative = Path::new("generated");
+    transaction.prepare_file_publication(relative).unwrap();
+
+    let staging = transaction
+        .staged_publication
+        .as_ref()
+        .unwrap()
+        .publish_source
+        .clone();
+    let intermediate = staging.join("nested");
+    let retained_intermediate = staging.join("nested-original");
+    let foreign_intermediate = temp.path().join("foreign-nested");
+    fs::create_dir(&foreign_intermediate).unwrap();
+    fs::create_dir(foreign_intermediate.join("repo")).unwrap();
+    fs::write(foreign_intermediate.join("marker"), "preserve\n").unwrap();
+    fs::rename(&intermediate, &retained_intermediate).unwrap();
+    symlink(&foreign_intermediate, &intermediate).unwrap();
+
+    let error = path::write_repository_file_atomic_staged(
+        transaction.work_destination(),
+        relative,
+        b"jig\n",
+        path::RepositoryFileLeaf::Missing,
+        || transaction.verify_destination_identity(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("replaced while init was running"), "{error}");
+    assert!(!foreign_intermediate.join("repo/generated").exists());
+    assert_eq!(
+        fs::read_to_string(foreign_intermediate.join("marker")).unwrap(),
+        "preserve\n"
+    );
+
+    let rollback = transaction.rollback().unwrap_err().to_string();
+    assert!(rollback.contains("Preserving the complete staging tree"));
+    fs::remove_file(&intermediate).unwrap();
+    fs::rename(&retained_intermediate, &intermediate).unwrap();
+    fs::remove_dir_all(&staging).unwrap();
+}
+
+#[test]
+fn second_disposal_quarantine_preserves_post_inspection_replacements() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    fs::create_dir(&root).unwrap();
+    let transaction = InitMutationTransaction::create(&root).unwrap();
+
+    let inspected_file = root.join("inspected-file");
+    let retained_file = root.join("retained-file");
+    fs::write(&inspected_file, "jig\n").unwrap();
+    let expected_file = transaction.snapshot_absolute_path(&inspected_file).unwrap();
+    fs::rename(&inspected_file, &retained_file).unwrap();
+    fs::write(&inspected_file, "foreign\n").unwrap();
+    let error = transaction
+        .dispose_snapshot_leaf(Path::new("managed"), &inspected_file, &expected_file)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("refusing to unlink replacement"), "{error}");
+    assert_eq!(fs::read_to_string(&inspected_file).unwrap(), "foreign\n");
+    assert_eq!(fs::read_to_string(&retained_file).unwrap(), "jig\n");
+
+    let inspected_directory = root.join("inspected-directory");
+    let retained_directory = root.join("retained-directory");
+    fs::create_dir(&inspected_directory).unwrap();
+    let expected_directory = path::repository_directory_commit_at(&inspected_directory).unwrap();
+    fs::rename(&inspected_directory, &retained_directory).unwrap();
+    fs::create_dir(&inspected_directory).unwrap();
+    fs::write(inspected_directory.join("foreign"), "preserve\n").unwrap();
+    let error = transaction
+        .dispose_empty_owned_directory(
+            Path::new("owned"),
+            &inspected_directory,
+            &inspected_directory,
+            expected_directory,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("refusing to remove replacement"), "{error}");
+    assert_eq!(
+        fs::read_to_string(inspected_directory.join("foreign")).unwrap(),
+        "preserve\n"
+    );
+    assert!(retained_directory.is_dir());
+}
+
+#[test]
+fn retained_generation_budget_fails_before_a_low_soft_handle_limit() {
+    let planned = (0..12)
+        .map(|index| PathBuf::from(format!("nested/{index}/generated")))
+        .collect::<BTreeSet<_>>();
+    let repeated_generation_count = 2;
+    let required = retained_generation_handle_requirement(&planned, repeated_generation_count);
+
+    let error = validate_retained_generation_budget(
+        &planned,
+        repeated_generation_count,
+        Some(required + 9),
+        10,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("soft handle limit"), "{error}");
+    validate_retained_generation_budget(
+        &planned,
+        repeated_generation_count,
+        Some(required + 10),
+        10,
+    )
+    .unwrap();
+}
+
+#[test]
+fn retained_generation_budget_caps_planned_and_repeated_generations_together() {
+    let planned = (0..MAX_EXISTING_INIT_RETAINED_GENERATIONS)
+        .map(|index| PathBuf::from(format!("generated-{index}")))
+        .collect::<BTreeSet<_>>();
+
+    validate_retained_generation_budget(&planned, 0, None, 0).unwrap();
+    let error = validate_retained_generation_budget(&planned, 1, None, 0)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains(&format!(
+            "plans {} generated file generations",
+            MAX_EXISTING_INIT_RETAINED_GENERATIONS + 1
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn retained_generation_model_matches_preimages_first_outputs_and_explicit_repeats() {
+    fn snapshot_handle_count(snapshot: &InitPathSnapshot) -> usize {
+        usize::from(!matches!(snapshot, InitPathSnapshot::Missing))
+    }
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    fs::create_dir_all(root.join("nested")).unwrap();
+    let first = Path::new("nested/first");
+    let second = Path::new("nested/second");
+    fs::write(root.join(first), "first preimage\n").unwrap();
+    fs::write(root.join(second), "second preimage\n").unwrap();
+
+    let mut transaction = InitMutationTransaction::create(&root).unwrap();
+    publish_existing_transaction_file(&mut transaction, first, b"first Jig generation\n");
+    publish_existing_transaction_file(&mut transaction, second, b"second Jig generation\n");
+    publish_existing_transaction_file(&mut transaction, first, b"repeated Jig generation\n");
+
+    let retained_file_generations = transaction
+        .files
+        .values()
+        .map(|mutation| {
+            snapshot_handle_count(&mutation.before)
+                + mutation
+                    .expected_jig_states
+                    .iter()
+                    .map(snapshot_handle_count)
+                    .sum::<usize>()
+        })
+        .sum::<usize>();
+    assert_eq!(retained_file_generations, 2 * 2 + 1);
+
+    let planned = BTreeSet::from([first.to_path_buf(), second.to_path_buf()]);
+    assert_eq!(
+        retained_generation_handle_requirement(&planned, 1),
+        retained_file_generations
+            + 1 // one retained directory prefix: nested
+            + 1 // one private write-staging directory for that parent
+            + RETAINED_GENERATION_HANDLE_HEADROOM
+    );
+
+    transaction.rollback().unwrap();
+    assert_eq!(
+        fs::read_to_string(root.join(first)).unwrap(),
+        "first preimage\n"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(second)).unwrap(),
+        "second preimage\n"
+    );
+}
+
+#[cfg(unix)]
+const EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_ENV: &str =
+    "JIG_TEST_EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER";
+#[cfg(unix)]
+const EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_TEST: &str = "bootstrap::tests::basic::existing_empty_default_init_succeeds_with_256_soft_handle_limit_helper";
+
+#[cfg(unix)]
+#[test]
+fn existing_empty_default_init_succeeds_with_256_soft_handle_limit() {
+    let _guard = lock_env();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_TEST,
+            "--nocapture",
+        ])
+        .env(EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_ENV, "1")
+        .env_remove(GIT_BIN_ENV)
+        .env_remove(path::INVOCATION_CWD_ENV)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "soft-limit init helper failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn existing_empty_default_init_succeeds_with_256_soft_handle_limit_helper() {
+    if std::env::var_os(EXISTING_INIT_SOFT_HANDLE_LIMIT_HELPER_ENV).is_none() {
+        return;
+    }
+
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: the isolated helper owns this process and `limit` is writable.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0,
+        "failed to read helper descriptor limit: {}",
+        std::io::Error::last_os_error()
+    );
+    let requested: libc::rlim_t = 256;
+    assert!(
+        limit.rlim_max == libc::RLIM_INFINITY || limit.rlim_max >= requested,
+        "helper hard descriptor limit {} is below {requested}",
+        limit.rlim_max
+    );
+    limit.rlim_cur = requested;
+    // SAFETY: this limit change is confined to the isolated helper subprocess.
+    assert_eq!(
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) },
+        0,
+        "failed to set helper descriptor limit: {}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(process_soft_handle_limit(), Some(256));
+
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("existing-empty");
+    fs::create_dir(&destination).unwrap();
+    let report = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(destination.clone(), false))
+    })
+    .unwrap();
+
+    assert_eq!(report["scaffold"]["preset"], "rust-react");
+    assert!(destination.join(".jig.toml").is_file());
+    assert!(
+        destination
+            .join("apps/rollback-demo-api/Cargo.toml")
+            .is_file()
+    );
+    assert!(destination.join("web/e2e/app.spec.ts").is_file());
+}
+
+fn publish_existing_transaction_file(
+    transaction: &mut InitMutationTransaction,
+    relative: &Path,
+    contents: &[u8],
+) {
+    transaction
+        .plan_regular_file_bytes(relative, contents)
+        .unwrap();
+    transaction.prepare_file_publication(relative).unwrap();
+    let permissions = transaction.publication_permissions(relative).unwrap();
+    let staging = transaction
+        .write_staging_path(relative)
+        .unwrap()
+        .to_path_buf();
+    let commit = path::write_repository_file_atomic_guarded(
+        transaction.work_destination(),
+        relative,
+        contents,
+        permissions,
+        &staging,
+        || transaction.verify_destination_identity(),
+    )
+    .unwrap();
+    transaction.record_regular_commit(relative, commit).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn guarded_publication_rejects_root_and_nested_parent_swaps_without_touching_foreign_trees() {
+    for swap_nested_parent in [false, true] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("repo");
+        fs::create_dir(&root).unwrap();
+        let relative = if swap_nested_parent {
+            fs::create_dir(root.join("scripts")).unwrap();
+            Path::new("scripts/generated")
+        } else {
+            Path::new("generated")
+        };
+        let mut transaction = InitMutationTransaction::create(&root).unwrap();
+        transaction
+            .plan_regular_file_bytes(relative, b"jig\n")
+            .unwrap();
+        transaction.prepare_file_publication(relative).unwrap();
+        let staging = transaction
+            .write_staging_path(relative)
+            .unwrap()
+            .to_path_buf();
+        let root_identity = path::repository_path_identity(&root).unwrap();
+        let nested_identity = swap_nested_parent
+            .then(|| path::repository_path_identity(&root.join("scripts")).unwrap());
+        let moved = temp.path().join(if swap_nested_parent {
+            "moved-scripts"
+        } else {
+            "moved-repo"
+        });
+        let mut checks = 0;
+        let error = path::write_repository_file_atomic_guarded(
+            &root,
+            relative,
+            b"jig\n",
+            None,
+            &staging,
+            || {
+                checks += 1;
+                if checks == 2 {
+                    if swap_nested_parent {
+                        fs::rename(root.join("scripts"), &moved)?;
+                        fs::create_dir(root.join("scripts"))?;
+                        fs::write(root.join("scripts/foreign"), "preserve\n")?;
+                    } else {
+                        fs::rename(&root, &moved)?;
+                        fs::create_dir(&root)?;
+                        fs::write(root.join("foreign"), "preserve\n")?;
+                    }
+                }
+                if path::repository_path_identity(&root)? != root_identity {
+                    bail!("root changed at guarded publication boundary");
+                }
+                if let Some(expected) = &nested_identity {
+                    if path::repository_path_identity(&root.join("scripts"))? != *expected {
+                        bail!("nested parent changed at guarded publication boundary");
+                    }
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("changed at guarded publication boundary"),
+            "{error}"
+        );
+        let foreign_root = if swap_nested_parent {
+            root.join("scripts")
+        } else {
+            root.clone()
+        };
+        assert_eq!(
+            fs::read_to_string(foreign_root.join("foreign")).unwrap(),
+            "preserve\n"
+        );
+        assert!(!foreign_root.join("generated").exists());
+        assert!(!moved.join("generated").exists());
+        let _ = transaction.rollback();
+    }
+}
+
+#[test]
+fn rollback_preserves_same_inode_foreign_rewrite_and_recreated_owned_directory() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    fs::create_dir(&root).unwrap();
+
+    let mut file_transaction = InitMutationTransaction::create(&root).unwrap();
+    publish_existing_transaction_file(&mut file_transaction, Path::new("managed"), b"jig-state\n");
+    fs::write(root.join("managed"), b"foreign!!\n").unwrap();
+    let error = file_transaction.rollback().unwrap_err().to_string();
+    assert!(error.contains("changed after Jig wrote it"), "{error}");
+    assert_eq!(fs::read(root.join("managed")).unwrap(), b"foreign!!\n");
+
+    let mut directory_transaction = InitMutationTransaction::create(&root).unwrap();
+    publish_existing_transaction_file(
+        &mut directory_transaction,
+        Path::new("owned/generated"),
+        b"jig\n",
+    );
+    fs::remove_file(root.join("owned/generated")).unwrap();
+    fs::remove_dir(root.join("owned")).unwrap();
+    fs::create_dir(root.join("owned")).unwrap();
+    fs::write(root.join("owned/foreign"), "preserve\n").unwrap();
+    let error = directory_transaction.rollback().unwrap_err().to_string();
+    assert!(error.contains("owned ancestor"), "{error}");
+    assert_eq!(
+        fs::read_to_string(root.join("owned/foreign")).unwrap(),
+        "preserve\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn late_init_failure_removes_managed_scaffold_agent_map_and_partial_git_outputs() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let git = temp.path().join("failing-git");
+    write_executable_test_script(
+        &git,
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    mkdir -p .git/objects/aa\n    printf 'ref: refs/heads/main\\n' > .git/HEAD\n    printf 'partial\\n' > .git/objects/aa/object\n    printf 'fatal: injected late failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
+    );
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+
+    let created_parent = temp.path().join("created-parent");
+    let destination = created_parent.join("nested/repo");
+    let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(destination.clone(), false))
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("git init -b main failed"), "{error}");
+    assert!(error.contains("injected late failure"), "{error}");
+    assert!(
+        !destination.exists(),
+        "late failure left generated repo output"
+    );
+    assert!(
+        !created_parent.exists(),
+        "late failure left transaction-owned parent directories"
+    );
+
+    let existing = temp.path().join("existing-empty");
+    fs::create_dir(&existing).unwrap();
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(existing.clone(), false))
+    })
+    .unwrap_err();
+    assert!(existing.is_dir());
+    assert!(fs::read_dir(&existing).unwrap().next().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn late_forced_init_failure_restores_user_files_bytes_and_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let git = temp.path().join("failing-git");
+    write_executable_test_script(
+        &git,
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    printf 'fatal: injected rollback test\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
+    );
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let destination = temp.path().join("existing");
+    fs::create_dir(&destination).unwrap();
+    fs::write(destination.join(".gitignore"), b"user bytes\n").unwrap();
+    fs::set_permissions(
+        destination.join(".gitignore"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    fs::write(destination.join("sentinel.txt"), "keep me\n").unwrap();
+    let before = regular_file_tree_snapshot(&destination);
+
+    let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(destination.clone(), true))
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("injected rollback test"), "{error}");
+    assert_eq!(regular_file_tree_snapshot(&destination), before);
+    assert_eq!(
+        fs::metadata(destination.join(".gitignore"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn late_init_rollback_preserves_foreign_file_changes_and_surfaces_both_failures() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let git = temp.path().join("mutating-git");
+    write_executable_test_script(
+        &git,
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    printf 'foreign concurrent contents\\n' > \"$JIG_TEST_FOREIGN_DESTINATION/.jig.toml\"\n    printf 'fatal: injected primary failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
+    );
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let destination = temp.path().join("existing");
+    fs::create_dir(&destination).unwrap();
+    let _destination = EnvVarGuard::set("JIG_TEST_FOREIGN_DESTINATION", destination.as_os_str());
+
+    let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(destination.clone(), false))
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("injected primary failure"), "{error}");
+    assert!(
+        error.contains("failed to roll back init changes"),
+        "{error}"
+    );
+    assert!(
+        error.contains(".jig.toml changed after Jig wrote it"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join(".jig.toml")).unwrap(),
+        "foreign concurrent contents\n"
+    );
+    let remaining = regular_file_tree_snapshot(&destination);
+    assert_eq!(remaining.len(), 1, "{remaining:?}");
+    assert!(remaining.contains_key(Path::new(".jig.toml")));
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_staged_git_init_never_claims_concurrent_destination_metadata() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("existing");
+    fs::create_dir(&destination).unwrap();
+    let git = temp.path().join("concurrent-git");
+    write_executable_test_script(
+        &git,
+        "#!/bin/sh\nfor arg in \"$@\"; do\n  if [ \"$arg\" = \"init\" ]; then\n    mkdir -p \"$JIG_TEST_CONCURRENT_GIT_DESTINATION/.git\"\n    printf 'foreign git metadata\\n' > \"$JIG_TEST_CONCURRENT_GIT_DESTINATION/.git/foreign\"\n    mkdir -p .git/objects\n    printf 'partial staged metadata\\n' > .git/HEAD\n    printf 'fatal: staged git failure\\n' >&2\n    exit 1\n  fi\ndone\nexec git \"$@\"\n",
+    );
+    let _git = EnvVarGuard::set(GIT_BIN_ENV, &git);
+    let _destination = EnvVarGuard::set(
+        "JIG_TEST_CONCURRENT_GIT_DESTINATION",
+        destination.as_os_str(),
+    );
+
+    let error = with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_init(rollback_test_init_opts(destination.clone(), false))
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("staged git failure"), "{error}");
+    assert!(
+        !error.contains("failed to roll back init changes"),
+        "foreign .git must not be transaction-owned: {error}"
+    );
+    assert_eq!(
+        fs::read_to_string(destination.join(".git/foreign")).unwrap(),
+        "foreign git metadata\n"
+    );
+    assert!(!destination.join(".jig.toml").exists());
+    assert!(!destination.join("Cargo.toml").exists());
+    assert!(fs::read_dir(&destination).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".jig-git-init-")
+    }));
+}
+
+#[test]
+fn init_destination_accepts_an_existing_real_directory_after_create_is_denied() {
+    let temp = tempdir().unwrap();
+    let existing = temp.path().join("existing");
+    fs::create_dir(&existing).unwrap();
+
+    validate_existing_init_directory_after_create_error(
+        &existing,
+        io::Error::new(io::ErrorKind::PermissionDenied, "root create denied"),
+        true,
+    )
+    .unwrap();
+
+    let file = temp.path().join("file");
+    fs::write(&file, "not a directory\n").unwrap();
+    let error = validate_existing_init_directory_after_create_error(
+        &file,
+        io::Error::new(io::ErrorKind::AlreadyExists, "already exists"),
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not a real directory"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn init_destination_never_accepts_an_existing_directory_symlink_after_create_fails() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target");
+    let link = temp.path().join("link");
+    fs::create_dir(&target).unwrap();
+    symlink(&target, &link).unwrap();
+
+    let error = validate_existing_init_directory_after_create_error(
+        &link,
+        io::Error::new(io::ErrorKind::AlreadyExists, "already exists"),
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not a real directory"), "{error}");
+}
+
+#[test]
+fn init_rejects_windows_aliased_scaffold_components_before_any_repository_write() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+
+    for force in [false, true] {
+        for (case_name, frontend_dir) in [
+            ("trailing-dot", "web."),
+            ("device", "CON"),
+            ("device-extension", "NUL.txt"),
+        ] {
+            let destination = temp.path().join(format!("{case_name}-{force}"));
+            fs::create_dir(&destination).unwrap();
+            let outside = temp.path().join(format!("outside-{case_name}-{force}"));
+            fs::write(&outside, "outside sentinel\n").unwrap();
+
+            let error = run_init(InitOpts {
+                path: destination.clone(),
+                scaffold: ScaffoldOpts {
+                    preset: Some(ScaffoldPreset::RustReact),
+                    db: Some(ScaffoldDb::None),
+                    frontends: Vec::new(),
+                    frontend_list: Vec::new(),
+                },
+                template: Some(template.path().display().to_string()),
+                template_mode: None,
+                vcs_ref: None,
+                force,
+                defaults: false,
+                no_input: true,
+                no_vault: true,
+                answers: AnswerOpts {
+                    repo_name: Some("demo".into()),
+                    frontend_apps: vec![FrontendApp {
+                        name: "client".into(),
+                        dir: frontend_dir.into(),
+                        coverage_threshold: 80,
+                        kind: "vite".into(),
+                        role: "spa".into(),
+                    }],
+                    ..AnswerOpts::default()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+
+            assert!(
+                error.contains("not portable to Windows"),
+                "{case_name}/{force}: {error}"
+            );
+            assert!(error.contains(frontend_dir), "{case_name}/{force}: {error}");
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "outside sentinel\n");
+            assert!(
+                fs::read_dir(&destination).unwrap().next().is_none(),
+                "{case_name}/{force}: portability preflight partially mutated the destination"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2343,6 +5960,52 @@ fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn adopt_resolves_relative_answers_file_from_the_launcher_invocation_directory() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let invocation = temp.path().join("invocation");
+    let other = temp.path().join("other");
+    let repo = invocation.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    fs::write(
+        invocation.join("answers.toml"),
+        "repo_name = \"invocation-answers\"\nsqlx_enabled = false\n",
+    )
+    .unwrap();
+    fs::write(
+        other.join("answers.toml"),
+        "repo_name = \"process-cwd-answers\"\nsqlx_enabled = false\n",
+    )
+    .unwrap();
+    let template = materialize_template_worktree();
+    let _invocation_cwd = EnvVarGuard::set(path::INVOCATION_CWD_ENV, invocation.as_os_str());
+    let _cwd = CurrentDirGuard::set(&other);
+
+    run_adopt(AdoptOpts {
+        path: PathBuf::from("repo"),
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            answers_file: Some(PathBuf::from("answers.toml")),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let config = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(config.contains("repo_name = \"invocation-answers\""));
+    assert!(!config.contains("process-cwd-answers"));
 }
 
 #[test]
@@ -3683,6 +7346,8 @@ fn minimal_to_full_uses_existing_answers_and_preserves_runtime_tables() {
     full.answers.ci_github_runner = Some("macos-14".into());
     full.answers.sqlx_enabled = Some(true);
     full.answers.rust_migration_dir = Some("db/migrations".into());
+    full.answers.rust_sqlx_metadata_dir = Some("db/sqlx-cache".into());
+    full.answers.sqlx_check_command = Some("scripts/check-custom-sqlx.sh".into());
     run_adopt(full).unwrap();
 
     let config =
@@ -3693,11 +7358,33 @@ fn minimal_to_full_uses_existing_answers_and_preserves_runtime_tables() {
     assert_eq!(config["ci_github_runner"].as_str(), Some("macos-14"));
     assert_eq!(config["sqlx_enabled"].as_bool(), Some(true));
     assert_eq!(config["rust_migration_dir"].as_str(), Some("db/migrations"));
+    assert_eq!(
+        config["rust_sqlx_metadata_dir"].as_str(),
+        Some("db/sqlx-cache")
+    );
+    assert_eq!(
+        config["sqlx_check_command"].as_str(),
+        Some("scripts/check-custom-sqlx.sh")
+    );
     assert_eq!(config["harness_footprint"].as_str(), Some("full"));
     assert_project_runtime_tables(&config);
 
     let workflow = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
-    assert!(workflow.contains("runs-on: macos-14"));
+    let workflow = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    for job in ["fmt", "clippy", "test"] {
+        assert_eq!(workflow["jobs"][job]["runs-on"], "macos-14");
+    }
+    for event in ["pull_request", "push"] {
+        let paths = workflow["on"][event]["paths"].as_array().unwrap();
+        assert!(paths.iter().any(|path| path == "db/migrations/**"));
+        assert!(paths.iter().any(|path| path == "db/sqlx-cache/**"));
+    }
+    for job in ["clippy", "test"] {
+        assert_eq!(
+            workflow["jobs"][job]["env"]["SQLX_OFFLINE_DIR"],
+            "${{ github.workspace }}/db/sqlx-cache"
+        );
+    }
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains(r#""name": "jig.sqlx_check""#));
     assert!(contract.contains(r#""name": "jig.migration_add""#));
@@ -3745,7 +7432,15 @@ rust_test_command = "cargo nextest run"
     assert_eq!(config["harness_footprint"].as_str(), Some("full"));
     assert_project_runtime_tables(&config);
     let workflow = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
-    assert!(workflow.contains("runs-on: ubuntu-24.04"));
+    let workflow = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+    assert_eq!(workflow["jobs"]["test"]["runs-on"], "ubuntu-24.04");
+    for event in ["pull_request", "push"] {
+        let paths = workflow["on"][event]["paths"].as_array().unwrap();
+        assert!(!paths.iter().any(|path| path == "migrations/**"));
+        assert!(!paths.iter().any(|path| path == ".sqlx/**"));
+    }
+    assert!(workflow["jobs"]["clippy"]["env"].is_null());
+    assert!(workflow["jobs"]["test"]["env"].is_null());
 }
 
 #[test]
@@ -6431,7 +10126,9 @@ fn adopt_infers_root_frontend_app() {
     assert!(answers.contains("name = \"root-web\""));
     assert!(answers.contains("dir = \".\""));
     assert!(answers.contains("kind = \"vite\""));
-    assert!(answers.contains("argv = [\"npm\", \"run\", \"dev\"]"));
+    assert!(answers.contains(
+        "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]"
+    ));
 }
 
 #[test]
@@ -6571,6 +10268,57 @@ fn bootstrap_invocation_cwd_rejects_invalid_env_values() {
     let _missing = EnvVarGuard::set(path::INVOCATION_CWD_ENV, missing.as_os_str());
     let error = path::bootstrap_invocation_cwd().unwrap_err().to_string();
     assert!(error.contains("JIG_INVOKE_CWD is not a directory"));
+}
+
+#[test]
+fn init_rejects_parent_components_before_answers_or_directory_creation() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let invocation = temp.path().join("caller");
+    fs::create_dir(&invocation).unwrap();
+    fs::create_dir(invocation.join("existing")).unwrap();
+    fs::write(invocation.join("existing/sentinel.txt"), "preserve\n").unwrap();
+    let _invocation_cwd = EnvVarGuard::set(path::INVOCATION_CWD_ENV, invocation.as_os_str());
+
+    for force in [false, true] {
+        for requested in ["missing/../existing", "missing/.."] {
+            let opts = InitOpts {
+                path: PathBuf::from(requested),
+                scaffold: ScaffoldOpts::default(),
+                template: None,
+                template_mode: None,
+                vcs_ref: None,
+                force,
+                defaults: false,
+                no_input: true,
+                no_vault: true,
+                answers: AnswerOpts {
+                    answers_file: Some(invocation.join("answers-that-must-not-be-read.toml")),
+                    ..AnswerOpts::default()
+                },
+            };
+
+            for error in [
+                preflight_init_destination(&opts).unwrap_err(),
+                run_init(opts).unwrap_err(),
+            ] {
+                let error = error.to_string();
+                assert!(
+                    error.contains("must not contain '..'"),
+                    "{requested}: {error}"
+                );
+                assert!(
+                    !error.contains("answers-that-must-not-be-read"),
+                    "{requested}: {error}"
+                );
+            }
+            assert!(!invocation.join("missing").exists());
+            assert_eq!(
+                fs::read_to_string(invocation.join("existing/sentinel.txt")).unwrap(),
+                "preserve\n"
+            );
+        }
+    }
 }
 
 #[test]
@@ -6762,7 +10510,7 @@ fn run_init_falls_back_only_for_unsupported_git_branch_flag() {
     fs::write(
             &git_path,
             format!(
-                "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"init\" ] && [ \"$2\" = \"-b\" ]; then\n  printf 'error: unknown switch `b`\\n' >&2\n  exit 129\nfi\nexit 0\n",
+                "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nprevious=\nfor arg in \"$@\"; do\n  if [ \"$previous\" = \"init\" ] && [ \"$arg\" = \"-b\" ]; then\n    printf 'error: unknown switch `b`\\n' >&2\n    exit 129\n  fi\n  previous=$arg\ndone\nexec git \"$@\"\n",
                 log_path.display()
             ),
         )
@@ -6798,9 +10546,9 @@ fn run_init_falls_back_only_for_unsupported_git_branch_flag() {
 
     assert_eq!(output["git_initialized"], true);
     let log = fs::read_to_string(&log_path).unwrap();
-    assert!(log.contains("git init -b trunk"));
-    assert!(log.contains("git init"));
-    assert!(log.contains("git symbolic-ref HEAD refs/heads/trunk"));
+    assert!(log.contains(" init -b trunk"));
+    assert!(log.lines().any(|line| line.ends_with(" init")));
+    assert!(log.contains(" symbolic-ref HEAD refs/heads/trunk"));
 }
 
 #[test]
@@ -6815,7 +10563,7 @@ fn run_init_surfaces_git_branch_init_failures() {
     fs::write(
             &git_path,
             format!(
-                "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"init\" ] && [ \"$2\" = \"-b\" ]; then\n  printf 'fatal: repository storage is broken\\n' >&2\n  exit 1\nfi\nexit 0\n",
+                "#!/bin/sh\nprintf 'git %s\\n' \"$*\" >> \"{}\"\nprevious=\nfor arg in \"$@\"; do\n  if [ \"$previous\" = \"init\" ] && [ \"$arg\" = \"-b\" ]; then\n    printf 'fatal: repository storage is broken\\n' >&2\n    exit 1\n  fi\n  previous=$arg\ndone\nexec git \"$@\"\n",
                 log_path.display()
             ),
         )
@@ -6848,11 +10596,11 @@ fn run_init_surfaces_git_branch_init_failures() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("git init -b main failed"));
-    assert!(error.contains("repository storage is broken"));
+    assert!(error.contains("git init -b main failed"), "{error}");
+    assert!(error.contains("repository storage is broken"), "{error}");
     let log = fs::read_to_string(&log_path).unwrap();
-    assert!(log.contains("git init -b main"));
-    assert!(!log.contains("git symbolic-ref HEAD refs/heads/main"));
+    assert!(log.contains(" init -b main"));
+    assert!(!log.contains(" symbolic-ref HEAD refs/heads/main"));
 }
 
 #[test]

@@ -3,6 +3,43 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn dev_summary_reports_ctrl_c_as_stopped() {
+    let summary = format_dev_summary(&json!({
+        "ok": false,
+        "interrupted": true,
+        "exit_status": 130,
+        "exit_signal": 2,
+        "termination_signal": "SIGINT",
+        "first_exit": null,
+        "proxy_failed": false,
+        "routes": []
+    }));
+
+    assert!(summary.contains("Dev: stopped (SIGINT)"));
+    assert!(!summary.contains("Routes:"));
+    assert!(!summary.contains("failed"));
+    assert!(!summary.contains("First exit"));
+}
+
+#[test]
+fn proxy_summary_reports_termination_as_stopped() {
+    let summary = format_proxy_summary(&json!({
+        "ok": false,
+        "interrupted": true,
+        "exit_status": 143,
+        "exit_signal": 15,
+        "termination_signal": "SIGTERM",
+        "app": "web",
+        "hostname": "web.demo.localhost",
+        "port": null
+    }));
+
+    assert!(summary.contains("Proxy: stopped (SIGTERM)"));
+    assert!(summary.contains("App: web"));
+    assert!(!summary.contains("failed"));
+}
+
+#[test]
 fn vault_run_summary_reports_status_and_redacted_output() {
     let summary = format_vault_run_summary(&json!({
         "result": {

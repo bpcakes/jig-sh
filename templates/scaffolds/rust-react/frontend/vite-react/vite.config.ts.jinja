@@ -1,5 +1,8 @@
-/// <reference types="vitest" />
-import react from "@vitejs/plugin-react-swc";
+/// <reference types="vitest/config" />
+import path from "node:path";
+
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 const devPort = Number(process.env.PORT);
@@ -7,6 +10,8 @@ const server =
   Number.isInteger(devPort) && devPort > 0
     ? {
         host: "127.0.0.1",
+        port: devPort,
+        strictPort: true,
         hmr: {
           host: "127.0.0.1",
           clientPort: devPort,
@@ -14,34 +19,50 @@ const server =
       }
     : {};
 const apiOrigin =
-  process.env.API_ORIGIN ??
-  process.env.JIG_DEV_API_ORIGIN ??
-  "http://api.<<[ repo_name ]>>.localhost:1355";
+  // A current Jig session owns its namespaced topology. API_ORIGIN remains the
+  // direct-Vite override when no managed API was selected.
+  firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN) ??
+  "http://api.<<[ repo_dns_label ]>>.localhost:1355";
 
 export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   server: {
     ...server,
-    proxy: apiOrigin
-      ? {
-          "/api": {
-            target: apiOrigin,
-            changeOrigin: true,
-          },
-          "/health": {
-            target: apiOrigin,
-            changeOrigin: true,
-          },
-        }
-      : undefined,
+    proxy: {
+      "/api": {
+        target: apiOrigin,
+        changeOrigin: true,
+      },
+      "/health": {
+        target: apiOrigin,
+        changeOrigin: true,
+      },
+    },
   },
-  plugins: [react()],
   test: {
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
+    include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       include: ["src/**/*.{ts,tsx}"],
-      exclude: ["src/main.tsx"],
+      exclude: [
+        "src/**/*.d.ts",
+        "src/**/*.test.{ts,tsx}",
+        "src/test-setup.ts",
+        "src/main.tsx",
+        "src/components/ui/**/*.{ts,tsx}",
+        "src/lib/utils.ts",
+      ],
     },
   },
 });
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  return values.map((value) => value?.trim()).find((value) => Boolean(value));
+}

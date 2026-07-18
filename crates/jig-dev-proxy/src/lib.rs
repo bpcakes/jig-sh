@@ -15,10 +15,14 @@ mod server;
 mod service;
 mod state;
 mod types;
+#[cfg(any(windows, test))]
+mod windows_system;
 mod workspace;
 
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
+use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,13 +34,61 @@ use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_l
 use crate::state::{StateStore, now_ms, pid_is_alive};
 use crate::types::{Route, RouteMode};
 
+pub use crate::state::MAX_ROUTES_FILE_BYTES;
 pub use crate::types::{
     AppKind, AppRunSpec, CommandSpec, DevRequest, ProxyAliasRequest, ProxyCertRequest,
     ProxyListRequest, ProxyPruneRequest, ProxyRunRequest, ProxyServiceRequest, ProxySettings,
     ProxyStartRequest, ProxyStopRequest,
 };
 
-pub fn dev(request: DevRequest) -> Result<Value> {
+/// Internal compatibility hook used to prove that generated Jig configuration
+/// stays aligned with the dev runtime's narrow npm environment boundary.
+#[doc(hidden)]
+pub fn is_generated_npm_dev_argv(argv: &[String]) -> bool {
+    processes::is_generated_npm_dev_argv(argv)
+}
+
+/// The outcome of a caller-owned development preflight.
+#[derive(Debug)]
+pub enum DevPreflightError {
+    /// The preflight observed the supplied cancellation probe and stopped.
+    Cancelled,
+    /// The preflight failed independently of a termination request.
+    Failed(anyhow::Error),
+}
+
+impl DevPreflightError {
+    pub fn cancelled() -> Self {
+        Self::Cancelled
+    }
+
+    pub fn failed(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<anyhow::Error> for DevPreflightError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+pub type DevPreflightResult = std::result::Result<(), DevPreflightError>;
+
+/// A development launch plan after workspace discovery, app selection, and
+/// no-proxy overrides have been applied.
+pub struct ResolvedDevRequest {
+    settings: ProxySettings,
+    apps: Vec<AppRunSpec>,
+}
+
+impl ResolvedDevRequest {
+    pub fn apps(&self) -> &[AppRunSpec] {
+        &self.apps
+    }
+}
+
+pub fn resolve_dev_request(request: DevRequest) -> Result<ResolvedDevRequest> {
     let mut specs = request.apps;
     if request.discover_workspace {
         specs.extend(workspace::discover(
@@ -48,11 +100,16 @@ pub fn dev(request: DevRequest) -> Result<Value> {
     }
     if !request.selected_apps.is_empty() {
         let available_apps: Vec<_> = specs.iter().map(|spec| spec.name.clone()).collect();
-        specs.retain(|spec| request.selected_apps.iter().any(|name| name == &spec.name));
-        if specs.is_empty() {
+        let mut unavailable_apps = Vec::new();
+        for name in &request.selected_apps {
+            if !available_apps.contains(name) && !unavailable_apps.contains(name) {
+                unavailable_apps.push(name.clone());
+            }
+        }
+        if !unavailable_apps.is_empty() {
             bail!(
                 "No development apps matched --app filter '{}'. Available apps: {}",
-                request.selected_apps.join(", "),
+                unavailable_apps.join(", "),
                 if available_apps.is_empty() {
                     "<none>".into()
                 } else {
@@ -60,6 +117,7 @@ pub fn dev(request: DevRequest) -> Result<Value> {
                 }
             );
         }
+        specs.retain(|spec| request.selected_apps.iter().any(|name| name == &spec.name));
     }
     if request.no_proxy {
         for spec in &mut specs {
@@ -70,8 +128,126 @@ pub fn dev(request: DevRequest) -> Result<Value> {
         bail!("No development apps were configured or discovered.");
     }
     ensure_unique_specs(&specs)?;
+    resolve_selected_app_directories(&request.root, &mut specs)?;
+    Ok(ResolvedDevRequest {
+        settings: request.settings,
+        apps: specs,
+    })
+}
+
+fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Result<()> {
+    let root = fs::canonicalize(root)
+        .with_context(|| format!("Failed to canonicalize repo root {}", root.display()))?;
+    for spec in specs {
+        let candidate = if spec.dir.is_absolute() {
+            spec.dir.clone()
+        } else {
+            root.join(&spec.dir)
+        };
+        let resolved = fs::canonicalize(&candidate).with_context(|| {
+            format!(
+                "development app '{}' directory {} must exist",
+                spec.name,
+                candidate.display()
+            )
+        })?;
+        if !resolved.starts_with(&root) {
+            bail!(
+                "development app '{}' directory {} resolves outside repo root {}",
+                spec.name,
+                candidate.display(),
+                root.display()
+            );
+        }
+        spec.dir = resolved;
+    }
+    Ok(())
+}
+
+pub fn dev(request: DevRequest) -> Result<Value> {
+    dev_resolved(resolve_dev_request(request)?)
+}
+
+pub fn dev_resolved(request: ResolvedDevRequest) -> Result<Value> {
+    dev_resolved_with_preflight(request, |_, _| Ok(()))
+}
+
+/// Runs a resolved development plan under one foreground termination session,
+/// including a caller-owned preflight that can poll for cancellation.
+pub fn dev_resolved_with_preflight(
+    request: ResolvedDevRequest,
+    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
+) -> Result<Value> {
     let current_exe = current_exe()?;
-    processes::run_apps(specs, &request.settings, &current_exe)
+    normalize_dev_result(processes::run_apps_with_preflight(
+        request.apps,
+        &request.settings,
+        &current_exe,
+        preflight,
+    ))
+}
+
+fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
+    match result {
+        Err(error) => {
+            let Some(reason) = processes::interruption_reason(&error) else {
+                return Err(error);
+            };
+            Ok(json!({
+                "ok": false,
+                "interrupted": true,
+                "exit_status": reason.exit_status(),
+                "exit_signal": reason.signal(),
+                "termination_signal": reason.label(),
+                "first_exit": null,
+                "proxy_failed": false,
+                "routes": [],
+            }))
+        }
+        result => result,
+    }
+}
+
+fn normalize_proxy_run_result(result: Result<Value>, app: &str, hostname: &str) -> Result<Value> {
+    match result {
+        Err(error) => {
+            let Some(reason) = processes::interruption_reason(&error) else {
+                return Err(error);
+            };
+            Ok(json!({
+                "ok": false,
+                "interrupted": true,
+                "exit_status": reason.exit_status(),
+                "exit_signal": reason.signal(),
+                "termination_signal": reason.label(),
+                "app": app,
+                "hostname": hostname,
+                "port": null,
+            }))
+        }
+        result => result,
+    }
+}
+
+fn normalize_proxy_start_result(result: Result<()>) -> Result<Option<Value>> {
+    match result {
+        Err(error) => {
+            let Some(reason) = processes::interruption_reason(&error) else {
+                return Err(error);
+            };
+            Ok(Some(json!({
+                "ok": false,
+                "interrupted": true,
+                "exit_status": reason.exit_status(),
+                "exit_signal": reason.signal(),
+                "termination_signal": reason.label(),
+                "foreground": false,
+                "http_port": null,
+                "https_port": null,
+            })))
+        }
+        Ok(()) => Ok(None),
+    }
 }
 
 pub fn proxy_start(request: ProxyStartRequest) -> Result<Value> {
@@ -82,7 +258,12 @@ pub fn proxy_start(request: ProxyStartRequest) -> Result<Value> {
         server::run_foreground(request.settings, current_exe)?;
         return Ok(json!({ "ok": true, "foreground": true }));
     }
-    processes::ensure_proxy_running(&request.settings, &current_exe)?;
+    if let Some(interrupted) = normalize_proxy_start_result(processes::ensure_proxy_running(
+        &request.settings,
+        &current_exe,
+    ))? {
+        return Ok(interrupted);
+    }
     let store = StateStore::resolve(request.settings.state_dir.clone())?;
     Ok(json!({
         "ok": true,
@@ -416,7 +597,10 @@ fn terminate_proxy_pid(_pid: u32) -> bool {
 
 #[cfg(windows)]
 fn terminate_proxy_pid(pid: u32) -> bool {
-    let Ok(status) = std::process::Command::new(windows_system32_tool("taskkill.exe"))
+    let Ok(taskkill) = crate::windows_system::native_system_executable("taskkill.exe") else {
+        return false;
+    };
+    let Ok(status) = std::process::Command::new(&taskkill)
         .env_clear()
         .args(["/PID", &pid.to_string(), "/T"])
         .status()
@@ -426,7 +610,7 @@ fn terminate_proxy_pid(pid: u32) -> bool {
     if status.success() && wait_for_pid_exit(pid, Duration::from_secs(2)) {
         return true;
     }
-    let Ok(status) = std::process::Command::new(windows_system32_tool("taskkill.exe"))
+    let Ok(status) = std::process::Command::new(taskkill)
         .env_clear()
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status()
@@ -434,13 +618,6 @@ fn terminate_proxy_pid(pid: u32) -> bool {
         return false;
     };
     status.success() && wait_for_pid_exit(pid, Duration::from_secs(1))
-}
-
-#[cfg(windows)]
-fn windows_system32_tool(name: &str) -> std::path::PathBuf {
-    // Use the canonical system directory instead of a mutable environment
-    // variable so cleanup keeps using the OS taskkill binary.
-    std::path::PathBuf::from(r"C:\Windows\System32").join(name)
 }
 
 fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
@@ -619,7 +796,13 @@ pub fn proxy_prune(request: ProxyPruneRequest) -> Result<Value> {
 
 pub fn proxy_run_foreground(request: ProxyRunRequest) -> Result<Value> {
     let current_exe = current_exe()?;
-    processes::run_app(request.spec, &request.settings, &current_exe)
+    let app = request.spec.name.clone();
+    let hostname = request.spec.hostname.clone();
+    normalize_proxy_run_result(
+        processes::run_app(request.spec, &request.settings, &current_exe),
+        &app,
+        &hostname,
+    )
 }
 
 pub fn proxy_alias(request: ProxyAliasRequest) -> Result<Value> {

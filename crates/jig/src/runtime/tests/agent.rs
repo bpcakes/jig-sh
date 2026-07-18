@@ -174,6 +174,41 @@ source = "https://github.com/bpcakes/jig-skills.git"
 }
 
 #[test]
+fn agent_doctor_bounds_and_redacts_codex_probe_output() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let secret = "codex-probe-output-secret";
+    let codex_path = temp.path().join("codex-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        &format!(
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 2000 ]; do printf '{}'; printf '{}' >&2; i=$((i + 1)); done\nexit 0\n",
+            secret, secret
+        ),
+    );
+
+    let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
+    let _codex_home = EnvVarGuard::set("CODEX_HOME", temp.path().join("codex-home"));
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let output = dispatch(&ctx, CommandKind::Agent(crate::cli::AgentCommand::Doctor)).unwrap();
+    let rendered = serde_json::to_string(&output).unwrap();
+
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert!(output["codex"]["available"].is_null());
+    assert!(
+        output["codex"]["probe_error"]
+            .as_str()
+            .unwrap()
+            .contains("capture limit")
+    );
+    assert!(
+        !rendered.contains(secret),
+        "probe output leaked into report"
+    );
+}
+
+#[test]
 fn agent_doctor_matches_relative_config_to_absolute_codex_source() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

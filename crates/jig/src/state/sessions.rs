@@ -147,7 +147,12 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
         "default_branch": ctx.default_branch(),
         "source_commit": ctx.source_commit(),
         "source_path": ctx.source_path(),
-        "recent_sessions": sessions.into_iter().rev().take(3).collect::<Vec<_>>(),
+        "recent_sessions": sessions
+            .into_iter()
+            .rev()
+            .take(3)
+            .map(SessionEvent::into_summary_reference)
+            .collect::<Vec<_>>(),
         "open_plans": open_plans,
         "recent_receipts": recent_receipts,
         "recent_decisions": recent_decisions,

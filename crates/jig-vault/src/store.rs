@@ -361,8 +361,7 @@ fn private_open_options() -> OpenOptions {
 
 #[cfg(not(unix))]
 fn private_open_options() -> OpenOptions {
-    let options = OpenOptions::new();
-    options
+    OpenOptions::new()
 }
 
 fn path_is_symlink(path: &Path) -> AnyResult<bool> {
