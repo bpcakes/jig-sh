@@ -13,6 +13,7 @@ use subtle::ConstantTimeEq;
 use crate::host::{ip_is_loopback, normalize_request_host};
 use crate::types::Route;
 
+use super::error_page::error_response;
 use super::{HEALTH_TOKEN_BYTES, MAX_PROXY_HOPS, ProxyBody, VIA_VALUE};
 
 pub(super) fn rewrite_proxy_headers(
@@ -168,44 +169,6 @@ pub(super) fn authority_host(value: &str) -> &str {
 
 pub(super) fn find_route<'a>(routes: &'a [Route], host: &str) -> Option<&'a Route> {
     routes.iter().find(|route| route.hostname == host)
-}
-
-pub(super) fn not_found_response(
-    routes: &[Route],
-    host: &str,
-    proxy_port: u16,
-    tls: bool,
-    show_routes: bool,
-) -> Response<ProxyBody> {
-    let scheme = if tls { "https" } else { "http" };
-    let list = if !show_routes {
-        "Route listing is hidden for non-loopback clients.".to_string()
-    } else if routes.is_empty() {
-        "No apps running.".to_string()
-    } else {
-        routes
-            .iter()
-            .map(|route| format!("{scheme}://{}:{proxy_port}", route.hostname))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    error_response(
-        StatusCode::NOT_FOUND,
-        &format!("No Jig proxy route for {host}\n\n{list}\n"),
-    )
-}
-
-pub(super) fn error_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
-    let mut response = Response::new(full_body(Bytes::from(message.to_string())));
-    *response.status_mut() = status;
-    response.headers_mut().insert(
-        "content-type",
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    response
-        .headers_mut()
-        .insert("x-jig-proxy", HeaderValue::from_static("1"));
-    response
 }
 
 pub(super) fn health_response() -> Response<ProxyBody> {

@@ -18,6 +18,7 @@ doc = false
 
 [dependencies]
 anyhow.workspace = true
+askama.workspace = true
 base64.workspace = true
 bytes.workspace = true
 dirs.workspace = true

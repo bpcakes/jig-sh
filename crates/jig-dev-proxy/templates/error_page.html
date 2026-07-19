@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>{{ code }} — Jig proxy</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@400;700;800;900&amp;family=JetBrains+Mono:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet">
+    <style>{% include "error_page.css" %}</style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="nav">
+        <div class="brand">
+          <a class="mark" href="https://github.com/bpcakes/jig-sh">JIG<em>.</em>SH</a>
+          <span class="brand-sub">development proxy</span>
+        </div>
+        <span class="nav-meta">local routing / diagnostic</span>
+      </header>
+      <main>
+        <section class="error-grid">
+          <div>
+            <p class="error-code">Proxy response / <b>{{ code }}</b></p>
+            <h1>{{ title_lead }}<span>{{ title_hot }}</span></h1>
+            <p class="lede">
+              {% if is_not_found %}
+                No Jig proxy route is registered for <code>{{ requested_host }}</code>.
+              {% else %}
+                {{ message }}
+              {% endif %}
+            </p>
+          </div>
+          <aside class="fault-panel" aria-label="HTTP status {{ code }}">
+            <span class="corner tl"></span>
+            <span class="corner tr"></span>
+            <span class="corner bl"></span>
+            <span class="corner br"></span>
+            <div class="panel-label">FIG. {{ code }} — proxy fault</div>
+            <div class="status-dial">{{ code }}</div>
+            <div class="fault-meta">
+              status / <b>{{ reason }}</b><br>
+              origin / jig dev proxy<br>
+              action / inspect &amp; retry
+            </div>
+          </aside>
+        </section>
+        {% if show_routes_section %}
+          <section class="routes">
+            <div class="section-head">
+              <span class="section-no">01</span>
+              <span class="section-title">Available routes</span>
+            </div>
+            {% if show_route_notice %}
+              <p class="empty-state">{{ route_notice }}</p>
+            {% else %}
+              <div class="route-list">
+                {% for route in routes %}
+                  <a class="route-link" href="{{ route.url }}">
+                    <span class="route-index">{{ route.index }}</span>
+                    <span>
+                      <strong>{{ route.hostname }}</strong>
+                      <small>{{ route.url }}</small>
+                    </span>
+                    <span class="arr">↗</span>
+                  </a>
+                {% endfor %}
+              </div>
+            {% endif %}
+          </section>
+        {% endif %}
+      </main>
+      <footer class="foot">
+        <span>Jig generated this response because no app could complete the request.</span>
+        <a href="https://github.com/bpcakes/jig-sh">jig.sh / source ↗</a>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -277,6 +277,10 @@ fn invalid_request_host_maps_to_bad_request_response() {
     let response = request_host_or_bad_request(&request).unwrap_err();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
 }
 
 #[test]
@@ -1083,10 +1087,42 @@ async fn https_not_found_uses_bound_proxy_port() {
     }];
 
     let response = not_found_response(&routes, "missing.demo.localhost", 1443, true, true);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/html; charset=utf-8"
+    );
     let collected = response.into_body().collect().await.unwrap();
     let text = String::from_utf8(collected.to_bytes().to_vec()).unwrap();
-    assert!(text.contains("https://web.demo.localhost:1443"));
+    assert!(text.contains("<h1>ROUTE<span>NOT FOUND.</span></h1>"));
+    assert!(text.contains("<span class=\"brand-sub\">development proxy</span>"));
+    assert!(!text.contains("harness · runtime · contract"));
+    assert!(!text.contains("class=\"tape\""));
+    assert!(text.contains("href=\"https://web.demo.localhost:1443\""));
     assert!(!text.contains(":443"));
+}
+
+#[tokio::test]
+async fn error_pages_escape_untrusted_message_content() {
+    let response = error_response(
+        StatusCode::BAD_REQUEST,
+        "Invalid host <script>alert('nope')</script>",
+    );
+    let collected = response.into_body().collect().await.unwrap();
+    let text = String::from_utf8(collected.to_bytes().to_vec()).unwrap();
+
+    assert!(text.contains("&#60;script&#62;alert(&#39;nope&#39;)&#60;/script&#62;"));
+    assert!(!text.contains("<script>alert"));
+}
+
+#[tokio::test]
+async fn not_found_escapes_requested_host() {
+    let response = not_found_response(&[], "<script.example>", 1355, false, true);
+    let collected = response.into_body().collect().await.unwrap();
+    let text = String::from_utf8(collected.to_bytes().to_vec()).unwrap();
+
+    assert!(text.contains("<code>&#60;script.example&#62;</code>"));
+    assert!(!text.contains("<code><script"));
 }
 
 #[tokio::test]

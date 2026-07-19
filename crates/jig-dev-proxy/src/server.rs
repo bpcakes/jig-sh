@@ -34,12 +34,14 @@ use crate::ports::local_lan_ip_for_ipv4_listener;
 use crate::state::{FileSignature, StateStore, file_signature};
 use crate::types::{ProxySettings, Route};
 mod backend;
+mod error_page;
 mod headers;
 mod routing;
 mod tls;
 mod tunnel;
 
 use self::backend::*;
+use self::error_page::*;
 use self::headers::*;
 use self::routing::*;
 use self::tls::*;

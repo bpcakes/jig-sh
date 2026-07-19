@@ -22,6 +22,9 @@ version = "0.2.0-beta.1"
 [workspace.dependencies]
 anyhow = "1.0.100"
 argon2 = "0.5.3"
+# Askama 0.15+ requires Rust 1.88. Keep this pin compatible with the
+# workspace's Rust 1.85 floor.
+askama = { version = "=0.14.0", default-features = false, features = ["derive", "std"] }
 base64 = "0.22.1"
 bytes = "1.10.1"
 chacha20poly1305 = "0.10.1"
