@@ -1738,7 +1738,45 @@ fn app_readiness_wait_errors_when_child_exits_first() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn production_readiness_path_times_out_and_reaps_live_non_listener() {
+fn production_readiness_path_waits_for_delayed_owned_listener() {
+    const HELPER_ENV: &str = "JIG_APP_READINESS_DELAYED_LISTENER_HELPER";
+    const MARKER_ENV: &str = "JIG_APP_READINESS_DELAYED_LISTENER_MARKER";
+    const START_ENV: &str = "JIG_APP_READINESS_DELAYED_LISTENER_START";
+    const STOP_ENV: &str = "JIG_APP_READINESS_DELAYED_LISTENER_STOP";
+    const TEST_NAME: &str =
+        "processes::tests::production_readiness_path_waits_for_delayed_owned_listener";
+
+    if std::env::var_os(HELPER_ENV).is_some() {
+        let marker = PathBuf::from(std::env::var_os(MARKER_ENV).expect("helper marker path"));
+        let start = PathBuf::from(std::env::var_os(START_ENV).expect("helper start path"));
+        let stop = PathBuf::from(std::env::var_os(STOP_ENV).expect("helper stop path"));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .unwrap();
+        let _runtime_guard = runtime.enter();
+        // Reserve the port before the delay without accepting connections, so
+        // the fixture cannot lose it while proving that readiness keeps waiting.
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        write_process_test_marker(&marker, &format!("{port}\n"));
+        let start_deadline = Instant::now() + Duration::from_secs(5);
+        while !start.exists() && !stop.exists() && Instant::now() < start_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !start.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(750));
+        let _listener = socket.listen(128).unwrap();
+        let exit_deadline = Instant::now() + Duration::from_secs(10);
+        while !stop.exists() && Instant::now() < exit_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        return;
+    }
+
     let _guard = termination_test_guard();
     struct ChildCleanup(Child);
     impl Drop for ChildCleanup {
@@ -1746,30 +1784,48 @@ fn production_readiness_path_times_out_and_reaps_live_non_listener() {
             terminate_and_reap_logged(&mut self.0, "test cleanup failed");
         }
     }
-
-    let mut command = Command::new("sh");
-    command.args(["-c", "sleep 30"]);
+    let temp = tempdir().unwrap();
+    let marker = temp.path().join("delayed-listener.marker");
+    let start = temp.path().join("start-delayed-listener");
+    let stop = TestStopFile(temp.path().join("stop-delayed-listener"));
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", TEST_NAME, "--nocapture"])
+        .env(HELPER_ENV, "1")
+        .env(MARKER_ENV, &marker)
+        .env(START_ENV, &start)
+        .env(STOP_ENV, &stop.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     configure_app_child_process_group(&mut command);
     let mut child = ChildCleanup(command.spawn().unwrap());
+    let port = wait_for_process_test_marker(&marker, &mut child.0, "delayed listener helper")
+        .trim()
+        .parse()
+        .unwrap();
 
-    let error = wait_for_app_ready_with_test_probe(
+    let started_at = Instant::now();
+    fs::write(&start, b"start\n").unwrap();
+    let owner_token = wait_for_app_ready(
         &AppRunSpec::new(
-            "never-ready",
+            "delayed",
             std::env::current_dir().unwrap(),
             CommandSpec::Argv(vec![]),
-            "never-ready.localhost",
+            "delayed.localhost",
         ),
-        43_210,
+        port,
         &mut child.0,
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap();
 
-    assert!(error.contains("did not listen"));
+    assert!(owner_token.is_some());
     assert!(
-        child.0.try_wait().unwrap().is_some(),
-        "timed-out child must be reaped"
+        started_at.elapsed() >= Duration::from_millis(600),
+        "production readiness returned before the delayed listener started"
     );
+    stop.stop();
+    assert!(child.0.wait().unwrap().success());
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

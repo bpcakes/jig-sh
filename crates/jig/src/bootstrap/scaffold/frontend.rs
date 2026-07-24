@@ -92,6 +92,18 @@ const VITE_REACT_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "src/main.tsx",
     },
     ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/app/providers.tsx.jinja",
+        output: "src/app/providers.tsx",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/app/router-context.ts.jinja",
+        output: "src/app/router-context.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/app/router.ts.jinja",
+        output: "src/app/router.ts",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/frontend/vite-react/src/App.tsx.jinja",
         output: "src/App.tsx",
     },
@@ -102,6 +114,22 @@ const VITE_REACT_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/frontend/vite-react/src/api.ts.jinja",
         output: "src/api.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/lib/query-client.ts.jinja",
+        output: "src/lib/query-client.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/routes/__root.tsx.jinja",
+        output: "src/routes/__root.tsx",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/routes/index.tsx.jinja",
+        output: "src/routes/index.tsx",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/vite-react/src/routeTree.gen.ts.jinja",
+        output: "src/routeTree.gen.ts",
     },
     ScaffoldTemplateFile {
         template: "rust-react/frontend/vite-react/README.md.jinja",

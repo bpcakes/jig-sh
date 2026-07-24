@@ -2000,6 +2000,11 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_package.contains(r#""dev": "vite""#));
     assert!(web_package.contains(r#""shadcn": "4.13.0""#));
     assert!(web_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(web_package.contains(r#""@tanstack/react-query": "5.101.4""#));
+    assert!(web_package.contains(r#""@tanstack/react-router": "1.170.18""#));
+    assert!(web_package.contains(r#""@tanstack/eslint-plugin-query": "5.101.4""#));
+    assert!(web_package.contains(r#""@tanstack/router-plugin": "1.168.23""#));
+    assert!(web_package.contains(r#""build": "vite build && tsc -b""#));
     assert!(web_package.contains(r#""@testing-library/dom": "10.4.1""#));
     assert!(web_package.contains(r#""@playwright/test": "1.61.1""#));
     assert!(web_package.contains(r#""test:e2e": "playwright test""#));
@@ -2009,6 +2014,13 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     );
     assert!(!web_package.contains(" install && "));
     assert!(destination.join("web/src/api.ts").exists());
+    assert!(destination.join("web/src/app/providers.tsx").exists());
+    assert!(destination.join("web/src/app/router-context.ts").exists());
+    assert!(destination.join("web/src/app/router.ts").exists());
+    assert!(destination.join("web/src/lib/query-client.ts").exists());
+    assert!(destination.join("web/src/routes/__root.tsx").exists());
+    assert!(destination.join("web/src/routes/index.tsx").exists());
+    assert!(destination.join("web/src/routeTree.gen.ts").exists());
     assert!(destination.join("web/playwright.config.ts").exists());
     assert!(destination.join("web/e2e/app.spec.ts").exists());
     assert!(destination.join("web/tsconfig.app.json").exists());
@@ -2036,7 +2048,30 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_css.contains(r#"@import "shadcn/tailwind.css";"#));
     let web_app = fs::read_to_string(destination.join("web/src/App.tsx")).unwrap();
     assert!(web_app.contains(r#"from "@/components/ui/card""#));
+    assert!(web_app.contains("useSuspenseQuery(appStatusQueryOptions)"));
+    assert!(web_app.contains("useQueryErrorResetBoundary()"));
+    assert!(web_app.contains("appStatusQueryOptions"));
+    let web_api = fs::read_to_string(destination.join("web/src/api.ts")).unwrap();
+    assert!(web_api.contains("queryOptions({"));
+    assert!(web_api.contains(r#"queryKey: ["app-status"]"#));
+    let web_providers = fs::read_to_string(destination.join("web/src/app/providers.tsx")).unwrap();
+    assert!(web_providers.contains("<QueryClientProvider client={client}>"));
+    let web_router = fs::read_to_string(destination.join("web/src/app/router.ts")).unwrap();
+    assert!(web_router.contains("import { routeTree } from \"@/routeTree.gen\""));
+    assert!(web_router.contains("export function createAppRouter("));
+    assert!(web_router.contains("context: { queryClient }"));
+    assert!(web_router.contains("defaultPreloadStaleTime: 0"));
+    assert!(web_router.contains(r#"declare module "@tanstack/react-router""#));
+    let web_index_route = fs::read_to_string(destination.join("web/src/routes/index.tsx")).unwrap();
+    assert!(web_index_route.contains(r#"createFileRoute("/")"#));
+    assert!(web_index_route.contains("context.queryClient.ensureQueryData"));
+    assert!(web_index_route.contains("errorComponent: AppError"));
+    let web_query_client =
+        fs::read_to_string(destination.join("web/src/lib/query-client.ts")).unwrap();
+    assert!(web_query_client.contains("retry: 1"));
     let web_vite_config = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
+    assert!(web_vite_config.contains(r#"from "@tanstack/router-plugin/vite""#));
+    assert!(web_vite_config.contains("autoCodeSplitting: true"));
     assert!(web_vite_config.contains("const devPort = Number(process.env.PORT);"));
     assert!(web_vite_config.contains("port: devPort"));
     assert!(web_vite_config.contains("process.env.API_ORIGIN"));
@@ -2066,6 +2101,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         "src/**/*.test.{ts,tsx}",
         "src/test-setup.ts",
         "src/main.tsx",
+        "src/routeTree.gen.ts",
         "src/components/ui/**/*.{ts,tsx}",
         "src/lib/utils.ts",
     ] {
@@ -2193,6 +2229,12 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     );
     assert!(admin_package.contains(r#""shadcn": "4.13.0""#));
     assert!(admin_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(admin_package.contains(r#""@tanstack/react-query": "5.101.4""#));
+    assert!(admin_package.contains(r#""@tanstack/react-router": "1.170.18""#));
+    assert!(admin_package.contains(r#""@tanstack/eslint-plugin-query": "5.101.4""#));
+    assert!(admin_package.contains(r#""@tanstack/router-plugin": "1.168.23""#));
+    assert!(admin_package.contains(r#""build": "vite build && tsc -b""#));
+    assert!(!admin_package.contains("react-router-dom"));
     assert!(admin_package.contains(r#""@testing-library/dom": "10.4.1""#));
     assert!(admin_package.contains(r#""lint": "eslint . && prettier --check .""#));
     assert!(admin_package.contains(r#""format": "prettier --write .""#));
@@ -2202,6 +2244,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(admin_readme.contains("real-backend Playwright starter for product SPA roles only"));
     let admin_vite_config =
         fs::read_to_string(destination.join("admin-panel/vite.config.ts")).unwrap();
+    assert!(admin_vite_config.contains(r#"from "@tanstack/router-plugin/vite""#));
+    assert!(admin_vite_config.contains("autoCodeSplitting: true"));
     assert!(admin_vite_config.contains("const devPort = Number(process.env.PORT)"));
     assert!(admin_vite_config.contains("port: devPort"));
     assert!(admin_vite_config.contains("strictPort: true"));
@@ -2236,8 +2280,17 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(providers.contains(&format!("const themeStorageKey = \"{theme_storage_key}\"")));
     assert_eq!(providers.matches(theme_storage_key).count(), 1);
     assert!(providers.contains("storageKey={themeStorageKey}"));
+    assert!(providers.contains("<QueryClientProvider client={client}>"));
+    let admin_router =
+        fs::read_to_string(destination.join("admin-panel/src/app/router.ts")).unwrap();
+    assert!(admin_router.contains("import { routeTree } from \"@/routeTree.gen\""));
+    assert!(admin_router.contains("export function createAppRouter("));
+    assert!(admin_router.contains("context: { queryClient }"));
+    assert!(admin_router.contains("defaultPreloadStaleTime: 0"));
+    assert!(admin_router.contains(r#"declare module "@tanstack/react-router""#));
     let admin_shell =
         fs::read_to_string(destination.join("admin-panel/src/app/shell.tsx")).unwrap();
+    assert!(admin_shell.contains(r#"from "@tanstack/react-router""#));
     assert!(admin_shell.contains("const appTitle = \"Admin Panel\""));
     assert!(admin_shell.contains(">{appTitle}</p>"));
     let admin_sidebar =
@@ -2245,6 +2298,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(admin_sidebar.contains("const appName = \"my-app\""));
     assert_eq!(admin_sidebar.matches("\"my-app\"").count(), 1);
     assert!(admin_sidebar.contains(">{appName}</span>"));
+    assert!(admin_sidebar.contains(r#"from "@tanstack/react-router""#));
+    assert!(admin_sidebar.contains("useRouterState({"));
     let admin_overview_test = fs::read_to_string(
         destination.join("admin-panel/src/features/overview/overview-page.test.tsx"),
     )
@@ -2252,7 +2307,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(admin_overview_test.contains("const expectedAppName = \"my-app\""));
     assert_eq!(admin_overview_test.matches("\"my-app\"").count(), 1);
     assert!(admin_overview_test.contains("name: expectedAppName"));
-    assert!(admin_overview_test.contains("screen.findByText(expectedAppName)"));
+    assert!(admin_overview_test.contains("screen.findAllByText(expectedAppName)"));
     let admin_prettierignore =
         fs::read_to_string(destination.join("admin-panel/.prettierignore")).unwrap();
     assert_eq!(admin_prettierignore.matches("dist/\n").count(), 1);
@@ -2262,6 +2317,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         1
     );
     assert!(admin_prettierignore.contains("bun.lock\nbun.lockb\n"));
+    assert!(admin_prettierignore.contains("src/routeTree.gen.ts"));
     let admin_empty =
         fs::read_to_string(destination.join("admin-panel/src/components/ui/empty.tsx")).unwrap();
     assert!(admin_empty.contains(r#"import type { ComponentProps } from "react""#));
@@ -2287,6 +2343,48 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             .exists()
     );
     assert!(destination.join("admin-panel/src/lib/api.ts").exists());
+    assert!(
+        destination
+            .join("admin-panel/src/lib/query-client.ts")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/app/router-context.ts")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/routes/__root.tsx")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/routes/index.tsx")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/routes/settings.tsx")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("admin-panel/src/routeTree.gen.ts")
+            .exists()
+    );
+    let admin_index_route =
+        fs::read_to_string(destination.join("admin-panel/src/routes/index.tsx")).unwrap();
+    assert!(admin_index_route.contains(r#"createFileRoute("/")"#));
+    assert!(admin_index_route.contains("context.queryClient.ensureQueryData"));
+    let admin_query_client =
+        fs::read_to_string(destination.join("admin-panel/src/lib/query-client.ts")).unwrap();
+    assert!(admin_query_client.contains("retry: 1"));
+    let admin_overview =
+        fs::read_to_string(destination.join("admin-panel/src/features/overview/overview-page.tsx"))
+            .unwrap();
+    assert!(admin_overview.contains("useSuspenseQuery(appStatusQueryOptions)"));
+    assert!(admin_overview.contains("useQueryErrorResetBoundary()"));
 
     let agent_map = fs::read_to_string(destination.join("agent-map.md")).unwrap();
     for guide in [
@@ -2625,7 +2723,7 @@ fn rust_react_admin_dynamic_values_use_formatter_stable_boundaries() {
     assert!(overview_test.contains(&format!("const expectedAppName = \"{repo_name}\"")));
     assert_eq!(overview_test.matches(&repo_name).count(), 1);
     assert!(overview_test.contains("name: expectedAppName"));
-    assert!(overview_test.contains("screen.findByText(expectedAppName)"));
+    assert!(overview_test.contains("screen.findAllByText(expectedAppName)"));
 }
 
 #[test]
@@ -4391,13 +4489,19 @@ fn scaffold_output_paths_include_template_collision_candidates() {
         "web/components.json",
         "web/src/App.tsx",
         "web/src/api.ts",
+        "web/src/app/router.ts",
+        "web/src/routeTree.gen.ts",
+        "web/src/routes/index.tsx",
         "web/src/components/ui/button.tsx",
         "web/src/lib/utils.ts",
         "landing/package.json",
         "landing/src/pages/index.astro",
         "admin-panel/package.json",
         "admin-panel/components.json",
-        "admin-panel/src/app/router.tsx",
+        "admin-panel/src/app/router.ts",
+        "admin-panel/src/routeTree.gen.ts",
+        "admin-panel/src/routes/index.tsx",
+        "admin-panel/src/routes/settings.tsx",
         "admin-panel/src/components/ui/sidebar.tsx",
         "admin-panel/src/features/overview/overview-page.tsx",
     ] {

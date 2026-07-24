@@ -1,13 +1,37 @@
+import { QueryClient } from "@tanstack/react-query"
+import { RouterProvider, createMemoryHistory } from "@tanstack/react-router"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
-import { OverviewPage } from "@/features/overview/overview-page"
+import { AppProviders } from "@/app/providers"
+import { createAppRouter } from "@/app/router"
 
 // Renderer values are not length-bounded.
 // prettier-ignore
 const expectedAppName = "<<[ repo_name ]>>"
 
 afterEach(() => vi.unstubAllGlobals())
+
+function renderAdmin(initialEntry = "/") {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  const router = createAppRouter({
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    queryClient,
+  })
+  render(
+    <AppProviders client={queryClient}>
+      <RouterProvider router={router} />
+    </AppProviders>
+  )
+
+  return router
+}
 
 it("shows application identity and readiness from the API", async () => {
   vi.stubGlobal(
@@ -26,11 +50,15 @@ it("shows application identity and readiness from the API", async () => {
       .mockResolvedValueOnce(new Response("", { status: 200 }))
   )
 
-  render(<OverviewPage />)
+  renderAdmin()
 
-  expect(screen.getByLabelText("Loading application status")).toBeDefined()
-  expect(await screen.findByText(expectedAppName)).toBeDefined()
-  expect(screen.getByText("0.1.0")).toBeDefined()
+  expect(
+    await screen.findByRole("heading", { name: "Application status" })
+  ).toBeDefined()
+  expect(await screen.findByText("0.1.0")).toBeDefined()
+  expect((await screen.findAllByText(expectedAppName)).length).toBeGreaterThan(
+    0
+  )
   expect(screen.getByText("Ready")).toBeDefined()
 })
 
@@ -56,7 +84,7 @@ it("reports malformed API data and retries", async () => {
     .mockResolvedValueOnce(new Response("", { status: 200 }))
   vi.stubGlobal("fetch", fetchMock)
 
-  render(<OverviewPage />)
+  renderAdmin()
 
   expect(
     await screen.findByText(/did not contain string name and version fields/)
@@ -75,7 +103,7 @@ it("reports an unsuccessful API version response", async () => {
       .mockResolvedValueOnce(new Response("", { status: 503 }))
   )
 
-  render(<OverviewPage />)
+  renderAdmin()
 
   expect(
     await screen.findByText(/version request failed with status 503/)
@@ -99,8 +127,51 @@ it("shows a connected application that is not ready", async () => {
       .mockResolvedValueOnce(new Response("", { status: 503 }))
   )
 
-  render(<OverviewPage />)
+  renderAdmin()
 
   expect(await screen.findByText("Not ready")).toBeDefined()
   expect(screen.getByText("Unavailable")).toBeDefined()
+})
+
+it("navigates between generated admin routes", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ name: expectedAppName, version: "0.1.0" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+  )
+
+  renderAdmin()
+
+  expect(
+    await screen.findByRole("heading", { name: "Application status" })
+  ).toBeDefined()
+  fireEvent.click(screen.getByRole("link", { name: "Settings" }))
+  expect(
+    await screen.findByRole("heading", {
+      name: "Project-owned configuration",
+    })
+  ).toBeDefined()
+  fireEvent.click(screen.getByRole("link", { name: "Overview" }))
+  expect(
+    await screen.findByRole("heading", { name: "Application status" })
+  ).toBeDefined()
+})
+
+it("renders the admin not-found route", async () => {
+  renderAdmin("/missing")
+
+  expect(
+    await screen.findByRole("heading", { name: "Page not found" })
+  ).toBeDefined()
+  expect(screen.getByRole("link", { name: "Return to overview" })).toBeDefined()
 })

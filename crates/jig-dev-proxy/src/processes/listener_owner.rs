@@ -23,10 +23,6 @@ use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_proc
 use super::cleanup::termination_requested;
 use super::interruption_error;
 
-#[cfg(not(test))]
-const APP_READY_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const APP_READY_TIMEOUT: Duration = Duration::from_millis(500);
 const APP_READY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const LISTENER_OWNER_RECHECK_ATTEMPTS: usize = 3;
 const LISTENER_OWNER_RECHECK_DELAY: Duration = Duration::from_millis(50);
@@ -36,30 +32,7 @@ pub(super) fn wait_for_app_ready(
     port: u16,
     child: &mut Child,
 ) -> Result<Option<String>> {
-    wait_for_app_ready_until(
-        &spec.name,
-        &spec.target_host,
-        port,
-        child,
-        Some(APP_READY_TIMEOUT),
-    )
-}
-
-#[cfg(test)]
-pub(super) fn wait_for_app_ready_with_test_probe(
-    spec: &AppRunSpec,
-    port: u16,
-    child: &mut Child,
-) -> Result<Option<String>> {
-    wait_for_app_ready_until_with_probe(
-        &spec.name,
-        &spec.target_host,
-        port,
-        child,
-        Some(APP_READY_TIMEOUT),
-        |_, _| false,
-        |_, _| true,
-    )
+    wait_for_app_ready_until(&spec.name, &spec.target_host, port, child, None)
 }
 
 pub(super) fn verify_process_route_owner(

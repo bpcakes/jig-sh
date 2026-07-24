@@ -1,0 +1,18 @@
+import { createFileRoute } from "@tanstack/react-router"
+
+import {
+  OverviewError,
+  OverviewPage,
+  OverviewPending,
+} from "@/features/overview/overview-page"
+import { appStatusQueryOptions } from "@/lib/api"
+
+export const Route = createFileRoute("/")({
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(appStatusQueryOptions),
+  component: OverviewPage,
+  pendingComponent: OverviewPending,
+  errorComponent: OverviewError,
+  pendingMs: 0,
+  pendingMinMs: 0,
+})

@@ -1,0 +1,13 @@
+import { createFileRoute } from "@tanstack/react-router";
+
+import { App, AppError, AppPending } from "@/App";
+import { appStatusQueryOptions } from "@/api";
+
+export const Route = createFileRoute("/")({
+  loader: ({ context }) => context.queryClient.ensureQueryData(appStatusQueryOptions),
+  component: App,
+  pendingComponent: AppPending,
+  errorComponent: AppError,
+  pendingMs: 0,
+  pendingMinMs: 0,
+});

@@ -1,0 +1,22 @@
+import { Link, Outlet, createRootRouteWithContext } from "@tanstack/react-router";
+
+import type { RouterContext } from "@/app/router-context";
+import { Button } from "@/components/ui/button";
+
+export const Route = createRootRouteWithContext<RouterContext>()({
+  component: () => <Outlet />,
+  notFoundComponent: () => (
+    <main className="flex min-h-svh items-center justify-center bg-background px-6 text-foreground">
+      <div className="max-w-md space-y-4 text-center">
+        <p className="text-sm font-medium text-muted-foreground">404</p>
+        <h1 className="text-3xl font-semibold tracking-tight">Page not found</h1>
+        <p className="text-muted-foreground">
+          The requested route does not exist in this application.
+        </p>
+        <Button asChild>
+          <Link to="/">Return home</Link>
+        </Button>
+      </div>
+    </main>
+  ),
+});

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "vite build && tsc -b",
     "build:bundle": "vite build",
     "typecheck": "tsc -b",
     "lint": "eslint . && prettier --check .",
@@ -19,13 +19,14 @@
   "dependencies": {
     "@fontsource-variable/geist": "5.2.9",
     "@tailwindcss/vite": "4.3.2",
+    "@tanstack/react-query": "5.101.4",
+    "@tanstack/react-router": "1.170.18",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "lucide-react": "1.24.0",
     "radix-ui": "1.6.2",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "react-router-dom": "7.18.1",
     "shadcn": "<<[ shadcn_cli_version ]>>",
     "sonner": "2.0.7",
     "tailwind-merge": "3.6.0",
@@ -34,6 +35,8 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@tanstack/eslint-plugin-query": "5.101.4",
+    "@tanstack/router-plugin": "1.168.23",
     "@testing-library/dom": "10.4.1",
     "@testing-library/react": "16.3.2",
     "@types/node": "<<[ node_types_version ]>>",

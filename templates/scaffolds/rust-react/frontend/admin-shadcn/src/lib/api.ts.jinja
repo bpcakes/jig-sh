@@ -1,3 +1,5 @@
+import { queryOptions } from "@tanstack/react-query"
+
 export type AppVersion = {
   name: string
   version: string
@@ -37,3 +39,8 @@ export async function fetchAppStatus(signal?: AbortSignal): Promise<AppStatus> {
 
   return { version, ready: readinessResponse.ok }
 }
+
+export const appStatusQueryOptions = queryOptions({
+  queryKey: ["app-status"],
+  queryFn: ({ signal }) => fetchAppStatus(signal),
+})

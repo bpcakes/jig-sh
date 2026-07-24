@@ -2,6 +2,7 @@
 import path from "node:path";
 
 import tailwindcss from "@tailwindcss/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -25,7 +26,16 @@ const apiOrigin =
   "http://api.<<[ repo_dns_label ]>>.localhost:1355";
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    tanstackRouter({
+      target: "react",
+      autoCodeSplitting: true,
+      quoteStyle: "double",
+      semicolons: true,
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -56,6 +66,7 @@ export default defineConfig({
         "src/**/*.test.{ts,tsx}",
         "src/test-setup.ts",
         "src/main.tsx",
+        "src/routeTree.gen.ts",
         "src/components/ui/**/*.{ts,tsx}",
         "src/lib/utils.ts",
       ],

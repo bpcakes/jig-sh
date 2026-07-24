@@ -1,5 +1,5 @@
+import { Link, useRouterState } from "@tanstack/react-router"
 import { LayoutDashboardIcon, SettingsIcon } from "lucide-react"
-import { NavLink, useLocation } from "react-router-dom"
 
 import {
   Sidebar,
@@ -16,15 +16,17 @@ import {
 } from "@/components/ui/sidebar"
 
 const navigation = [
-  { label: "Overview", to: "/", icon: LayoutDashboardIcon, end: true },
-  { label: "Settings", to: "/settings", icon: SettingsIcon, end: false },
-]
+  { label: "Overview", to: "/", icon: LayoutDashboardIcon, exact: true },
+  { label: "Settings", to: "/settings", icon: SettingsIcon, exact: false },
+] as const
 // Renderer values are not length-bounded.
 // prettier-ignore
 const appName = "<<[ repo_name ]>>"
 
 export function AppSidebar() {
-  const { pathname } = useLocation()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
 
   return (
     <Sidebar collapsible="icon">
@@ -32,7 +34,7 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <NavLink to="/">
+              <Link to="/" activeOptions={{ exact: true }}>
                 <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <LayoutDashboardIcon className="size-4" />
                 </div>
@@ -40,7 +42,7 @@ export function AppSidebar() {
                   <span className="truncate font-medium">{appName}</span>
                   <span className="truncate text-xs">Administration</span>
                 </div>
-              </NavLink>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -55,16 +57,16 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     asChild
                     isActive={
-                      item.end
+                      item.exact
                         ? pathname === item.to
                         : pathname.startsWith(item.to)
                     }
                     tooltip={item.label}
                   >
-                    <NavLink to={item.to} end={item.end}>
+                    <Link to={item.to} activeOptions={{ exact: item.exact }}>
                       <item.icon />
                       <span>{item.label}</span>
-                    </NavLink>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
