@@ -196,6 +196,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Update(_)
         | CommandKind::Doctor
         | CommandKind::Info
+        | CommandKind::Status
         | CommandKind::Prompt(_)
         | CommandKind::Vault(_)
         | CommandKind::Ui(_)

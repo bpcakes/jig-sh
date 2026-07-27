@@ -211,6 +211,7 @@ impl NormalizedRemoteCommittedFixture {
 mod basic;
 mod committed;
 mod frontend_adoption;
+mod status_provider;
 mod template_mode;
 mod template_source;
 mod windows_dependency_checker;

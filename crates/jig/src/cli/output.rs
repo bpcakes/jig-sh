@@ -5,12 +5,12 @@ use anyhow::{Result, anyhow};
 use crate::{doctor, info};
 
 mod dev;
-
-const WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT: usize = 5;
+mod status;
 
 pub(super) enum HumanOutput {
     Doctor,
     Info,
+    Status,
     VaultRun,
     VaultGeneric,
     AgentDoctor,
@@ -58,6 +58,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
     Ok(match human_output {
         HumanOutput::Doctor => doctor::format_summary(value),
         HumanOutput::Info => info::format_summary(value),
+        HumanOutput::Status => status::format_summary(value),
         HumanOutput::VaultRun => format_vault_run_summary(value),
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
         HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
@@ -221,72 +222,7 @@ pub(super) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
 }
 
 pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
-    let counts = &value["counts"];
-    let repo = &value["repo"];
-    let repo_name = value_str(repo, "name").unwrap_or("<unknown>");
-    let default_branch = value_str(repo, "default_branch").unwrap_or("<unknown>");
-    let open_plan_count = value_u64(counts, "open_plans").unwrap_or(0);
-    let receipt_count = value_u64(counts, "receipts").unwrap_or(0);
-    let failed_receipt_count = value_u64(counts, "failed_receipts").unwrap_or(0);
-    let decision_count = value_u64(counts, "decisions").unwrap_or(0);
-
-    let mut lines = vec![
-        "Work status:".into(),
-        format!("  Plans: {open_plan_count} open"),
-        format!("  Receipts: {receipt_count} total, {failed_receipt_count} failed"),
-        format!("  Decisions: {decision_count}"),
-        format!("Repo: {repo_name} ({default_branch})"),
-        format!(
-            "Current session: {}",
-            value_str(value, "current_session_id").unwrap_or("none")
-        ),
-    ];
-
-    let open_plans = value["open_plans"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if open_plans.is_empty() {
-        lines.push("Open plans: none".into());
-    } else {
-        lines.push("Open plans:".into());
-        for plan in open_plans {
-            let plan_id = value_str(plan, "plan_id").unwrap_or("<unknown>");
-            let title = value_str(plan, "title").unwrap_or("<untitled>");
-            lines.push(format!("  - {plan_id}: {title}"));
-        }
-    }
-
-    let recent_receipts = value["recent_receipts"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if recent_receipts.is_empty() {
-        lines.push("Recent receipts: none".into());
-    } else {
-        lines.push("Recent receipts:".into());
-        for receipt in recent_receipts
-            .iter()
-            .take(WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT)
-        {
-            let id = value_str(receipt, "id").unwrap_or("<unknown>");
-            let tool = value_str(receipt, "tool_name").unwrap_or("<unknown>");
-            let exit_status = value_i64(receipt, "exit_status")
-                .map(|status| status.to_string())
-                .unwrap_or_else(|| "?".into());
-            let diff = value_str(receipt, "diff_summary").unwrap_or("unknown diff");
-            lines.push(format!("  - {tool} ({id}): exit {exit_status}, {diff}"));
-        }
-        if recent_receipts.len() > WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT {
-            let hidden = recent_receipts.len() - WORK_STATUS_RECENT_RECEIPT_SUMMARY_LIMIT;
-            let noun = if hidden == 1 { "receipt" } else { "receipts" };
-            lines.push(format!(
-                "  (and {hidden} more recent {noun}; rerun with --json for full output)"
-            ));
-        }
-    }
-
-    lines.join("\n")
+    status::format_work_summary(value)
 }
 
 pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {

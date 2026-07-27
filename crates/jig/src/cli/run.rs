@@ -43,6 +43,11 @@ pub(crate) fn run() -> Result<()> {
             emit(json_output, HumanOutput::Info, &output)?;
             require_json_ok(true, &output)
         }
+        CommandKind::Status => {
+            let ctx = RepoContext::load()?;
+            let output = status::snapshot(&ctx)?;
+            emit(json_output, HumanOutput::Status, &output)
+        }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Dev(opts) => {
             let human_output = dev_human_output(&opts);

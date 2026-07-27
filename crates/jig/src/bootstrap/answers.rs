@@ -10,8 +10,9 @@ use super::{
     generated_package_manager_version,
 };
 use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, config_app_dirs_match,
-    default_codex_marketplace_plugins, normalize_config_app_dir, validate_web_package_manager,
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
+    config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
+    validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 
@@ -74,6 +75,7 @@ pub(super) struct RenderAnswers {
     frontend_apps: Vec<FrontendApp>,
     generated_frontend_dev_apps: Vec<FrontendApp>,
     vault: vault::VaultAnswers,
+    status: StatusConfig,
     agent_tooling: AgentToolingAnswers,
 }
 
@@ -345,6 +347,7 @@ struct RawAnswers {
     frontend_apps: Option<Vec<FrontendApp>>,
     dev: Option<dev::RawDevAnswers>,
     vault: Option<vault::VaultAnswers>,
+    status: Option<StatusConfig>,
     agent_tooling: Option<AgentToolingAnswers>,
 }
 
@@ -508,6 +511,7 @@ impl RawAnswers {
                 .get_or_insert_with(dev::RawDevAnswers::default)
                 .apps = Some(opts.dev_apps.clone());
         }
+        merge_option(&mut self.status, opts.status.clone());
     }
 
     fn normalize_app_dirs(&mut self) -> Result<()> {
@@ -558,6 +562,7 @@ impl RawAnswers {
             web_package_manager: self.web_package_manager,
             frontend_apps: self.frontend_apps.unwrap_or_default(),
             dev_apps,
+            status: self.status,
         }
     }
 
@@ -639,6 +644,8 @@ impl RawAnswers {
         } = dev::resolve(frontend_apps.as_slice(), self.dev)?;
         let vault = self.vault.unwrap_or_else(vault::default_answers);
         vault::validate_answers(&vault)?;
+        let status = self.status.unwrap_or_default();
+        status.validate()?;
         let legacy_dev_command = self.dev_command.filter(|value| !value.trim().is_empty());
 
         let web_package_manager = self.web_package_manager.unwrap_or_else(|| "bun".into());
@@ -724,6 +731,7 @@ impl RawAnswers {
             generated_frontend_dev_apps,
             frontend_apps,
             vault,
+            status,
             agent_tooling: self.agent_tooling.unwrap_or_default(),
         })
     }
@@ -930,46 +938,5 @@ fn default_repo_name(destination: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recopy_normalizes_exact_former_generated_sqlx_default() {
-        let metadata_dir = "db/sqlx metadata";
-        let former_default = format!(
-            "SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} cargo sqlx prepare --check --workspace -- --workspace --all-targets",
-            shell_quote(metadata_dir)
-        );
-        let mut raw = RawAnswers {
-            repo_name: Some("demo".into()),
-            sqlx_enabled: Some(true),
-            rust_migration_dir: Some("migrations".into()),
-            rust_sqlx_metadata_dir: Some(metadata_dir.into()),
-            schema_dump_enabled: Some(false),
-            sqlx_check_command: Some(former_default.clone()),
-            ..RawAnswers::default()
-        };
-
-        raw.normalize_legacy_generated_cargo_command_defaults();
-        assert_eq!(raw.sqlx_check_command, None);
-        let rendered = raw.resolve(None).unwrap();
-        assert_eq!(
-            rendered.sqlx_check_command,
-            format!(
-                "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR={} sqlx prepare --check --workspace -- --workspace --all-targets",
-                shell_quote(metadata_dir)
-            )
-        );
-
-        let mut customized = RawAnswers {
-            rust_sqlx_metadata_dir: Some(metadata_dir.into()),
-            sqlx_check_command: Some(format!("{former_default} --custom")),
-            ..RawAnswers::default()
-        };
-        customized.normalize_legacy_generated_cargo_command_defaults();
-        assert_eq!(
-            customized.sqlx_check_command.as_deref(),
-            Some(format!("{former_default} --custom").as_str())
-        );
-    }
-}
+#[path = "answers_tests.rs"]
+mod tests;

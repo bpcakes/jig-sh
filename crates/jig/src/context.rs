@@ -10,9 +10,11 @@ use serde::Deserialize;
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
 mod loop_config;
+mod status_config;
 mod work_config;
 
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
+pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
     parse_review_scope_arg,
@@ -120,6 +122,8 @@ struct RepoConfig {
     work: WorkConfig,
     #[serde(default, rename = "loop")]
     loop_config: LoopConfig,
+    #[serde(default)]
+    status: StatusConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
 }
@@ -662,7 +666,7 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_frontend_app_roles(config)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    validate_runtime_config(config)
+    status_config::validate_runtime_config(config)
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
@@ -886,11 +890,6 @@ fn validate_dev_app_env_prefixes<'a>(
         }
     }
     Ok(())
-}
-
-fn validate_runtime_config(config: &RepoConfig) -> Result<()> {
-    config.work.validate()?;
-    config.loop_config.validate()
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]

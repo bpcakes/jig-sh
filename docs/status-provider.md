@@ -2,7 +2,7 @@
 
 The Jig status-provider protocol is an open JSON boundary between a project-specific inspector and any status consumer. The provider may be a private Ruby executable, a public Rust binary, a container, or another implementation. Its source and discovery algorithms do not need to be published. Its report conforms to the public `jig.status-provider/v1` schema.
 
-Version 1 defines the observation contract only. Jig does not yet configure or execute providers, aggregate their reports, or expose them in the UI. Those runtime features can consume this contract without changing it.
+Version 1 defines the provider observation contract. Jig can configure and execute v1 providers and expose a fresh aggregate with `scripts/jig status --json`; the aggregate is a separate, runtime-owned schema. Jig does not yet cache provider reports, expose them in its web UI or a terminal UI, or launch an implementation agent.
 
 Normative artifacts:
 
@@ -14,7 +14,7 @@ Normative artifacts:
 
 A provider observes project-owned facts. For a software rewrite, those facts include the work-package specification, implementation and verification states, dependencies, acceptance checks, domain blockers, evidence references, and the exact source inputs inspected.
 
-A consumer validates and combines observations. A future Jig aggregator will add facts that a project inspector does not own: remote Git freshness, worktree cleanliness, active plans and receipts, agent leases, active runs, available gates, and launcher policy. Final `launchability` is therefore deliberately absent from the provider report.
+A consumer validates and combines observations. Jig's aggregator adds facts that a project inspector does not own: local checkout and tracking-ref freshness, worktree cleanliness, active plans and recent receipts, available gates, and loop leases and attempts. A later launcher may add launch policy. Final `launchability` is therefore deliberately absent from the provider report.
 
 The provider report is also not a UI view model. Terminal and web presentations may reorder, filter, summarize, or join its data without requiring providers to emit colors, panel names, display limits, commands, or rendered text.
 
@@ -31,6 +31,44 @@ When an executable is invoked in status-provider mode, it must follow these rule
 - It does not place secrets, environment dumps, full source files, or unbounded command output in the report. Evidence is represented by stable references and optional digests.
 
 This process behavior belongs to a dedicated provider mode. An existing verifier may retain different CI-oriented exit behavior for its human command.
+
+## Jig runner and aggregate
+
+Configure a provider with an exact argv array in `.jig.toml`:
+
+```toml
+[[status.providers]]
+id = "factorish.hocr2.migration-readiness"
+argv = ["ruby", "scripts/verify_migration_readiness.rb", "--status-provider-v1"]
+timeout_seconds = 30
+```
+
+The configured `id` must exactly match `provider.id` in the report. Jig runs the argv directly from the repository root; it does not parse a shell command string. Arguments containing control characters are rejected so the renderer answer file remains safely round-trippable. Provider entries default to a 30-second timeout and accept values from 1 through 3,600 seconds. At most 32 providers may be configured.
+
+The runner closes stdin, caps stdout at 8 MiB and stderr at 64 KiB, and owns the complete child process tree. Timeout, cancellation, capture failure, or process-tree cleanup failure invalidates that invocation. Jig also removes inherited Bash startup/option/trace controls, exported Bash functions, and all inherited `GIT_*` variables so ambient repository redirection cannot make the provider inspect another checkout. Other ordinary toolchain and project environment values remain inherited. Provider configuration is committed executable authority; review it like a project-owned script and never place credentials in argv.
+
+Run:
+
+```sh
+scripts/jig status
+scripts/jig status --json
+```
+
+Human output is a compact operator summary. JSON has `schema_version: 1` and includes:
+
+- `repository`: local HEAD, branch, worktree cleanliness, and ahead/behind counts against the existing local tracking ref;
+- `work`: Jig's structured work-state summary plus a read-only gate snapshot for every open plan;
+- `loops`: configured workflows, active leases, attempts, backoff, and exhausted attempts;
+- `providers`: one result per configured provider, in configuration order;
+- `errors`: failures collecting Jig-owned sections.
+
+A successful provider result keeps the original JSON document under `providers[].report`, including additive fields unknown to the current Rust DTO. `summary` contains generic package, blocker, diagnostic, facet, and acceptance-check counts. `input_freshness` compares each Git input revision with the root checkout or its validated repository-relative path and reports `current`, `dirty`, `stale`, `unknown`, or `unavailable`; non-Git inputs are `not_applicable`.
+
+Provider execution failures use `status: "failed"`, a stable error `code`, a bounded stderr diagnostic when one exists, and `report: null`. Nonzero stdout is never merged. A trustworthy provider report with `outcome: "partial"` uses provider `status: "partial"`.
+
+Top-level `ok: true` means Jig constructed the inspection snapshot. Top-level `outcome: "partial"` means at least one provider failed or was partial, or a Jig-owned section could not be collected. A dirty input, stale revision, domain blocker, or blocked gate is a complete observed fact and does not by itself make collection partial.
+
+`jig status` is read-only: it records no receipt, writes no cache, and never fetches a remote. Ahead/behind values therefore describe the current local tracking ref and may be older than the remote server.
 
 ## Report envelope
 

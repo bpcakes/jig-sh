@@ -2289,7 +2289,7 @@ pub(crate) struct OwnedProcessTreeOutput {
 }
 
 pub(crate) struct BoundedProcessOutput {
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
     pub(crate) truncated: bool,
     pub(crate) complete: bool,
 }
@@ -2356,9 +2356,9 @@ pub(crate) fn run_owned_process_tree_with_output(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ProcessOutputLimits {
-    stdout: usize,
-    stderr: usize,
+pub(crate) struct ProcessOutputLimits {
+    pub(crate) stdout: usize,
+    pub(crate) stderr: usize,
 }
 
 impl ProcessOutputLimits {
@@ -2377,7 +2377,7 @@ impl ProcessOutputLimits {
     }
 }
 
-fn run_owned_process_tree_with_output_limits(
+pub(crate) fn run_owned_process_tree_with_output_limits(
     command: &mut Command,
     timeout: Duration,
     limits: ProcessOutputLimits,

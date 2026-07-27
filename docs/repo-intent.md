@@ -39,7 +39,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 3`, with command-backed tools such as `jig.bootstrap`, `jig.fmt_check`, `jig.clippy`, `jig.test`, `jig.test_locked`, `jig.contract_check`, and optional SQLx/schema/migration tools. Legacy `contract_version: 2` command-backed manifests can still be loaded by the runtime.
 
-The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. Version 1 defines no provider runner, aggregate status store, UI integration, or launcher.
+The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; provider caching, status UI integration, and an implementation launcher remain later milestones.
 
 Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
 
@@ -75,7 +75,7 @@ A shorter product phrasing is:
 
 `templates/project/` is the source for generated repository assets. It renders `.jig.toml`, `AGENTS.md`, `.agent/jig-contract.json`, scripts, workflows, and agent support files.
 
-`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, `jig_version`, crate roots, SQLx settings, web app settings, and template source metadata.
+`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, `jig_version`, crate roots, SQLx settings, web app settings, status-provider argv, and template source metadata.
 
 The template source metadata is a trust boundary. In generated or adopted repos, `scripts/install-jig.sh` may install from the exact `_commit` recorded in `.jig.toml` when that value is a hex git revision, so changing `_src_path` or `_commit` is equivalent to changing the source used to install the repo-local Jig runtime.
 
@@ -88,6 +88,8 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 `crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. For command-backed tools, it resolves the command key from `.agent/jig-contract.json`, executes the configured `.jig.toml` command from the repo root, records a receipt, and returns structured JSON.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
+
+`crates/jig/src/status.rs` owns the separate runtime boundary: configured provider execution, v1 validation, local Git input freshness, and aggregation with structured work, gate, lease, and attempt state. It preserves accepted provider JSON as emitted and keeps execution/configuration dependencies out of `jig-contract`.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 

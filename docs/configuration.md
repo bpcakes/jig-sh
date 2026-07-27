@@ -79,6 +79,7 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `web_package_manager`: currently `bun`
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
+- `status`: read-only software-rewrite status providers executed by `scripts/jig status`
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
@@ -90,7 +91,7 @@ Contracts that declare `"kind": "native"` tools require the repo's pinned `scrip
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `jig_version`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, and `agent_tooling`. `schema_check_command`, `migration_add_command`, and `contract_check_command` are legacy accepted keys for older rendered repos; new renders use native binary implementations. Older hand-edited v2 manifests that still list these legacy command keys must either keep the matching `.jig.toml` values until updated, or switch the corresponding tools to their native forms.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `jig_version`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `status`, and `agent_tooling`. `schema_check_command`, `migration_add_command`, and `contract_check_command` are legacy accepted keys for older rendered repos; new renders use native binary implementations. Older hand-edited v2 manifests that still list these legacy command keys must either keep the matching `.jig.toml` values until updated, or switch the corresponding tools to their native forms.
 
 Nested accepted keys are:
 
@@ -98,11 +99,37 @@ Nested accepted keys are:
 - `[vault]`: `scope`, `scope_id`, `allow_global`
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
+- `[status]`: `providers`
+- `[[status.providers]]`: `id`, `argv`, `timeout_seconds`
 - `[work]`: `checks`, `gates`, `refinements`
 - `[[work.gates]]`: `id`, `kind`, `tool`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
+
+## `status` Shape
+
+Generated repositories start with no providers:
+
+```toml
+[status]
+providers = []
+```
+
+Add a project-owned inspector as an argv array:
+
+```toml
+[[status.providers]]
+id = "factorish.hocr2.migration-readiness"
+argv = ["ruby", "scripts/verify_migration_readiness.rb", "--status-provider-v1"]
+timeout_seconds = 30
+```
+
+`id` is required, must be unique, and must exactly match the report's `provider.id`. `argv` must contain an executable, must not contain control characters, and is passed directly without shell parsing. `timeout_seconds` defaults to 30 and must be between 1 and 3,600. Jig accepts at most 32 providers. The provider must follow the read-only [`jig.status-provider/v1` process contract](status-provider.md#process-contract).
+
+`scripts/jig status` executes configured providers from the repository root and combines their validated reports with local Git, work/gate, and loop lease/attempt state. The command records no receipt, writes no provider cache, and never fetches remotes. Provider stdout and stderr are bounded, and each invocation runs in an owned process tree. Treat every configured argv as trusted repository executable code.
+
+This section is part of the renderer answers round trip: `jig update --recopy` preserves configured provider entries. The status aggregate is described under [Jig runner and aggregate](status-provider.md#jig-runner-and-aggregate).
 
 ## `agent_tooling` Shape
 

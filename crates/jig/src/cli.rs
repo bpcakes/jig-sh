@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 #[cfg(test)]
 use crate::tool_defs::tool;
-use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, tool_defs, ui};
+use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, status, tool_defs, ui};
 
 mod agent;
 mod bootstrap_run;
@@ -105,6 +105,20 @@ Examples:
   jig info --json
   jig explain --json";
 
+const STATUS_AFTER_HELP: &str = "\
+Runs configured jig.status-provider/v1 inspectors and combines their validated
+reports with local Git freshness, structured work and gate state, and loop
+leases and attempts. The command is read-only, does not fetch remotes, and
+records no receipt.
+
+Provider failures are included as partial status so an operator can inspect the
+remaining snapshot. Human-readable output is the default. Pass --json for the
+versioned aggregate.
+
+Examples:
+  jig status
+  jig status --json";
+
 const PRESETS_AFTER_HELP: &str = "\
 Use presets with `jig init` when you want Jig to create starter application code
 and the repo harness together.
@@ -174,6 +188,9 @@ pub(crate) enum CommandKind {
         after_help = INFO_AFTER_HELP
     )]
     Info,
+    /// Aggregate local repo, work, loop, and configured rewrite-provider status.
+    #[command(name = tool_defs::cli_command::STATUS, after_help = STATUS_AFTER_HELP)]
+    Status,
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::SCHEMA_DUMP)]
     SchemaDump(ToolOpts),
@@ -303,5 +320,7 @@ mod dev_tests;
 mod help_tests;
 #[cfg(test)]
 mod preset_tests;
+#[cfg(test)]
+mod status_tests;
 #[cfg(test)]
 mod tests;

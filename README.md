@@ -11,7 +11,7 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 - **Agent context files** (`AGENTS.md`, `agent-map.md`) so agents learn the repo layout and conventions without reading source.
 - **A typed `jig` command contract** so every machine, CI run, and agent executes the same commands and leaves append-only receipts under `.agent/state/`.
-- **An open status-provider protocol** so public or private project inspectors can publish versioned software-rewrite observations to any consumer.
+- **An open status-provider protocol and aggregate** so public or private project inspectors can publish versioned software-rewrite observations and `jig status` can join them with repo and harness state.
 - **Work gates backed by receipts** so a task cannot be marked done without a verifiable output artifact.
 - **A local dev proxy** so app hostnames stay stable across port changes and machine restarts.
 - **A local encrypted vault** so selected secrets resolve into brokered child processes without ever living in the repo.
@@ -133,6 +133,17 @@ See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for 
 ### Structured work & receipts
 
 `work start` opens a plan, `check` runs gates, and `work finish` closes a plan only after fresh evidence exists. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
+
+### Rewrite status
+
+Configure a public or private `jig.status-provider/v1` inspector in `.jig.toml`, then join its blockers and implementation/verification progress with local Git freshness, plans, gates, loop leases, and attempts:
+
+```sh
+scripts/jig status
+scripts/jig status --json
+```
+
+The command is read-only and keeps provider failures visible as partial status. See [Status-provider protocol](docs/status-provider.md#jig-runner-and-aggregate).
 
 ### Flight recorder UI
 

@@ -54,6 +54,7 @@ mod runtime;
 mod serde_helpers;
 mod shell;
 mod state;
+mod status;
 #[cfg(test)]
 mod test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
