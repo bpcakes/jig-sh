@@ -2,6 +2,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+#[cfg(unix)]
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
 use jig_contract::status_provider::v1::Input;
 use serde_json::{Value, json};
@@ -170,6 +179,32 @@ fn runner_maps_timeout_non_utf8_and_bounded_output_failures() {
         run_provider_inner_with_limits(tempdir().unwrap().path(), &oversized, 8, 64).unwrap_err();
     assert_eq!(failure.code, "stdout_limit_exceeded");
     assert!(failure.message.contains("8 byte limit"));
+}
+
+#[cfg(unix)]
+#[test]
+fn runner_cancels_an_in_flight_provider_tree_promptly() {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let trigger = Arc::clone(&cancelled);
+    let setter = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(100));
+        trigger.store(true, Ordering::SeqCst);
+    });
+    let long_running = provider(vec!["sh".into(), "-c".into(), "sleep 30 & wait".into()]);
+    let started = Instant::now();
+    let failure =
+        run_provider_inner_with_cancellation(tempdir().unwrap().path(), &long_running, &|| {
+            cancelled.load(Ordering::SeqCst)
+        })
+        .unwrap_err();
+    setter.join().unwrap();
+
+    assert_eq!(failure.code, "cancelled");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "provider cancellation took {:?}",
+        started.elapsed()
+    );
 }
 
 #[cfg(unix)]

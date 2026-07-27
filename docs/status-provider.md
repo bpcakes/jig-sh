@@ -2,7 +2,7 @@
 
 The Jig status-provider protocol is an open JSON boundary between a project-specific inspector and any status consumer. The provider may be a private Ruby executable, a public Rust binary, a container, or another implementation. Its source and discovery algorithms do not need to be published. Its report conforms to the public `jig.status-provider/v1` schema.
 
-Version 1 defines the provider observation contract. Jig can configure and execute v1 providers and expose a fresh aggregate with `scripts/jig status --json`; the aggregate is a separate, runtime-owned schema. Jig does not yet cache provider reports, expose them in its web UI or a terminal UI, or launch an implementation agent.
+Version 1 defines the provider observation contract. Jig can configure and execute v1 providers, expose a fresh aggregate with `scripts/jig status --json`, and present that aggregate through `scripts/jig status --tui`; the aggregate is a separate, runtime-owned schema. Jig does not cache provider reports, expose them in its web flight-recorder UI, decide launchability, or launch an implementation agent.
 
 Normative artifacts:
 
@@ -52,6 +52,7 @@ Run:
 ```sh
 scripts/jig status
 scripts/jig status --json
+scripts/jig status --tui
 ```
 
 Human output is a compact operator summary. JSON has `schema_version: 1` and includes:
@@ -69,6 +70,18 @@ Provider execution failures use `status: "failed"`, a stable error `code`, a bou
 Top-level `ok: true` means Jig constructed the inspection snapshot. Top-level `outcome: "partial"` means at least one provider failed or was partial, or a Jig-owned section could not be collected. A dirty input, stale revision, domain blocker, or blocked gate is a complete observed fact and does not by itself make collection partial.
 
 `jig status` is read-only: it records no receipt, writes no cache, and never fetches a remote. Ahead/behind values therefore describe the current local tracking ref and may be older than the remote server.
+
+## Terminal dashboard
+
+`scripts/jig status --tui` is an interactive consumer of the same aggregate schema version 1 returned by `--json`. It does not call project-specific discovery code directly. This keeps private providers private and makes the dashboard usable with any conforming provider.
+
+The Overview view shows repository cleanliness, local tracking-ref state, configured provider outcome and duration, normalized specification/implementation/verification/acceptance progress, source-input freshness, Jig plan/gate/loop state, provider diagnostics, and aggregate collection errors. Packages presents every reported package with its native facet states, acceptance coverage, dependencies, evidence, and blockers. Blockers flattens package blockers into a directly navigable queue with full detail.
+
+Keys are `q`, Escape, or Ctrl-C to quit; `r` to refresh; Tab or Shift-Tab and `1`/`2`/`3` to change views; `j`/`k`, arrows, PageUp/PageDown, Home, and End to move; `[` and `]` to switch providers; and `b` to show only blocked packages. The first snapshot runs in a background worker. Refreshes never overlap, run every 30 seconds after the prior collection completes by default, and can be changed with `--refresh-seconds 1..3600`. A refresh requested while another is active is queued once.
+
+Both stdin and stdout must be terminals. Use the human summary or `--json` in a pipeline. `--tui` and `--json` are mutually exclusive. Quitting while a provider runs sends cancellation through Jig's owned process-tree supervisor, joins the refresh worker, and restores raw mode, the original screen, and cursor visibility before returning.
+
+The terminal dashboard is implemented in the CLI-owned `jig-status-tui` crate behind a snapshot-source interface. It is distinct from `scripts/jig ui`, which serves browser pages over plans, gates, receipts, and loop history. Neither UI adds launch policy. A future Codex launcher requires a separate authority and policy contract rather than making status observation executable by implication.
 
 ## Report envelope
 

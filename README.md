@@ -141,9 +141,10 @@ Configure a public or private `jig.status-provider/v1` inspector in `.jig.toml`,
 ```sh
 scripts/jig status
 scripts/jig status --json
+scripts/jig status --tui
 ```
 
-The command is read-only and keeps provider failures visible as partial status. See [Status-provider protocol](docs/status-provider.md#jig-runner-and-aggregate).
+The terminal dashboard has Overview, Packages, and Blockers views, background refresh, provider switching, and stable package/blocker selection. The command is read-only and keeps provider failures visible as partial status. It is separate from `jig ui`, the browser-based work/receipt flight recorder. See [Status-provider protocol](docs/status-provider.md#terminal-dashboard).
 
 ### Flight recorder UI
 
@@ -246,6 +247,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 - `crates/jig/` — publishable `jig` runtime and MCP server
 - `crates/jig-dev-proxy/` — local HTTP/HTTPS proxy with TLS certificate management
+- `crates/jig-status-tui/` — read-only terminal dashboard over versioned status aggregates
 - `crates/jig-ui/` — read-only loopback dashboard server and presentation
 - `crates/jig-vault/` — local encrypted vault, redaction, audit, and brokered-run primitives
 - `crates/jig-contract/contracts/status-provider/` — public status-provider JSON Schema and conformance example

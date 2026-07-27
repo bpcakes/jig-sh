@@ -1,0 +1,21 @@
+use std::time::Duration;
+
+use jig_status_tui::SnapshotSource;
+use serde_json::Value;
+
+use crate::context::RepoContext;
+
+struct RepoStatusSource {
+    ctx: RepoContext,
+}
+
+impl SnapshotSource for RepoStatusSource {
+    fn snapshot(&self, cancelled: &dyn Fn() -> bool) -> Result<Value, String> {
+        super::snapshot_with_cancellation(&self.ctx, cancelled)
+            .map_err(|error| format!("{error:#}"))
+    }
+}
+
+pub(crate) fn run(ctx: RepoContext, refresh_interval: Duration) -> anyhow::Result<()> {
+    jig_status_tui::run(RepoStatusSource { ctx }, refresh_interval)
+}

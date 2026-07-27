@@ -43,8 +43,15 @@ pub(crate) fn run() -> Result<()> {
             emit(json_output, HumanOutput::Info, &output)?;
             require_json_ok(true, &output)
         }
-        CommandKind::Status => {
+        CommandKind::Status(opts) => {
+            opts.validate_output_mode(json_output)?;
             let ctx = RepoContext::load()?;
+            if opts.tui {
+                return status::tui::run(
+                    ctx,
+                    std::time::Duration::from_secs(opts.effective_refresh_seconds()),
+                );
+            }
             let output = status::snapshot(&ctx)?;
             emit(json_output, HumanOutput::Status, &output)
         }

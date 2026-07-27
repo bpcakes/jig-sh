@@ -39,7 +39,7 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 3`, with command-backed tools such as `jig.bootstrap`, `jig.fmt_check`, `jig.clippy`, `jig.test`, `jig.test_locked`, `jig.contract_check`, and optional SQLx/schema/migration tools. Legacy `contract_version: 2` command-backed manifests can still be loaded by the runtime.
 
-The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; provider caching, status UI integration, and an implementation launcher remain later milestones.
+The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. The `jig` runtime configures and safely executes providers and exposes a versioned aggregate through `jig status`; `crates/jig-status-tui` presents that aggregate without importing runtime internals. Provider caching, web flight-recorder integration, launchability policy, and an implementation launcher remain later milestones.
 
 Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
 
@@ -90,6 +90,8 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
 
 `crates/jig/src/status.rs` owns the separate runtime boundary: configured provider execution, v1 validation, local Git input freshness, and aggregation with structured work, gate, lease, and attempt state. It preserves accepted provider JSON as emitted and keeps execution/configuration dependencies out of `jig-contract`.
+
+`crates/jig-status-tui` implements the interactive terminal consumer used by `scripts/jig status --tui`. Like the web UI crate, it depends on a read-only snapshot-provider trait rather than `RepoContext`, provider commands, state storage, or runtime policy. The small adapter in `crates/jig/src/status/tui.rs` supplies cancellable aggregate snapshots. The TUI does not cache status or launch agents.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 

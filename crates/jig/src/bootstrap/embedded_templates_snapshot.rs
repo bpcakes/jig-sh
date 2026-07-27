@@ -8002,7 +8002,7 @@ local_source_stamp() {
   # binary; omitted build inputs can make the source-cache stamp stale.
   {
     git -C "$source_root" rev-parse HEAD 2>/dev/null || printf 'unknown-head\n'
-    git -C "$source_root" diff HEAD -- Cargo.toml Cargo.lock crates/jig crates/jig-dev-proxy 2>/dev/null || true
+    git -C "$source_root" diff HEAD -- Cargo.toml Cargo.lock crates/jig crates/jig-dev-proxy crates/jig-status-tui 2>/dev/null || true
   } | hash_stdin
 }
 

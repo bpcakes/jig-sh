@@ -14,6 +14,7 @@ mod loops;
 mod prompt;
 mod proxy;
 mod state;
+mod status_opts;
 mod vault;
 mod work;
 
@@ -31,6 +32,7 @@ pub(crate) use proxy::{
     ProxyStartOpts, ProxyStopOpts,
 };
 pub(crate) use state::{StateArchiveOpts, StateCommand};
+pub(crate) use status_opts::StatusOpts;
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
     VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
@@ -113,11 +115,12 @@ records no receipt.
 
 Provider failures are included as partial status so an operator can inspect the
 remaining snapshot. Human-readable output is the default. Pass --json for the
-versioned aggregate.
+versioned aggregate or --tui for the interactive dashboard.
 
 Examples:
   jig status
-  jig status --json";
+  jig status --json
+  jig status --tui";
 
 const PRESETS_AFTER_HELP: &str = "\
 Use presets with `jig init` when you want Jig to create starter application code
@@ -190,7 +193,7 @@ pub(crate) enum CommandKind {
     Info,
     /// Aggregate local repo, work, loop, and configured rewrite-provider status.
     #[command(name = tool_defs::cli_command::STATUS, after_help = STATUS_AFTER_HELP)]
-    Status,
+    Status(StatusOpts),
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::SCHEMA_DUMP)]
     SchemaDump(ToolOpts),

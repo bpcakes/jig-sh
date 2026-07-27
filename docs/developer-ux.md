@@ -100,7 +100,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux/macOS retain the exact child process-group identity until descendants are proven gone, Windows uses a private Job Object, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured check and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
-- `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state.
+- `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
 - `scripts/jig mcp` exposes the same command contract to MCP clients.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
@@ -114,13 +114,16 @@ Repositories with a project-specific software-rewrite inspector can configure it
 ```sh
 scripts/jig status
 scripts/jig status --json
+scripts/jig status --tui
 ```
 
 The human view calls out repo cleanliness and local tracking state, open plans, loop leases/attempts, provider failures, package and blocker totals, and whether each reported Git input is current, dirty, or stale. The versioned JSON retains each validated `jig.status-provider/v1` document and adds Jig-owned work, gate, and runtime facts beside it.
 
 A failed provider does not erase the rest of the picture: it appears as a failed provider result and makes aggregate `outcome` partial. The command is read-only, records no receipt, stores no cache, and performs no remote fetch. See [Status-provider protocol](status-provider.md#jig-runner-and-aggregate) for configuration and exact semantics.
 
-This aggregate is the data boundary for a later command-line TUI. Provider caching, web/TUI presentation, launchability policy, and a Codex implementation launcher are not part of this slice.
+The TUI consumes that aggregate through three views: Overview for progress, repo and legacy/target freshness, diagnostics, and Jig state; Packages for selectable native facet and acceptance details; and Blockers for a flattened operator queue. Press `r` to refresh, Tab or `1`/`2`/`3` to change views, `j`/`k` or arrows to move, `[`/`]` to switch providers, `b` to filter packages, and `q` to quit. Collection happens in one cancellable background worker, so a slow provider does not block navigation or quit. `--refresh-seconds` changes the 30-second default.
+
+This status TUI and the browser flight recorder below are separate consumers with separate snapshot models. Provider caching, launchability policy, and a Codex implementation launcher remain outside this slice.
 
 ## Flight Recorder UI
 

@@ -127,7 +127,7 @@ timeout_seconds = 30
 
 `id` is required, must be unique, and must exactly match the report's `provider.id`. `argv` must contain an executable, must not contain control characters, and is passed directly without shell parsing. `timeout_seconds` defaults to 30 and must be between 1 and 3,600. Jig accepts at most 32 providers. The provider must follow the read-only [`jig.status-provider/v1` process contract](status-provider.md#process-contract).
 
-`scripts/jig status` executes configured providers from the repository root and combines their validated reports with local Git, work/gate, and loop lease/attempt state. The command records no receipt, writes no provider cache, and never fetches remotes. Provider stdout and stderr are bounded, and each invocation runs in an owned process tree. Treat every configured argv as trusted repository executable code.
+`scripts/jig status` executes configured providers from the repository root and combines their validated reports with local Git, work/gate, and loop lease/attempt state. Add `--tui` for the interactive Overview, Packages, and Blockers views; `--refresh-seconds` changes its 30-second refresh interval. The command records no receipt, writes no provider cache, and never fetches remotes. Provider stdout and stderr are bounded, and each invocation runs in an owned process tree. Treat every configured argv as trusted repository executable code.
 
 This section is part of the renderer answers round trip: `jig update --recopy` preserves configured provider entries. The status aggregate is described under [Jig runner and aggregate](status-provider.md#jig-runner-and-aggregate).
 

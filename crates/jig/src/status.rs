@@ -18,6 +18,7 @@ use crate::runtime::{loop_status_snapshot, work_gates_snapshot};
 use crate::state::{now_ms, state_summary};
 
 mod git;
+pub(crate) mod tui;
 
 use git::{
     GitCheckoutObservation, InputFreshness, git_text, input_freshness, observe_git_checkout,
@@ -28,10 +29,17 @@ const PROVIDER_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const PROVIDER_STDERR_LIMIT: usize = 64 * 1024;
 
 pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
+    snapshot_with_cancellation(ctx, &|| false)
+}
+
+pub(crate) fn snapshot_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
     let runs = ctx
         .status_providers()
         .iter()
-        .map(|provider| run_provider(ctx.root(), provider))
+        .map(|provider| run_provider(ctx.root(), provider, cancelled))
         .collect::<Vec<_>>();
 
     // Providers are contractually read-only. Observe repository and Jig state
@@ -306,9 +314,13 @@ struct ProviderFailure {
     stderr_truncated: bool,
 }
 
-fn run_provider(root: &Path, provider: &StatusProviderConfig) -> ProviderRun {
+fn run_provider(
+    root: &Path,
+    provider: &StatusProviderConfig,
+    cancelled: &dyn Fn() -> bool,
+) -> ProviderRun {
     let started = Instant::now();
-    let result = run_provider_inner(root, provider);
+    let result = run_provider_inner_with_cancellation(root, provider, cancelled);
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match result {
         Ok(report) => ProviderRun {
@@ -326,18 +338,50 @@ fn run_provider(root: &Path, provider: &StatusProviderConfig) -> ProviderRun {
     }
 }
 
+#[cfg(test)]
 fn run_provider_inner(
     root: &Path,
     provider: &StatusProviderConfig,
 ) -> std::result::Result<ValidatedReport, ProviderFailure> {
-    run_provider_inner_with_limits(root, provider, PROVIDER_STDOUT_LIMIT, PROVIDER_STDERR_LIMIT)
+    run_provider_inner_with_cancellation(root, provider, &|| false)
 }
 
+fn run_provider_inner_with_cancellation(
+    root: &Path,
+    provider: &StatusProviderConfig,
+    cancelled: &dyn Fn() -> bool,
+) -> std::result::Result<ValidatedReport, ProviderFailure> {
+    run_provider_inner_with_limits_and_cancellation(
+        root,
+        provider,
+        PROVIDER_STDOUT_LIMIT,
+        PROVIDER_STDERR_LIMIT,
+        cancelled,
+    )
+}
+
+#[cfg(test)]
 fn run_provider_inner_with_limits(
     root: &Path,
     provider: &StatusProviderConfig,
     stdout_limit: usize,
     stderr_limit: usize,
+) -> std::result::Result<ValidatedReport, ProviderFailure> {
+    run_provider_inner_with_limits_and_cancellation(
+        root,
+        provider,
+        stdout_limit,
+        stderr_limit,
+        &|| false,
+    )
+}
+
+fn run_provider_inner_with_limits_and_cancellation(
+    root: &Path,
+    provider: &StatusProviderConfig,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    cancelled: &dyn Fn() -> bool,
 ) -> std::result::Result<ValidatedReport, ProviderFailure> {
     let mut command = Command::new(&provider.argv[0]);
     command
@@ -355,7 +399,7 @@ fn run_provider_inner_with_limits(
             stdout: stdout_limit,
             stderr: stderr_limit,
         },
-        || false,
+        cancelled,
     )
     .map_err(|error| process_failure(provider, error))?;
     let stderr = output.stderr.as_ref().map(|capture| {

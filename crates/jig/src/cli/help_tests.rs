@@ -74,6 +74,15 @@ fn info_help_includes_examples_and_alias() {
 }
 
 #[test]
+fn status_help_includes_text_json_and_tui_modes() {
+    let status_help = rendered_help(&["status"]);
+    assert_help_contains(&status_help, "jig status --json");
+    assert_help_contains(&status_help, "jig status --tui");
+    assert_help_contains(&status_help, "--refresh-seconds");
+    assert_help_contains(&status_help, "interactive dashboard");
+}
+
+#[test]
 fn presets_help_includes_harness_only_automation_example() {
     let presets_help = rendered_help(&["presets"]);
 

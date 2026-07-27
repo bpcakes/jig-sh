@@ -45,6 +45,7 @@ jig-contract.workspace = true
 jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
 jig-features.workspace = true
+jig-status-tui.workspace = true
 jig-ui.workspace = true
 jig-vault.workspace = true
 libc.workspace = true

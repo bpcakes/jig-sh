@@ -15,6 +15,7 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-features"
   "jig-vault"
   "jig-dev-proxy"
+  "jig-status-tui"
   "jig-ui"
   "$PACKAGE_NAME"
 )
@@ -90,6 +91,7 @@ crate_dir_for_package() {
     jig-features) printf '%s\n' "crates/jig-features" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
+    jig-status-tui) printf '%s\n' "crates/jig-status-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
@@ -201,7 +203,7 @@ require_version_consistency() {
   done
 
   local dependency_name
-  for dependency_name in jig-dev-proxy jig-ui; do
+  for dependency_name in jig-dev-proxy jig-status-tui jig-ui; do
     dependency_version="$(python3 - "$ROOT_DIR/Cargo.toml" "$dependency_name" <<'PY'
 import pathlib
 import re
@@ -469,6 +471,12 @@ replace_exactly_once(
 )
 replace_exactly_once(
     root / "Cargo.toml",
+    r'(jig-status-tui\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
+    rf'\g<1>"={version}"',
+    "workspace jig-status-tui exact dependency version",
+)
+replace_exactly_once(
+    root / "Cargo.toml",
     r'(jig-ui\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
     rf'\g<1>"={version}"',
     "workspace jig-ui exact dependency version",
@@ -479,7 +487,7 @@ replace_exactly_once(
     rf'\g<1>"={version}"',
     "workspace jig-dev-proxy exact dependency version",
 )
-for package in ("jig-dev-proxy", "jig-ui", "jig-sh"):
+for package in ("jig-dev-proxy", "jig-status-tui", "jig-ui", "jig-sh"):
     replace_exactly_once(
         root / "Cargo.lock",
         rf'(?ms)(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = )"[^"]*"',

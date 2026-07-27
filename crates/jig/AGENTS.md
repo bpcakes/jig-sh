@@ -14,6 +14,8 @@
 - `src/state.rs`: sessions, plans, receipts, and decisions stored under `.agent/state`.
 - `src/ui.rs`: `jig ui` CLI adapter for the separately owned `jig-ui` server and presentation crate.
 - `src/ui/snapshot.rs`: joins Jig-owned state, work-gate, and loop data for the UI provider boundary.
+- `src/status.rs`: configured status-provider execution, validation, freshness, and aggregate snapshots.
+- `src/status/tui.rs`: adapter from cancellable aggregate snapshots to the separately owned `jig-status-tui` crate.
 - `src/bootstrap.rs`: init/adopt/update command surface.
 - `src/bootstrap/`: bootstrap support for native template rendering, git, staged renders, and template-source handling.
 
@@ -25,6 +27,8 @@
 - Change session, plan, receipt, or decision persistence: `src/state.rs`.
 - Change the data exposed by `jig ui`: `src/ui/snapshot.rs`.
 - Change `jig ui` routes, query parsing, server behavior, or rendering: `crates/jig-ui/`.
+- Change status provider execution or aggregate facts: `src/status.rs` and `src/status/`.
+- Change terminal status navigation, refresh runtime, or rendering: `crates/jig-status-tui/`.
 - Change init/adopt/update behavior: `src/bootstrap.rs` and `src/bootstrap/`.
 - Change git metadata captured in receipts: `src/git_receipts.rs`.
 

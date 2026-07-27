@@ -7,6 +7,7 @@ members = [
     "crates/jig-features",
     "crates/jig-rust",
     "crates/jig-sqlx",
+    "crates/jig-status-tui",
     "crates/jig-typescript",
     "crates/jig-ui",
     "crates/jig-vault",
@@ -30,6 +31,7 @@ bytes = "1.10.1"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.50", features = ["derive"] }
 ctrlc = "3.5.0"
+crossterm = "=0.28.1"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
 fs4 = "0.13.1"
@@ -39,18 +41,25 @@ hmac = "0.12.1"
 http-body-util = "0.1.3"
 hyper = { version = "1.7.0", features = ["full"] }
 hyper-util = { version = "0.1.17", features = ["full"] }
+# Ratatui 0.28 accepts newer instability 0.3 releases, but 0.3.11+ require
+# Rust 1.88. Keep the latest release compatible with the workspace Rust floor.
+instability = "=0.3.10"
 jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.2.0-beta.1" }
 jig-contract = { path = "crates/jig-contract", version = "=0.2.0-beta.1" }
 jig-core = { path = "crates/jig-core", version = "=0.2.0-beta.1" }
 jig-features = { path = "crates/jig-features", version = "=0.2.0-beta.1" }
 jig-rust = { path = "crates/jig-rust", version = "=0.2.0-beta.1" }
 jig-sqlx = { path = "crates/jig-sqlx", version = "=0.2.0-beta.1" }
+jig-status-tui = { path = "crates/jig-status-tui", version = "=0.2.0-beta.1" }
 jig-typescript = { path = "crates/jig-typescript", version = "=0.2.0-beta.1" }
 jig-ui = { path = "crates/jig-ui", version = "=0.2.0-beta.1" }
 jig-vault = { path = "crates/jig-vault", version = "=0.2.0-beta.1" }
 jsonschema = { version = "0.48.5", default-features = false }
 libc = "0.2.177"
 rcgen = { version = "0.14", features = ["x509-parser"] }
+# Ratatui 0.29 pins unicode-width 0.2.0 (conflicting with Jig's 0.2.2), while
+# 0.30 requires Rust 1.88. Keep the compatible 0.28 line with Crossterm 0.28.
+ratatui = { version = "=0.28.1", default-features = false, features = ["crossterm"] }
 # rpassword 7.5.2 uses let-chains that require newer Rust despite its declared
 # MSRV. Keep this exact pin so the workspace remains buildable on Rust 1.85.
 rpassword = "=7.4.0"
