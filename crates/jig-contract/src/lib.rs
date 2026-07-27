@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod status_provider;
+
 pub mod kind {
     pub const COMMAND: &str = "command";
     pub const NATIVE: &str = "native";

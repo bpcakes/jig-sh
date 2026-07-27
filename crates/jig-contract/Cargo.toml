@@ -10,4 +10,9 @@ homepage = "https://github.com/bpcakes/jig-sh"
 documentation = "https://github.com/bpcakes/jig-sh/tree/master/docs"
 
 [dependencies]
+schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+jsonschema.workspace = true

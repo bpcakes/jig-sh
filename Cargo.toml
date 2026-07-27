@@ -48,6 +48,7 @@ jig-sqlx = { path = "crates/jig-sqlx", version = "=0.2.0-beta.1" }
 jig-typescript = { path = "crates/jig-typescript", version = "=0.2.0-beta.1" }
 jig-ui = { path = "crates/jig-ui", version = "=0.2.0-beta.1" }
 jig-vault = { path = "crates/jig-vault", version = "=0.2.0-beta.1" }
+jsonschema = { version = "0.48.5", default-features = false }
 libc = "0.2.177"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 # rpassword 7.5.2 uses let-chains that require newer Rust despite its declared
@@ -55,6 +56,7 @@ rcgen = { version = "0.14", features = ["x509-parser"] }
 rpassword = "=7.4.0"
 rustls = { version = "0.23.35", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pemfile = "2.2.0"
+schemars = "1.2.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

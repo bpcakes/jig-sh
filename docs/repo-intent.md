@@ -39,6 +39,8 @@ The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
 The stable generated contract is `.agent/jig-contract.json`. Current renders use `contract_version: 3`, with command-backed tools such as `jig.bootstrap`, `jig.fmt_check`, `jig.clippy`, `jig.test`, `jig.test_locked`, `jig.contract_check`, and optional SQLx/schema/migration tools. Legacy `contract_version: 2` command-backed manifests can still be loaded by the runtime.
 
+The separate `jig.status-provider/v1` protocol is an open, language-neutral observation boundary for software-rewrite tooling. `crates/jig-contract` owns its Rust DTOs and packages its JSON Schema and conformance example under `contracts/status-provider/`. A provider may remain private; the report is interoperable. Version 1 defines no provider runner, aggregate status store, UI integration, or launcher.
+
 Runtime memory tools are intentionally not part of `.agent/jig-contract.json`. They are runtime-owned conveniences exposed by the CLI and MCP server.
 
 The root `AGENTS.md` is block-managed during adoption and update. Existing repo-specific content outside the Jig managed block is preserved.
@@ -84,6 +86,8 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 - `update` re-renders managed paths from stored template metadata and refuses to overwrite changed managed files unless forced.
 
 `crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. For command-backed tools, it resolves the command key from `.agent/jig-contract.json`, executes the configured `.jig.toml` command from the repo root, records a receipt, and returns structured JSON.
+
+`crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
 
 `crates/jig-dev-proxy` implements the Jig local development proxy used by `scripts/jig dev` and `scripts/jig proxy ...`. It is split from `crates/jig` so route storage, HTTP/HTTPS forwarding, certificates, service files, LAN mode, workspace discovery, and process supervision remain testable without depending on the broader CLI, MCP, receipt, or template runtime.
 
@@ -132,7 +136,7 @@ It is not a global agent memory system. The state is repo-local and runtime-owne
 
 It is not trying to centralize business ownership. Crate-level guidance and application-specific commands stay project-owned.
 
-It is not currently a general polyglot harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps.
+It is not currently a general polyglot generated harness. The generated defaults assume Cargo workspaces, Rust formatting/clippy/tests, optional SQLx, and Bun for configured web apps. The status-provider observation boundary is deliberately language-neutral, but it does not by itself make the generated execution harness polyglot.
 
 ## How Agents Should Approach This Repo
 

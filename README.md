@@ -11,6 +11,7 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 - **Agent context files** (`AGENTS.md`, `agent-map.md`) so agents learn the repo layout and conventions without reading source.
 - **A typed `jig` command contract** so every machine, CI run, and agent executes the same commands and leaves append-only receipts under `.agent/state/`.
+- **An open status-provider protocol** so public or private project inspectors can publish versioned software-rewrite observations to any consumer.
 - **Work gates backed by receipts** so a task cannot be marked done without a verifiable output artifact.
 - **A local dev proxy** so app hostnames stay stable across port changes and machine restarts.
 - **A local encrypted vault** so selected secrets resolve into brokered child processes without ever living in the repo.
@@ -81,7 +82,7 @@ scripts/jig check test
 
 These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status`, `scripts/jig work evidence`, and `scripts/jig work receipts --failed-only`.
 
-See [Public Contract](docs/public-contract.md) and [Developer UX](docs/developer-ux.md) for the full surface.
+See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
 
 ## Creating and adopting repos
 
@@ -222,6 +223,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - [Configuration](docs/configuration.md) — full `.jig.toml` reference and options
 - [Adoption](docs/adoption.md) — bring Jig into an existing repository
 - [Public Contract](docs/public-contract.md) — stable command contract for MCP clients and CI
+- [Status-provider protocol](docs/status-provider.md) — open JSON contract for software-rewrite observations
 - [`examples/`](examples/) — visible `.jig.toml` answer-file examples
 
 ## Repository layout
@@ -230,6 +232,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 - `crates/jig-dev-proxy/` — local HTTP/HTTPS proxy with TLS certificate management
 - `crates/jig-ui/` — read-only loopback dashboard server and presentation
 - `crates/jig-vault/` — local encrypted vault, redaction, audit, and brokered-run primitives
+- `crates/jig-contract/contracts/status-provider/` — public status-provider JSON Schema and conformance example
 - `templates/project/` — files rendered into downstream repos
 - `examples/` — sample `.jig.toml` answer files
 - `scripts/validate-fixtures.sh` — renders sample repos and validates the generated harness
