@@ -17,9 +17,14 @@ use crate::file_ops;
 use crate::host::{RouteHostname, validate_routed_hostname};
 use crate::types::{Route, RouteMode};
 
+mod dev_sessions;
 mod process_identity;
 mod signature;
 
+pub(crate) use dev_sessions::{
+    DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
+    DevStateSnapshot,
+};
 use process_identity::route_is_alive;
 #[cfg(test)]
 use process_identity::windows_tasklist_csv_pid;
@@ -106,6 +111,37 @@ impl ProcessRouteOwnership {
 }
 
 impl StateStore {
+    /// Resolves an existing proxy state directory without creating one.
+    ///
+    /// Existing paths go through the same symlink, permission, and replacement
+    /// recovery checks as `resolve`. A missing configured path is reported as
+    /// `None`, allowing read/stop commands to remain non-mutating.
+    pub(crate) fn resolve_existing(explicit: Option<PathBuf>) -> Result<Option<Self>> {
+        let candidate = if let Some(path) = explicit.as_ref() {
+            path.clone()
+        } else if let Ok(path) = std::env::var("JIG_PROXY_STATE_DIR") {
+            PathBuf::from(path)
+        } else {
+            dirs::home_dir()
+                .context("Could not resolve home directory for Jig proxy state")?
+                .join(".jig/proxy")
+        };
+        if path_is_symlink(&candidate)? {
+            // Delegate to the normal resolver so existing-path diagnostics stay
+            // identical and no alternate symlink path is accepted here.
+            return Self::resolve(explicit).map(Some);
+        }
+        if !candidate.try_exists().with_context(|| {
+            format!(
+                "Failed to inspect Jig proxy state dir {}",
+                candidate.display()
+            )
+        })? {
+            return Ok(None);
+        }
+        Self::resolve(explicit).map(Some)
+    }
+
     pub(crate) fn resolve(explicit: Option<PathBuf>) -> Result<Self> {
         match Self::resolve_interruptible(explicit, &|| false)? {
             LockOutcome::Acquired(store) => Ok(store),
@@ -244,6 +280,44 @@ impl StateStore {
             )),
             outcome => Ok(outcome),
         }
+    }
+
+    /// Returns one lock-consistent snapshot of persisted development sessions
+    /// and proxy routes.
+    ///
+    /// Callers must release this snapshot before performing process or network
+    /// work; the state lock is held only while the files are read.
+    pub(crate) fn snapshot_dev_state(&self) -> Result<DevStateSnapshot> {
+        self.with_route_lock(|routes_path| {
+            Ok(DevStateSnapshot {
+                sessions: dev_sessions::read_from_path(&self.dev_sessions_path())?,
+                routes: read_routes_from_path(routes_path)?,
+            })
+        })
+    }
+
+    /// Mutates development sessions while observing the routes protected by
+    /// the same state lock.
+    ///
+    /// Route state is read-only at this boundary. The closure must return
+    /// before callers perform process or network work. If the closure fails,
+    /// or leaves the session collection unchanged, no session file is written.
+    pub(crate) fn mutate_dev_sessions<T>(
+        &self,
+        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
+    ) -> Result<T> {
+        self.with_route_lock(|routes_path| {
+            let routes = read_routes_from_path(routes_path)?;
+            let sessions_path = self.dev_sessions_path();
+            let mut sessions = dev_sessions::read_from_path(&sessions_path)?;
+            let original = sessions.clone();
+            let result = mutate(&mut sessions, &routes)?;
+            dev_sessions::validate_records(&sessions)?;
+            if sessions != original {
+                dev_sessions::write_to_path(&sessions_path, &sessions)?;
+            }
+            Ok(result)
+        })
     }
 
     #[cfg(test)]
@@ -678,6 +752,10 @@ impl StateStore {
 
     fn routes_path(&self) -> PathBuf {
         self.root.join(ROUTES_FILE)
+    }
+
+    fn dev_sessions_path(&self) -> PathBuf {
+        self.root.join(dev_sessions::FILE_NAME)
     }
 
     fn lock_path(&self) -> PathBuf {

@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::command::{
-    DevRequest, ProxyAliasRequest, ProxyCertCommand, ProxyCommand, ProxyRuntimeOptions,
-    ProxyServiceCommand, ProxyStartRequest,
+    DevCommand, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest, ProxyCertCommand,
+    ProxyCommand, ProxyRuntimeOptions, ProxyServiceCommand, ProxyStartRequest,
 };
 #[cfg(test)]
 use crate::command::{
@@ -22,7 +22,15 @@ use crate::progress::CliProgress;
 pub(crate) mod commands {
     use super::*;
 
-    pub(crate) fn dev(ctx: &RepoContext, opts: DevRequest) -> Result<Value> {
+    pub(crate) fn dev(ctx: &RepoContext, command: DevCommand) -> Result<Value> {
+        match command {
+            DevCommand::Launch(opts) => dev_launch(ctx, opts),
+            DevCommand::Status(opts) => dev_status(ctx, opts),
+            DevCommand::Stop(opts) => dev_stop(ctx, opts),
+        }
+    }
+
+    fn dev_launch(ctx: &RepoContext, opts: DevRequest) -> Result<Value> {
         let progress = CliProgress::new("dev");
         progress.header("launch configured development apps");
         progress.info("repo", ctx.root().display());
@@ -43,7 +51,8 @@ pub(crate) mod commands {
         .with_apps(apps)
         .with_selected_apps(opts.apps)
         .with_discover_workspace(discover_workspace)
-        .with_no_proxy(opts.no_proxy);
+        .with_no_proxy(opts.no_proxy)
+        .with_replace(opts.replace);
         let request = progress.log_blocked_on_err(jig_dev_proxy::resolve_dev_request(request))?;
         progress.step("check dependencies", "selected frontend bootstrap state");
         let output = progress.log_blocked_on_err(jig_dev_proxy::dev_resolved_with_preflight(
@@ -52,6 +61,9 @@ pub(crate) mod commands {
                 if let Err(error) = ensure_frontend_dependencies(ctx, apps, cancelled) {
                     if error.is::<FrontendDependencyPreflightCancelled>() {
                         return Err(jig_dev_proxy::DevPreflightError::cancelled());
+                    }
+                    if error.is::<FrontendDependencyPreflightCleanupUnconfirmed>() {
+                        return Err(jig_dev_proxy::DevPreflightError::cleanup_unconfirmed(error));
                     }
                     return Err(jig_dev_proxy::DevPreflightError::failed(error));
                 }
@@ -62,7 +74,8 @@ pub(crate) mod commands {
                 Ok(())
             },
         ))?;
-        if dev_interrupted(&output) {
+        if dev_interrupted(&output) || output.get("stopped").and_then(Value::as_bool) == Some(true)
+        {
             progress.done("dev session stopped");
         } else if json_ok(&output) {
             progress.done("dev session complete");
@@ -70,6 +83,22 @@ pub(crate) mod commands {
             progress.blocked("dev session ended with ok=false");
         }
         Ok(output)
+    }
+
+    fn dev_status(ctx: &RepoContext, opts: DevStatusRequest) -> Result<Value> {
+        jig_dev_proxy::dev_status(jig_dev_proxy::DevStatusRequest::new(
+            ctx.repo_name(),
+            ctx.root().to_path_buf(),
+            opts.state_dir,
+        ))
+    }
+
+    fn dev_stop(ctx: &RepoContext, opts: DevStopRequest) -> Result<Value> {
+        jig_dev_proxy::dev_stop(jig_dev_proxy::DevStopRequest::new(
+            ctx.repo_name(),
+            ctx.root().to_path_buf(),
+            opts.state_dir,
+        ))
     }
 
     pub(crate) fn proxy(ctx: &RepoContext, command: ProxyCommand) -> Result<Value> {
@@ -459,6 +488,23 @@ impl std::fmt::Display for FrontendDependencyPreflightCancelled {
 
 impl std::error::Error for FrontendDependencyPreflightCancelled {}
 
+#[derive(Debug)]
+struct FrontendDependencyPreflightCleanupUnconfirmed {
+    app_dir: String,
+}
+
+impl std::fmt::Display for FrontendDependencyPreflightCleanupUnconfirmed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Frontend dependency readiness check process tree could not be cleaned up safely for {}",
+            self.app_dir
+        )
+    }
+}
+
+impl std::error::Error for FrontendDependencyPreflightCleanupUnconfirmed {}
+
 fn frontend_dependency_readiness(
     repo_root: &Path,
     app_dir: &str,
@@ -534,42 +580,42 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
         command.env(key, value);
     }
     crate::shell::sanitize_bash_environment(&mut command);
-    let output = match crate::doctor::run_owned_process_tree_with_output(
-        &mut command,
-        timeout,
-        cancelled,
-    ) {
-        Ok(output) => output,
-        Err(crate::doctor::OwnedProcessTreeError::Start(error)) => {
-            if error.kind() == std::io::ErrorKind::NotFound {
+    let output =
+        match crate::doctor::run_owned_process_tree_with_output(&mut command, timeout, cancelled) {
+            Ok(output) => output,
+            Err(crate::doctor::OwnedProcessTreeError::Start(error)) => {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    return Err(anyhow::anyhow!(
+                        "Failed to run dependency readiness check {} with Bash: {error}. {}",
+                        checker.display(),
+                        bash_requirement_hint()
+                    ));
+                }
                 return Err(anyhow::anyhow!(
-                    "Failed to run dependency readiness check {} with Bash: {error}. {}",
+                    "Failed to start dependency readiness check {} with Bash: {error}",
                     checker.display(),
-                    bash_requirement_hint()
                 ));
             }
-            return Err(anyhow::anyhow!(
-                "Failed to start dependency readiness check {} with Bash: {error}",
-                checker.display(),
-            ));
-        }
-        Err(crate::doctor::OwnedProcessTreeError::TimedOut) => bail!(
-            "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
-            timeout.as_secs_f64()
-        ),
-        Err(crate::doctor::OwnedProcessTreeError::Cancelled) => {
-            return Err(FrontendDependencyPreflightCancelled {
-                app_dir: app_dir.to_string(),
+            Err(crate::doctor::OwnedProcessTreeError::TimedOut) => bail!(
+                "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
+                timeout.as_secs_f64()
+            ),
+            Err(crate::doctor::OwnedProcessTreeError::Cancelled) => {
+                return Err(FrontendDependencyPreflightCancelled {
+                    app_dir: app_dir.to_string(),
+                }
+                .into());
             }
-            .into());
-        }
-        Err(crate::doctor::OwnedProcessTreeError::Await) => {
-            bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
-        }
-        Err(crate::doctor::OwnedProcessTreeError::Cleanup) => bail!(
-            "Frontend dependency readiness check process tree could not be cleaned up safely for {app_dir}"
-        ),
-    };
+            Err(crate::doctor::OwnedProcessTreeError::Await) => {
+                bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
+            }
+            Err(crate::doctor::OwnedProcessTreeError::Cleanup) => {
+                return Err(FrontendDependencyPreflightCleanupUnconfirmed {
+                    app_dir: app_dir.to_string(),
+                }
+                .into());
+            }
+        };
     let stderr = output.stderr.as_ref().ok_or_else(|| {
         anyhow::anyhow!("Frontend dependency readiness diagnostic output was not captured")
     })?;

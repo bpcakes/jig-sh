@@ -184,9 +184,14 @@ Generated repos run supervised dev commands behind stable local hostnames, so ap
 
 ```sh
 scripts/jig dev
+scripts/jig dev status
+scripts/jig dev --replace
+scripts/jig dev stop
 scripts/jig proxy alias api --port 8080
 scripts/jig proxy list
 ```
+
+Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process.
 
 For HTTPS, generate and explicitly trust a local, name-constrained CA:
 

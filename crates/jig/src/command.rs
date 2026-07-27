@@ -31,10 +31,11 @@ pub(crate) use prompt::{
     PromptSearchRequest,
 };
 pub(crate) use proxy::{
-    DevRequest, ProxyAliasRequest, ProxyCertCommand, ProxyCertGenerateRequest,
-    ProxyCertRuntimeRequest, ProxyCertTrustRequest, ProxyCertUntrustRequest, ProxyCommand,
-    ProxyListRequest, ProxyPruneRequest, ProxyRunRequest, ProxyRuntimeOptions, ProxyServiceCommand,
-    ProxyServiceInstallRequest, ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
+    DevCommand, DevRequest, DevStatusRequest, DevStopRequest, ProxyAliasRequest, ProxyCertCommand,
+    ProxyCertGenerateRequest, ProxyCertRuntimeRequest, ProxyCertTrustRequest,
+    ProxyCertUntrustRequest, ProxyCommand, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
+    ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
+    ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
 pub(crate) use state::{StateArchiveRequest, StateCommand};
 pub(crate) use vault::{
@@ -58,7 +59,7 @@ pub(crate) enum RuntimeCommand {
     AgentMap(AgentMapCommand),
     GenerateSqlxUncheckedQueriesTodo(SqlxTodoRequest),
     #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-    Dev(DevRequest),
+    Dev(DevCommand),
     #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
     Proxy(ProxyCommand),
     Agent(AgentCommand),

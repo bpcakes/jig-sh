@@ -150,11 +150,8 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     require_json_ok(false, &serde_json::json!({ "ok": false })).unwrap();
     assert!(test_command_reports_failure_with_ok(&CommandKind::Dev(
         DevOpts {
-            jig_project: None,
-            apps: Vec::new(),
-            discover_workspace: false,
-            no_proxy: false,
-            proxy: ProxyRuntimeOpts::default(),
+            command: None,
+            launch: DevLaunchOpts::default(),
         }
     )));
     assert!(test_command_reports_failure_with_ok(&CommandKind::Doctor));
@@ -172,6 +169,33 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     assert!(!test_command_reports_failure_with_ok(&CommandKind::Vault(
         VaultCommand::Status(VaultStatusOpts::default())
     )));
+}
+
+#[test]
+fn dev_management_actions_do_not_request_launch_process_identity() {
+    let launch = DevOpts {
+        command: None,
+        launch: DevLaunchOpts {
+            jig_project: Some("demo@/tmp/demo".into()),
+            ..Default::default()
+        },
+    };
+    assert_eq!(dev_launch_identity_present(&launch), Some(true));
+    assert!(matches!(dev_human_output(&launch), HumanOutput::Dev));
+
+    let status = DevOpts {
+        command: Some(DevSubcommand::Status(DevStatusOpts::default())),
+        launch: DevLaunchOpts::default(),
+    };
+    assert_eq!(dev_launch_identity_present(&status), None);
+    assert!(matches!(dev_human_output(&status), HumanOutput::DevStatus));
+
+    let stop = DevOpts {
+        command: Some(DevSubcommand::Stop(DevStopOpts::default())),
+        launch: DevLaunchOpts::default(),
+    };
+    assert_eq!(dev_launch_identity_present(&stop), None);
+    assert!(matches!(dev_human_output(&stop), HumanOutput::DevStop));
 }
 
 #[test]

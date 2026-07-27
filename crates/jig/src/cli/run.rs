@@ -45,20 +45,24 @@ pub(crate) fn run() -> Result<()> {
         }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Dev(opts) => {
+            let human_output = dev_human_output(&opts);
             let output = crate::dev_proxy::commands::dev_without_context(opts.into())?;
-            emit(json_output, HumanOutput::Dev, &output)?;
+            emit(json_output, human_output, &output)?;
             require_foreground_status(&output)
         }
         #[cfg(feature = "dev-proxy")]
         CommandKind::Dev(opts) => {
+            let human_output = dev_human_output(&opts);
             let Some(ctx) = RepoContext::load_optional()? else {
                 anyhow::bail!(
-                    "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml` dev app configuration. Run it from a Jig repo, or use `scripts/jig proxy run <name> -- <command>` for an ad-hoc command."
+                    "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml`. Run it from a Jig repo, or use `scripts/jig proxy run <name> -- <command>` for an ad-hoc command."
                 );
             };
-            ensure_dev_process_identity(&ctx, opts.jig_project.is_some());
+            if let Some(identity_present) = dev_launch_identity_present(&opts) {
+                ensure_dev_process_identity(&ctx, identity_present);
+            }
             let output = runtime::dispatch(&ctx, crate::command::RuntimeCommand::Dev(opts.into()))?;
-            emit(json_output, HumanOutput::Dev, &output)?;
+            emit(json_output, human_output, &output)?;
             require_foreground_status(&output)
         }
         #[cfg(not(feature = "dev-proxy"))]
@@ -163,6 +167,21 @@ pub(crate) fn run() -> Result<()> {
             )
         }
     }
+}
+
+fn dev_human_output(opts: &DevOpts) -> HumanOutput {
+    match &opts.command {
+        None => HumanOutput::Dev,
+        Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
+        Some(DevSubcommand::Stop(_)) => HumanOutput::DevStop,
+    }
+}
+
+#[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
+fn dev_launch_identity_present(opts: &DevOpts) -> Option<bool> {
+    opts.command
+        .is_none()
+        .then_some(opts.launch.jig_project.is_some())
 }
 
 #[cfg(feature = "dev-proxy")]

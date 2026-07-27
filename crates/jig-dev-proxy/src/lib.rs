@@ -7,12 +7,14 @@
 //! invariants that maintainers should preserve when editing this crate.
 
 mod certs;
+mod dev_sessions;
 mod file_ops;
 mod host;
 mod ports;
 mod processes;
 mod server;
 mod service;
+mod session_control;
 mod state;
 mod types;
 #[cfg(any(windows, test))]
@@ -36,9 +38,9 @@ use crate::types::{Route, RouteMode};
 
 pub use crate::state::MAX_ROUTES_FILE_BYTES;
 pub use crate::types::{
-    AppKind, AppRunSpec, CommandSpec, DevRequest, ProxyAliasRequest, ProxyCertRequest,
-    ProxyListRequest, ProxyPruneRequest, ProxyRunRequest, ProxyServiceRequest, ProxySettings,
-    ProxyStartRequest, ProxyStopRequest,
+    AppKind, AppRunSpec, CommandSpec, DevRequest, DevStatusRequest, DevStopRequest,
+    ProxyAliasRequest, ProxyCertRequest, ProxyListRequest, ProxyPruneRequest, ProxyRunRequest,
+    ProxyServiceRequest, ProxySettings, ProxyStartRequest, ProxyStopRequest,
 };
 
 /// Internal compatibility hook used to prove that generated Jig configuration
@@ -55,6 +57,9 @@ pub enum DevPreflightError {
     Cancelled,
     /// The preflight failed independently of a termination request.
     Failed(anyhow::Error),
+    /// The preflight failed and could not confirm cleanup of its owned process
+    /// tree.
+    CleanupUnconfirmed(anyhow::Error),
 }
 
 impl DevPreflightError {
@@ -64,6 +69,10 @@ impl DevPreflightError {
 
     pub fn failed(error: anyhow::Error) -> Self {
         Self::Failed(error)
+    }
+
+    pub fn cleanup_unconfirmed(error: anyhow::Error) -> Self {
+        Self::CleanupUnconfirmed(error)
     }
 }
 
@@ -78,8 +87,11 @@ pub type DevPreflightResult = std::result::Result<(), DevPreflightError>;
 /// A development launch plan after workspace discovery, app selection, and
 /// no-proxy overrides have been applied.
 pub struct ResolvedDevRequest {
+    repo_name: String,
+    root: std::path::PathBuf,
     settings: ProxySettings,
     apps: Vec<AppRunSpec>,
+    replace: bool,
 }
 
 impl ResolvedDevRequest {
@@ -89,10 +101,16 @@ impl ResolvedDevRequest {
 }
 
 pub fn resolve_dev_request(request: DevRequest) -> Result<ResolvedDevRequest> {
+    let root = fs::canonicalize(&request.root).with_context(|| {
+        format!(
+            "Failed to canonicalize repo root {}",
+            request.root.display()
+        )
+    })?;
     let mut specs = request.apps;
     if request.discover_workspace {
         specs.extend(workspace::discover(
-            &request.root,
+            &root,
             &request.repo_name,
             &request.settings.tld,
             &request.package_manager,
@@ -128,16 +146,17 @@ pub fn resolve_dev_request(request: DevRequest) -> Result<ResolvedDevRequest> {
         bail!("No development apps were configured or discovered.");
     }
     ensure_unique_specs(&specs)?;
-    resolve_selected_app_directories(&request.root, &mut specs)?;
+    resolve_selected_app_directories(&root, &mut specs)?;
     Ok(ResolvedDevRequest {
+        repo_name: request.repo_name,
+        root,
         settings: request.settings,
         apps: specs,
+        replace: request.replace,
     })
 }
 
 fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Result<()> {
-    let root = fs::canonicalize(root)
-        .with_context(|| format!("Failed to canonicalize repo root {}", root.display()))?;
     for spec in specs {
         let candidate = if spec.dir.is_absolute() {
             spec.dir.clone()
@@ -151,7 +170,7 @@ fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Re
                 candidate.display()
             )
         })?;
-        if !resolved.starts_with(&root) {
+        if !resolved.starts_with(root) {
             bail!(
                 "development app '{}' directory {} resolves outside repo root {}",
                 spec.name,
@@ -168,6 +187,14 @@ pub fn dev(request: DevRequest) -> Result<Value> {
     dev_resolved(resolve_dev_request(request)?)
 }
 
+pub fn dev_status(request: DevStatusRequest) -> Result<Value> {
+    dev_sessions::status(request)
+}
+
+pub fn dev_stop(request: DevStopRequest) -> Result<Value> {
+    dev_sessions::stop(request)
+}
+
 pub fn dev_resolved(request: ResolvedDevRequest) -> Result<Value> {
     dev_resolved_with_preflight(request, |_, _| Ok(()))
 }
@@ -180,9 +207,12 @@ pub fn dev_resolved_with_preflight(
 ) -> Result<Value> {
     let current_exe = current_exe()?;
     normalize_dev_result(processes::run_apps_with_preflight(
+        &request.repo_name,
+        &request.root,
         request.apps,
         &request.settings,
         &current_exe,
+        request.replace,
         preflight,
     ))
 }
@@ -193,6 +223,20 @@ fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
             let Some(reason) = processes::interruption_reason(&error) else {
                 return Err(error);
             };
+            if reason.is_requested_stop() {
+                return Ok(json!({
+                    "ok": true,
+                    "interrupted": false,
+                    "stopped": true,
+                    "stop_reason": reason.label(),
+                    "exit_status": reason.exit_status(),
+                    "exit_signal": null,
+                    "termination_signal": null,
+                    "first_exit": null,
+                    "proxy_failed": false,
+                    "routes": [],
+                }));
+            }
             Ok(json!({
                 "ok": false,
                 "interrupted": true,

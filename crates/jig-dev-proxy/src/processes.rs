@@ -19,11 +19,12 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::certs;
+use crate::dev_sessions::{DevCleanupLease, DevSessionRuntime};
 use crate::host::{RouteHostname, TargetHost, target_host_is_loopback};
 use crate::ports::{find_free_app_port_excluding, local_lan_ip_for_ipv4_listener, port_is_free};
 use crate::state::{
-    LockOutcome, ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore, now_ms,
-    process_start_tokens_supported,
+    DevProcessIdentity, LockOutcome, ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore, now_ms,
+    process_start_token, process_start_tokens_supported,
 };
 #[cfg(test)]
 use crate::types::CommandSpec;
@@ -118,6 +119,22 @@ struct SpawnedChild {
     child: Child,
     output: CapturedAppOutput,
     process_lease: AppProcessLease,
+}
+
+struct SpawnChildFailure {
+    error: anyhow::Error,
+    cleanup_confirmed: bool,
+    spawned_process: Option<DevProcessIdentity>,
+}
+
+impl From<anyhow::Error> for SpawnChildFailure {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            cleanup_confirmed: true,
+            spawned_process: None,
+        }
+    }
 }
 
 pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path) -> Result<()> {
@@ -479,20 +496,69 @@ fn finalize_single_app_cleanup(
 }
 
 pub(crate) fn run_apps_with_preflight(
+    repo_name: &str,
+    root: &Path,
     specs: Vec<AppRunSpec>,
     settings: &ProxySettings,
     current_exe: &Path,
+    replace: bool,
     preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
 ) -> Result<Value> {
     let _termination_session = start_termination_cleanup_session()?;
-    // The preflight owns a subprocess tree too. Arm before handing control to
-    // it so a repeated signal requests cleanup instead of taking the
-    // no-resources `_exit` path and orphaning that tree.
+    validate_dev_specs_for_session(&specs, settings)?;
+    // Session state and the preflight can each outlive the instruction that
+    // creates them. Arm before either exists so a signal requests ordinary
+    // cleanup instead of taking the no-resources `_exit` path.
     arm_owned_resources()?;
-    let interrupted = || termination_requested().is_some();
-    normalize_preflight_result(preflight(&specs, &interrupted), termination_requested())?;
-    ensure_not_interrupted_with(termination_requested)?;
-    run_apps_with_interrupt_probe(specs, settings, current_exe, termination_requested)
+    let store = match StateStore::resolve_interruptible(settings.state_dir.clone(), &|| {
+        termination_requested().is_some()
+    })? {
+        LockOutcome::Acquired(store) => store,
+        LockOutcome::Cancelled => {
+            let reason = termination_requested().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "proxy state resolution was cancelled without a pending termination request"
+                )
+            })?;
+            return Err(interruption_error(reason));
+        }
+    };
+    let session = DevSessionRuntime::start(store.clone(), repo_name, root, &specs, replace)?;
+    let requested_reason = || {
+        termination_requested().or_else(|| {
+            session
+                .requested_stop()
+                .then_some(TerminationReason::requested_stop())
+        })
+    };
+    let interrupted = || requested_reason().is_some();
+    session
+        .prepare_cleanup_scope()
+        .context("Failed to persist cleanup intent before development preflight")?;
+    let mut preflight_cleanup = session.arm_cleanup();
+    let preflight_result = preflight(&specs, &interrupted);
+    finish_preflight_cleanup(&mut preflight_cleanup, preflight_result, requested_reason())?;
+    ensure_not_interrupted_with(requested_reason)?;
+    let result = run_apps_with_session_and_interrupt_probe(
+        specs,
+        settings,
+        current_exe,
+        store,
+        &session,
+        requested_reason,
+    );
+    if result
+        .as_ref()
+        .err()
+        .and_then(interruption_reason)
+        .is_some_and(TerminationReason::is_requested_stop)
+        && !session.cleanup_is_confirmed()
+    {
+        bail!(
+            "Jig dev received a stop request, but process-tree or route cleanup could not be confirmed; the session was retained for inspection"
+        );
+    }
+    result
 }
 
 fn normalize_preflight_result(
@@ -508,13 +574,27 @@ fn normalize_preflight_result(
             ),
         },
         Err(DevPreflightError::Failed(error)) => Err(error),
+        Err(DevPreflightError::CleanupUnconfirmed(error)) => Err(error),
     }
 }
 
-fn run_apps_with_interrupt_probe(
+fn finish_preflight_cleanup(
+    cleanup: &mut DevCleanupLease,
+    result: DevPreflightResult,
+    termination_reason: Option<TerminationReason>,
+) -> Result<()> {
+    if !matches!(&result, Err(DevPreflightError::CleanupUnconfirmed(_))) {
+        cleanup.confirm();
+    }
+    normalize_preflight_result(result, termination_reason)
+}
+
+fn run_apps_with_session_and_interrupt_probe(
     specs: Vec<AppRunSpec>,
     settings: &ProxySettings,
     current_exe: &Path,
+    store: StateStore,
+    session: &DevSessionRuntime,
     interrupt_requested: impl Fn() -> Option<TerminationReason>,
 ) -> Result<Value> {
     if specs.is_empty() {
@@ -523,10 +603,6 @@ fn run_apps_with_interrupt_probe(
     validate_explicit_ports(&specs)?;
     let uses_proxy = specs.iter().any(|spec| spec.proxy);
     let cancelled = || interrupt_requested().is_some();
-    let store = lock_outcome_or_interruption(
-        StateStore::resolve_interruptible(settings.state_dir.clone(), &cancelled)?,
-        &interrupt_requested,
-    )?;
     if uses_proxy {
         ensure_process_routes_supported()?;
         validate_process_routes(settings, &specs)?;
@@ -595,7 +671,7 @@ fn run_apps_with_interrupt_probe(
     for prepared in prepared_apps {
         if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
             select_interruption();
-            cleanup_children(&mut children);
+            cleanup_dev_session_children(session, &mut children);
             for running in &mut children {
                 running.output.discard();
             }
@@ -607,21 +683,64 @@ fn run_apps_with_interrupt_probe(
             port,
             argv,
         } = prepared;
+        if let Err(error) = session.prepare_cleanup_scope() {
+            select_primary_outcome();
+            cleanup_dev_session_children(session, &mut children);
+            return Err(error)
+                .context("Failed to persist cleanup intent before starting a development app");
+        }
+        let mut session_cleanup = session.arm_cleanup();
         let SpawnedChild {
             mut child,
             mut output,
             process_lease,
-        } = match spawn_child(&spec, &argv, port, settings, &dev_env) {
+        } = match spawn_child_with_cleanup_report(&spec, &argv, port, settings, &dev_env) {
             Ok(spawned) => spawned,
-            Err(error) => {
+            Err(failure) => {
+                let SpawnChildFailure {
+                    mut error,
+                    cleanup_confirmed,
+                    spawned_process,
+                } = failure;
+                if cleanup_confirmed {
+                    session_cleanup.confirm();
+                } else if let Some(process) = spawned_process {
+                    if let Err(record_error) = session.record_app_process(&spec.name, port, process)
+                    {
+                        error = error.context(format!(
+                            "Failed to retain the unconfirmed process identity in the Jig dev session: {record_error:#}"
+                        ));
+                    }
+                }
                 select_primary_outcome();
-                cleanup_children(&mut children);
+                cleanup_dev_session_children(session, &mut children);
                 return Err(error);
             }
         };
         let child_pid = child.id();
+        let session_process = DevProcessIdentity {
+            pid: child_pid,
+            start_token: process_start_token(child_pid),
+        };
+        if let Err(error) = session.record_app_process(&spec.name, port, session_process.clone()) {
+            select_primary_outcome();
+            cleanup_dev_session_current_and_children(
+                session,
+                &mut session_cleanup,
+                &mut child,
+                "could not clean up app after dev-session registration failure",
+                &mut children,
+            );
+            output.print_failure(&spec.name);
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to persist process identity for development app '{}'",
+                    spec.name
+                )
+            });
+        }
         let owner_start_token = if spec.proxy {
-            match wait_for_app_ready(&spec, port, &mut child) {
+            match wait_for_app_ready_interruptible(&spec, port, &mut child, &interrupt_requested) {
                 Ok(token) => token,
                 Err(error) => {
                     if is_interruption(&error) {
@@ -629,16 +748,18 @@ fn run_apps_with_interrupt_probe(
                     } else {
                         select_primary_outcome();
                     }
-                    terminate_and_reap_logged(
+                    cleanup_dev_session_current_and_children(
+                        session,
+                        &mut session_cleanup,
                         &mut child,
                         "could not clean up app after readiness failure",
+                        &mut children,
                     );
                     if is_interruption(&error) {
                         output.discard();
                     } else {
                         output.print_failure(&spec.name);
                     }
-                    cleanup_children(&mut children);
                     return Err(error);
                 }
             }
@@ -650,22 +771,40 @@ fn run_apps_with_interrupt_probe(
         if spec.proxy {
             let Some(owner_start_token) = owner_start_token else {
                 select_primary_outcome();
-                terminate_and_reap_logged(
+                cleanup_dev_session_current_and_children(
+                    session,
+                    &mut session_cleanup,
                     &mut child,
                     "could not clean up app after missing owner identity",
+                    &mut children,
                 );
-                cleanup_children(&mut children);
                 bail!(
                     "Could not verify start identity for child process {child_pid}; refusing to publish process route"
                 );
             };
+            if session_process.start_token.as_deref() != Some(owner_start_token.as_str()) {
+                select_primary_outcome();
+                cleanup_dev_session_current_and_children(
+                    session,
+                    &mut session_cleanup,
+                    &mut child,
+                    "could not clean up app after its process identity changed during readiness",
+                    &mut children,
+                );
+                bail!(
+                    "Development app '{}' changed process identity before its route could be published",
+                    spec.name
+                );
+            }
             let Some((hostname, target_host)) = route_parts else {
                 select_primary_outcome();
-                terminate_and_reap_logged(
+                cleanup_dev_session_current_and_children(
+                    session,
+                    &mut session_cleanup,
                     &mut child,
                     "could not clean up app after route preparation failure",
+                    &mut children,
                 );
-                cleanup_children(&mut children);
                 bail!(
                     "Could not prepare process route for child process {child_pid}; refusing to publish route"
                 );
@@ -706,8 +845,9 @@ fn run_apps_with_interrupt_probe(
                     route_ownership: Some(ownership),
                     route_cleanup_armed: true,
                     route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    session_cleanup,
                 });
-                cleanup_children(&mut children);
+                cleanup_dev_session_children(session, &mut children);
                 if interrupted {
                     for running in &mut children {
                         running.output.discard();
@@ -727,8 +867,9 @@ fn run_apps_with_interrupt_probe(
                     route_ownership: Some(ownership),
                     route_cleanup_armed: true,
                     route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    session_cleanup,
                 });
-                cleanup_children(&mut children);
+                cleanup_dev_session_children(session, &mut children);
                 for running in &mut children {
                     running.output.discard();
                 }
@@ -759,8 +900,9 @@ fn run_apps_with_interrupt_probe(
                     route_cleanup_armed: route_ownership.is_some(),
                     route_ownership,
                     route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    session_cleanup,
                 });
-                cleanup_children(&mut children);
+                cleanup_dev_session_children(session, &mut children);
                 if interrupted {
                     for running in &mut children {
                         running.output.discard();
@@ -780,9 +922,15 @@ fn run_apps_with_interrupt_probe(
             route_cleanup_armed: route_ownership.is_some(),
             route_ownership,
             route_cleanup_deadline: route_cleanup_deadline.clone(),
+            session_cleanup,
         });
     }
 
+    if let Err(error) = session.mark_running() {
+        select_primary_outcome();
+        cleanup_dev_session_children(session, &mut children);
+        return Err(error).context("Failed to mark the Jig dev session as running");
+    }
     print_dev_table(&display_rows);
 
     let mut first_exit = None;
@@ -804,7 +952,7 @@ fn run_apps_with_interrupt_probe(
                 Ok(None) => {}
                 Err(error) => {
                     select_primary_outcome();
-                    cleanup_children(&mut children);
+                    cleanup_dev_session_children(session, &mut children);
                     return Err(error.into());
                 }
             }
@@ -828,7 +976,7 @@ fn run_apps_with_interrupt_probe(
                     Ok(None) => {}
                     Err(error) => {
                         select_primary_outcome();
-                        cleanup_children(&mut children);
+                        cleanup_dev_session_children(session, &mut children);
                         return Err(error.into());
                     }
                 }
@@ -848,7 +996,7 @@ fn run_apps_with_interrupt_probe(
                 Ok(LockOutcome::Cancelled) => {
                     let Some(reason) = interrupt_requested() else {
                         select_primary_outcome();
-                        cleanup_children(&mut children);
+                        cleanup_dev_session_children(session, &mut children);
                         bail!(
                             "foreground runtime-state wait was cancelled without a termination request"
                         );
@@ -859,7 +1007,7 @@ fn run_apps_with_interrupt_probe(
                 }
                 Err(error) => {
                     select_primary_outcome();
-                    cleanup_children(&mut children);
+                    cleanup_dev_session_children(session, &mut children);
                     return Err(error);
                 }
             };
@@ -872,7 +1020,7 @@ fn run_apps_with_interrupt_probe(
         }
         thread::sleep(Duration::from_millis(100));
     }
-    let cleanup_complete = cleanup_children(&mut children);
+    let cleanup_complete = cleanup_dev_session_children(session, &mut children);
     if interrupted.is_some() {
         for running in &mut children {
             running.output.discard();
@@ -906,6 +1054,53 @@ fn run_apps_with_interrupt_probe(
         "proxy_failed": proxy_stopped,
         "routes": routes,
     }))
+}
+
+fn cleanup_dev_session_children(
+    session: &DevSessionRuntime,
+    children: &mut [RunningChild],
+) -> bool {
+    let complete = cleanup_children(children);
+    complete && session.cleanup_is_confirmed()
+}
+
+fn cleanup_dev_session_current_and_children(
+    session: &DevSessionRuntime,
+    session_cleanup: &mut DevCleanupLease,
+    child: &mut Child,
+    context: &str,
+    children: &mut [RunningChild],
+) -> bool {
+    let current_complete = terminate_and_reap_logged(child, context);
+    if current_complete {
+        session_cleanup.confirm();
+    }
+    let prior_complete = cleanup_children(children);
+    current_complete && prior_complete && session.cleanup_is_confirmed()
+}
+
+#[cfg(test)]
+fn run_apps_with_interrupt_probe(
+    specs: Vec<AppRunSpec>,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    interrupt_requested: impl Fn() -> Option<TerminationReason>,
+) -> Result<Value> {
+    validate_dev_specs_for_session(&specs, settings)?;
+    let root = specs
+        .first()
+        .map(|spec| spec.dir.as_path())
+        .ok_or_else(|| anyhow::anyhow!("test dev session requires at least one app"))?;
+    let store = StateStore::resolve(settings.state_dir.clone())?;
+    let session = DevSessionRuntime::start(store.clone(), "test", root, &specs, false)?;
+    run_apps_with_session_and_interrupt_probe(
+        specs,
+        settings,
+        current_exe,
+        store,
+        &session,
+        interrupt_requested,
+    )
 }
 
 fn require_cleanup_for_success(cleanup_complete: bool, primary_failed: bool) -> Result<()> {
@@ -959,6 +1154,19 @@ fn validate_explicit_ports(specs: &[AppRunSpec]) -> Result<()> {
                 "Multiple development apps requested port {port}. Likely fix: assign each [[dev.apps]] entry a unique port or remove explicit port overrides."
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_dev_specs_for_session(specs: &[AppRunSpec], settings: &ProxySettings) -> Result<()> {
+    if specs.is_empty() {
+        bail!("No development apps were configured or discovered.");
+    }
+    validate_explicit_ports(specs)?;
+    if specs.iter().any(|spec| spec.proxy) {
+        ensure_process_routes_supported()?;
+        validate_process_routes(settings, specs)?;
+        ensure_unique_process_route_hostnames(specs)?;
     }
     Ok(())
 }
@@ -1100,6 +1308,17 @@ fn spawn_child(
     settings: &ProxySettings,
     dev_env: &[(String, String)],
 ) -> Result<SpawnedChild> {
+    spawn_child_with_cleanup_report(spec, argv, port, settings, dev_env)
+        .map_err(|failure| failure.error)
+}
+
+fn spawn_child_with_cleanup_report(
+    spec: &AppRunSpec,
+    argv: &[String],
+    port: u16,
+    settings: &ProxySettings,
+    dev_env: &[(String, String)],
+) -> std::result::Result<SpawnedChild, SpawnChildFailure> {
     ensure_app_supervision_supported(cfg!(unix), cfg!(windows))?;
     // App commands are trusted repo-configured dev processes and intentionally
     // inherit the caller's environment. Derived app coordinates are replaced
@@ -1167,20 +1386,37 @@ fn spawn_child(
             ))
         }
     })?;
+    let spawned_process = DevProcessIdentity {
+        pid: child.id(),
+        start_token: process_start_token(child.id()),
+    };
     let process_lease = match register_app_child(&mut child) {
         Ok(lease) => lease,
         Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error).with_context(|| {
-                format!(
+            let cleanup_confirmed = terminate_and_reap_logged(
+                &mut child,
+                "could not clean up app after process-tree registration failure",
+            );
+            return Err(SpawnChildFailure {
+                error: error.context(format!(
                     "Failed to establish an owned process-tree boundary for dev app '{}'",
                     spec.name
-                )
+                )),
+                cleanup_confirmed,
+                spawned_process: Some(spawned_process),
             });
         }
     };
-    let output = CapturedAppOutput::from_child(&mut child, &spec.name)?;
+    let output = match CapturedAppOutput::from_child(&mut child, &spec.name) {
+        Ok(output) => output,
+        Err(failure) => {
+            return Err(SpawnChildFailure {
+                error: failure.error,
+                cleanup_confirmed: failure.cleanup_confirmed,
+                spawned_process: Some(spawned_process),
+            });
+        }
+    };
     Ok(SpawnedChild {
         child,
         output,

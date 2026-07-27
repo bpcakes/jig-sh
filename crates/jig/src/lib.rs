@@ -15,16 +15,16 @@ mod dev_proxy {
         use anyhow::{Result, bail};
         use serde_json::Value;
 
-        use crate::command::{DevRequest, ProxyCommand};
+        use crate::command::{DevCommand, ProxyCommand};
         use crate::context::RepoContext;
 
-        pub(crate) fn dev(_ctx: &RepoContext, _opts: DevRequest) -> Result<Value> {
+        pub(crate) fn dev(_ctx: &RepoContext, _command: DevCommand) -> Result<Value> {
             bail!(
                 "`jig dev` is unavailable because this binary was built without the `dev-proxy` feature"
             )
         }
 
-        pub(crate) fn dev_without_context(_opts: DevRequest) -> Result<Value> {
+        pub(crate) fn dev_without_context(_command: DevCommand) -> Result<Value> {
             bail!(
                 "`jig dev` is unavailable because this binary was built without the `dev-proxy` feature"
             )
@@ -133,20 +133,30 @@ jig_version = "0.2.0-beta.1"
     }
 
     #[test]
-    fn dev_without_context_reports_proxy_disabled_without_repo_lookup() {
-        let error = dev_proxy::commands::dev_without_context(
+    fn every_dev_action_reports_proxy_disabled_without_repo_lookup() {
+        let commands = [
             cli::DevOpts {
-                jig_project: None,
-                apps: Vec::new(),
-                discover_workspace: false,
-                no_proxy: false,
-                proxy: cli::ProxyRuntimeOpts::default(),
+                command: None,
+                launch: cli::DevLaunchOpts::default(),
             }
             .into(),
-        )
-        .unwrap_err()
-        .to_string();
+            cli::DevOpts {
+                command: Some(cli::DevSubcommand::Status(cli::DevStatusOpts::default())),
+                launch: cli::DevLaunchOpts::default(),
+            }
+            .into(),
+            cli::DevOpts {
+                command: Some(cli::DevSubcommand::Stop(cli::DevStopOpts::default())),
+                launch: cli::DevLaunchOpts::default(),
+            }
+            .into(),
+        ];
 
-        assert!(error.contains("without the `dev-proxy` feature"));
+        for command in commands {
+            let error = dev_proxy::commands::dev_without_context(command)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("without the `dev-proxy` feature"));
+        }
     }
 }

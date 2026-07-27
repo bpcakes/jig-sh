@@ -24,6 +24,11 @@ name = "dev_sigint"
 path = "tests/dev_sigint.rs"
 required-features = ["dev-proxy"]
 
+[[test]]
+name = "dev_lifecycle"
+path = "tests/dev_lifecycle.rs"
+required-features = ["dev-proxy"]
+
 [features]
 # The default CLI build includes the local dev proxy. Library consumers that
 # only need the harness/runtime API can use `default-features = false`.

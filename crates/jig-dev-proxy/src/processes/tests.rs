@@ -130,6 +130,48 @@ fn preflight_failure_survives_even_when_termination_is_pending() {
     assert_eq!(error.to_string(), "preflight cleanup failure sentinel");
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = AppRunSpec::new(
+        "web",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
+        "web.demo.localhost",
+    )
+    .with_proxy(false);
+    let session = DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    session.prepare_cleanup_scope().unwrap();
+    let mut cleanup = session.arm_cleanup();
+
+    let error = finish_preflight_cleanup(
+        &mut cleanup,
+        Err(DevPreflightError::cleanup_unconfirmed(anyhow::anyhow!(
+            "preflight cleanup was not confirmed"
+        ))),
+        None,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "preflight cleanup was not confirmed");
+    assert!(!session.cleanup_is_confirmed());
+    drop(cleanup);
+    drop(session);
+    let sessions = store.snapshot_dev_state().unwrap().sessions;
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].cleanup_required);
+    assert_eq!(sessions[0].phase, crate::state::DevSessionPhase::Orphaned);
+}
+
 #[cfg(unix)]
 #[test]
 fn child_exit_status_preserves_shell_signal_statuses() {

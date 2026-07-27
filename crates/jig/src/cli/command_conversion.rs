@@ -2,13 +2,13 @@ use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevOpts,
-    GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts, LoopCommand, LoopRunOpts,
-    LoopStatusOpts, LoopTickOpts, MigrationAddOpts, ProxyAliasOpts, ProxyCertCommand,
-    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
-    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
-    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
-    ProxyStopOpts, StateArchiveOpts, StateCommand, ToolOpts, VaultAuditCommand,
+    CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts, DevStatusOpts,
+    DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts,
+    LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, MigrationAddOpts, ProxyAliasOpts,
+    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
+    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
+    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
+    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, ToolOpts, VaultAuditCommand,
     VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts, VaultRuntimeOpts,
     VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts,
     VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
@@ -429,13 +429,40 @@ impl From<StateArchiveOpts> for command::StateArchiveRequest {
     }
 }
 
-impl From<DevOpts> for command::DevRequest {
+impl From<DevOpts> for command::DevCommand {
     fn from(opts: DevOpts) -> Self {
+        match opts.command {
+            None => Self::Launch(opts.launch.into()),
+            Some(DevSubcommand::Status(opts)) => Self::Status(opts.into()),
+            Some(DevSubcommand::Stop(opts)) => Self::Stop(opts.into()),
+        }
+    }
+}
+
+impl From<DevLaunchOpts> for command::DevRequest {
+    fn from(opts: DevLaunchOpts) -> Self {
         Self {
             apps: opts.apps,
             discover_workspace: opts.discover_workspace,
             no_proxy: opts.no_proxy,
+            replace: opts.replace,
             proxy: opts.proxy.into(),
+        }
+    }
+}
+
+impl From<DevStatusOpts> for command::DevStatusRequest {
+    fn from(opts: DevStatusOpts) -> Self {
+        Self {
+            state_dir: opts.state_dir,
+        }
+    }
+}
+
+impl From<DevStopOpts> for command::DevStopRequest {
+    fn from(opts: DevStopOpts) -> Self {
+        Self {
+            state_dir: opts.state_dir,
         }
     }
 }
@@ -608,6 +635,69 @@ impl From<ProxyServiceRuntimeOpts> for command::ProxyServiceRuntimeRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_conversion_preserves_default_launch_and_replace() {
+        let request: command::DevCommand = DevOpts {
+            command: None,
+            launch: DevLaunchOpts {
+                jig_project: Some("demo@/tmp/demo".into()),
+                apps: vec!["web".into(), "api".into()],
+                discover_workspace: true,
+                no_proxy: false,
+                replace: true,
+                proxy: ProxyRuntimeOpts {
+                    state_dir: Some("/tmp/proxy".into()),
+                    https: true,
+                    ..Default::default()
+                },
+            },
+        }
+        .into();
+
+        match request {
+            command::DevCommand::Launch(request) => {
+                assert_eq!(request.apps, vec!["web", "api"]);
+                assert!(request.discover_workspace);
+                assert!(!request.no_proxy);
+                assert!(request.replace);
+                assert_eq!(request.proxy.state_dir, Some("/tmp/proxy".into()));
+                assert!(request.proxy.https);
+            }
+            other => panic!("expected dev launch request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_conversion_preserves_management_action_state_dirs() {
+        let status: command::DevCommand = DevOpts {
+            command: Some(DevSubcommand::Status(DevStatusOpts {
+                state_dir: Some("/tmp/status".into()),
+            })),
+            launch: DevLaunchOpts::default(),
+        }
+        .into();
+        match status {
+            command::DevCommand::Status(request) => {
+                assert_eq!(request.state_dir, Some("/tmp/status".into()));
+            }
+            other => panic!("expected dev status request, got {other:?}"),
+        }
+
+        let stop: command::DevCommand = DevOpts {
+            command: Some(DevSubcommand::Stop(DevStopOpts {
+                state_dir: Some("/tmp/stop".into()),
+            })),
+            launch: DevLaunchOpts::default(),
+        }
+        .into();
+        match stop {
+            command::DevCommand::Stop(request) => {
+                assert_eq!(request.state_dir, Some("/tmp/stop".into()));
+            }
+            other => panic!("expected dev stop request, got {other:?}"),
+        }
+    }
 
     #[test]
     fn migration_add_conversion_preserves_tool_receipt_controls() {

@@ -14,11 +14,11 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 
 - [x] (2026-07-27 10:19Z) Inspected the clean worktree, repository and crate guides, existing signal/process-group cleanup, route storage, CLI parser/dispatch, human output, and test boundaries.
 - [x] (2026-07-27 10:19Z) Opened structured work as `plan_01KYHH3P1WD70FK7DK6Z3GV32R` and wrote this self-contained implementation plan.
-- [ ] Implement the versioned, private, repo-scoped dev-session registry and authenticated supervisor control endpoint.
-- [ ] Implement status, graceful stop, exact orphan fallback, normal cleanup, and safe same-repository conflict replacement.
-- [ ] Add the optional-subcommand CLI, neutral command DTOs, human/JSON output, contextual conflict diagnostics, and no-feature behavior.
-- [ ] Add unit and integration coverage for normal, orphaned, stale, concurrent, cross-repository, legacy, selected-app, and no-proxy lifecycle paths.
-- [ ] Update public documentation, crate invariants, command lists, and release notes.
+- [x] (2026-07-27 11:12Z) Implemented the versioned, private, repo-scoped dev-session registry and authenticated supervisor control endpoint.
+- [x] (2026-07-27 11:12Z) Implemented status, graceful supervisor-owned stop, explicit cleanup confirmation, retained orphan evidence, and safe same-repository conflict replacement.
+- [x] (2026-07-27 11:12Z) Added the optional-subcommand CLI, neutral command DTOs, human/JSON output, contextual conflict diagnostics, and no-feature behavior.
+- [x] (2026-07-27 12:03Z) Added state-security, control-authentication, cleanup-accounting, CLI/output, same-root alias/selection, cross-repository, legacy-route, orphan, no-feature, and real-process lifecycle coverage.
+- [x] (2026-07-27 11:12Z) Updated public documentation, command lists, and release notes; the final invariant audit remains.
 - [ ] Build the development binary, dogfood all relevant Jig checks, inspect receipts/gates, and complete the requirement-by-requirement audit.
 
 ## Surprises & Discoveries
@@ -32,7 +32,13 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - Observation: current `jig proxy prune` filters only dead process routes, while `jig proxy stop` manages the shared proxy listener rather than development app processes.
   Evidence: `crates/jig-dev-proxy/src/lib.rs::proxy_prune`, `proxy_stop`, and `docs/configuration.md`.
 - Observation: one canonical repository may intentionally run multiple disjoint `--app` selections at once.
-  Evidence: app selection is per launch in `resolve_dev_request`; replacement must therefore stop only sessions whose planned route hostnames overlap the requested launch, while plain `jig dev stop` may stop all sessions for the current repository.
+  Evidence: app selection is per launch in `resolve_dev_request`; replacement must therefore stop only sessions whose planned app names or route hostnames overlap the requested launch, while plain `jig dev stop` may stop all sessions for the current repository.
+- Observation: a persisted PID/start token cannot safely replace the live supervisor's unreaped child handle for external Unix signaling.
+  Evidence: between any final token check and `kill(pid)` or `kill(-pgid)`, the process may exit and the numeric identity may be recycled; the existing `child_lifecycle` implementation deliberately pins process-group generation with an unreaped `Child`. The initial orphan-signaling prototype was removed after adversarial review.
+- Observation: process cleanup can legitimately exceed a fixed eight-second management wait.
+  Evidence: each child has bounded TERM, force, and confirmation phases, cleanup retries process trees, and route cleanup shares a 30-second lock deadline. The control retirement wait now scales without an artificial cap at a 35-second base plus 15 seconds per app in the largest concurrently targeted session.
+- Observation: app names are repository-local identities, while hostnames are shared proxy identities.
+  Evidence: two repositories routinely both configure an app named `web`; cross-repository claims now conflict only on hostname, with focused unit and CLI integration coverage.
 
 ## Decision Log
 
@@ -51,10 +57,10 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - Decision: use a random authenticated loopback control endpoint as the primary supervisor-stop mechanism.
   Rationale: the running supervisor owns the unreaped child handles and platform process-tree resources needed for the strongest cleanup. A private random token plus exact session registry entry allows `stop` and `--replace` to ask that supervisor to execute its normal cleanup without relying on a racy external group signal, and it works when an invoking agent has lost the original terminal.
   Date/Author: 2026-07-27 / Codex
-- Decision: use persisted child PID/start-token fallback only after the control path and exact supervisor are unavailable, and fail closed unless the recorded app is still the exact live process-group leader.
-  Rationale: a live exact group leader pins the numeric process-group generation sufficiently for one bounded signal phase. Once the leader identity is lost, Jig must not retry a numeric group because it may have been recycled. This fallback is intentionally weaker than normal `Child`-backed cleanup and must report incomplete cleanup rather than guessing.
+- Decision: never use persisted numeric PIDs as external signal authority after the authenticated supervisor is unavailable.
+  Rationale: even a matching start token is only an observation, not a race-free handle. The supervisor owns the unreaped children and platform cleanup resources; if it cannot complete cleanup, Jig records `cleanup_required`, reports the session as orphaned, returns `ok: false`, and retains the evidence without signaling.
   Date/Author: 2026-07-27 / Codex
-- Decision: make replacement same-canonical-repository and hostname-overlap scoped.
+- Decision: make replacement same-canonical-repository and app-or-hostname-overlap scoped.
   Rationale: `--replace` should resolve the common hidden-session conflict without stopping unrelated app subsets or a process belonging to another repository. Unregistered legacy/ad-hoc routes remain manual recovery cases.
   Date/Author: 2026-07-27 / Codex
 - Decision: keep the session registry compatible by treating a missing file as an empty registry, accepting only version 1 initially, and failing closed on malformed or unknown-version state.
@@ -63,7 +69,7 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 
 ## Outcomes & Retrospective
 
-Implementation has not started. The initial audit establishes that a route-only `--force` would be unsafe and that first-class management requires a durable session identity plus supervisor-owned cleanup. This section will be revised after each major milestone and at completion.
+The registry, authenticated control plane, CLI lifecycle actions, same-repository replacement, contextual conflicts, structured output, documentation, and focused end-to-end test are implemented. Adversarial review changed the original orphan fallback: no raw PID or PGID signal remains because persisted observations cannot pin a process generation. The implementation now carries an explicit cleanup-required marker and removes a session only after the foreground owner confirms dependency-preflight, app process-tree, and route cleanup. The final adversarial pass found and closed post-spawn and preflight cleanup-accounting gaps; no high- or medium-severity findings remain. Full repository gates remain.
 
 ## Context and Orientation
 
@@ -73,7 +79,7 @@ Implementation has not started. The initial audit establishes that a route-only 
 
 A “canonical repository identity” in this plan means an identifier calculated from the filesystem's canonical root path after symlinks are resolved. A “start token” means a platform process-creation identity that changes when a numeric PID is reused. A “control endpoint” means a loopback-only listener opened by the foreground supervisor; management clients must present the random token stored in the private session record before the listener requests normal shutdown. An “orphan” is a registered app whose exact process identity remains alive after its registered supervisor identity or control endpoint is gone.
 
-The new registry is current ownership state, not history. Normal launch completion removes its exact session record. Status reconciles records into `running`, `orphaned`, or `stale` observations without signaling anything. Stop is idempotent when no matching session exists. Fully dead stale records may be removed under the session-state lock; records with any exact live owner remain until cleanup succeeds.
+The new registry is current ownership state, not history. Normal launch completion removes its exact session record. Status reconciles records into `running`, `orphaned`, or `stale` observations without signaling anything. Stop is idempotent when no matching session exists. Fully dead records that never armed cleanup may be removed under the session-state lock; cleanup-required records remain until the owning supervisor confirms cleanup.
 
 ## Plan of Work
 
@@ -83,9 +89,9 @@ Second, add a small control module in `crates/jig-dev-proxy/src/processes/` or a
 
 Third, register the planned session only after termination handling and the control listener are active, but before dependency preflight or child spawn. Persist each spawned direct child identity immediately, before readiness can block, and update its route/port data when known. If registration or update fails after a child exists, use the existing owned `Child` cleanup before returning the error. Hold a generation-specific session guard for the entire launch and remove only its own record on normal completion, startup failure, configured child exit, or ordinary signal cleanup. Do not hold the session-state lock while acquiring route/certificate locks or waiting for processes.
 
-Fourth, implement a read-only status API and one shared stop engine. Status canonicalizes the requested root, selects every record with the same repository identity, verifies supervisor and child start tokens, checks owned route presence, classifies each session, and returns a stable same-version diagnostic JSON document with secrets omitted. Stop snapshots matching records, sends an authenticated control request to every reachable supervisor, waits concurrently for normal retirement, and then reconciles. For a dead/unreachable supervisor, the fallback may signal an app group only after verifying immediately that the exact start token still matches and the PID is the group leader. Revalidate before escalation; once that identity is gone, never signal the numeric group again. Remove only route publications matching hostname, PID, and start token. If any live owner cannot be safely stopped or confirmed, retain its registry entry, return `ok: false`, and describe the incomplete cleanup without exposing the token.
+Fourth, implement a read-only status API and one shared stop engine. Status canonicalizes the requested root, selects every record with the same repository identity, verifies supervisor and child start tokens, checks owned route presence, classifies each session, and returns a stable same-version diagnostic JSON document with secrets omitted. Stop snapshots matching records, sends an authenticated control request to every reachable supervisor, waits for normal retirement using the foreground cleanup budget, and then reconciles. If the authenticated supervisor is unavailable or cleanup remains unconfirmed, do not signal persisted numeric PIDs; retain the cleanup-required entry, return `ok: false`, and describe the incomplete cleanup without exposing the token.
 
-Fifth, run the same stop engine before a launch marked `replace`, restricted to registered sessions from the same canonical root whose planned proxied hostnames overlap the requested launch. After stop succeeds, launch normally and retain the existing route preflight as the final concurrent-race guard. A different-repository record, an unattributed process route, an identity mismatch, or an incomplete stop must abort replacement without launching new children.
+Fifth, run the same stop engine before a launch marked `replace`, restricted to registered sessions from the same canonical root whose planned app names or proxied hostnames overlap the requested launch. After stop succeeds, launch normally and retain the existing route preflight as the final concurrent-race guard. A different-repository record, an unattributed process route, an identity mismatch, or an incomplete stop must abort replacement without launching new children.
 
 Sixth, change the route conflict diagnostics in `crates/jig-dev-proxy/src/state.rs`. When session attribution proves a same-repository owner, recommend `jig dev stop` or `jig dev --replace`. When attribution proves another repository, state that replacement refuses cross-repository ownership and identify the non-secret owner display root. When no session safely attributes the live route, say that `--replace` will not terminate it and retain the manual process-stop plus `jig proxy prune` recovery.
 
@@ -146,11 +152,11 @@ Bare `jig dev` with every existing flag must parse and behave exactly as before.
 
 While one fixture session is starting, ready, or running, status from the same canonical repository must report one running session, its non-secret supervisor identity, planned apps, spawned app identities when present, route coordinates, and effective state directory. A symlink spelling of the same root must select the same session. Status from a different root must not claim it. A missing registry must return `ok: true`, `running: false`, and an empty session list.
 
-Stop with no matching sessions must exit successfully and say that nothing was running. Stop with one or more sessions from the current root must request each supervisor's ordinary cleanup, wait for all tied child trees, remove exact owned routes and registry entries, and return success. An injected dead supervisor with one exact live recorded app group must exercise the bounded fallback. An injected start-token mismatch or unpinned/reused group must never receive a signal and must return incomplete cleanup with `ok: false`.
+Stop with no matching sessions must exit successfully and say that nothing was running. Stop with one or more sessions from the current root must request each supervisor's ordinary cleanup, wait for all tied child trees, remove exact owned routes and registry entries, and return success. An injected dead supervisor with cleanup-required state, a start-token mismatch, or an unverified identity must never receive a signal and must return incomplete cleanup with `ok: false`.
 
 Replacement must stop only same-root sessions whose planned proxied hostnames overlap the new selected apps. A disjoint same-root `--app` session must survive. A cross-root session using the same hostname, an unregistered legacy process route, or a registered identity that cannot be stopped must block replacement. After successful replacement, only the new session owns the hostname and no old route or registry entry remains.
 
-Normal child exit, startup failure, dependency-preflight failure, SIGINT, SIGHUP, SIGTERM, externally requested stop, and route-publication failure must each retire the exact session record and preserve existing process/route cleanup behavior. A hard-killed supervisor may leave an orphan record; status must classify it and stop must either clean exact live recorded owners or fail closed.
+Normal child exit, startup failure, dependency-preflight failure, SIGINT, SIGHUP, SIGTERM, externally requested stop, and route-publication failure must each retire the exact session record and preserve existing process/route cleanup behavior. A hard-killed supervisor may leave a cleanup-required orphan record; status must classify it as requiring attention and stop must fail closed without converting numeric PID observations into signal authority.
 
 JSON output must contain no control token or raw configured command. Human output must distinguish launch, status, successful/idempotent stop, and incomplete stop. A non-default-feature build must still parse all three actions and return the existing clear “without the dev-proxy feature” error.
 
@@ -202,6 +208,7 @@ The internal version-1 session document must contain:
       repo_root_display
       repo_root_identity
       started_at_ms
+      cleanup_required
       supervisor.pid
       supervisor.start_token
       control.port
@@ -211,12 +218,12 @@ The internal version-1 session document must contain:
         hostname
         target_host
         target_port
-        owner.pid
-        owner.start_token
+        process.pid
+        process.start_token
 
 Optional owner/port fields represent planned or starting apps. The persisted control token is sensitive and must remain inside the owner-only state file. Returned JSON maps internal records to redacted observation DTOs.
 
-The process owner must expose one shared stop engine used by both `dev stop` and `--replace`. It must separate snapshot/decision, control request, bounded wait, exact orphan fallback, exact route cleanup, and final registry reconciliation so no state-file lock is held during network or process operations.
+The process owner must expose one shared stop engine used by both `dev stop` and `--replace`. It must separate snapshot/decision, authenticated control request, cleanup-budget-aware wait, and final registry reconciliation so no state-file lock is held during network or process operations. Persisted process observations are diagnostic only after the supervisor is unavailable.
 
 No new external service or daemon is introduced. Existing dependencies (`getrandom`, `serde`, `serde_json`, `sha2`, `subtle`, `fs4`, `libc`, and platform APIs already used by the crate) are sufficient.
 

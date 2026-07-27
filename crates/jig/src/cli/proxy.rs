@@ -14,6 +14,18 @@ Examples:
   jig proxy run api --port 3000 -- cargo run
   jig proxy run web --no-proxy -- npm run dev";
 
+pub(super) const DEV_AFTER_HELP: &str = "\
+With no subcommand, `jig dev` launches the configured apps as one foreground
+development session. `--replace` stops only conflicting registered sessions
+owned by this same canonical repository before launching.
+
+Examples:
+  jig dev
+  jig dev --app web
+  jig dev --replace
+  jig dev status
+  jig dev stop";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum ProxyCommand {
     /// Start the local development proxy.
@@ -129,7 +141,30 @@ pub(crate) struct ProxyRuntimeOpts {
 }
 
 #[derive(Args, Debug)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    flatten_help = true,
+    after_help = DEV_AFTER_HELP
+)]
 pub(crate) struct DevOpts {
+    #[command(subcommand)]
+    pub(crate) command: Option<DevSubcommand>,
+    #[command(flatten)]
+    pub(crate) launch: DevLaunchOpts,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum DevSubcommand {
+    /// Show registered development sessions owned by the current repository.
+    #[command(name = tool_defs::cli_command::DEV_STATUS)]
+    Status(DevStatusOpts),
+    /// Stop all registered development sessions owned by the current repository.
+    #[command(name = tool_defs::cli_command::DEV_STOP)]
+    Stop(DevStopOpts),
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct DevLaunchOpts {
     #[arg(
         long = "jig-project",
         hide = true,
@@ -143,8 +178,31 @@ pub(crate) struct DevOpts {
     pub(crate) discover_workspace: bool,
     #[arg(long, help = "Run apps directly without publishing proxy routes")]
     pub(crate) no_proxy: bool,
+    #[arg(
+        long,
+        help = "Stop conflicting live dev sessions owned by this repository before launching"
+    )]
+    pub(crate) replace: bool,
     #[command(flatten)]
     pub(crate) proxy: ProxyRuntimeOpts,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct DevStatusOpts {
+    #[arg(
+        long,
+        help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct DevStopOpts {
+    #[arg(
+        long,
+        help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
+    )]
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]

@@ -140,6 +140,7 @@ pub struct DevRequest {
     pub selected_apps: Vec<String>,
     pub discover_workspace: bool,
     pub no_proxy: bool,
+    pub replace: bool,
 }
 
 impl DevRequest {
@@ -158,6 +159,7 @@ impl DevRequest {
             selected_apps: Vec::new(),
             discover_workspace: false,
             no_proxy: false,
+            replace: false,
         }
     }
 
@@ -179,6 +181,45 @@ impl DevRequest {
     pub fn with_no_proxy(mut self, no_proxy: bool) -> Self {
         self.no_proxy = no_proxy;
         self
+    }
+
+    pub fn with_replace(mut self, replace: bool) -> Self {
+        self.replace = replace;
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DevStatusRequest {
+    pub repo_name: String,
+    pub root: PathBuf,
+    pub state_dir: Option<PathBuf>,
+}
+
+impl DevStatusRequest {
+    pub fn new(repo_name: impl Into<String>, root: PathBuf, state_dir: Option<PathBuf>) -> Self {
+        Self {
+            repo_name: repo_name.into(),
+            root,
+            state_dir,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DevStopRequest {
+    pub repo_name: String,
+    pub root: PathBuf,
+    pub state_dir: Option<PathBuf>,
+}
+
+impl DevStopRequest {
+    pub fn new(repo_name: impl Into<String>, root: PathBuf, state_dir: Option<PathBuf>) -> Self {
+        Self {
+            repo_name: repo_name.into(),
+            root,
+            state_dir,
+        }
     }
 }
 

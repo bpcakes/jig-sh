@@ -317,6 +317,12 @@ Cleanup is armed before any proxy startup child can spawn. Published process rou
 
 When running multiple apps with `scripts/jig dev`, Jig treats them as a tied dev session: when the first child process exits, Jig removes the session routes and terminates the remaining child processes.
 
+The proxy state directory also holds a private registry for active tied dev sessions. Records are keyed to the canonical repository root and carry supervisor/app observations, an explicit cleanup-required marker, and an authenticated loopback control endpoint; `scripts/jig dev status` and `scripts/jig dev stop` expose only sanitized session data, never the control credential. Status is read-only and limited to the current repository. Stop targets all registered sessions for that repository, succeeds when none exist, and asks the live supervisor to use its retained child handles for cleanup. If the supervisor is gone or cleanup cannot be confirmed, Jig returns `ok: false` and retains the record without signaling persisted numeric PIDs.
+
+Bare `scripts/jig dev` remains the launch form. `scripts/jig dev --replace` resolves conflicts before launch by stopping only overlapping registered sessions from the same canonical repository, then atomically retrying the claim. It refuses cross-repository ownership, unregistered live process routes, and newly observed concurrent claims. This means a process launched by a pre-registry Jig version or by an ad-hoc command is never killed merely because its route hostname conflicts; stop that process explicitly and run `scripts/jig proxy prune` once.
+
+Session lookup uses the same proxy state-directory resolution as launch. With the default, no extra flag is needed; with an isolated state directory, use `scripts/jig dev --state-dir <path>` for launch, `scripts/jig dev status --state-dir <path>`, and `scripts/jig dev stop --state-dir <path>`. The status and stop subcommands do not accept launch-only app, discovery, replacement, or listener flags.
+
 Jig chooses automatic app ports with a local bind probe against every socket address resolved from each app's configured target host, then starts the child command and waits for the target port before publishing the process route. Readiness has no fixed wall-clock timeout because first-time compilation can legitimately take several minutes; the wait ends when the app listens, exits, or the user interrupts the session. The probe does not reserve the socket across arbitrary package scripts, so Jig verifies that the observed listener belongs to the spawned child process group before publishing. If a concurrent local process steals the port or the app rebinds to a different port, Jig reports an app readiness failure instead of publishing the bad route.
 
 App stdout and stderr are collapsed during a dev session. On an interactive terminal, Jig replaces the raw stream with one animated, colored status line per starting app, using the latest meaningful child-process message (for example, `[..] api · Compiling creditkit-http`). The line follows the actual stderr terminal width and clips Unicode by display width. It is cleared when the app becomes ready, leaving only the compact app table. If an app fails during startup or exits unsuccessfully, Jig stops its process group and then prints that app's captured output tail (up to 2 MiB) before the failure summary. Successful app output, interrupted output, and output from apps stopped only because another app failed remain hidden. `NO_COLOR` disables color while preserving the live status line.
@@ -328,7 +334,7 @@ App stdout and stderr are collapsed during a dev session. On an interactive term
 
 Equivalent portable config spellings such as `web`, `./web`, and repeated separators use one lexical identity for frontend/dev relationships; absolute, parent-relative, case-only, and symlink-alias spellings do not become portable aliases. Selected app paths remain canonical through containment and readiness checks. At the Windows child-spawn boundary, working directories and batch shims convert supported drive/UNC paths to ordinary spelling, while direct native executables retain their canonical target. Bare-name Windows PATH searches try only inspected, validated `PATHEXT` executable variants; if none resolves, launch fails rather than delegating the bare name to ambient Windows lookup. Explicit extensionless paths remain literal-first. Generated pnpm/Yarn metadata launchers use the same rule.
 
-The proxy process is shared local runtime state and can outlive a `scripts/jig dev` session. Use `scripts/jig proxy stop` when you want to shut down the background proxy listener. Proxy commands print their JSON response before returning; when a response contains `ok: false`, including stop refusals that deliberately keep runtime files to avoid terminating an unrelated process, the CLI exits nonzero so scripts should inspect the JSON warning field.
+The proxy process is shared local runtime state and can outlive a `scripts/jig dev` session. Use `scripts/jig dev stop` to stop this repository's registered app sessions; use `scripts/jig proxy stop` when you want to shut down the shared background proxy listener itself. Proxy and dev-management commands print their JSON response before returning when `--json` is supplied; when a response contains `ok: false`, including stop refusals that deliberately retain runtime files to avoid terminating an unrelated process, the CLI exits nonzero so scripts should inspect its `warning` or `warnings` field.
 
 The proxy is intended for trusted local development and trusted LAN testing only; it does not provide authentication or multi-tenant isolation.
 
@@ -369,6 +375,9 @@ Useful commands:
 
 - `scripts/jig dev`
 - `scripts/jig dev --app web`
+- `scripts/jig dev status`
+- `scripts/jig dev --replace`
+- `scripts/jig dev stop`
 - `scripts/jig proxy start`
 - `scripts/jig proxy stop`
 - `scripts/jig proxy list`

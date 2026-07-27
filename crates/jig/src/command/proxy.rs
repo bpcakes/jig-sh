@@ -5,11 +5,29 @@
 use std::path::PathBuf;
 
 #[derive(Debug)]
+pub(crate) enum DevCommand {
+    Launch(DevRequest),
+    Status(DevStatusRequest),
+    Stop(DevStopRequest),
+}
+
+#[derive(Debug)]
 pub(crate) struct DevRequest {
     pub(crate) apps: Vec<String>,
     pub(crate) discover_workspace: bool,
     pub(crate) no_proxy: bool,
+    pub(crate) replace: bool,
     pub(crate) proxy: ProxyRuntimeOptions,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DevStatusRequest {
+    pub(crate) state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct DevStopRequest {
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default)]

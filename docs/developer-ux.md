@@ -134,12 +134,21 @@ The dev proxy improves local development by separating the public developer URL 
 
 ```sh
 scripts/jig dev
+scripts/jig dev status
+scripts/jig dev --replace
+scripts/jig dev stop
 scripts/jig proxy list
 ```
 
 Jig assigns or verifies app ports, starts trusted repo-configured commands, waits for readiness, and publishes stable local routes. Vite apps get structured `--port`, `--host`, and `--strictPort` injection when configured with `argv`, which avoids many fragile package-script edits. Generated Astro apps consume the same injected `HOST` and `PORT`, fail instead of moving to a different busy port, and stay in Jig's supervised foreground tree even when Astro detects an agent environment.
 
 On Unix, the foreground supervisor also identifies itself in process listings as `jig dev --jig-project=<repo-name>@<repo-root>`. The name appears before the full path so simultaneous sessions remain distinguishable even when `ps` truncates a long command column.
+
+Every foreground launch also registers a tied dev session in the proxy state directory. `scripts/jig dev status` is a read-only view of sessions owned by the current canonical repository, including supervisor and app process health; no sessions is a successful stopped state. `scripts/jig dev stop` requests shutdown of every registered session for that repository and is idempotent when nothing is running. It uses the session's authenticated loopback control endpoint so the live supervisor performs its ordinary handle-backed cleanup. If that supervisor is gone or cleanup cannot be confirmed, the command exits nonzero and retains the session record for inspection; it never converts persisted numeric PIDs into authority to signal a possibly recycled process.
+
+Bare `scripts/jig dev` remains the launch command. Add `--replace` when a new launch should stop only its conflicting registered sessions from the same canonical repository before claiming their apps and routes. Replacement never takes over a cross-repository session, an ad-hoc `proxy run`, or a live route that cannot be attributed to a registered session. A process started by an older Jig without session registration therefore needs a one-time manual stop followed by `scripts/jig proxy prune`; subsequent registered sessions can be handled with `dev status`, `dev stop`, or `dev --replace`.
+
+Launch and both management subcommands must use the same proxy state directory. They default to `JIG_PROXY_STATE_DIR` or `~/.jig/proxy`; pass `--state-dir <path>` after `status` or `stop` when the launch used an explicit directory. Launch-only flags such as `--app`, `--replace`, and proxy listener options are not accepted by the management subcommands.
 
 Manual services can still join the same local routing model:
 

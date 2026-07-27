@@ -24,10 +24,11 @@ pub(crate) use loops::{
 };
 pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{
-    DevOpts, ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts,
-    ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts,
-    ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
-    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts,
+    DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyAliasOpts,
+    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
+    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
+    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
+    ProxyStartOpts, ProxyStopOpts,
 };
 pub(crate) use state::{StateArchiveOpts, StateCommand};
 pub(crate) use vault::{
@@ -188,7 +189,7 @@ pub(crate) enum CommandKind {
         hide = true
     )]
     GenerateSqlxUncheckedQueriesTodo(GenerateSqlxUncheckedQueriesTodoOpts),
-    /// Run configured development apps through the local dev proxy.
+    /// Run and manage configured development app sessions.
     #[command(name = tool_defs::cli_command::DEV)]
     Dev(DevOpts),
     /// Manage the local development proxy.

@@ -9,6 +9,8 @@
 - `src/lib.rs`: public API consumed by `crates/jig`.
 - `src/types.rs`: request, route, app, proxy, certificate, and service types.
 - `src/state.rs`: machine-local mutable proxy state under `~/.jig/proxy` or `JIG_PROXY_STATE_DIR`.
+- `src/dev_sessions.rs`: repo-scoped foreground dev-session registration, lifecycle management, and replacement claims.
+- `src/session_control.rs`: authenticated loopback control channel used by `dev stop` and `dev --replace`.
 - `src/host.rs`: repo/app hostname normalization and validation.
 - `src/ports.rs`: local port probing and LAN address detection.
 - `src/server.rs`: HTTP and HTTPS proxy listeners.
@@ -22,6 +24,7 @@
 - Change hostname or route behavior: `src/host.rs`, `src/state.rs`, and `src/server.rs`.
 - Change HTTP, HTTPS, HTTP/2, or WebSocket forwarding: `src/server.rs`.
 - Change app command launching or framework flag injection: `src/processes.rs`.
+- Change dev status, stop, replacement, or registry behavior: `src/dev_sessions.rs`, `src/dev_sessions/`, `src/session_control.rs`, and `src/state/dev_sessions.rs`.
 - Change local certificate behavior: `src/certs.rs`.
 - Change launchd or systemd service files: `src/service.rs`.
 - Change workspace discovery: `src/workspace.rs`.
@@ -31,6 +34,8 @@
 - Keep this crate independent from Jig repository state, receipts, MCP, and templates.
 - Store mutable proxy state outside `.agent/state`; that directory is append-only work memory.
 - Route mutations must be lock-protected and safe to repeat.
+- Dev-session mutations share the route-state lock so a replacement claim and route ownership decision are atomic. Keep `dev-sessions.json` versioned, owner-only, symlink-hardened, bounded, and fail-closed on malformed or unknown state.
+- Only the live foreground supervisor may terminate its registered app trees. Management reaches it through the authenticated loopback control channel; persisted PID and start-token observations are diagnostic evidence, not external signaling authority. Retain `cleanup_required` records until that supervisor confirms both process-tree and route cleanup.
 - Certificate trust and service installation must be explicit commands; do not mutate user or system trust/service state from ordinary `dev` or `proxy run`.
 - The local CA must stay name-constrained to configured Jig development DNS names plus loopback and detected IPv4 LAN addresses. The CA validity is intentionally longer than leaf certificates but bounded for local development, so treat the CA key as machine-local sensitive material, document the local trust scope, and keep `cert untrust` available for compromise, uninstall, or forced regeneration flows.
 - Platform trust helpers are invoked from fixed system tool directories rather than the invoking environment's `PATH`; service and certificate commands are explicit user operations, so document this trust boundary when changing those paths.

@@ -312,8 +312,29 @@ fn proxy_run_help_includes_launcher_context_and_examples() {
 }
 
 #[test]
-fn dev_help_hides_internal_process_identity() {
-    assert_help_omits(&rendered_help(&["dev"]), "--jig-project");
+fn dev_help_describes_launch_and_session_management() {
+    let dev_help = rendered_help(&["dev"]);
+    assert_help_contains(
+        &dev_help,
+        "Run and manage configured development app sessions",
+    );
+    assert_help_contains(&dev_help, "status");
+    assert_help_contains(&dev_help, "stop");
+    assert_help_contains(&dev_help, "--replace");
+    assert_help_contains(&dev_help, "jig dev --replace");
+    assert_help_contains(&dev_help, "jig dev status");
+    assert_help_contains(&dev_help, "jig dev stop");
+    assert_help_omits(&dev_help, "--jig-project");
+
+    let status_help = rendered_help(&["dev", "status"]);
+    assert_help_contains(&status_help, "--state-dir");
+    assert_help_omits(&status_help, "--replace");
+    assert_help_omits(&status_help, "--app");
+
+    let stop_help = rendered_help(&["dev", "stop"]);
+    assert_help_contains(&stop_help, "--state-dir");
+    assert_help_omits(&stop_help, "--replace");
+    assert_help_omits(&stop_help, "--app");
 }
 
 #[test]

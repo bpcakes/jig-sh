@@ -22,6 +22,94 @@ fn dev_summary_reports_ctrl_c_as_stopped() {
 }
 
 #[test]
+fn dev_summary_reports_management_requested_stop() {
+    let summary = format_dev_summary(&json!({
+        "ok": true,
+        "interrupted": false,
+        "stopped": true,
+        "stop_reason": "dev stop",
+        "routes": [],
+    }));
+
+    assert!(summary.contains("Dev: stopped (dev stop)"));
+    assert!(!summary.contains("Dev: ok"));
+}
+
+#[test]
+fn dev_status_summary_reports_registered_sessions() {
+    let summary = format_dev_status_summary(&json!({
+        "ok": true,
+        "repo_name": "demo",
+        "repo_root": "/tmp/demo",
+        "state_dir": "/tmp/proxy",
+        "running": true,
+        "sessions": [{
+            "session_id": "dev_123",
+            "status": "running",
+            "supervisor_pid": 4242,
+            "apps": [
+                {"name": "api"},
+                {"name": "web"}
+            ]
+        }]
+    }));
+
+    assert!(summary.contains("Dev status: running"));
+    assert!(summary.contains("Repo: demo (/tmp/demo)"));
+    assert!(summary.contains("State: /tmp/proxy"));
+    assert!(summary.contains("Sessions: 1"));
+    assert!(summary.contains("dev_123: running"));
+    assert!(summary.contains("supervisor PID 4242"));
+    assert!(summary.contains("2 apps"));
+}
+
+#[test]
+fn dev_status_summary_reports_no_running_sessions() {
+    let summary = format_dev_status_summary(&json!({
+        "ok": true,
+        "repo_root": "/tmp/demo",
+        "running": false,
+        "sessions": []
+    }));
+
+    assert!(summary.contains("Dev status: stopped"));
+    assert!(summary.contains("Sessions: 0"));
+}
+
+#[test]
+fn dev_stop_summary_distinguishes_idempotent_and_incomplete_results() {
+    let nothing_running = format_dev_stop_summary(&json!({
+        "ok": true,
+        "repo_name": "demo",
+        "repo_root": "/tmp/demo",
+        "matched_sessions": 0,
+        "stopped_sessions": 0,
+        "stopped_apps": 0,
+        "sessions": [],
+        "warnings": []
+    }));
+    assert!(nothing_running.contains("Dev stop: nothing running"));
+    assert!(nothing_running.contains("Sessions matched: 0"));
+
+    let incomplete = format_dev_stop_summary(&json!({
+        "ok": false,
+        "repo_name": "demo",
+        "repo_root": "/tmp/demo",
+        "matched_sessions": 1,
+        "stopped_sessions": 0,
+        "sessions": [{
+            "session_id": "dev_123",
+            "outcome": "orphaned"
+        }],
+        "warnings": ["exact process identity could not be confirmed stopped"]
+    }));
+    assert!(incomplete.contains("Dev stop: incomplete"));
+    assert!(incomplete.contains("Sessions matched: 1"));
+    assert!(incomplete.contains("Sessions stopped: 0"));
+    assert!(incomplete.contains("exact process identity could not be confirmed stopped"));
+}
+
+#[test]
 fn proxy_summary_reports_termination_as_stopped() {
     let summary = format_proxy_summary(&json!({
         "ok": false,
