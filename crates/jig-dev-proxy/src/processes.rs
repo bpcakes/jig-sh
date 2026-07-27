@@ -41,10 +41,11 @@ mod windows_launch;
 
 use self::child_lifecycle::*;
 pub(crate) use self::cleanup::TerminationReason;
+pub(crate) use self::cleanup::force_cleanup_requested;
 use self::cleanup::{
-    RunningChild, arm_owned_resources, cleanup_children, force_cleanup_requested,
-    new_route_cleanup_deadline, select_interruption, select_primary_outcome,
-    start_termination_cleanup_session, termination_requested,
+    RunningChild, arm_owned_resources, cleanup_children, new_route_cleanup_deadline,
+    select_interruption, select_primary_outcome, start_termination_cleanup_session,
+    termination_requested,
 };
 use self::frameworks::*;
 use self::listener_owner::*;
@@ -523,7 +524,17 @@ pub(crate) fn run_apps_with_preflight(
             return Err(interruption_error(reason));
         }
     };
-    let session = DevSessionRuntime::start(store.clone(), repo_name, root, &specs, replace)?;
+    let session = lock_outcome_or_interruption(
+        DevSessionRuntime::start_interruptible(
+            store.clone(),
+            repo_name,
+            root,
+            &specs,
+            replace,
+            &|| termination_requested().is_some(),
+        )?,
+        &termination_requested,
+    )?;
     let requested_reason = || {
         termination_requested().or_else(|| {
             session
@@ -532,9 +543,11 @@ pub(crate) fn run_apps_with_preflight(
         })
     };
     let interrupted = || requested_reason().is_some();
-    session
-        .prepare_cleanup_scope()
-        .context("Failed to persist cleanup intent before development preflight")?;
+    lock_outcome_or_interruption(
+        session.prepare_cleanup_scope_interruptible(&interrupted)?,
+        &requested_reason,
+    )
+    .context("Failed to persist cleanup intent before development preflight")?;
     let mut preflight_cleanup = session.arm_cleanup();
     let preflight_result = preflight(&specs, &interrupted);
     finish_preflight_cleanup(&mut preflight_cleanup, preflight_result, requested_reason())?;
@@ -668,6 +681,17 @@ fn run_apps_with_session_and_interrupt_probe(
     )?;
 
     arm_owned_resources()?;
+    let mark_running_result = session
+        .mark_running_interruptible(&cancelled)
+        .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
+    if let Err(error) = mark_running_result {
+        if is_interruption(&error) {
+            select_interruption();
+        } else {
+            select_primary_outcome();
+        }
+        return Err(error).context("Failed to mark the Jig dev session as running");
+    }
     for prepared in prepared_apps {
         if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
             select_interruption();
@@ -683,9 +707,22 @@ fn run_apps_with_session_and_interrupt_probe(
             port,
             argv,
         } = prepared;
-        if let Err(error) = session.prepare_cleanup_scope() {
-            select_primary_outcome();
+        let cleanup_scope_result = session
+            .prepare_cleanup_scope_interruptible(&cancelled)
+            .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
+        if let Err(error) = cleanup_scope_result {
+            let interrupted = is_interruption(&error);
+            if interrupted {
+                select_interruption();
+            } else {
+                select_primary_outcome();
+            }
             cleanup_dev_session_children(session, &mut children);
+            if interrupted {
+                for running in &mut children {
+                    running.output.discard();
+                }
+            }
             return Err(error)
                 .context("Failed to persist cleanup intent before starting a development app");
         }
@@ -705,11 +742,25 @@ fn run_apps_with_session_and_interrupt_probe(
                 if cleanup_confirmed {
                     session_cleanup.confirm();
                 } else if let Some(process) = spawned_process {
-                    if let Err(record_error) = session.record_app_process(&spec.name, port, process)
-                    {
-                        error = error.context(format!(
-                            "Failed to retain the unconfirmed process identity in the Jig dev session: {record_error:#}"
-                        ));
+                    let cleanup_cancelled =
+                        || force_cleanup_requested() || session.requested_stop();
+                    match session.record_app_process_cleanup_cancelable(
+                        &spec.name,
+                        port,
+                        process,
+                        &cleanup_cancelled,
+                    ) {
+                        Ok(Some(())) => {}
+                        Ok(None) => {
+                            error = error.context(
+                                "Forced cleanup cancelled a contended attempt to retain the unconfirmed process identity; generic cleanup-required evidence remains in the Jig dev session",
+                            );
+                        }
+                        Err(record_error) => {
+                            error = error.context(format!(
+                                "Failed to retain the unconfirmed process identity in the Jig dev session: {record_error:#}"
+                            ));
+                        }
                     }
                 }
                 select_primary_outcome();
@@ -722,8 +773,16 @@ fn run_apps_with_session_and_interrupt_probe(
             pid: child_pid,
             start_token: process_start_token(child_pid),
         };
-        if let Err(error) = session.record_app_process(&spec.name, port, session_process.clone()) {
-            select_primary_outcome();
+        let record_process_result = session
+            .record_app_process_interruptible(&spec.name, port, session_process.clone(), &cancelled)
+            .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
+        if let Err(error) = record_process_result {
+            let interrupted = is_interruption(&error);
+            if interrupted {
+                select_interruption();
+            } else {
+                select_primary_outcome();
+            }
             cleanup_dev_session_current_and_children(
                 session,
                 &mut session_cleanup,
@@ -731,7 +790,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 "could not clean up app after dev-session registration failure",
                 &mut children,
             );
-            output.print_failure(&spec.name);
+            if interrupted {
+                output.discard();
+                for running in &mut children {
+                    running.output.discard();
+                }
+            } else {
+                output.print_failure(&spec.name);
+            }
             return Err(error).with_context(|| {
                 format!(
                     "Failed to persist process identity for development app '{}'",
@@ -926,11 +992,6 @@ fn run_apps_with_session_and_interrupt_probe(
         });
     }
 
-    if let Err(error) = session.mark_running() {
-        select_primary_outcome();
-        cleanup_dev_session_children(session, &mut children);
-        return Err(error).context("Failed to mark the Jig dev session as running");
-    }
     print_dev_table(&display_rows);
 
     let mut first_exit = None;
@@ -1092,7 +1153,18 @@ fn run_apps_with_interrupt_probe(
         .map(|spec| spec.dir.as_path())
         .ok_or_else(|| anyhow::anyhow!("test dev session requires at least one app"))?;
     let store = StateStore::resolve(settings.state_dir.clone())?;
-    let session = DevSessionRuntime::start(store.clone(), "test", root, &specs, false)?;
+    let cancelled = || interrupt_requested().is_some();
+    let session = lock_outcome_or_interruption(
+        DevSessionRuntime::start_interruptible(
+            store.clone(),
+            "test",
+            root,
+            &specs,
+            false,
+            &cancelled,
+        )?,
+        &interrupt_requested,
+    )?;
     run_apps_with_session_and_interrupt_probe(
         specs,
         settings,

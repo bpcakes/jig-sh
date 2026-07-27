@@ -19,6 +19,7 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - [x] (2026-07-27 11:12Z) Added the optional-subcommand CLI, neutral command DTOs, human/JSON output, contextual conflict diagnostics, and no-feature behavior.
 - [x] (2026-07-27 12:03Z) Added state-security, control-authentication, cleanup-accounting, CLI/output, same-root alias/selection, cross-repository, legacy-route, orphan, no-feature, and real-process lifecycle coverage.
 - [x] (2026-07-27 11:12Z) Updated public documentation, command lists, and release notes; the final invariant audit remains.
+- [x] (2026-07-27 13:08Z) Reproduced and fixed the full-suite signal regression caused by post-publication session-state locking; the complete `dev_sigint` integration now passes 9/9 and an independent lifecycle review found no remaining high- or medium-severity issue.
 - [ ] Build the development binary, dogfood all relevant Jig checks, inspect receipts/gates, and complete the requirement-by-requirement audit.
 
 ## Surprises & Discoveries
@@ -39,6 +40,8 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
   Evidence: each child has bounded TERM, force, and confirmation phases, cleanup retries process trees, and route cleanup shares a 30-second lock deadline. The control retirement wait now scales without an artificial cap at a 35-second base plus 15 seconds per app in the largest concurrently targeted session.
 - Observation: app names are repository-local identities, while hostnames are shared proxy identities.
   Evidence: two repositories routinely both configure an app named `web`; cross-repository claims now conflict only on hostname, with focused unit and CLI integration coverage.
+- Observation: the session registry and route registry intentionally share one lock, so a session-phase write after publishing a route can block the foreground supervisor behind an observer that acquired the route lock.
+  Evidence: the first full `scripts/jig work check` exposed four deterministic `dev_sigint` failures. Three stalled at the old post-publication `mark_running` mutation before child monitoring; the fourth completed forced route-cleanup cancellation but then stalled in non-cancelable session retirement.
 
 ## Decision Log
 
@@ -66,10 +69,13 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - Decision: keep the session registry compatible by treating a missing file as an empty registry, accepting only version 1 initially, and failing closed on malformed or unknown-version state.
   Rationale: existing installations have no file to migrate. Silently discarding corrupt ownership data could authorize an unsafe replacement or hide processes.
   Date/Author: 2026-07-27 / Codex
+- Decision: make every foreground session-state wait cancellation-aware, publish the running phase before any app route becomes externally visible, and allow only repeated-signal forced cleanup to abandon a contended retirement write.
+  Rationale: the supervisor must remain able to observe the first termination request and clean its owned children even when another process holds the shared route lock. On a later force request, retaining conservative cleanup-required evidence is safer than blocking exit or falsely claiming cleanup. The replacement stop engine also carries cancellation through its state waits and polling loop.
+  Date/Author: 2026-07-27 / Codex
 
 ## Outcomes & Retrospective
 
-The registry, authenticated control plane, CLI lifecycle actions, same-repository replacement, contextual conflicts, structured output, documentation, and focused end-to-end test are implemented. Adversarial review changed the original orphan fallback: no raw PID or PGID signal remains because persisted observations cannot pin a process generation. The implementation now carries an explicit cleanup-required marker and removes a session only after the foreground owner confirms dependency-preflight, app process-tree, and route cleanup. The final adversarial pass found and closed post-spawn and preflight cleanup-accounting gaps; no high- or medium-severity findings remain. Full repository gates remain.
+The registry, authenticated control plane, CLI lifecycle actions, same-repository replacement, contextual conflicts, structured output, documentation, and focused end-to-end test are implemented. Adversarial review changed the original orphan fallback: no raw PID or PGID signal remains because persisted observations cannot pin a process generation. The implementation now carries an explicit cleanup-required marker and removes a session only after the foreground owner confirms dependency-preflight, app process-tree, and route cleanup. The first full repository gate exposed a shared-lock signal regression; foreground registry writes are now interruptible, the running transition precedes route publication, and forced retirement retains evidence instead of blocking. The complete signal and lifecycle integrations pass, and the final independent review found no high- or medium-severity findings. Full repository gates remain.
 
 ## Context and Orientation
 

@@ -458,7 +458,7 @@ pub(super) fn termination_requested() -> Option<TerminationReason> {
     (signal != 0).then_some(TerminationReason::from_signal(signal))
 }
 
-pub(super) fn force_cleanup_requested() -> bool {
+pub(crate) fn force_cleanup_requested() -> bool {
     FORCE_CLEANUP_REQUESTED.load(Ordering::SeqCst)
 }
 

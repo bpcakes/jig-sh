@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use self::management::stop_session_ids;
+use self::management::stop_session_ids_interruptible;
 use self::process_identity::{capture_process_identity, process_identity_observed_alive};
 use crate::session_control::SessionControlServer;
 use crate::state::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    StateStore, now_ms, pid_is_alive, process_start_token,
+    LockOutcome, StateStore, now_ms, pid_is_alive, process_start_token,
 };
 use crate::types::{AppRunSpec, Route, RouteMode};
 
@@ -50,6 +50,7 @@ impl DevCleanupLease {
 }
 
 impl DevSessionRuntime {
+    #[cfg(test)]
     pub(crate) fn start(
         store: StateStore,
         repo_name: &str,
@@ -57,6 +58,22 @@ impl DevSessionRuntime {
         specs: &[AppRunSpec],
         replace: bool,
     ) -> Result<Self> {
+        match Self::start_interruptible(store, repo_name, root, specs, replace, &|| false)? {
+            LockOutcome::Acquired(session) => Ok(session),
+            LockOutcome::Cancelled => {
+                bail!("uncancelled Jig dev session startup was cancelled")
+            }
+        }
+    }
+
+    pub(crate) fn start_interruptible(
+        store: StateStore,
+        repo_name: &str,
+        root: &Path,
+        specs: &[AppRunSpec],
+        replace: bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<Self>> {
         let repo = CanonicalRepo::resolve(repo_name, root)?;
         let session_id = new_session_id()?;
         let control = SessionControlServer::start(&session_id)?;
@@ -88,7 +105,10 @@ impl DevSessionRuntime {
                 .collect(),
         };
 
-        let first_claim = claim_session(&store, &record)?;
+        let first_claim = match claim_session_interruptible(&store, &record, cancelled)? {
+            LockOutcome::Acquired(claim) => claim,
+            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        };
         match first_claim {
             ClaimOutcome::Claimed => {}
             ClaimOutcome::Conflicted(conflicts) if !replace => {
@@ -99,30 +119,38 @@ impl DevSessionRuntime {
                     return Err(conflicts.launch_error(true));
                 }
                 let target_ids = conflicts.same_repo_session_ids();
-                let stop = stop_session_ids(&store, &repo, &target_ids)?;
+                if cancelled() {
+                    return Ok(LockOutcome::Cancelled);
+                }
+                let stop =
+                    match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled)? {
+                        LockOutcome::Acquired(stop) => stop,
+                        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                    };
                 if !stop.ok {
                     bail!(
                         "Could not replace the existing Jig dev session safely: {}",
                         stop.warnings.join("; ")
                     );
                 }
-                match claim_session(&store, &record)? {
-                    ClaimOutcome::Claimed => {}
-                    ClaimOutcome::Conflicted(conflicts) => {
+                match claim_session_interruptible(&store, &record, cancelled)? {
+                    LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                    LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
+                    LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
                         return Err(conflicts.concurrent_launch_error());
                     }
                 }
             }
         }
 
-        Ok(Self {
+        Ok(LockOutcome::Acquired(Self {
             store,
             session_id,
             repo_root_identity: repo.root_identity,
             supervisor,
             control,
             pending_cleanup: Arc::new(AtomicUsize::new(0)),
-        })
+        }))
     }
 
     pub(crate) fn requested_stop(&self) -> bool {
@@ -141,95 +169,149 @@ impl DevSessionRuntime {
         self.pending_cleanup.load(Ordering::Acquire) == 0
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_cleanup_scope(&self) -> Result<()> {
-        self.store.mutate_dev_sessions(|sessions, _| {
-            let session = exact_session_mut(
-                sessions,
-                &self.session_id,
-                &self.repo_root_identity,
-                &self.supervisor,
-            )?;
-            if !session.cleanup_required {
-                session.cleanup_required = true;
-                session.updated_at_ms = next_timestamp(session.updated_at_ms);
-            }
-            Ok(())
-        })
+        self.store
+            .mutate_dev_sessions(|sessions, _| self.prepare_cleanup_scope_in(sessions))
     }
 
-    pub(crate) fn record_app_process(
+    pub(crate) fn prepare_cleanup_scope_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        self.store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                self.prepare_cleanup_scope_in(sessions)
+            })
+    }
+
+    fn prepare_cleanup_scope_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
+        let session = exact_session_mut(
+            sessions,
+            &self.session_id,
+            &self.repo_root_identity,
+            &self.supervisor,
+        )?;
+        if !session.cleanup_required {
+            session.cleanup_required = true;
+            session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_app_process_cleanup_cancelable(
         &self,
         app_name: &str,
         target_port: u16,
         process: DevProcessIdentity,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<()>> {
+        self.store
+            .mutate_dev_sessions_cleanup_cancelable(cancelled, |sessions, _| {
+                self.record_app_process_in(sessions, app_name, target_port, process)
+            })
+    }
+
+    pub(crate) fn record_app_process_interruptible(
+        &self,
+        app_name: &str,
+        target_port: u16,
+        process: DevProcessIdentity,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        self.store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                self.record_app_process_in(sessions, app_name, target_port, process)
+            })
+    }
+
+    fn record_app_process_in(
+        &self,
+        sessions: &mut [DevSessionRecord],
+        app_name: &str,
+        target_port: u16,
+        process: DevProcessIdentity,
     ) -> Result<()> {
-        self.store.mutate_dev_sessions(|sessions, _| {
-            let session = exact_session_mut(
-                sessions,
-                &self.session_id,
-                &self.repo_root_identity,
-                &self.supervisor,
-            )?;
-            let app = session
-                .apps
-                .iter_mut()
-                .find(|app| app.name == app_name)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Jig dev session '{}' did not contain configured app '{}'",
-                        self.session_id,
-                        app_name
-                    )
-                })?;
-            app.target_port = Some(target_port);
-            app.process = Some(process);
-            session.cleanup_required = true;
-            session.updated_at_ms = next_timestamp(session.updated_at_ms);
-            Ok(())
-        })
+        let session = exact_session_mut(
+            sessions,
+            &self.session_id,
+            &self.repo_root_identity,
+            &self.supervisor,
+        )?;
+        let app = session
+            .apps
+            .iter_mut()
+            .find(|app| app.name == app_name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Jig dev session '{}' did not contain configured app '{}'",
+                    self.session_id,
+                    app_name
+                )
+            })?;
+        app.target_port = Some(target_port);
+        app.process = Some(process);
+        session.cleanup_required = true;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        Ok(())
     }
 
-    pub(crate) fn mark_running(&self) -> Result<()> {
-        self.store.mutate_dev_sessions(|sessions, _| {
-            let session = exact_session_mut(
-                sessions,
-                &self.session_id,
-                &self.repo_root_identity,
-                &self.supervisor,
-            )?;
-            session.phase = DevSessionPhase::Running;
-            session.updated_at_ms = next_timestamp(session.updated_at_ms);
-            Ok(())
-        })
+    pub(crate) fn mark_running_interruptible(
+        &self,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        self.store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                self.mark_running_in(sessions)
+            })
     }
 
-    fn retire(&self) -> Result<bool> {
-        self.store.mutate_dev_sessions(|sessions, _| {
-            let Some(index) = sessions.iter().position(|session| {
-                session.session_id == self.session_id
-                    && session.repo_root_identity == self.repo_root_identity
-                    && session.supervisor == self.supervisor
-            }) else {
-                return Ok(true);
-            };
-            if !self.cleanup_is_confirmed() {
-                sessions[index].phase = DevSessionPhase::Orphaned;
-                sessions[index].cleanup_required = true;
-                sessions[index].updated_at_ms = next_timestamp(sessions[index].updated_at_ms);
-                return Ok(false);
-            }
-            sessions.remove(index);
-            Ok(true)
-        })
+    fn mark_running_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
+        let session = exact_session_mut(
+            sessions,
+            &self.session_id,
+            &self.repo_root_identity,
+            &self.supervisor,
+        )?;
+        session.phase = DevSessionPhase::Running;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        Ok(())
+    }
+
+    fn retire(&self) -> Result<Option<bool>> {
+        self.store.mutate_dev_sessions_cleanup_cancelable(
+            &crate::processes::force_cleanup_requested,
+            |sessions, _| {
+                let Some(index) = sessions.iter().position(|session| {
+                    session.session_id == self.session_id
+                        && session.repo_root_identity == self.repo_root_identity
+                        && session.supervisor == self.supervisor
+                }) else {
+                    return Ok(true);
+                };
+                if !self.cleanup_is_confirmed() {
+                    sessions[index].phase = DevSessionPhase::Orphaned;
+                    sessions[index].cleanup_required = true;
+                    sessions[index].updated_at_ms = next_timestamp(sessions[index].updated_at_ms);
+                    return Ok(false);
+                }
+                sessions.remove(index);
+                Ok(true)
+            },
+        )
     }
 }
 
 impl Drop for DevSessionRuntime {
     fn drop(&mut self) {
         match self.retire() {
-            Ok(true) => {}
-            Ok(false) => eprintln!(
+            Ok(Some(true)) => {}
+            Ok(Some(false)) => eprintln!(
                 "jig dev retained session '{}' because process-tree or route cleanup was not confirmed; inspect `jig dev status`",
+                self.session_id
+            ),
+            Ok(None) => eprintln!(
+                "jig dev retained session '{}' because forced cleanup cancelled a contended session-state update; inspect `jig dev status`",
                 self.session_id
             ),
             Err(error) => eprintln!(
@@ -329,8 +411,12 @@ enum ClaimOutcome {
     Conflicted(ClaimConflicts),
 }
 
-fn claim_session(store: &StateStore, proposed: &DevSessionRecord) -> Result<ClaimOutcome> {
-    store.mutate_dev_sessions(|sessions, routes| {
+fn claim_session_interruptible(
+    store: &StateStore,
+    proposed: &DevSessionRecord,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<ClaimOutcome>> {
+    store.mutate_dev_sessions_interruptible(cancelled, |sessions, routes| {
         sessions.retain(|session| session.cleanup_required || session_observed_alive(session));
         let mut conflicts = ClaimConflicts::default();
         let mut seen_session_ids = HashSet::new();
