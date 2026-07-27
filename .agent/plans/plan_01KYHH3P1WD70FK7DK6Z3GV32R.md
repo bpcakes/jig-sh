@@ -21,7 +21,7 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - [x] (2026-07-27 11:12Z) Updated public documentation, command lists, and release notes; the final invariant audit remains.
 - [x] (2026-07-27 13:08Z) Reproduced and fixed the full-suite signal regression caused by post-publication session-state locking; the complete `dev_sigint` integration now passes 9/9 and an independent lifecycle review found no remaining high- or medium-severity issue.
 - [x] (2026-07-27 13:34Z) Split dev API, supervision, state transactions, lifecycle tests, CLI rendering, and CLI dispatch into focused modules; every new module is below 800 LOC and every touched oversized legacy file is at or below its pre-feature line count.
-- [ ] Build the development binary, dogfood all relevant Jig checks, inspect receipts/gates, and complete the requirement-by-requirement audit.
+- [x] (2026-07-27 13:49Z) Built the development binary, dogfooded format, strict Clippy, contract, agent-guide/map, changed-file LOC, focused lifecycle/signal, feature-disabled, complete proxy, and full workspace checks, then confirmed both required structured gates fresh.
 
 ## Surprises & Discoveries
 
@@ -81,7 +81,9 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 
 ## Outcomes & Retrospective
 
-The registry, authenticated control plane, CLI lifecycle actions, same-repository replacement, contextual conflicts, structured output, documentation, and focused end-to-end test are implemented. Adversarial review changed the original orphan fallback: no raw PID or PGID signal remains because persisted observations cannot pin a process generation. The implementation now carries an explicit cleanup-required marker and removes a session only after the foreground owner confirms dependency-preflight, app process-tree, and route cleanup. The first full repository gate exposed a shared-lock signal regression; foreground registry writes are now interruptible, the running transition precedes route publication, and forced retirement retains evidence instead of blocking. The complete signal and lifecycle integrations pass, and the final independent review found no high- or medium-severity findings. Full repository gates remain.
+The registry, authenticated control plane, CLI lifecycle actions, same-repository replacement, contextual conflicts, structured output, documentation, and end-to-end lifecycle coverage are complete. Adversarial review changed the original orphan fallback: no raw PID or PGID signal remains because persisted observations cannot pin a process generation. The implementation carries an explicit cleanup-required marker and removes a session only after the foreground owner confirms dependency-preflight, app process-tree, and route cleanup.
+
+The first full repository gate exposed a shared-lock signal regression; foreground registry writes are now interruptible, the running transition precedes route publication, and forced retirement retains evidence instead of blocking. The complete 9-test signal integration, 2-test real lifecycle integration, 530-test proxy crate, feature-disabled suite, strict Clippy, format, contract, guide/map, and changed-file LOC checks pass. The final `work check` passed both configured gates on the final source fingerprint: contract receipt `receipt_01KYHRPQKC5AMBZ4PFW9BF7XQ0`, test receipt `receipt_01KYHSDA98HWEY074CN7S79GCM`, and batch receipt `receipt_01KYHSDABT7A3HYJR4JYYVZX0V`. Independent lifecycle review found no remaining high- or medium-severity issue.
 
 ## Context and Orientation
 
