@@ -298,6 +298,8 @@ mod vault_run;
 pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
 
 #[cfg(test)]
+mod dev_tests;
+#[cfg(test)]
 mod help_tests;
 #[cfg(test)]
 mod preset_tests;

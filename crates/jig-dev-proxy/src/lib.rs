@@ -7,6 +7,7 @@
 //! invariants that maintainers should preserve when editing this crate.
 
 mod certs;
+mod dev_api;
 mod dev_sessions;
 mod file_ops;
 mod host;
@@ -36,6 +37,7 @@ use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_l
 use crate::state::{StateStore, now_ms, pid_is_alive};
 use crate::types::{Route, RouteMode};
 
+pub use crate::dev_api::{dev, dev_resolved, dev_status, dev_stop};
 pub use crate::state::MAX_ROUTES_FILE_BYTES;
 pub use crate::types::{
     AppKind, AppRunSpec, CommandSpec, DevRequest, DevStatusRequest, DevStopRequest,
@@ -183,22 +185,6 @@ fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Re
     Ok(())
 }
 
-pub fn dev(request: DevRequest) -> Result<Value> {
-    dev_resolved(resolve_dev_request(request)?)
-}
-
-pub fn dev_status(request: DevStatusRequest) -> Result<Value> {
-    dev_sessions::status(request)
-}
-
-pub fn dev_stop(request: DevStopRequest) -> Result<Value> {
-    dev_sessions::stop(request)
-}
-
-pub fn dev_resolved(request: ResolvedDevRequest) -> Result<Value> {
-    dev_resolved_with_preflight(request, |_, _| Ok(()))
-}
-
 /// Runs a resolved development plan under one foreground termination session,
 /// including a caller-owned preflight that can poll for cancellation.
 pub fn dev_resolved_with_preflight(
@@ -206,7 +192,7 @@ pub fn dev_resolved_with_preflight(
     preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
 ) -> Result<Value> {
     let current_exe = current_exe()?;
-    normalize_dev_result(processes::run_apps_with_preflight(
+    dev_api::normalize_dev_result(processes::run_apps_with_preflight(
         &request.repo_name,
         &request.root,
         request.apps,
@@ -215,41 +201,6 @@ pub fn dev_resolved_with_preflight(
         request.replace,
         preflight,
     ))
-}
-
-fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
-    match result {
-        Err(error) => {
-            let Some(reason) = processes::interruption_reason(&error) else {
-                return Err(error);
-            };
-            if reason.is_requested_stop() {
-                return Ok(json!({
-                    "ok": true,
-                    "interrupted": false,
-                    "stopped": true,
-                    "stop_reason": reason.label(),
-                    "exit_status": reason.exit_status(),
-                    "exit_signal": null,
-                    "termination_signal": null,
-                    "first_exit": null,
-                    "proxy_failed": false,
-                    "routes": [],
-                }));
-            }
-            Ok(json!({
-                "ok": false,
-                "interrupted": true,
-                "exit_status": reason.exit_status(),
-                "exit_signal": reason.signal(),
-                "termination_signal": reason.label(),
-                "first_exit": null,
-                "proxy_failed": false,
-                "routes": [],
-            }))
-        }
-        result => result,
-    }
 }
 
 fn normalize_proxy_run_result(result: Result<Value>, app: &str, hostname: &str) -> Result<Value> {

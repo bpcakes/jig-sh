@@ -10,6 +10,8 @@ use super::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::tempdir;
 
+mod dev_session;
+
 #[cfg(target_os = "linux")]
 fn process_identity_is_alive(pid: u32, start_token: &str) -> bool {
     crate::state::pid_is_alive(pid)
@@ -84,92 +86,6 @@ fn ensure_not_interrupted_reports_pending_signal() {
     assert!(error.to_string().starts_with("Interrupted by "));
     assert!(is_interruption(&error));
     assert_eq!(interruption_reason(&error), Some(reason));
-}
-
-#[test]
-fn typed_preflight_cancellation_requires_a_pending_termination_reason() {
-    let reason = TerminationReason::from_signal({
-        #[cfg(unix)]
-        {
-            libc::SIGTERM
-        }
-        #[cfg(not(unix))]
-        {
-            2
-        }
-    });
-
-    let interrupted =
-        normalize_preflight_result(Err(DevPreflightError::cancelled()), Some(reason)).unwrap_err();
-    assert_eq!(interruption_reason(&interrupted), Some(reason));
-
-    let unconfirmed =
-        normalize_preflight_result(Err(DevPreflightError::cancelled()), None).unwrap_err();
-    assert!(!is_interruption(&unconfirmed));
-    assert!(unconfirmed.to_string().contains("without a pending"));
-}
-
-#[test]
-fn preflight_failure_survives_even_when_termination_is_pending() {
-    let reason = TerminationReason::from_signal({
-        #[cfg(unix)]
-        {
-            libc::SIGINT
-        }
-        #[cfg(not(unix))]
-        {
-            2
-        }
-    });
-    let failure = anyhow::anyhow!("preflight cleanup failure sentinel");
-
-    let error = normalize_preflight_result(Err(DevPreflightError::failed(failure)), Some(reason))
-        .unwrap_err();
-
-    assert!(!is_interruption(&error));
-    assert_eq!(error.to_string(), "preflight cleanup failure sentinel");
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
-    let temp = tempdir().unwrap();
-    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
-    let spec = AppRunSpec::new(
-        "web",
-        temp.path().to_path_buf(),
-        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
-        "web.demo.localhost",
-    )
-    .with_proxy(false);
-    let session = DevSessionRuntime::start(
-        store.clone(),
-        "demo",
-        temp.path(),
-        std::slice::from_ref(&spec),
-        false,
-    )
-    .unwrap();
-    session.prepare_cleanup_scope().unwrap();
-    let mut cleanup = session.arm_cleanup();
-
-    let error = finish_preflight_cleanup(
-        &mut cleanup,
-        Err(DevPreflightError::cleanup_unconfirmed(anyhow::anyhow!(
-            "preflight cleanup was not confirmed"
-        ))),
-        None,
-    )
-    .unwrap_err();
-
-    assert_eq!(error.to_string(), "preflight cleanup was not confirmed");
-    assert!(!session.cleanup_is_confirmed());
-    drop(cleanup);
-    drop(session);
-    let sessions = store.snapshot_dev_state().unwrap().sessions;
-    assert_eq!(sessions.len(), 1);
-    assert!(sessions[0].cleanup_required);
-    assert_eq!(sessions[0].phase, crate::state::DevSessionPhase::Orphaned);
 }
 
 #[cfg(unix)]

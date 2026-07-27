@@ -7,12 +7,15 @@ use std::time::{Duration, Instant};
 #[cfg(not(unix))]
 use std::sync::Mutex;
 
-use crate::dev_sessions::DevCleanupLease;
-use crate::state::{ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore};
 use anyhow::{Result, bail};
 
+pub(crate) use self::termination_reason::TerminationReason;
 use super::child_lifecycle::{AppProcessLease, terminate_and_reap};
 use super::output::CapturedAppOutput;
+use crate::dev_sessions::DevCleanupLease;
+use crate::state::{ProcessRouteOwnership, STATE_LOCK_TIMEOUT, StateStore};
+
+mod termination_reason;
 
 const SESSION_INACTIVE: u8 = 0;
 const SESSION_RUNNING: u8 = 1;
@@ -48,61 +51,6 @@ pub(super) fn shared_route_cleanup_deadline(deadline: &SharedRouteCleanupDeadlin
 static CTRL_C_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 #[cfg(not(unix))]
 static CTRL_C_INSTALL_LOCK: Mutex<()> = Mutex::new(());
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct TerminationReason {
-    signal: i32,
-    requested_stop: bool,
-}
-
-impl TerminationReason {
-    pub(crate) const fn from_signal(signal: i32) -> Self {
-        Self {
-            signal,
-            requested_stop: false,
-        }
-    }
-
-    pub(crate) const fn requested_stop() -> Self {
-        Self {
-            signal: 0,
-            requested_stop: true,
-        }
-    }
-
-    pub(crate) fn signal(self) -> i32 {
-        self.signal
-    }
-
-    pub(crate) fn exit_status(self) -> i32 {
-        if self.requested_stop {
-            0
-        } else {
-            128 + self.signal
-        }
-    }
-
-    pub(crate) fn is_requested_stop(self) -> bool {
-        self.requested_stop
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        if self.requested_stop {
-            return "dev stop";
-        }
-        #[cfg(unix)]
-        match self.signal {
-            libc::SIGINT => "SIGINT",
-            libc::SIGHUP => "SIGHUP",
-            libc::SIGTERM => "SIGTERM",
-            _ => "signal",
-        }
-        #[cfg(not(unix))]
-        {
-            "Ctrl-C"
-        }
-    }
-}
 
 pub(super) struct RunningChild {
     pub(super) name: String,

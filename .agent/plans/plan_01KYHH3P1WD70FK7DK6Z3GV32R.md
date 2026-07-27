@@ -20,6 +20,7 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
 - [x] (2026-07-27 12:03Z) Added state-security, control-authentication, cleanup-accounting, CLI/output, same-root alias/selection, cross-repository, legacy-route, orphan, no-feature, and real-process lifecycle coverage.
 - [x] (2026-07-27 11:12Z) Updated public documentation, command lists, and release notes; the final invariant audit remains.
 - [x] (2026-07-27 13:08Z) Reproduced and fixed the full-suite signal regression caused by post-publication session-state locking; the complete `dev_sigint` integration now passes 9/9 and an independent lifecycle review found no remaining high- or medium-severity issue.
+- [x] (2026-07-27 13:34Z) Split dev API, supervision, state transactions, lifecycle tests, CLI rendering, and CLI dispatch into focused modules; every new module is below 800 LOC and every touched oversized legacy file is at or below its pre-feature line count.
 - [ ] Build the development binary, dogfood all relevant Jig checks, inspect receipts/gates, and complete the requirement-by-requirement audit.
 
 ## Surprises & Discoveries
@@ -42,6 +43,8 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
   Evidence: two repositories routinely both configure an app named `web`; cross-repository claims now conflict only on hostname, with focused unit and CLI integration coverage.
 - Observation: the session registry and route registry intentionally share one lock, so a session-phase write after publishing a route can block the foreground supervisor behind an observer that acquired the route lock.
   Evidence: the first full `scripts/jig work check` exposed four deterministic `dev_sigint` failures. Three stalled at the old post-publication `mark_running` mutation before child monitoring; the fourth completed forced route-cleanup cancellation but then stalled in non-cancelable session retirement.
+- Observation: `jig check rust-file-loc` intentionally treats any growth in a touched legacy file above the absolute maximum as an error, even when the new feature's own modules are small.
+  Evidence: the first explicit `--changed-against 86da2ff` audit identified eleven pre-existing oversized integration/test files whose feature additions increased their line counts. Extracting the added concerns into focused modules makes the staged policy check pass without exception annotations.
 
 ## Decision Log
 
@@ -71,6 +74,9 @@ A human can observe the result by launching a fixture `jig dev`, running `jig de
   Date/Author: 2026-07-27 / Codex
 - Decision: make every foreground session-state wait cancellation-aware, publish the running phase before any app route becomes externally visible, and allow only repeated-signal forced cleanup to abandon a contended retirement write.
   Rationale: the supervisor must remain able to observe the first termination request and clean its owned children even when another process holds the shared route lock. On a later force request, retaining conservative cleanup-required evidence is safer than blocking exit or falsely claiming cleanup. The replacement stop engine also carries cancellation through its state waits and polling loop.
+  Date/Author: 2026-07-27 / Codex
+- Decision: isolate the feature's dev API, multi-app supervisor, session-state store, management tests, CLI renderers, and CLI dispatch in dedicated child modules while preserving the existing public paths through thin re-exports and wrappers.
+  Rationale: this keeps each new concern independently reviewable, satisfies the repository's changed-file LOC policy, and reduces rather than increases the legacy oversized files touched by the integration.
   Date/Author: 2026-07-27 / Codex
 
 ## Outcomes & Retrospective

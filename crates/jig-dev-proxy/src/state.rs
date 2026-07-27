@@ -17,10 +17,6 @@ use crate::file_ops;
 use crate::host::{RouteHostname, validate_routed_hostname};
 use crate::types::{Route, RouteMode};
 
-mod dev_sessions;
-mod process_identity;
-mod signature;
-
 pub(crate) use dev_sessions::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
     DevStateSnapshot,
@@ -32,6 +28,12 @@ pub(crate) use process_identity::{
     pid_is_alive, process_start_token, process_start_tokens_supported,
 };
 pub(crate) use signature::{FileSignature, file_signature};
+
+mod dev_session_store;
+mod dev_sessions;
+mod process_identity;
+mod resolution;
+mod signature;
 
 const ROUTES_VERSION: u32 = 1;
 const ROUTES_FILE: &str = "routes.json";
@@ -111,102 +113,6 @@ impl ProcessRouteOwnership {
 }
 
 impl StateStore {
-    /// Resolves an existing proxy state directory without creating one.
-    ///
-    /// Existing paths go through the same symlink, permission, and replacement
-    /// recovery checks as `resolve`. A missing configured path is reported as
-    /// `None`, allowing read/stop commands to remain non-mutating.
-    pub(crate) fn resolve_existing(explicit: Option<PathBuf>) -> Result<Option<Self>> {
-        let candidate = if let Some(path) = explicit.as_ref() {
-            path.clone()
-        } else if let Ok(path) = std::env::var("JIG_PROXY_STATE_DIR") {
-            PathBuf::from(path)
-        } else {
-            dirs::home_dir()
-                .context("Could not resolve home directory for Jig proxy state")?
-                .join(".jig/proxy")
-        };
-        if path_is_symlink(&candidate)? {
-            // Delegate to the normal resolver so existing-path diagnostics stay
-            // identical and no alternate symlink path is accepted here.
-            return Self::resolve(explicit).map(Some);
-        }
-        if !candidate.try_exists().with_context(|| {
-            format!(
-                "Failed to inspect Jig proxy state dir {}",
-                candidate.display()
-            )
-        })? {
-            return Ok(None);
-        }
-        Self::resolve(explicit).map(Some)
-    }
-
-    pub(crate) fn resolve(explicit: Option<PathBuf>) -> Result<Self> {
-        match Self::resolve_interruptible(explicit, &|| false)? {
-            LockOutcome::Acquired(store) => Ok(store),
-            LockOutcome::Cancelled => {
-                anyhow::bail!("uncancelled proxy state resolution was cancelled")
-            }
-        }
-    }
-
-    pub(crate) fn resolve_interruptible(
-        explicit: Option<PathBuf>,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<Self>> {
-        let (root, can_chmod_existing) = if let Some(path) = explicit {
-            (path, false)
-        } else if let Ok(path) = std::env::var("JIG_PROXY_STATE_DIR") {
-            (PathBuf::from(path), false)
-        } else {
-            (
-                dirs::home_dir()
-                    .context("Could not resolve home directory for Jig proxy state")?
-                    .join(".jig/proxy"),
-                true,
-            )
-        };
-        if path_is_symlink(&root)? {
-            anyhow::bail!(
-                "Proxy state dir {} must not be a symlink. Use a dedicated real directory.",
-                root.display()
-            );
-        }
-        ensure_state_create_ancestor_is_not_shared_writable(&root)?;
-        let default_parent_existed = can_chmod_existing
-            && root
-                .parent()
-                .is_some_and(|parent| parent.try_exists().unwrap_or(false));
-        let existed = root.exists();
-        fs::create_dir_all(&root)
-            .with_context(|| format!("Failed to create proxy state dir {}", root.display()))?;
-        if path_is_symlink(&root)? {
-            anyhow::bail!(
-                "Proxy state dir {} became a symlink while it was being prepared. Use a dedicated real directory.",
-                root.display()
-            );
-        }
-        let root = fs::canonicalize(&root)
-            .with_context(|| format!("Failed to resolve proxy state dir {}", root.display()))?;
-        if can_chmod_existing {
-            ensure_default_state_parent_permissions(&root, default_parent_existed)?;
-        }
-        let can_chmod_root = can_chmod_existing || !existed || existing_dir_is_empty(&root);
-        ensure_state_dir_has_no_symlinks(&root)?;
-        ensure_state_dir_permissions(&root, can_chmod_root)?;
-        // Re-scan after chmod/ACL hardening because Windows `icacls /T` is
-        // recursive and must not be applied through a just-created symlink.
-        ensure_state_dir_has_no_symlinks(&root)?;
-        if !recover_replace_backups_with_lock_interruptible(&root, cancelled)? {
-            return Ok(LockOutcome::Cancelled);
-        }
-        Ok(LockOutcome::Acquired(Self {
-            root,
-            can_chmod_root,
-        }))
-    }
-
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
@@ -280,82 +186,6 @@ impl StateStore {
             )),
             outcome => Ok(outcome),
         }
-    }
-
-    /// Returns one lock-consistent snapshot of persisted development sessions
-    /// and proxy routes.
-    ///
-    /// Callers must release this snapshot before performing process or network
-    /// work; the state lock is held only while the files are read.
-    pub(crate) fn snapshot_dev_state(&self) -> Result<DevStateSnapshot> {
-        self.with_route_lock(|routes_path| self.snapshot_dev_state_unlocked(routes_path))
-    }
-
-    pub(crate) fn snapshot_dev_state_interruptible(
-        &self,
-        cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<DevStateSnapshot>> {
-        self.with_route_lock_interruptible(cancelled, |routes_path| {
-            self.snapshot_dev_state_unlocked(routes_path)
-        })
-    }
-
-    fn snapshot_dev_state_unlocked(&self, routes_path: &Path) -> Result<DevStateSnapshot> {
-        Ok(DevStateSnapshot {
-            sessions: dev_sessions::read_from_path(&self.dev_sessions_path())?,
-            routes: read_routes_from_path(routes_path)?,
-        })
-    }
-
-    /// Mutates development sessions while observing the routes protected by
-    /// the same state lock.
-    ///
-    /// Route state is read-only at this boundary. The closure must return
-    /// before callers perform process or network work. If the closure fails,
-    /// or leaves the session collection unchanged, no session file is written.
-    #[cfg(test)]
-    pub(crate) fn mutate_dev_sessions<T>(
-        &self,
-        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
-    ) -> Result<T> {
-        self.with_route_lock(|routes_path| self.mutate_dev_sessions_unlocked(routes_path, mutate))
-    }
-
-    pub(crate) fn mutate_dev_sessions_interruptible<T>(
-        &self,
-        cancelled: &impl Fn() -> bool,
-        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
-    ) -> Result<LockOutcome<T>> {
-        self.with_route_lock_interruptible(cancelled, |routes_path| {
-            self.mutate_dev_sessions_unlocked(routes_path, mutate)
-        })
-    }
-
-    pub(crate) fn mutate_dev_sessions_cleanup_cancelable<T>(
-        &self,
-        cancelled: &impl Fn() -> bool,
-        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
-    ) -> Result<Option<T>> {
-        self.with_route_lock_cancelable(cancelled, |routes_path| {
-            self.mutate_dev_sessions_unlocked(routes_path, mutate)
-        })
-    }
-
-    fn mutate_dev_sessions_unlocked<T>(
-        &self,
-        routes_path: &Path,
-        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &[Route]) -> Result<T>,
-    ) -> Result<T> {
-        let routes = read_routes_from_path(routes_path)?;
-        let sessions_path = self.dev_sessions_path();
-        let mut sessions = dev_sessions::read_from_path(&sessions_path)?;
-        let original = sessions.clone();
-        let result = mutate(&mut sessions, &routes)?;
-        dev_sessions::validate_records(&sessions)?;
-        if sessions != original {
-            dev_sessions::write_to_path(&sessions_path, &sessions)?;
-        }
-        Ok(result)
     }
 
     #[cfg(test)]
@@ -790,10 +620,6 @@ impl StateStore {
 
     fn routes_path(&self) -> PathBuf {
         self.root.join(ROUTES_FILE)
-    }
-
-    fn dev_sessions_path(&self) -> PathBuf {
-        self.root.join(dev_sessions::FILE_NAME)
     }
 
     fn lock_path(&self) -> PathBuf {
