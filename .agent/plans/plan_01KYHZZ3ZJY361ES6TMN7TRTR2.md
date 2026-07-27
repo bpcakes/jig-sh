@@ -41,8 +41,10 @@ output, or identity mismatch without trusting that invocation's stdout.
   snapshots.
 - [x] (2026-07-27) Updated configuration, protocol, public-contract,
   developer-UX, README, and repository-intent documentation.
-- [ ] Build the development binary, dogfood the new command, run the relevant
-  checks and final Jig gates, then close this plan.
+- [x] (2026-07-27) Built the development binary, dogfooded the new command,
+  passed formatting, Clippy, LOC, default/no-default compilation, focused
+  status tests, the public contract tests, and the plan-scoped contract/test
+  gates.
 
 ## Surprises & Discoveries
 
@@ -113,7 +115,36 @@ output, or identity mismatch without trusting that invocation's stdout.
 
 ## Outcomes & Retrospective
 
-Not complete yet.
+Implemented the reusable observation boundary needed by a later TUI:
+
+- `.jig.toml` now round-trips exact provider argv, identity, and timeout
+  configuration through init and `update --recopy`.
+- `jig status` safely supervises configured provider process trees, validates
+  one semantically valid v1 report per successful invocation, preserves
+  additive report fields, and reports invocation failures without trusting
+  their stdout.
+- The versioned JSON aggregate joins provider reports with local Git and input
+  freshness, structured plans/gates, and loop leases/attempts. Human output
+  gives a compact operator view. Neither path records a receipt, caches a
+  report, or fetches a remote.
+- Status-specific config, Git observation, CLI rendering, and tests live in
+  focused modules that pass Jig's changed-file LOC policy.
+
+The real hocr2 Ruby adapter also completed a smoke run with provider id
+`factorish.hocr2.migration-readiness`, 130 work packages, and exact target and
+legacy revisions. Jig's aggregate integration fixture proves provider CWD,
+root and nested Git freshness, malformed-provider partial status, and that
+inspection creates no `.agent/state` directory.
+
+Final plan evidence:
+
+- batch receipt `receipt_01KYJ3CHJB4ZXDD9DFKB2GAEDY`;
+- contract receipt `receipt_01KYJ2V6KVFSZV4PHTXTEZYG34`;
+- test receipt `receipt_01KYJ3CHFVQ47EA7X5CV4F6J9D`;
+- both required gates passed with fresh committed-state fingerprints.
+
+The TUI, provider caching, MCP exposure, launchability policy, and Codex
+implementation launcher remain intentionally outside this slice.
 
 ## Context and Orientation
 
