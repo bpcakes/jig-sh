@@ -150,6 +150,7 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
     require_json_ok(false, &serde_json::json!({ "ok": false })).unwrap();
     assert!(test_command_reports_failure_with_ok(&CommandKind::Dev(
         DevOpts {
+            jig_project: None,
             apps: Vec::new(),
             discover_workspace: false,
             no_proxy: false,

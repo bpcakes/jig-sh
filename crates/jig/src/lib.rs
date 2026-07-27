@@ -136,6 +136,7 @@ jig_version = "0.2.0-beta.1"
     fn dev_without_context_reports_proxy_disabled_without_repo_lookup() {
         let error = dev_proxy::commands::dev_without_context(
             cli::DevOpts {
+                jig_project: None,
                 apps: Vec::new(),
                 discover_workspace: false,
                 no_proxy: false,

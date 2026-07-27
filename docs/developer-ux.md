@@ -139,6 +139,8 @@ scripts/jig proxy list
 
 Jig assigns or verifies app ports, starts trusted repo-configured commands, waits for readiness, and publishes stable local routes. Vite apps get structured `--port`, `--host`, and `--strictPort` injection when configured with `argv`, which avoids many fragile package-script edits. Generated Astro apps consume the same injected `HOST` and `PORT`, fail instead of moving to a different busy port, and stay in Jig's supervised foreground tree even when Astro detects an agent environment.
 
+On Unix, the foreground supervisor also identifies itself in process listings as `jig dev --jig-project=<repo-name>@<repo-root>`. The name appears before the full path so simultaneous sessions remain distinguishable even when `ps` truncates a long command column.
+
 Manual services can still join the same local routing model:
 
 ```sh

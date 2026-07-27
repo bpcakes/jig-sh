@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
@@ -129,6 +130,13 @@ pub(crate) struct ProxyRuntimeOpts {
 
 #[derive(Args, Debug)]
 pub(crate) struct DevOpts {
+    #[arg(
+        long = "jig-project",
+        hide = true,
+        value_name = "NAME@ROOT",
+        help = "Internal process-list identity added by Jig"
+    )]
+    pub(crate) jig_project: Option<OsString>,
     #[arg(long = "app", help = "Configured app name to run; may be repeated")]
     pub(crate) apps: Vec<String>,
     #[arg(long, help = "Discover JavaScript workspace apps with dev scripts")]

@@ -312,6 +312,11 @@ fn proxy_run_help_includes_launcher_context_and_examples() {
 }
 
 #[test]
+fn dev_help_hides_internal_process_identity() {
+    assert_help_omits(&rendered_help(&["dev"]), "--jig-project");
+}
+
+#[test]
 fn migration_help_includes_examples() {
     let migration_help = rendered_help(&["migration-add"]);
     assert_help_contains(&migration_help, "open structured work plan");

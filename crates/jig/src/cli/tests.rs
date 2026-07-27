@@ -1081,6 +1081,23 @@ fn parses_dev_command_with_selected_apps() {
 }
 
 #[test]
+fn parses_hidden_dev_process_identity() {
+    let cli =
+        Cli::try_parse_from(["jig", "dev", "--jig-project=demo@/tmp/demo", "--no-proxy"]).unwrap();
+
+    match cli.command {
+        CommandKind::Dev(opts) => {
+            assert_eq!(
+                opts.jig_project.as_deref(),
+                Some(std::ffi::OsStr::new("demo@/tmp/demo"))
+            );
+            assert!(opts.no_proxy);
+        }
+        other => panic!("expected dev command, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_hidden_proxy_no_http2_runtime_flag() {
     let cli = Cli::try_parse_from(["jig", "proxy", "start", "--foreground", "--no-http2"]).unwrap();
 

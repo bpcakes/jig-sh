@@ -154,6 +154,79 @@ fn env_port_helper() {
 }
 
 #[test]
+fn dev_process_list_identifies_its_repo() {
+    let _guard = SIGNAL_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let repo = tempdir().expect("create process-identity test repo");
+    let ready_path = repo.path().join("helper-ready");
+    let started_path = repo.path().join("helper-started");
+    write_repo_fixture(repo.path());
+
+    let stdout_file = NamedTempFile::new().expect("create stdout capture");
+    let stderr_file = NamedTempFile::new().expect("create stderr capture");
+    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .process_group(0)
+        .args(["dev", "--no-proxy"])
+        .current_dir(repo.path())
+        .env_remove("JIG_REPO_ROOT")
+        .env(HELPER_ENV, "1")
+        .env(READY_ENV, &ready_path)
+        .env(STARTED_ENV, &started_path)
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_file.reopen().unwrap()))
+        .stderr(Stdio::from(stderr_file.reopen().unwrap()))
+        .spawn()
+        .expect("spawn identifiable jig dev");
+    let mut child = ForegroundChildGuard::new(child, started_path);
+    wait_for_file_with_output(
+        &ready_path,
+        &mut child,
+        Duration::from_secs(10),
+        stdout_file.path(),
+        stderr_file.path(),
+    );
+    let (helper, _port, descendant) = read_helper_marker(&ready_path);
+
+    let output = Command::new("ps")
+        .args(["-p", &child.id().to_string(), "-o", "command="])
+        .output()
+        .expect("inspect jig dev process command");
+    assert!(
+        output.status.success(),
+        "ps failed with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let command = String::from_utf8(output.stdout).expect("ps command is UTF-8");
+    let root = fs::canonicalize(repo.path()).expect("canonicalize test repo");
+    let expected = format!(
+        "jig dev --jig-project=signal-test@{}",
+        root.to_string_lossy()
+    );
+    assert!(
+        command.contains(&expected),
+        "jig dev process did not identify its repo\nexpected: {expected}\nactual: {command}"
+    );
+
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
+        0
+    );
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("wait for identifiable jig dev")
+        .expect("identifiable jig dev exits after SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert_verified_process_tree_exited(
+        &[("helper", &helper), ("descendant", &descendant)],
+        PROCESS_TREE_EXIT_TIMEOUT,
+    );
+    child.disarm();
+}
+
+#[test]
 fn jig_foreground_commands_have_structured_signal_exits_and_clean_children() {
     let _guard = SIGNAL_TEST_LOCK
         .lock()
