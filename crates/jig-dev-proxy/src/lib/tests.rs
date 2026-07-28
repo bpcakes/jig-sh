@@ -781,7 +781,7 @@ fn proxy_alias_registers_route_and_refreshes_https_certificate() {
         target_port: 5000,
         repo_name: "demo".into(),
         accept_non_loopback_target: false,
-        settings: settings.clone(),
+        settings,
     })
     .unwrap();
     health.join().unwrap();
@@ -818,7 +818,7 @@ fn proxy_alias_defers_https_certificate_without_running_https_proxy() {
     })
     .unwrap();
 
-    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let store = StateStore::resolve(settings.state_dir).unwrap();
     assert!(!store.leaf_path().exists());
 }
 
@@ -876,7 +876,7 @@ fn proxy_stop_list_report_service_when_state_dir_is_missing() {
     .unwrap();
     let list = proxy_list_with_service_probe(
         ProxyListRequest {
-            settings: settings.clone(),
+            settings,
             raw: false,
         },
         |_, state_dir| {

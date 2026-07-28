@@ -157,7 +157,7 @@ fn dispatch_vault_run_records_failure_audit_event() {
             files: Vec::new(),
             command: vec!["definitely-not-a-jig-vault-test-command".into()],
             vault: crate::command::VaultRuntimeOptions {
-                home: Some(vault_home.clone()),
+                home: Some(vault_home),
                 ..Default::default()
             },
         },

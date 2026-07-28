@@ -126,7 +126,7 @@ pub(super) fn service_body(
     #[cfg(target_os = "macos")]
     {
         let mut args = vec![
-            current_exe.clone(),
+            current_exe,
             "proxy".to_string(),
             "start".to_string(),
             "--foreground".to_string(),

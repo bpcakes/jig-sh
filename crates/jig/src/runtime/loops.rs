@@ -854,7 +854,7 @@ where
     match File::open(path) {
         Ok(mut file) => {
             let mut bytes = Vec::new();
-            let mut chunk = [0_u8; 64 * 1024];
+            let mut chunk = vec![0_u8; 64 * 1024].into_boxed_slice();
             loop {
                 ensure_status_active(cancelled)?;
                 let read = file

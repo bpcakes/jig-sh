@@ -108,7 +108,7 @@ pub(super) fn service_status_snapshot(
                 return Ok(ServiceStatusSnapshot {
                     value: json!({
                         "ok": false,
-                        "error": error.clone(),
+                        "error": error,
                         "installed": false,
                         "may_restart_proxy": false,
                         "file_present": file_present,
@@ -154,7 +154,7 @@ pub(super) fn service_status_snapshot(
             && !service_state_dir_matches);
     let value = json!({
         "ok": service.ok && service_state_dir_error.is_none(),
-        "error": service_state_dir_error.clone(),
+        "error": service_state_dir_error,
         "installed": installed,
         "may_restart_proxy": may_restart_proxy,
         "file_present": file_present,

@@ -244,7 +244,7 @@ fn repository_observation_cancels_an_in_flight_git_status_promptly() {
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let trigger = Arc::clone(&cancelled);
-    let marker = started_marker.clone();
+    let marker = started_marker;
     let setter = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !marker.exists() && Instant::now() < deadline {
@@ -312,7 +312,7 @@ sqlx_enabled = false
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let trigger = Arc::clone(&cancelled);
-    let marker = started_marker.clone();
+    let marker = started_marker;
     let setter = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !marker.exists() && Instant::now() < deadline {

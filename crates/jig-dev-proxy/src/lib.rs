@@ -785,7 +785,7 @@ pub fn proxy_prune(request: ProxyPruneRequest) -> Result<Value> {
     if missing_state_dir(&request.settings)?.is_some() {
         return Ok(json!({ "ok": true, "routes": [] }));
     }
-    let store = StateStore::resolve(request.settings.state_dir.clone())?;
+    let store = StateStore::resolve(request.settings.state_dir)?;
     let routes = store.prune()?;
     Ok(json!({ "ok": true, "routes": routes }))
 }

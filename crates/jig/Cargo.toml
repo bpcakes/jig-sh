@@ -70,3 +70,6 @@ zeroize.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+
+[lints]
+workspace = true

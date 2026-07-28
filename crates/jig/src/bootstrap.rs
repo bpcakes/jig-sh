@@ -714,8 +714,8 @@ impl InitMutationTransaction {
             let publish_destination = existing_ancestor.join(&missing_tail[0]);
             return Ok(Self {
                 final_destination: destination.to_path_buf(),
-                destination: work_destination.clone(),
-                destination_identity: destination_identity.clone(),
+                destination: work_destination,
+                destination_identity,
                 staged_publication: Some(StagedInitPublication {
                     staging_root: Some(staging_root),
                     publish_source,

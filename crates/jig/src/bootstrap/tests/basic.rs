@@ -8389,7 +8389,7 @@ frontend_apps = []
     .unwrap();
 
     let output = run_adopt(AdoptOpts {
-        path: repo.clone(),
+        path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
         vcs_ref: None,
@@ -8441,7 +8441,7 @@ scope = "repo"
     .unwrap();
 
     let error = run_adopt(AdoptOpts {
-        path: repo.clone(),
+        path: repo,
         template: Some(template.path().display().to_string()),
         template_mode: None,
         vcs_ref: None,

@@ -325,7 +325,7 @@ fn jsonl_read_waits_for_atomic_rewrite_and_observes_replacement() {
     let path = temp.path().join("events.jsonl");
     append_jsonl(&path, &json!({ "id": "before" })).unwrap();
     let writer_path = path.clone();
-    let reader_path = path.clone();
+    let reader_path = path;
     let (rewritten_tx, rewritten_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (read_tx, read_rx) = mpsc::channel();
@@ -367,7 +367,7 @@ fn jsonl_read_waits_for_existing_data_file_lock() {
         .open(&path)
         .unwrap();
     FileExt::lock_exclusive(&lock).unwrap();
-    let reader_path = path.clone();
+    let reader_path = path;
     let (started_tx, started_rx) = mpsc::channel();
     let (read_tx, read_rx) = mpsc::channel();
 
@@ -406,7 +406,7 @@ fn cancellable_jsonl_read_stops_while_data_file_lock_is_held() {
         .unwrap();
     FileExt::lock_exclusive(&lock).unwrap();
 
-    let reader_path = path.clone();
+    let reader_path = path;
     let cancelled = Arc::new(AtomicBool::new(false));
     let reader_cancelled = Arc::clone(&cancelled);
     let (started_tx, started_rx) = mpsc::channel();
@@ -1051,7 +1051,7 @@ fn cancellable_state_summary_stops_during_stream_collection() {
         .unwrap();
     FileExt::lock_exclusive(&lock).unwrap();
 
-    let reader_ctx = ctx.clone();
+    let reader_ctx = ctx;
     let cancelled = Arc::new(AtomicBool::new(false));
     let reader_cancelled = Arc::clone(&cancelled);
     let (started_tx, started_rx) = mpsc::channel();
@@ -1117,7 +1117,7 @@ fn state_summary_reads_existing_read_only_state() {
     for path in [
         ctx.state_file("sessions.jsonl"),
         ctx.state_file("receipts.jsonl"),
-        ctx.current_session_path().to_path_buf(),
+        ctx.current_session_path(),
         lock_dir.join("sessions.jsonl.lock"),
         lock_dir.join("receipts.jsonl.lock"),
     ] {

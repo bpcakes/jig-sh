@@ -11,3 +11,6 @@ documentation = "https://github.com/bpcakes/jig-sh/tree/master/docs"
 
 [dependencies]
 jig-contract.workspace = true
+
+[lints]
+workspace = true

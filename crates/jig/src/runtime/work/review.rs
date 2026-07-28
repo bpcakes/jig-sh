@@ -328,7 +328,7 @@ fn record_invalid_review_output(
             exit_status: 2,
             stdout,
             stderr: &receipt_stderr,
-            evidence: Some(evidence.clone()),
+            evidence: Some(evidence),
             session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: true,

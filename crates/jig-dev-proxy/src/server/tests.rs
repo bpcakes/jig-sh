@@ -893,7 +893,7 @@ fn tls_acceptor_rejects_symlinked_key_file() {
         ..ProxySettings::default()
     };
     crate::certs::ensure_for_hosts(&settings, &["web.demo.localhost".into()]).unwrap();
-    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let store = StateStore::resolve(settings.state_dir).unwrap();
     let key_path = store.leaf_key_path();
     let outside_key = temp.path().join("outside-leaf-key.pem");
     fs::rename(&key_path, &outside_key).unwrap();
@@ -920,7 +920,7 @@ fn tls_acceptor_retries_transient_key_pair_mismatch() {
         ..ProxySettings::default()
     };
     crate::certs::ensure_for_hosts(&settings, &["web.demo.localhost".into()]).unwrap();
-    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let store = StateStore::resolve(settings.state_dir).unwrap();
     let key_path = store.leaf_key_path();
     let original_key = fs::read_to_string(&key_path).unwrap();
     fs::write(
@@ -929,7 +929,7 @@ fn tls_acceptor_retries_transient_key_pair_mismatch() {
     )
     .unwrap();
 
-    let restore_key_path = key_path.clone();
+    let restore_key_path = key_path;
     let restore = std::thread::spawn(move || {
         std::thread::sleep(TLS_RELOAD_FILE_RETRY_DELAY / 2);
         fs::write(restore_key_path, original_key).unwrap();

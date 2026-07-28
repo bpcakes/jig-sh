@@ -1180,7 +1180,7 @@ fn hash_open_repository_file(file: &mut File) -> Result<[u8; 32]> {
     file.seek(SeekFrom::Start(0))
         .context("Failed to rewind repository file")?;
     let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let read = file
             .read(&mut buffer)

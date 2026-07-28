@@ -377,7 +377,7 @@ fn blocker_selection_survives_insertions_duplicate_codes_and_display_changes() {
         "message": "The first dependency is still pending",
         "related_work_package": "WP-000",
         "source": {"path": "docs/packages.md", "line": 11}
-    }, selected.clone()]);
+    }, selected]);
 
     let mut app = App::default();
     app.accept_snapshot(initial);

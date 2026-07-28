@@ -419,7 +419,7 @@ fn prepare_certs_for_hosts_records_host_before_route_registration() {
 
     prepare_certs_for_hosts(&settings, &["web.demo.localhost".into()]).unwrap();
 
-    let store = StateStore::resolve(settings.state_dir.clone()).unwrap();
+    let store = StateStore::resolve(settings.state_dir).unwrap();
     let leaf_hosts = fs::read_to_string(store.leaf_hosts_path()).unwrap();
     assert!(leaf_hosts.contains("web.demo.localhost"));
     assert!(store.read_routes(false).unwrap().is_empty());

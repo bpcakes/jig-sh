@@ -444,7 +444,7 @@ fn run_apps_with_session_and_interrupt_probe(
                     process_cleanup_armed: true,
                     route_ownership: Some(ownership),
                     route_cleanup_armed: true,
-                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    route_cleanup_deadline,
                     session_cleanup,
                 });
                 cleanup_dev_session_children(session, &mut children);
@@ -459,14 +459,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 select_interruption();
                 children.push(RunningChild {
                     name: spec.name,
-                    store: store.clone(),
+                    store,
                     child,
                     output,
                     _process_lease: process_lease,
                     process_cleanup_armed: true,
                     route_ownership: Some(ownership),
                     route_cleanup_armed: true,
-                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    route_cleanup_deadline,
                     session_cleanup,
                 });
                 cleanup_dev_session_children(session, &mut children);
@@ -492,14 +492,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 }
                 children.push(RunningChild {
                     name: spec.name,
-                    store: store.clone(),
+                    store,
                     child,
                     output,
                     _process_lease: process_lease,
                     process_cleanup_armed: true,
                     route_cleanup_armed: route_ownership.is_some(),
                     route_ownership,
-                    route_cleanup_deadline: route_cleanup_deadline.clone(),
+                    route_cleanup_deadline,
                     session_cleanup,
                 });
                 cleanup_dev_session_children(session, &mut children);
