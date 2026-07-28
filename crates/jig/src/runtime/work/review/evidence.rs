@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::text::truncate_chars;
+
 const MAX_EVIDENCE_PREVIEW_CHARS: usize = 500;
 // Keep review receipts bounded while preserving raw counts separately so
 // truncated findings cannot appear smaller than they were.
@@ -175,16 +177,6 @@ fn finding_fingerprint(
     ]);
     let bytes = serde_json::to_vec(&value).expect("finding fingerprint input is valid JSON");
     hash_bytes(&bytes)
-}
-
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    let mut chars = value.chars();
-    let truncated = chars.by_ref().take(max_chars).collect::<String>();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
-    }
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {

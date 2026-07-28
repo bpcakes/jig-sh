@@ -60,6 +60,7 @@ mod status;
 mod test_env;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod test_process;
+mod text;
 mod tool_defs;
 mod ui;
 

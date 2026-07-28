@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -650,15 +649,7 @@ fn sanitize_observer_environment(command: &mut Command) {
     // A status command is aimed at a known checkout. Inherited GIT_DIR,
     // GIT_WORK_TREE, replacement refs, command-scoped config, or quarantine
     // variables must not redirect either a provider or Jig's own comparisons.
-    for (name, _) in env::vars_os() {
-        if name
-            .to_string_lossy()
-            .to_ascii_uppercase()
-            .starts_with("GIT_")
-        {
-            command.env_remove(name);
-        }
-    }
+    crate::bootstrap::scrub_git_repository_environment_except(command, &[]);
     // Providers and Jig's own probes are observational. Restore this control
     // only after removing inherited Git variables so `git status` cannot
     // refresh stat data through an optional index lock.

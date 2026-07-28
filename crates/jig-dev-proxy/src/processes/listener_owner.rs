@@ -17,11 +17,11 @@ use crate::ports::{is_port_free, is_tcp_listening};
 use crate::state::{process_start_token, process_start_tokens_supported};
 use crate::types::AppRunSpec;
 
-#[cfg(unix)]
-use super::child_lifecycle::unix_pid;
 use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
 use super::cleanup::{TerminationReason, termination_requested};
 use super::interruption_error;
+#[cfg(unix)]
+use crate::unix_pid;
 
 const APP_READY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const LISTENER_OWNER_RECHECK_ATTEMPTS: usize = 3;

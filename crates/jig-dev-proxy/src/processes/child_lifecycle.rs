@@ -34,6 +34,9 @@ use windows_sys::Win32::System::JobObjects::{
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
+#[cfg(unix)]
+use crate::unix_pid;
+
 use super::cleanup::force_cleanup_requested;
 
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1484,11 +1487,6 @@ fn classify_liveness_probe(result: i32, error: impl FnOnce() -> io::Error) -> io
         Err(error)
     }
 }
-#[cfg(unix)]
-pub(super) fn unix_pid(pid: u32) -> Option<i32> {
-    i32::try_from(pid).ok()
-}
-
 #[cfg(windows)]
 pub(super) fn terminate_pid(pid: u32) -> Result<()> {
     if !crate::state::pid_is_alive(pid) {

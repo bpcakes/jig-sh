@@ -1234,28 +1234,9 @@ fn parse_frontmatter_and_body(
 }
 
 fn write_prompt_file(path: &Path, metadata: &PromptMetadata, body: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-        let frontmatter = serde_yaml_ng::to_string(metadata)?;
-        let text = format!("---\n{frontmatter}---\n{body}");
-        let mut temp = tempfile::Builder::new()
-            .prefix(".jig-prompt-")
-            .suffix(".tmp")
-            .tempfile_in(parent)
-            .with_context(|| format!("Failed to create temporary file in {}", parent.display()))?;
-        temp.write_all(text.as_bytes())
-            .with_context(|| format!("Failed to write temporary prompt for {}", path.display()))?;
-        temp.as_file()
-            .sync_all()
-            .with_context(|| format!("Failed to sync temporary prompt for {}", path.display()))?;
-        temp.persist(path)
-            .map(|_| ())
-            .map_err(|error| error.error)
-            .with_context(|| format!("Failed to write {}", path.display()))?;
-        return Ok(());
-    }
-    bail!("Prompt path has no parent: {}", path.display())
+    let frontmatter = serde_yaml_ng::to_string(metadata)?;
+    let text = format!("---\n{frontmatter}---\n{body}");
+    write_bytes_atomic(path, text.as_bytes())
 }
 
 fn read_body(body: Option<String>, file: Option<&Path>) -> Result<String> {

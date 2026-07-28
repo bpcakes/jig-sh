@@ -24,6 +24,7 @@ use answers::{AnswerInput, RenderAnswers};
 #[cfg(test)]
 use file_copy::create_symlink;
 use git::init_git_repo_with_validation;
+pub(crate) use git::scrub_git_repository_environment_except;
 #[cfg(test)]
 use git::{git, git_stdout};
 #[cfg(test)]

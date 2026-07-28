@@ -17,6 +17,7 @@ use crate::state::{
     DecisionStreamRecord, PlanStreamEvent, ReceiptStreamRecord, StateStreams, current_session,
     now_ms, plan_detail_streams, plan_receipts, state_streams,
 };
+use crate::text::truncate_chars;
 
 const TIMELINE_RECEIPT_SCAN_LIMIT: usize = 400;
 const HISTORY_LIMIT: usize = 10;
@@ -397,13 +398,4 @@ fn build_timeline(streams: &StateStreams, query: UiQuery) -> Vec<TimelineItem> {
     entries.sort_by_key(|e| std::cmp::Reverse(e.timestamp_ms().unwrap_or(0)));
     entries.truncate(query.limit);
     entries
-}
-
-fn truncate_chars(value: &str, limit: usize) -> String {
-    if value.chars().count() <= limit {
-        return value.into();
-    }
-    let mut value = value.chars().take(limit).collect::<String>();
-    value.push('…');
-    value
 }

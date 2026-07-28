@@ -582,7 +582,7 @@ fn classify_signal_error(raw_os_error: Option<i32>) -> SignalResult {
 }
 
 #[cfg(unix)]
-fn unix_pid(pid: u32) -> Option<i32> {
+pub(crate) fn unix_pid(pid: u32) -> Option<i32> {
     i32::try_from(pid).ok()
 }
 

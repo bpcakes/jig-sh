@@ -874,7 +874,7 @@ pub(super) fn disable_git_worktree_integrations(command: &mut Command) {
         .env("GIT_CONFIG_VALUE_1", "false");
 }
 
-fn scrub_git_repository_environment_except(command: &mut Command, allowed: &[&str]) {
+pub(crate) fn scrub_git_repository_environment_except(command: &mut Command, allowed: &[&str]) {
     for (name, _) in env::vars_os() {
         let normalized = name.to_string_lossy().to_ascii_uppercase();
         if normalized.starts_with("GIT_") && !allowed.contains(&normalized.as_str()) {
