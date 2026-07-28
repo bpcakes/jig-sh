@@ -9,8 +9,9 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
-use crate::doctor::{OwnedProcessTreeError, run_owned_process_tree_with_output};
-use crate::process::{format_exit_status, require_success};
+use crate::process::{
+    OwnedProcessTreeError, format_exit_status, require_success, run_owned_process_tree_with_output,
+};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 

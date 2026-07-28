@@ -14,10 +14,10 @@ use tempfile::NamedTempFile;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-use crate::doctor::{
-    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
+use crate::process::{
+    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
+    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
 };
-use crate::process::{format_exit_status, require_success, run_checked_output_with_context};
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;

@@ -504,42 +504,45 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
         command.env(key, value);
     }
     crate::shell::sanitize_bash_environment(&mut command);
-    let output =
-        match crate::doctor::run_owned_process_tree_with_output(&mut command, timeout, cancelled) {
-            Ok(output) => output,
-            Err(crate::doctor::OwnedProcessTreeError::Start(error)) => {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    return Err(anyhow::anyhow!(
-                        "Failed to run dependency readiness check {} with Bash: {error}. {}",
-                        checker.display(),
-                        bash_requirement_hint()
-                    ));
-                }
+    let output = match crate::process::run_owned_process_tree_with_output(
+        &mut command,
+        timeout,
+        cancelled,
+    ) {
+        Ok(output) => output,
+        Err(crate::process::OwnedProcessTreeError::Start(error)) => {
+            if error.kind() == std::io::ErrorKind::NotFound {
                 return Err(anyhow::anyhow!(
-                    "Failed to start dependency readiness check {} with Bash: {error}",
+                    "Failed to run dependency readiness check {} with Bash: {error}. {}",
                     checker.display(),
+                    bash_requirement_hint()
                 ));
             }
-            Err(crate::doctor::OwnedProcessTreeError::TimedOut) => bail!(
-                "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
-                timeout.as_secs_f64()
-            ),
-            Err(crate::doctor::OwnedProcessTreeError::Cancelled) => {
-                return Err(FrontendDependencyPreflightCancelled {
-                    app_dir: app_dir.to_string(),
-                }
-                .into());
+            return Err(anyhow::anyhow!(
+                "Failed to start dependency readiness check {} with Bash: {error}",
+                checker.display(),
+            ));
+        }
+        Err(crate::process::OwnedProcessTreeError::TimedOut) => bail!(
+            "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
+            timeout.as_secs_f64()
+        ),
+        Err(crate::process::OwnedProcessTreeError::Cancelled) => {
+            return Err(FrontendDependencyPreflightCancelled {
+                app_dir: app_dir.to_string(),
             }
-            Err(crate::doctor::OwnedProcessTreeError::Await) => {
-                bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
+            .into());
+        }
+        Err(crate::process::OwnedProcessTreeError::Await) => {
+            bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
+        }
+        Err(crate::process::OwnedProcessTreeError::Cleanup) => {
+            return Err(FrontendDependencyPreflightCleanupUnconfirmed {
+                app_dir: app_dir.to_string(),
             }
-            Err(crate::doctor::OwnedProcessTreeError::Cleanup) => {
-                return Err(FrontendDependencyPreflightCleanupUnconfirmed {
-                    app_dir: app_dir.to_string(),
-                }
-                .into());
-            }
-        };
+            .into());
+        }
+    };
     let stderr = output.stderr.as_ref().ok_or_else(|| {
         anyhow::anyhow!("Frontend dependency readiness diagnostic output was not captured")
     })?;

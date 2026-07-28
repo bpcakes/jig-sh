@@ -8,11 +8,11 @@ use jig_contract::status_provider::v1::Input;
 use serde::Serialize;
 
 use super::sanitize_observer_environment;
+use crate::process::format_exit_status;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-use crate::doctor::{
+use crate::process::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
 };
-use crate::process::format_exit_status;
 
 const GIT_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]

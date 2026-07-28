@@ -615,7 +615,7 @@ fn frontend_dependency_preflight_rejects_incomplete_capture_after_success() {
     fs::write(
         temp.path().join("scripts/check-webapps.sh"),
         r#"#!/usr/bin/env bash
-"$JIG_PREFLIGHT_ESCAPE_TEST_EXE" --exact doctor::tests::owned_process_output_escape_helper --nocapture
+"$JIG_PREFLIGHT_ESCAPE_TEST_EXE" --exact process::tests::owned_process_output_escape_helper --nocapture
 exit 0
 "#,
     )

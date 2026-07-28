@@ -14,10 +14,10 @@ use crate::cancellation::{
     status_collection_cancellation,
 };
 use crate::context::{RepoContext, StatusProviderConfig};
-use crate::doctor::{
+use crate::process::format_exit_status;
+use crate::process::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
 };
-use crate::process::format_exit_status;
 use crate::runtime::{
     loop_status_snapshot_with_cancellation, work_gates_snapshot_with_cancellation,
 };
