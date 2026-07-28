@@ -15,6 +15,7 @@ use crate::context::{
     validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
+use crate::shell::quote as shell_quote;
 
 mod dev;
 mod vault;
@@ -899,10 +900,6 @@ pub(super) fn web_run_command(package_manager: &str) -> &'static str {
         "yarn" => "yarn run",
         _ => unreachable!("web package manager was already validated"),
     }
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn serialize_harness_footprint<S>(

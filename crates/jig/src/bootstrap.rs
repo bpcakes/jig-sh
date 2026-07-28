@@ -24,9 +24,11 @@ use answers::{AnswerInput, RenderAnswers};
 #[cfg(test)]
 use file_copy::create_symlink;
 use git::init_git_repo_with_validation;
-pub(crate) use git::scrub_git_repository_environment_except;
 #[cfg(test)]
 use git::{git, git_stdout};
+pub(crate) use git::{
+    scrub_git_repository_environment_except, scrub_known_repository_git_environment,
+};
 #[cfg(test)]
 use initial_copy::seed_answers_toml;
 use initial_copy::{BootstrapCopyRequest, render_and_copy_bootstrap_template};
@@ -70,7 +72,7 @@ const ANSWERS_FILE: &str = ".jig.toml";
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
 const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
-const GIT_BIN_ENV: &str = "JIG_GIT_BIN";
+pub(crate) const GIT_BIN_ENV: &str = "JIG_GIT_BIN";
 const BUILD_TEMPLATE_PIN_RELEASED: &str = "released";
 const BUILD_TEMPLATE_PIN_UNRELEASED: &str = "unreleased";
 const OFFICIAL_TEMPLATE_SOURCE: &str = "https://github.com/bpcakes/jig-sh.git";
@@ -3498,7 +3500,7 @@ fn validate_update_destination(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn external_program(env_key: &str, fallback: &str) -> String {
+pub(crate) fn external_program(env_key: &str, fallback: &str) -> String {
     env::var(env_key).unwrap_or_else(|_| fallback.to_string())
 }
 

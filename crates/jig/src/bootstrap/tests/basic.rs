@@ -1391,7 +1391,7 @@ fn run_init_uses_native_renderer_and_git() {
     assert!(answers.contains("scope = \"repo\""));
     assert!(answers.contains("allow_global = false"));
     assert!(answers.contains(
-        "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR='.sqlx' sqlx prepare --check --workspace -- --workspace --all-targets"
+        "CARGO=cargo SQLX_OFFLINE=false SQLX_OFFLINE_DIR=.sqlx sqlx prepare --check --workspace -- --workspace --all-targets"
     ));
     assert!(!answers.contains("cargo sqlx prepare --check"));
     let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();

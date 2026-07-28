@@ -6,9 +6,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+
+use crate::state::now_ms;
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -77,7 +78,7 @@ pub(crate) fn temp_path(path: &Path, fallback_name: &str) -> PathBuf {
     path.with_file_name(format!(
         "{file_name}.{}.{}.{}.tmp",
         std::process::id(),
-        epoch_millis(),
+        now_ms(),
         counter
     ))
 }
@@ -160,7 +161,7 @@ pub(crate) fn backup_path(path: &Path, fallback_name: &str) -> PathBuf {
     path.with_file_name(format!(
         "{file_name}.{}.{}.{}.replace-backup",
         std::process::id(),
-        epoch_millis(),
+        now_ms(),
         counter
     ))
 }
@@ -218,11 +219,4 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
-}
-
-fn epoch_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
 }

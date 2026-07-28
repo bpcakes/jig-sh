@@ -189,6 +189,11 @@ mod tests {
     #[test]
     fn quote_handles_shell_special_characters() {
         assert_eq!(quote("scripts/jig"), "scripts/jig");
+        assert_eq!(
+            quote("https://example.test/path"),
+            "https://example.test/path"
+        );
+        assert_eq!(quote("path+suffix"), "'path+suffix'");
         assert_eq!(quote(""), "''");
         assert_eq!(quote("path with space"), "'path with space'");
         assert_eq!(quote("team's path"), "'team'\\''s path'");

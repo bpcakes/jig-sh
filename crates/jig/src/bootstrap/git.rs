@@ -813,7 +813,7 @@ fn scrub_git_repository_environment_for_ambient_config(command: &mut Command) {
     scrub_git_repository_environment_except(command, ALLOWED_GIT_ENVIRONMENT);
 }
 
-pub(super) fn scrub_known_repository_git_environment(command: &mut Command) {
+pub(crate) fn scrub_known_repository_git_environment(command: &mut Command) {
     // Keep the user's ordinary environment, read-only config sources, and the
     // authentication knobs needed by remote template fetches. Repository
     // discovery/redirection, alternate object/index paths, quarantine state,

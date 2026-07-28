@@ -7,6 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
+use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
@@ -938,12 +939,26 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let git = std::env::var_os("JIG_GIT_BIN").unwrap_or_else(|| OsString::from("git"));
-    Command::new(&git)
-        .current_dir(cwd)
-        .args(args)
+    git_command(cwd, args)
         .output()
         .with_context(|| format!("Failed to start git in {}", cwd.display()))
+}
+
+fn git_command<I, S>(cwd: &Path, args: I) -> Command
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new(external_program(GIT_BIN_ENV, "git"));
+    command
+        .current_dir(cwd)
+        .arg("--no-replace-objects")
+        .args(args);
+    // PR-manager commands target this known checkout but may fetch or push.
+    // Strip repository redirection while retaining the transport/authentication
+    // variables allowed by the shared known-repository policy.
+    scrub_known_repository_git_environment(&mut command);
+    command
 }
 
 fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
@@ -963,6 +978,45 @@ fn git_error(label: &str, output: std::process::Output) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::{EnvVarGuard, lock_env};
+
+    #[test]
+    fn git_command_uses_configured_program_and_scrubs_repository_redirects() {
+        let _env_lock = lock_env();
+        let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, "custom-git");
+        let _git_dir = EnvVarGuard::set("GIT_DIR", "/tmp/redirected.git");
+        let _git_trace = EnvVarGuard::set("GIT_TRACE", "1");
+        let _git_ssh = EnvVarGuard::set("GIT_SSH_COMMAND", "ssh -i test-key");
+
+        let command = git_command(Path::new("/tmp/repository"), ["status", "--short"]);
+
+        assert_eq!(command.get_program(), OsStr::new("custom-git"));
+        assert_eq!(
+            command.get_current_dir(),
+            Some(Path::new("/tmp/repository"))
+        );
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["--no-replace-objects", "status", "--short"]
+                .map(OsStr::new)
+                .as_slice()
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == OsStr::new("GIT_DIR") && value.is_none() })
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == OsStr::new("GIT_TRACE") && value.is_none() })
+        );
+        assert!(
+            !command
+                .get_envs()
+                .any(|(name, _)| { name == OsStr::new("GIT_SSH_COMMAND") })
+        );
+    }
 
     #[test]
     fn classify_uses_observed_default_branch_when_base_ref_is_missing() {

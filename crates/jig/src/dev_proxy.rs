@@ -18,6 +18,7 @@ use crate::command::{
 };
 use crate::context::{DevAppConfig, RepoContext};
 use crate::progress::CliProgress;
+use crate::shell::quote as shell_quote;
 
 pub(crate) mod commands {
     pub(crate) use self::dev::dev;
@@ -375,17 +376,6 @@ fn package_manager_manifest_exists(app_dir: &Path, package_manager: &str) -> boo
     candidates
         .iter()
         .any(|candidate| app_dir.join(candidate).is_file())
-}
-
-fn shell_quote(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_+-./".contains(&byte))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
