@@ -5,41 +5,12 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::context::DevConfig;
-use crate::test_env::{EnvVarGuard, lock_env};
+use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_process::{read_test_process_identity, terminate_and_confirm_test_process};
 
-fn write_contract(root: &std::path::Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["contract_check_command"],
-            "tools": [],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-}
-
 fn write_config(root: &std::path::Path, extra: &str) {
-    write_contract(root);
-    fs::write(
-        root.join(".jig.toml"),
-        format!(
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-{extra}
-"#
-        ),
-    )
-    .unwrap();
+    TestRepoBuilder::new(root).config(extra).write();
 }
 
 fn write_dependency_checker(root: &std::path::Path) {
@@ -110,15 +81,10 @@ fn dev_interruption_is_distinct_from_json_success() {
 #[test]
 fn dev_apps_take_precedence_when_matching_frontend_apps_are_also_configured() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
     fs::create_dir_all(temp.path().join("apps/web")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[frontend_apps]]
@@ -135,8 +101,8 @@ kind = "vite"
 dir = "apps/web"
 argv = ["bun", "run", "dev"]
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -882,16 +848,11 @@ fn frontend_dependency_preflight_cleans_descendants_after_exit_and_timeout() {
 #[test]
 fn dev_apps_reject_unmatched_frontend_apps_when_both_sections_are_configured() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
     fs::create_dir_all(temp.path().join("apps/legacy-web")).unwrap();
     fs::create_dir_all(temp.path().join("apps/web")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[frontend_apps]]
@@ -908,8 +869,8 @@ kind = "vite"
 dir = "apps/web"
 argv = ["bun", "run", "dev"]
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
 
@@ -920,16 +881,11 @@ argv = ["bun", "run", "dev"]
 #[test]
 fn dev_apps_reject_mismatched_frontend_app_dirs_when_both_sections_are_configured() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
     fs::create_dir_all(temp.path().join("apps/web")).unwrap();
     fs::create_dir_all(temp.path().join("frontend/web")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[frontend_apps]]
@@ -946,8 +902,8 @@ kind = "vite"
 dir = "frontend/web"
 argv = ["bun", "run", "dev"]
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
 
@@ -958,15 +914,10 @@ argv = ["bun", "run", "dev"]
 #[test]
 fn legacy_frontend_apps_are_used_when_dev_apps_are_absent() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
     fs::create_dir_all(temp.path().join("apps/web")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "pnpm"
 
 [[frontend_apps]]
@@ -977,8 +928,8 @@ coverage_threshold = 80
 [dev]
 proxy_port = 1555
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -997,14 +948,9 @@ proxy_port = 1555
 #[test]
 fn unknown_dev_app_kind_is_rejected() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [dev]
@@ -1015,8 +961,8 @@ name = "web"
 kind = "vit"
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
 
@@ -1026,14 +972,9 @@ command = "bun run dev"
 #[test]
 fn dev_app_host_must_be_ip_literal() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [dev]
@@ -1044,8 +985,8 @@ name = "web"
 host = "api.example.test"
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -1057,14 +998,9 @@ command = "bun run dev"
 #[test]
 fn proxied_dev_app_host_must_be_loopback() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[dev.apps]]
@@ -1072,8 +1008,8 @@ name = "web"
 host = "192.0.2.10"
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -1085,14 +1021,9 @@ command = "bun run dev"
 #[test]
 fn non_proxied_dev_app_may_use_non_loopback_direct_host() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[dev.apps]]
@@ -1101,8 +1032,8 @@ host = "192.0.2.10"
 proxy = false
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -1115,22 +1046,17 @@ command = "bun run dev"
 #[test]
 fn dev_app_name_rejects_surrounding_whitespace() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [[dev.apps]]
 name = " web "
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -1142,26 +1068,18 @@ command = "bun run dev"
 #[test]
 fn dev_app_dirs_must_be_portable_repository_relative() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
     let outside = tempdir().unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        format!(
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(temp.path())
+        .config(format!(
+            r#"
 [[dev.apps]]
 name = "web"
 dir = "{}"
 command = "bun run dev"
 "#,
             outside.path().display()
-        ),
-    )
-    .unwrap();
+        ))
+        .write();
 
     let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
 
@@ -1200,22 +1118,17 @@ proxy = false
 #[test]
 fn selected_dev_app_dirs_must_exist_after_filtering() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 
 [[dev.apps]]
 name = "web"
 dir = "missing-app-dir"
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
@@ -1232,14 +1145,9 @@ command = "bun run dev"
 #[test]
 fn vite_dev_app_requires_argv() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 web_package_manager = "bun"
 
 [dev]
@@ -1250,8 +1158,8 @@ name = "web"
 kind = "vite"
 command = "bun run dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let settings = settings(&ctx, &ProxyRuntimeOptions::default()).unwrap();
@@ -1263,20 +1171,15 @@ command = "bun run dev"
 #[test]
 fn invalid_dev_tld_is_rejected() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 
 [dev]
 tld = "bad,tld"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = settings(&ctx, &ProxyRuntimeOptions::default())
@@ -1289,20 +1192,15 @@ tld = "bad,tld"
 #[test]
 fn public_dev_tld_is_rejected() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 
 [dev]
 tld = "dev"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = settings(&ctx, &ProxyRuntimeOptions::default())
@@ -1315,20 +1213,15 @@ tld = "dev"
 #[test]
 fn configured_zero_proxy_ports_are_rejected_but_explicit_zero_is_ephemeral() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 
 [dev]
 proxy_port = 0
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = settings(&ctx, &ProxyRuntimeOptions::default())
@@ -1351,17 +1244,12 @@ proxy_port = 0
 #[test]
 fn explicit_read_only_state_dir_must_exist() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let opts = ProxyRuntimeOptions {
         state_dir: Some(temp.path().join("missing-state")),
@@ -1397,17 +1285,12 @@ fn explicit_read_only_state_dir_reports_inspection_errors() {
 #[test]
 fn settings_does_not_create_missing_state_dir() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
     let missing = temp.path().join("missing-state");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let opts = ProxyRuntimeOptions {
@@ -1424,17 +1307,12 @@ jig_version = "0.2.0-beta.1"
 #[test]
 fn service_status_settings_allow_missing_state_dir() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
     let missing = temp.path().join("missing-state");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let opts = ProxyRuntimeOptions {
@@ -1737,21 +1615,16 @@ lan = true
 #[test]
 fn proxy_http_and_https_ports_must_differ() {
     let temp = tempdir().unwrap();
-    write_contract(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 
 [dev]
 proxy_port = 1555
 https_port = 1555
 "#,
-    )
-    .unwrap();
+        )
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = settings(&ctx, &ProxyRuntimeOptions::default())

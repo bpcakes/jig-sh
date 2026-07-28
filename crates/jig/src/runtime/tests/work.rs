@@ -45,34 +45,17 @@ fn unavailable_schema_check_explains_disabled_config() {
 #[test]
 fn unavailable_typescript_check_explains_missing_contract_tool() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    crate::test_env::TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [[frontend_apps]]
 name = "web"
 dir = "apps/web"
 coverage_threshold = 80
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": [],
-            "tools": [],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        )
+        .required_commands(Vec::<String>::new())
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let error = dispatch(
@@ -927,21 +910,15 @@ fn work_gates_reject_unknown_required_gate_freshness() {
 #[test]
 fn work_config_rejects_unsupported_gate_kind() {
     let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    crate::test_env::TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [[work.gates]]
 id = "custom"
 kind = "unsupported-kind"
 "#,
-    )
-    .unwrap();
+        )
+        .write();
     let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
 
     assert!(error.contains("Unsupported work gate kind 'unsupported-kind'"));

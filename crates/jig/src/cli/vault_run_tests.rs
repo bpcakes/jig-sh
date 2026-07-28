@@ -1,9 +1,7 @@
-use serde_json::json;
-
 use crate::command::{
     VaultRepoScope, VaultRuntimeOptions, VaultScopeSelection, VaultStatusRequest,
 };
-use crate::test_env::{CurrentDirGuard, lock_env};
+use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
@@ -126,14 +124,9 @@ scope = "repo"
 fn malformed_repo_vault_config_blocks_status_without_home_override() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    std::fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "cargo fmt --all -- --check"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
@@ -145,20 +138,9 @@ frontend_apps = []
 [vault]
 scope = "repo"
 "#,
-    )
-    .unwrap();
-    std::fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["bootstrap_command"],
-            "tools": []
-        })
-        .to_string(),
-    )
-    .unwrap();
+        )
+        .required_commands(["bootstrap_command"])
+        .write();
     let _cwd = CurrentDirGuard::set(temp.path());
     let mut command = crate::command::VaultCommand::Status(VaultStatusRequest {
         vault: VaultRuntimeOptions::default(),

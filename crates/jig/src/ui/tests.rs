@@ -7,19 +7,14 @@ use tempfile::tempdir;
 
 use crate::context::RepoContext;
 use crate::state::{ReceiptInput, record_receipt};
+use crate::test_env::TestRepoBuilder;
 
 use super::snapshot::{snapshot, snapshot_with_query};
 
 fn write_ui_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
 [commands]
 custom_check_command = "printf 'manifest target ran\n'"
 
@@ -28,27 +23,15 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["custom_check_command"],
-            "tools": [
-                {
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Run configured custom check.",
-                    "command": "custom_check_command"
-                }
-            ],
+        )
+        .required_commands(["custom_check_command"])
+        .tool(json!({
+            "name": "jig.custom_check",
+            "kind": "command",
+            "description": "Run configured custom check.",
+            "command": "custom_check_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
 }
 
 fn seeded_context(root: &Path) -> RepoContext {

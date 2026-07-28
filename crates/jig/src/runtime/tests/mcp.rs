@@ -1,6 +1,8 @@
 use super::*;
 use std::process::Command;
 
+use crate::test_env::TestRepoBuilder;
+
 #[test]
 fn mcp_call_dispatches_command_tool_declared_only_in_manifest() {
     let temp = tempdir().unwrap();
@@ -35,37 +37,21 @@ fn mcp_call_dispatches_command_tool_without_makefile() {
 #[test]
 fn mcp_native_migration_add_creates_files() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 sqlx_enabled = true
 rust_migration_dir = "migrations"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command"],
-            "tools": [
-                {
-                    "name": "jig.migration_add",
-                    "kind": "native",
-                    "description": "Add migration."
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.migration_add",
+            "kind": "native",
+            "description": "Add migration."
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap();
@@ -86,72 +72,32 @@ rust_migration_dir = "migrations"
 #[test]
 fn mcp_native_contract_check_validates_manifest() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
     fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "cargo fmt --check"
 rust_clippy_command = "cargo clippy"
 rust_test_command = "cargo test"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": [
-                "bootstrap_command",
-                "rust_fmt_check_command",
-                "rust_clippy_command",
-                "rust_test_command"
-            ],
-            "tools": [
-                {
-                    "name": "jig.bootstrap",
-                    "kind": "command",
-                    "description": "Bootstrap.",
-                    "command": "bootstrap_command"
-                },
-                {
-                    "name": "jig.fmt_check",
-                    "kind": "command",
-                    "description": "Format.",
-                    "command": "rust_fmt_check_command"
-                },
-                {
-                    "name": "jig.clippy",
-                    "kind": "command",
-                    "description": "Clippy.",
-                    "command": "rust_clippy_command"
-                },
-                {
-                    "name": "jig.test",
-                    "kind": "command",
-                    "description": "Test.",
-                    "command": "rust_test_command"
-                },
-                {
-                    "name": "jig.contract_check",
-                    "kind": "native",
-                    "description": "Contract check."
-                }
-            ],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        )
+        .contract_version(2)
+        .required_commands([
+            "bootstrap_command",
+            "rust_fmt_check_command",
+            "rust_clippy_command",
+            "rust_test_command",
+        ])
+        .tool(json!({ "name": "jig.bootstrap", "kind": "command", "description": "Bootstrap.", "command": "bootstrap_command" }))
+        .tool(json!({ "name": "jig.fmt_check", "kind": "command", "description": "Format.", "command": "rust_fmt_check_command" }))
+        .tool(json!({ "name": "jig.clippy", "kind": "command", "description": "Clippy.", "command": "rust_clippy_command" }))
+        .tool(json!({ "name": "jig.test", "kind": "command", "description": "Test.", "command": "rust_test_command" }))
+        .tool(json!({ "name": "jig.contract_check", "kind": "native", "description": "Contract check." }))
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = call_tool(&ctx, "jig.contract_check", json!({})).unwrap();
@@ -168,42 +114,26 @@ rust_test_command = "cargo test"
 #[test]
 fn mcp_native_schema_check_detects_clean_schema_dump() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
     fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 sqlx_enabled = true
 schema_dump_enabled = true
 rust_migration_dir = "migrations"
 schema_dump_command = "mkdir -p docs/schema && printf 'stable\n' > docs/schema/tables.sql"
 rust_test_command = "cargo test"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command", "schema_dump_command"],
-            "tools": [
-                {
-                    "name": "jig.schema_check",
-                    "kind": "native",
-                    "description": "Schema check."
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command", "schema_dump_command"])
+        .tool(json!({
+            "name": "jig.schema_check",
+            "kind": "native",
+            "description": "Schema check."
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     for args in [
         ["init", "-q"].as_slice(),
         ["config", "user.name", "Fixture"].as_slice(),

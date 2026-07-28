@@ -7564,7 +7564,7 @@ fn executable_exists(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env::{CurrentDirGuard, EnvVarGuard, lock_env};
+    use crate::test_env::{CurrentDirGuard, EnvVarGuard, TestRepoBuilder, lock_env};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use crate::test_process::{
         TestProcessIdentity, assert_test_process_stopped, publish_test_process_identity,
@@ -13747,49 +13747,30 @@ printf '%s\n' '{"ok":true,"running":false,"routes":[]}'
     }
 
     fn write_doctor_fixture(root: &Path) {
-        fs::create_dir_all(root.join(".agent")).unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
-        fs::write(
-            root.join(".jig.toml"),
-            format!(
-                r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "{}"
+        TestRepoBuilder::new(root)
+            .jig_version(env!("CARGO_PKG_VERSION"))
+            .config(
+                r#"
 bootstrap_command = "printf bootstrap"
 
 [agent_tooling.codex]
 marketplaces = []
 "#,
-                env!("CARGO_PKG_VERSION")
-            ),
-        )
-        .unwrap();
-        fs::write(
-            root.join(".agent/jig-contract.json"),
-            serde_json::to_string_pretty(&json!({
-                "contract_version": 3,
-                "tool_namespace": "jig",
-                "jig_version": env!("CARGO_PKG_VERSION"),
-                "required_commands": ["bootstrap_command"],
-                "tools": [
-                    {
-                        "name": tool::CONTRACT_CHECK,
-                        "kind": "native",
-                        "description": "Contract check."
-                    },
-                    {
-                        "name": tool::BOOTSTRAP,
-                        "kind": "command",
-                        "description": "Bootstrap.",
-                        "command": "bootstrap_command"
-                    }
-                ],
+            )
+            .required_commands(["bootstrap_command"])
+            .tool(json!({
+                "name": tool::CONTRACT_CHECK,
+                "kind": "native",
+                "description": "Contract check."
             }))
-            .unwrap(),
-        )
-        .unwrap();
+            .tool(json!({
+                "name": tool::BOOTSTRAP,
+                "kind": "command",
+                "description": "Bootstrap.",
+                "command": "bootstrap_command"
+            }))
+            .write();
         fs::write(root.join(".mcp.json"), "{}").unwrap();
         fs::write(root.join("scripts/install-jig.sh"), "#!/usr/bin/env bash\n").unwrap();
         fs::write(

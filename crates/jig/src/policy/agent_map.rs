@@ -307,13 +307,13 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use serde_json::json;
     use tempfile::tempdir;
 
     #[cfg(unix)]
     use super::write;
     use super::{check_guides, normalize_map_path, validate};
     use crate::context::RepoContext;
+    use crate::test_env::TestRepoBuilder;
 
     #[test]
     fn normalize_map_path_accepts_repo_relative_paths() {
@@ -432,33 +432,18 @@ mod tests {
     #[test]
     fn check_guides_validates_existing_guides_only() {
         let temp = tempdir().unwrap();
-        fs::create_dir_all(temp.path().join(".agent")).unwrap();
         fs::create_dir_all(temp.path().join("crates/api")).unwrap();
         fs::create_dir_all(temp.path().join("crates/worker")).unwrap();
-        fs::write(
-            temp.path().join(".jig.toml"),
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"
 rust_crate_roots = ["crates"]
 rust_test_command = "cargo test"
 "#,
-        )
-        .unwrap();
-        fs::write(
-            temp.path().join(".agent/jig-contract.json"),
-            serde_json::to_string_pretty(&json!({
-                "contract_version": 2,
-                "tool_namespace": "jig",
-                "jig_version": "0.2.0-beta.1",
-                "required_commands": ["rust_test_command"],
-                "tools": [],
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+            )
+            .contract_version(2)
+            .required_commands(["rust_test_command"])
+            .write();
         fs::write(
             temp.path().join("crates/api/AGENTS.md"),
             "## Purpose\nNo entrypoint reference yet.\n",

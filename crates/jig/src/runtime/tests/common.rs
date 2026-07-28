@@ -2,18 +2,15 @@ use super::*;
 use std::path::Path;
 use std::process::Command;
 
+use serde_json::json;
+
 use crate::state::{ReceiptInput, record_receipt};
+use crate::test_env::TestRepoBuilder;
 
 pub(super) fn write_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
 [commands]
 custom_check_command = "printf 'manifest target ran\n'"
 
@@ -22,39 +19,22 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["custom_check_command"],
-            "tools": [
-                {
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Run configured custom check.",
-                    "command": "custom_check_command"
-                }
-            ],
+        )
+        .required_commands(["custom_check_command"])
+        .tool(json!({
+            "name": "jig.custom_check",
+            "kind": "command",
+            "description": "Run configured custom check.",
+            "command": "custom_check_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     write_open_plan(root);
 }
 
 pub(super) fn write_command_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
 rust_migration_dir = "migrations"
 rust_sqlx_metadata_dir = ".sqlx"
 schema_dump_command = "printf 'schema dump\n'"
@@ -66,40 +46,23 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command"],
-            "tools": [
-                {
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Run configured custom check.",
-                    "command": "rust_test_command"
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.custom_check",
+            "kind": "command",
+            "description": "Run configured custom check.",
+            "command": "rust_test_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     write_open_plan(root);
 }
 
 pub(super) fn write_mutating_check_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
 [commands]
 first_check_command = "printf 'first ran\n'"
 mutating_check_command = "printf 'generated\n' > generated.txt"
@@ -114,46 +77,28 @@ id = "mutating"
 kind = "check"
 tool = "jig.mutating_check"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["first_check_command", "mutating_check_command"],
-            "tools": [
-                {
-                    "name": "jig.first_check",
-                    "kind": "command",
-                    "description": "Run configured first check.",
-                    "command": "first_check_command"
-                },
-                {
-                    "name": "jig.mutating_check",
-                    "kind": "command",
-                    "description": "Run configured mutating check.",
-                    "command": "mutating_check_command"
-                }
-            ],
+        )
+        .required_commands(["first_check_command", "mutating_check_command"])
+        .tool(json!({
+            "name": "jig.first_check",
+            "kind": "command",
+            "description": "Run configured first check.",
+            "command": "first_check_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .tool(json!({
+            "name": "jig.mutating_check",
+            "kind": "command",
+            "description": "Run configured mutating check.",
+            "command": "mutating_check_command"
+        }))
+        .write();
     write_open_plan(root);
 }
 
 pub(super) fn write_failing_check_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
 [commands]
 custom_check_command = "printf 'check failed\n' >&2; exit 7"
 
@@ -162,27 +107,15 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["custom_check_command"],
-            "tools": [
-                {
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Run configured custom check.",
-                    "command": "custom_check_command"
-                }
-            ],
+        )
+        .required_commands(["custom_check_command"])
+        .tool(json!({
+            "name": "jig.custom_check",
+            "kind": "command",
+            "description": "Run configured custom check.",
+            "command": "custom_check_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     write_open_plan(root);
 }
 
@@ -199,7 +132,6 @@ pub(super) fn write_review_fixture_repo_without_refinement(root: &Path) {
 }
 
 fn write_review_fixture_repo_with_options(root: &Path, check_command: &str, refinement: bool) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
     let refinement_config = if refinement {
         r#"
 [[work.refinements]]
@@ -209,15 +141,9 @@ skill = "jig-rust:rust-simplify"
     } else {
         ""
     };
-    fs::write(
-        root.join(".jig.toml"),
-        format!(
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(root)
+        .config(format!(
+            r#"
 [commands]
 custom_check_command = "{check_command}"
 
@@ -235,28 +161,15 @@ tool = "jig.custom_check"
 {refinement_config}
 "#,
             refinement_config = refinement_config
-        ),
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["custom_check_command"],
-            "tools": [
-                {
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Run configured custom check.",
-                    "command": "custom_check_command"
-                }
-            ],
+        ))
+        .required_commands(["custom_check_command"])
+        .tool(json!({
+            "name": "jig.custom_check",
+            "kind": "command",
+            "description": "Run configured custom check.",
+            "command": "custom_check_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     write_open_plan(root);
 }
 

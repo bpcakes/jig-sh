@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_env::TestRepoBuilder;
 
 #[test]
 fn agent_doctor_reports_configured_codex_marketplace() {
@@ -217,14 +218,9 @@ fn agent_doctor_matches_relative_config_to_absolute_codex_source() {
     fs::create_dir_all(&repo_root).unwrap();
     fs::create_dir_all(&skills_root).unwrap();
     write_fixture_repo(&repo_root);
-    fs::write(
-        repo_root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(&repo_root)
+        .config(
+            r#"
 [[agent_tooling.codex.marketplaces]]
 id = "local-skills"
 source = "../jig-skills"
@@ -234,8 +230,8 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
+        )
+        .write_config();
     let codex_home = temp.path().join("codex-home");
     fs::create_dir_all(&codex_home).unwrap();
     fs::write(
@@ -270,14 +266,9 @@ fn agent_doctor_accepts_empty_marketplace_config_without_codex() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [agent_tooling.codex]
 marketplaces = []
 
@@ -286,8 +277,8 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
+        )
+        .write_config();
     let missing_codex = temp.path().join("missing-codex");
 
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &missing_codex);
@@ -352,14 +343,9 @@ fn agent_doctor_reports_marketplace_specific_bootstrap_commands() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [[agent_tooling.codex.marketplaces]]
 id = "first-skills"
 source = "bpcakes/jig-skills"
@@ -368,8 +354,8 @@ source = "bpcakes/jig-skills"
 id = "local-skills"
 source = "./team's-skills"
 "#,
-    )
-    .unwrap();
+        )
+        .write_config();
     let codex_path = temp.path().join("codex-stub.sh");
     write_codex_stub(
         &codex_path,
@@ -443,14 +429,9 @@ fn agent_bootstrap_uses_single_configured_marketplace_source() {
     write_fixture_repo(temp.path());
     let skills_root = temp.path().join("jig-skills");
     fs::create_dir_all(&skills_root).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [[agent_tooling.codex.marketplaces]]
 id = "local-skills"
 source = "./jig-skills"
@@ -461,8 +442,8 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
+        )
+        .write_config();
     let log_path = temp.path().join("codex.log");
     let codex_path = temp.path().join("codex-stub.sh");
     write_codex_stub(
@@ -653,14 +634,9 @@ fn agent_bootstrap_rejects_ambiguous_configured_marketplaces() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 [[agent_tooling.codex.marketplaces]]
 id = "first-skills"
 source = "../first-skills"
@@ -674,8 +650,8 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 "#,
-    )
-    .unwrap();
+        )
+        .write_config();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = dispatch(

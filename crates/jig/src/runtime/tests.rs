@@ -8,7 +8,7 @@ use common::*;
 
 use crate::cli::CommandKind;
 use crate::command::RuntimeCommand;
-use crate::test_env::{EnvVarGuard, lock_env};
+use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
@@ -252,37 +252,21 @@ fn dispatch_routes_proxy_list_through_dev_proxy_feature() {
 #[test]
 fn tool_no_receipt_skips_receipt_append() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 rust_test_command = "printf 'command tool ran\n'"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command"],
-            "tools": [
-                {
-                    "name": "jig.test",
-                    "kind": "command",
-                    "description": "Run configured test command.",
-                    "command": "rust_test_command"
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let output = dispatch(
@@ -302,80 +286,34 @@ rust_test_command = "printf 'command tool ran\n'"
 #[test]
 fn native_tool_no_receipt_skips_receipt_append() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
     fs::write(temp.path().join(".mcp.json"), "{}").unwrap();
     fs::write(temp.path().join("scripts/jig"), "#!/bin/sh\n").unwrap();
     fs::write(temp.path().join("scripts/install-jig.sh"), "#!/bin/sh\n").unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 bootstrap_command = "printf 'bootstrap\n'"
 rust_fmt_check_command = "printf 'fmt\n'"
 rust_clippy_command = "printf 'clippy\n'"
 rust_test_command = "printf 'test\n'"
 rust_test_locked_command = "printf 'test locked\n'"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": [
-                "bootstrap_command",
-                "rust_fmt_check_command",
-                "rust_clippy_command",
-                "rust_test_command",
-                "rust_test_locked_command"
-            ],
-            "tools": [
-                {
-                    "name": "jig.bootstrap",
-                    "kind": "command",
-                    "description": "Run bootstrap.",
-                    "command": "bootstrap_command"
-                },
-                {
-                    "name": "jig.fmt_check",
-                    "kind": "command",
-                    "description": "Run fmt.",
-                    "command": "rust_fmt_check_command"
-                },
-                {
-                    "name": "jig.clippy",
-                    "kind": "command",
-                    "description": "Run clippy.",
-                    "command": "rust_clippy_command"
-                },
-                {
-                    "name": "jig.test",
-                    "kind": "command",
-                    "description": "Run tests.",
-                    "command": "rust_test_command"
-                },
-                {
-                    "name": "jig.test_locked",
-                    "kind": "command",
-                    "description": "Run locked tests.",
-                    "command": "rust_test_locked_command"
-                },
-                {
-                    "name": "jig.contract_check",
-                    "kind": "native",
-                    "description": "Run native contract check."
-                }
-            ],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+        )
+        .required_commands([
+            "bootstrap_command",
+            "rust_fmt_check_command",
+            "rust_clippy_command",
+            "rust_test_command",
+            "rust_test_locked_command",
+        ])
+        .tool(json!({ "name": "jig.bootstrap", "kind": "command", "description": "Run bootstrap.", "command": "bootstrap_command" }))
+        .tool(json!({ "name": "jig.fmt_check", "kind": "command", "description": "Run fmt.", "command": "rust_fmt_check_command" }))
+        .tool(json!({ "name": "jig.clippy", "kind": "command", "description": "Run clippy.", "command": "rust_clippy_command" }))
+        .tool(json!({ "name": "jig.test", "kind": "command", "description": "Run tests.", "command": "rust_test_command" }))
+        .tool(json!({ "name": "jig.test_locked", "kind": "command", "description": "Run locked tests.", "command": "rust_test_locked_command" }))
+        .tool(json!({ "name": "jig.contract_check", "kind": "native", "description": "Run native contract check." }))
+        .write();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let output = dispatch(
@@ -401,37 +339,21 @@ rust_test_locked_command = "printf 'test locked\n'"
 #[test]
 fn failed_tool_error_remains_primary_when_receipt_append_fails() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n' >&2; exit 7"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command"],
-            "tools": [
-                {
-                    "name": "jig.test",
-                    "kind": "command",
-                    "description": "Run configured test command.",
-                    "command": "rust_test_command"
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     fs::write(temp.path().join(".agent/state"), "not a directory").unwrap();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -455,37 +377,21 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
 #[test]
 fn collect_result_keeps_failed_tool_context_when_receipt_append_fails() {
     let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join(".agent")).unwrap();
-    fs::write(
-        temp.path().join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
 rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n' >&2; exit 7"
 "#,
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 2,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_test_command"],
-            "tools": [
-                {
-                    "name": "jig.test",
-                    "kind": "command",
-                    "description": "Run configured test command.",
-                    "command": "rust_test_command"
-                }
-            ],
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
         }))
-        .unwrap(),
-    )
-    .unwrap();
+        .write();
     fs::write(temp.path().join(".agent/state"), "not a directory").unwrap();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();

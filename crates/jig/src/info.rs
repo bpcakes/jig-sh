@@ -344,6 +344,7 @@ fn string_list(values: Option<&Vec<Value>>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::TestRepoBuilder;
     use serde_json::json;
     use std::fs;
     use std::path::Path;
@@ -580,14 +581,9 @@ mod tests {
     }
 
     fn write_info_fixture(root: &Path) {
-        fs::create_dir_all(root.join(".agent")).unwrap();
-        fs::write(
-            root.join(".jig.toml"),
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+        TestRepoBuilder::new(root)
+            .config(
+                r#"
 sqlx_enabled = true
 rust_migration_dir = "migrations"
 rust_sqlx_metadata_dir = ".sqlx"
@@ -617,26 +613,14 @@ tool = "jig.test"
 [agent_tooling.codex]
 marketplaces = []
 "#,
-        )
-        .unwrap();
-        fs::write(
-            root.join(".agent/jig-contract.json"),
-            serde_json::to_string_pretty(&json!({
-                "contract_version": 3,
-                "tool_namespace": "jig",
-                "jig_version": "0.2.0-beta.1",
-                "required_commands": ["bootstrap_command", "rust_test_command"],
-                "tools": [
-                    {
-                        "name": "jig.test",
-                        "kind": "command",
-                        "description": "Run tests.",
-                        "command": "rust_test_command"
-                    }
-                ],
+            )
+            .required_commands(["bootstrap_command", "rust_test_command"])
+            .tool(json!({
+                "name": "jig.test",
+                "kind": "command",
+                "description": "Run tests.",
+                "command": "rust_test_command"
             }))
-            .unwrap(),
-        )
-        .unwrap();
+            .write();
     }
 }

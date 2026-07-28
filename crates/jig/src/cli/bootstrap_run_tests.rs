@@ -1,7 +1,7 @@
 use clap::ValueEnum;
 use serde_json::json;
 
-use crate::test_env::{EnvVarGuard, lock_env};
+use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
@@ -152,14 +152,9 @@ fn ensure_bootstrap_vault_initializes_repo_scope_and_reports_created() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
-    std::fs::create_dir_all(repo.join(".agent")).unwrap();
-    std::fs::write(
-        repo.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(&repo)
+        .config(
+            r#"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "cargo fmt --all -- --check"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
@@ -173,20 +168,9 @@ scope = "repo"
 scope_id = "scope_123"
 allow_global = false
 "#,
-    )
-    .unwrap();
-    std::fs::write(
-        repo.join(".agent/jig-contract.json"),
-        json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["bootstrap_command"],
-            "tools": []
-        })
-        .to_string(),
-    )
-    .unwrap();
+        )
+        .required_commands(["bootstrap_command"])
+        .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "correct horse battery staple");
     let bootstrap = json!({ "destination": repo.display().to_string() });
@@ -205,14 +189,9 @@ fn ensure_bootstrap_vault_late_passphrase_error_mentions_written_repo_files() {
     let _env = lock_env();
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
-    std::fs::create_dir_all(repo.join(".agent")).unwrap();
-    std::fs::write(
-        repo.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(&repo)
+        .config(
+            r#"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "cargo fmt --all -- --check"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
@@ -226,20 +205,9 @@ scope = "repo"
 scope_id = "scope_123"
 allow_global = false
 "#,
-    )
-    .unwrap();
-    std::fs::write(
-        repo.join(".agent/jig-contract.json"),
-        json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["bootstrap_command"],
-            "tools": []
-        })
-        .to_string(),
-    )
-    .unwrap();
+        )
+        .required_commands(["bootstrap_command"])
+        .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
     let bootstrap = json!({ "destination": repo.display().to_string() });
