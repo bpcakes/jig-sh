@@ -1,4 +1,3 @@
-
 use super::*;
 #[cfg(windows)]
 use crate::types::{AppKind, AppRunSpec, CommandSpec, ProxySettings};

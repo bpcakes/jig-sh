@@ -1,4 +1,3 @@
-
 #[cfg(any(unix, windows))]
 use super::super::termination_test_guard;
 use super::*;
