@@ -411,26 +411,28 @@ impl RouteCache {
                 .await
                 .context("Route loading task failed")??;
 
-        let mut cache = self
-            .inner
-            .write()
-            .map_err(|_| anyhow::anyhow!("jig proxy route cache write lock was poisoned"))?;
-        if signature.is_some()
-            && cache.signature == signature
-            && cache
-                .loaded_at
-                .is_some_and(|loaded_at| loaded_at.elapsed() <= ROUTE_CACHE_MAX_AGE)
         {
-            return Ok(Arc::clone(&cache.routes));
-        }
-        if signature.is_some() {
-            cache.signature = signature;
-            cache.loaded_at = Some(Instant::now());
-            cache.routes = Arc::clone(&routes);
-        } else {
-            cache.signature = None;
-            cache.loaded_at = None;
-            cache.routes = Arc::new(Vec::new());
+            let mut cache = self
+                .inner
+                .write()
+                .map_err(|_| anyhow::anyhow!("jig proxy route cache write lock was poisoned"))?;
+            if signature.is_some()
+                && cache.signature == signature
+                && cache
+                    .loaded_at
+                    .is_some_and(|loaded_at| loaded_at.elapsed() <= ROUTE_CACHE_MAX_AGE)
+            {
+                return Ok(Arc::clone(&cache.routes));
+            }
+            if signature.is_some() {
+                cache.signature = signature;
+                cache.loaded_at = Some(Instant::now());
+                cache.routes = Arc::clone(&routes);
+            } else {
+                cache.signature = None;
+                cache.loaded_at = None;
+                cache.routes = Arc::new(Vec::new());
+            }
         }
         Ok(routes)
     }
@@ -520,17 +522,22 @@ impl TlsCache {
         let acceptor = tokio::task::spawn_blocking(move || tls_acceptor(&store, http2))
             .await
             .context("TLS certificate loading task failed")??;
-        let mut cache = self
-            .inner
-            .write()
-            .map_err(|_| anyhow::anyhow!("jig proxy TLS cache write lock was poisoned"))?;
-        cache.signature = signature;
-        cache.loaded_at = Some(Instant::now());
-        cache.acceptor = Some(acceptor.clone());
+        {
+            let mut cache = self
+                .inner
+                .write()
+                .map_err(|_| anyhow::anyhow!("jig proxy TLS cache write lock was poisoned"))?;
+            cache.signature = signature;
+            cache.loaded_at = Some(Instant::now());
+            cache.acceptor = Some(acceptor.clone());
+        }
         Ok(acceptor)
     }
 }
 
+// `None` is the cache's not-yet-observed state; an observation is `Some` even
+// when either individual certificate file is currently absent.
+#[allow(clippy::unnecessary_wraps)]
 fn tls_signature(store: &StateStore) -> TlsSignature {
     Some((
         file_signature(&store.leaf_path()),
@@ -587,7 +594,10 @@ async fn serve_http(
         let limits = limits.clone();
         let listener_context = listener_context.clone();
         tokio::spawn(async move {
-            let connection_permit = ConnectionPermit::new(permit);
+            // The permit intentionally spans construction and serving of the
+            // whole connection task, including upgraded connections.
+            #[allow(clippy::significant_drop_tightening)]
+            let _connection_permit = ConnectionPermit::new(permit);
             let request_context = RequestContext {
                 remote_addr,
                 proxy_port: listener_context.proxy_port,
@@ -604,7 +614,6 @@ async fn serve_http(
                     limits.clone(),
                 )
             });
-            let _connection_permit = connection_permit;
             let io = TokioIo::new(stream);
             let mut http1 = hyper::server::conn::http1::Builder::new();
             http1.timer(TokioTimer::new());
@@ -659,9 +668,10 @@ async fn serve_https(
         let limits = limits.clone();
         let listener_context = listener_context.clone();
         tokio::spawn(async move {
-            let connection_permit = ConnectionPermit::new(permit);
             // This includes certificate reload and the first ClientHello, so
             // stale or idle clients cannot pin connection permits indefinitely.
+            #[allow(clippy::significant_drop_tightening)]
+            let _connection_permit = ConnectionPermit::new(permit);
             let handshake = async {
                 let tls = tls_cache
                     .acceptor()
@@ -696,7 +706,6 @@ async fn serve_https(
                     limits.clone(),
                 )
             });
-            let _connection_permit = connection_permit;
             let io = TokioIo::new(stream);
             if http2 {
                 let mut builder =

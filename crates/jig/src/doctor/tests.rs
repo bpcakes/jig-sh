@@ -2250,6 +2250,9 @@ fn sqlx_driver_probe_reaps_descendants_on_completion_and_timeout() {
 }
 
 #[cfg(unix)]
+// The scoped signal session must remain active until the explicit finish path
+// restores handlers and re-delivers any recorded signal.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_driver_probe_sigint_helper() {
     let Some(executable) = std::env::var_os("JIG_SQLX_PROBE_SIGINT_HELPER") else {
@@ -2292,6 +2295,8 @@ fn sqlx_probe_signal_finish_fails_closed_when_restoration_fails() {
 }
 
 #[cfg(unix)]
+// Session ownership deliberately spans signal delivery through restoration.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_probe_signal_session_redelivers_distinct_signals_once_after_restoration() {
     const HELPER: &str = "JIG_SQLX_PROBE_MIXED_SIGNAL_HELPER";
@@ -2357,6 +2362,8 @@ fn sqlx_probe_signal_session_redelivers_distinct_signals_once_after_restoration(
 }
 
 #[cfg(unix)]
+// Session ownership deliberately spans signal delivery through restoration.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_probe_signal_session_does_not_swallow_later_default_termination() {
     use std::os::unix::process::ExitStatusExt;
@@ -2406,6 +2413,8 @@ fn sqlx_probe_signal_session_does_not_swallow_later_default_termination() {
 }
 
 #[cfg(unix)]
+// These guards serialize generations and are consumed only by explicit finish.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
     use std::sync::mpsc;
@@ -2499,6 +2508,8 @@ fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
 }
 
 #[cfg(unix)]
+// These guards pin the generation until delayed callbacks are accounted for.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation() {
     const HELPER: &str = "JIG_SQLX_PROBE_DELAYED_ENTRY_HELPER";
@@ -2573,6 +2584,8 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
 }
 
 #[cfg(unix)]
+// The guard must outlive the paused handler until fail-closed retirement.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn sqlx_probe_signal_session_timeout_fails_closed_for_a_recorded_signal() {
     use std::sync::mpsc;

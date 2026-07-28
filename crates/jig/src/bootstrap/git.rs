@@ -441,6 +441,9 @@ fn existing_git_work_tree_root(destination: &Path) -> Result<PathBuf> {
         git_command_failed_message(destination, output)
     })?;
     strip_git_path_line_ending(&mut output.stdout)?;
+    #[cfg(unix)]
+    let reported = PathBuf::from(git_path_from_bytes(output.stdout));
+    #[cfg(not(unix))]
     let reported = PathBuf::from(git_path_from_bytes(output.stdout)?);
     let reported = if reported.is_absolute() {
         reported
@@ -957,7 +960,14 @@ fn configured_git_template_dir(
         staged_git_command_failed_message(work_tree, output)
     })?;
     strip_git_path_line_ending(&mut output.stdout)?;
-    git_path_from_bytes(output.stdout).map(Some)
+    #[cfg(unix)]
+    {
+        Ok(Some(git_path_from_bytes(output.stdout)))
+    }
+    #[cfg(not(unix))]
+    {
+        git_path_from_bytes(output.stdout).map(Some)
+    }
 }
 
 fn default_git_template_dir(
@@ -974,6 +984,9 @@ fn default_git_template_dir(
         staged_git_command_failed_message(work_tree, output)
     })?;
     strip_git_path_line_ending(&mut output.stdout)?;
+    #[cfg(unix)]
+    let exec_path = PathBuf::from(git_path_from_bytes(output.stdout));
+    #[cfg(not(unix))]
     let exec_path = PathBuf::from(git_path_from_bytes(output.stdout)?);
     let exec_path = if exec_path.is_absolute() {
         exec_path
@@ -1027,10 +1040,10 @@ fn create_empty_private_git_template(path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn git_path_from_bytes(bytes: Vec<u8>) -> Result<std::ffi::OsString> {
+fn git_path_from_bytes(bytes: Vec<u8>) -> std::ffi::OsString {
     use std::os::unix::ffi::OsStringExt;
 
-    Ok(std::ffi::OsString::from_vec(bytes))
+    std::ffi::OsString::from_vec(bytes)
 }
 
 #[cfg(not(unix))]

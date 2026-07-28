@@ -18,7 +18,20 @@ const MAX_TIMELINE_LIMIT: usize = 1000;
 
 /// Read-only data source for the dashboard and plan detail routes.
 pub trait SnapshotProvider: Sync {
+    /// Collects the dashboard snapshot for a parsed timeline query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when repository state or supporting status data cannot
+    /// be read or assembled safely.
     fn dashboard_snapshot(&self, query: UiQuery) -> Result<DashboardSnapshot>;
+
+    /// Collects one plan snapshot when the requested plan exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when plan state, related gates, or timeline data cannot
+    /// be read or assembled safely.
     fn plan_snapshot(&self, plan_id: &str) -> Result<Option<PlanSnapshot>>;
 }
 

@@ -103,6 +103,13 @@ impl ResolvedDevRequest {
     }
 }
 
+/// Resolves workspace discovery, application selection, and repository paths.
+///
+/// # Errors
+///
+/// Returns an error when the repository or app paths are invalid, workspace
+/// discovery fails, a requested app is unavailable, or resolved paths escape
+/// the repository.
 pub fn resolve_dev_request(request: DevRequest) -> Result<ResolvedDevRequest> {
     let root = fs::canonicalize(&request.root).with_context(|| {
         format!(
@@ -188,6 +195,11 @@ fn resolve_selected_app_directories(root: &Path, specs: &mut [AppRunSpec]) -> Re
 
 /// Runs a resolved development plan under one foreground termination session,
 /// including a caller-owned preflight that can poll for cancellation.
+///
+/// # Errors
+///
+/// Returns an error when executable discovery, preflight, process supervision,
+/// app readiness, proxy routing, or cleanup fails.
 pub fn dev_resolved_with_preflight(
     request: ResolvedDevRequest,
     preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
@@ -246,6 +258,12 @@ fn normalize_proxy_start_result(result: Result<()>) -> Result<Option<Value>> {
     }
 }
 
+/// Starts the local proxy in the foreground or as a managed background process.
+///
+/// # Errors
+///
+/// Returns an error when executable or state resolution, certificate loading,
+/// listener startup, process supervision, or runtime-state inspection fails.
 pub fn proxy_start(request: ProxyStartRequest) -> Result<Value> {
     let current_exe = current_exe()?;
     if request.foreground {
@@ -272,6 +290,12 @@ pub fn proxy_start(request: ProxyStartRequest) -> Result<Value> {
     }))
 }
 
+/// Stops the matching local proxy when its ownership can be verified.
+///
+/// # Errors
+///
+/// Returns an error when state or service inspection fails, proxy ownership is
+/// uncertain, termination fails, or runtime cleanup cannot be confirmed.
 pub fn proxy_stop(request: ProxyStopRequest) -> Result<Value> {
     proxy_stop_with_service_probe(request, proxy_service_status_snapshot)
 }
@@ -620,6 +644,12 @@ fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
     !pid_is_alive(pid)
 }
 
+/// Lists proxy routes and runtime status.
+///
+/// # Errors
+///
+/// Returns an error when proxy state, route data, process identity, or service
+/// status cannot be read or validated safely.
 pub fn proxy_list(request: ProxyListRequest) -> Result<Value> {
     proxy_list_with_service_probe(request, proxy_service_status_snapshot)
 }
@@ -774,6 +804,12 @@ const fn proxy_exe_note() -> &'static str {
     "If this path came from JIG_DEV_BIN, restart the long-running proxy after rebuilding or replacing that binary."
 }
 
+/// Removes routes whose owning processes are no longer live.
+///
+/// # Errors
+///
+/// Returns an error when state resolution, route locking, route validation, or
+/// the atomic state rewrite fails.
 pub fn proxy_prune(request: ProxyPruneRequest) -> Result<Value> {
     if missing_state_dir(&request.settings)?.is_some() {
         return Ok(json!({ "ok": true, "routes": [] }));
@@ -783,6 +819,12 @@ pub fn proxy_prune(request: ProxyPruneRequest) -> Result<Value> {
     Ok(json!({ "ok": true, "routes": routes }))
 }
 
+/// Runs one proxied application under foreground process supervision.
+///
+/// # Errors
+///
+/// Returns an error when executable discovery, app startup, listener ownership
+/// verification, route publication, proxy startup, or cleanup fails.
 pub fn proxy_run_foreground(request: ProxyRunRequest) -> Result<Value> {
     let current_exe = current_exe()?;
     let app = request.spec.name.clone();
@@ -794,6 +836,13 @@ pub fn proxy_run_foreground(request: ProxyRunRequest) -> Result<Value> {
     )
 }
 
+/// Registers a static proxy alias after validating its target and exposure.
+///
+/// # Errors
+///
+/// Returns an error when the target or hostname is invalid, required exposure
+/// acknowledgement is absent, state mutation fails, or certificates cannot be
+/// refreshed safely.
 pub fn proxy_alias(request: ProxyAliasRequest) -> Result<Value> {
     if request.target_port == 0 {
         bail!("Proxy alias target port must be greater than 0");
@@ -856,6 +905,12 @@ fn proxy_https_listener_is_current_jig_proxy(store: &StateStore) -> Result<bool>
     Ok(store.read_pid()? == Some(health_pid))
 }
 
+/// Executes an explicit local certificate operation.
+///
+/// # Errors
+///
+/// Returns an error when certificate state is invalid, key or certificate I/O
+/// fails, trust acknowledgement is absent, or the platform trust command fails.
 pub fn proxy_cert(request: ProxyCertRequest) -> Result<Value> {
     match request {
         ProxyCertRequest::Generate { settings, force } => certs::generate(&settings, force),
@@ -871,6 +926,12 @@ pub fn proxy_cert(request: ProxyCertRequest) -> Result<Value> {
     }
 }
 
+/// Executes an explicit user-service operation for the local proxy.
+///
+/// # Errors
+///
+/// Returns an error when service scope acknowledgement is absent, service files
+/// are invalid, or platform service installation, removal, or inspection fails.
 pub fn proxy_service(request: ProxyServiceRequest) -> Result<Value> {
     match request {
         ProxyServiceRequest::Install {
@@ -884,6 +945,12 @@ pub fn proxy_service(request: ProxyServiceRequest) -> Result<Value> {
     }
 }
 
+/// Resolves the canonical path of the running Jig executable.
+///
+/// # Errors
+///
+/// Returns an error when the current executable path cannot be read or
+/// canonicalized.
 pub fn current_exe() -> Result<std::path::PathBuf> {
     let path = std::env::current_exe()?;
     path.canonicalize().with_context(|| {
@@ -894,6 +961,12 @@ pub fn current_exe() -> Result<std::path::PathBuf> {
     })
 }
 
+/// Resolves the proxy state directory from an override, environment, or home.
+///
+/// # Errors
+///
+/// Returns an error when no explicit or environment override is present and a
+/// home directory cannot be resolved.
 pub fn resolve_state_dir(explicit: Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
     if let Some(path) = explicit {
         Ok(path)

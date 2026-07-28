@@ -260,6 +260,9 @@ fn normalize_link(raw: &str, map_dir: &Path) -> Option<String> {
     Some(normalize_relative_path(&combined))
 }
 
+// Keep the explicit current-directory case distinct from unsupported/root
+// components even though both intentionally leave the relative stack unchanged.
+#[allow(clippy::match_same_arms)]
 fn normalize_relative_path(path: &Path) -> String {
     let mut stack = Vec::new();
     for component in path.components() {

@@ -57,6 +57,11 @@ impl Report {
     ///
     /// Every discovered issue is returned so provider authors can fix one
     /// report in a single pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns all semantic validation failures found in provider metadata,
+    /// inputs, work packages, diagnostics, extensions, and referenced paths.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
         validate_required(

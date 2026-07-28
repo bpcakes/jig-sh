@@ -160,7 +160,7 @@ fn run_native_tool(
     match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
-        NativeToolKind::ContractCheck => crate::policy::contract_check(ctx),
+        NativeToolKind::ContractCheck => Ok(crate::policy::contract_check(ctx)),
         NativeToolKind::MigrationAdd => {
             let name = args_value
                 .get(args::NAME)

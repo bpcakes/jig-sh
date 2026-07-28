@@ -562,7 +562,7 @@ fn git_init_preserves_a_non_utf8_template_path_from_global_config() {
 fn configured_git_path_preserves_non_utf8_bytes() {
     use std::os::unix::ffi::OsStrExt;
 
-    let path = super::git_path_from_bytes(b"template-\xff".to_vec()).unwrap();
+    let path = super::git_path_from_bytes(b"template-\xff".to_vec());
     assert_eq!(path.as_bytes(), b"template-\xff");
 }
 

@@ -49,6 +49,12 @@ impl SecretBytes {
         self.value.as_mut_slice()
     }
 
+    /// Appends bytes without allowing the backing allocation to grow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretBytesCapacityError`] when the new length overflows or
+    /// exceeds the existing allocation capacity.
     pub fn extend_from_slice(&mut self, bytes: &[u8]) -> Result<(), SecretBytesCapacityError> {
         let Some(new_len) = self.len().checked_add(bytes.len()) else {
             return Err(SecretBytesCapacityError);
@@ -64,6 +70,12 @@ impl SecretBytes {
         self.value.truncate(len);
     }
 
+    /// Converts the bytes into a protected UTF-8 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original [`SecretBytes`] when its contents are not valid
+    /// UTF-8.
     pub fn into_secret_string(self) -> std::result::Result<SecretString, Self> {
         self.into_zeroizing_string().map(|mut value| {
             let owned = std::mem::take(&mut *value);

@@ -1068,7 +1068,7 @@ fn write_repository_file_atomic_with(
         .parent()
         .with_context(|| format!("Repository file has no parent: {}", path.display()))?;
     let existing_permissions = match expected_leaf {
-        RepositoryFileLeaf::Missing => None,
+        RepositoryFileLeaf::Missing | RepositoryFileLeaf::Symlink => None,
         RepositoryFileLeaf::RegularFile => {
             let metadata = fs::symlink_metadata(&path)
                 .with_context(|| format!("Failed to stat {}", path.display()))?;
@@ -1080,7 +1080,6 @@ fn write_repository_file_atomic_with(
             }
             Some(metadata.permissions())
         }
-        RepositoryFileLeaf::Symlink => None,
     };
     let final_permissions = desired_permissions.or(existing_permissions);
 
@@ -1732,6 +1731,9 @@ pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathB
     Ok(resolved)
 }
 
+// The shared publication boundary is fallible on platforms without a hardened
+// no-replace primitive even though supported targets return immediately.
+#[allow(clippy::unnecessary_wraps)]
 const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<()> {
     #[cfg(any(
         target_os = "linux",

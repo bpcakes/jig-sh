@@ -145,7 +145,7 @@ fn ensure_for_hosts_locked_interruptible(
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
     };
     ensure_leaf_hosts_within_ca_constraints(&store.ca_path(), &hosts)?;
-    if leaf_matches_hosts(store, &hosts)? {
+    if leaf_matches_hosts(store, &hosts) {
         restrict_private_key(&store.ca_key_path())?;
         restrict_private_key(&store.leaf_key_path())?;
         return Ok(LockOutcome::Acquired(certificate_paths(store)));
@@ -154,6 +154,9 @@ fn ensure_for_hosts_locked_interruptible(
     Ok(LockOutcome::Acquired(certificate_paths(store)))
 }
 
+// The shared call boundary is fallible because the Windows implementation
+// rejects generation until private-key ACL hardening is available.
+#[allow(clippy::unnecessary_wraps)]
 const fn ensure_certificate_generation_supported() -> Result<()> {
     #[cfg(windows)]
     {
@@ -557,20 +560,20 @@ fn write_leaf_hosts(store: &StateStore, hosts: &[String]) -> Result<()> {
     file_ops::write_atomic_text(store.leaf_hosts_path(), &text, CERT_FILE_FALLBACK)
 }
 
-fn leaf_matches_hosts(store: &StateStore, desired_hosts: &[String]) -> Result<bool> {
+fn leaf_matches_hosts(store: &StateStore, desired_hosts: &[String]) -> bool {
     // This sidecar is written in the same locked regeneration path as the leaf
     // certificate. Treat parse/read failure as a cache miss and regenerate.
     if !store.leaf_path().exists()
         || !store.leaf_key_path().exists()
         || !store.leaf_hosts_path().exists()
     {
-        return Ok(false);
+        return false;
     }
     let Ok(text) = fs::read_to_string(store.leaf_hosts_path()) else {
-        return Ok(false);
+        return false;
     };
     let Ok(existing) = serde_json::from_str::<LeafHostsFile>(&text) else {
-        return Ok(false);
+        return false;
     };
     match existing {
         LeafHostsFile::Record(record) if record.version == LEAF_HOSTS_VERSION => {
@@ -580,17 +583,15 @@ fn leaf_matches_hosts(store: &StateStore, desired_hosts: &[String]) -> Result<bo
                 || !certificate_is_current(&store.ca_path()).unwrap_or(false)
                 || !certificate_is_current(&store.leaf_path()).unwrap_or(false)
             {
-                return Ok(false);
+                return false;
             }
-            Ok(
-                private_key_matches_certificate(&store.leaf_key_path(), &store.leaf_path())
-                    .unwrap_or(false),
-            )
+            private_key_matches_certificate(&store.leaf_key_path(), &store.leaf_path())
+                .unwrap_or(false)
         }
-        LeafHostsFile::Record(_) => Ok(false),
+        LeafHostsFile::Record(_) => false,
         LeafHostsFile::Legacy(hosts) => {
             let _ = hosts;
-            Ok(false)
+            false
         }
     }
 }

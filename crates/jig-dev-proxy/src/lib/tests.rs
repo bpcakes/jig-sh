@@ -9,8 +9,8 @@ use super::*;
 
 mod dev_lifecycle;
 
-fn no_service_snapshot() -> Result<Option<service::ServiceStatusSnapshot>> {
-    Ok(None)
+const fn no_service_snapshot() -> Option<service::ServiceStatusSnapshot> {
+    None
 }
 
 #[test]
@@ -159,9 +159,10 @@ fn proxy_stop_keeps_runtime_files_for_live_unverified_pid() {
     store.write_pid(std::process::id()).unwrap();
     store.write_http_port(closed_loopback_port()).unwrap();
 
-    let output =
-        proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| no_service_snapshot())
-            .unwrap();
+    let output = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(no_service_snapshot())
+    })
+    .unwrap();
 
     assert_eq!(output["ok"].as_bool(), Some(false));
     assert_eq!(output["stopped"].as_bool(), Some(false));
@@ -242,9 +243,10 @@ fn proxy_stop_does_not_kill_when_health_pid_differs() {
     store.write_http_port(port).unwrap();
     store.ensure_health_token().unwrap();
 
-    let output =
-        proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| no_service_snapshot())
-            .unwrap();
+    let output = proxy_stop_with_service_probe(ProxyStopRequest { settings }, |_, _| {
+        Ok(no_service_snapshot())
+    })
+    .unwrap();
     handle.join().unwrap();
 
     assert_eq!(output["ok"].as_bool(), Some(false));
@@ -291,7 +293,7 @@ fn proxy_stop_keeps_runtime_files_when_stale_pid_but_health_pid_cannot_stop() {
 
     let output = proxy_stop_with_service_probe_and_terminator(
         ProxyStopRequest { settings },
-        |_, _| no_service_snapshot(),
+        |_, _| Ok(no_service_snapshot()),
         |pid| {
             attempted_stop.set(Some(pid));
             false
@@ -333,7 +335,7 @@ fn proxy_stop_keeps_runtime_files_when_pid_file_missing_but_health_pid_answers()
 
     let output = proxy_stop_with_service_probe_and_terminator(
         ProxyStopRequest { settings },
-        |_, _| no_service_snapshot(),
+        |_, _| Ok(no_service_snapshot()),
         |pid| {
             attempted_stop.set(Some(pid));
             true
@@ -376,7 +378,7 @@ fn proxy_stop_ignores_health_pid_without_health_token() {
 
     let output = proxy_stop_with_service_probe_and_terminator(
         ProxyStopRequest { settings },
-        |_, _| no_service_snapshot(),
+        |_, _| Ok(no_service_snapshot()),
         |pid| {
             attempted_stop.set(Some(pid));
             true
@@ -835,7 +837,7 @@ fn proxy_stop_list_and_prune_noop_when_state_dir_is_missing() {
         ProxyStopRequest {
             settings: settings.clone(),
         },
-        |_, _| no_service_snapshot(),
+        |_, _| Ok(no_service_snapshot()),
     )
     .unwrap();
     let list = proxy_list_with_service_probe(
@@ -843,7 +845,7 @@ fn proxy_stop_list_and_prune_noop_when_state_dir_is_missing() {
             settings: settings.clone(),
             raw: false,
         },
-        |_, _| no_service_snapshot(),
+        |_, _| Ok(no_service_snapshot()),
     )
     .unwrap();
     let prune = proxy_prune(ProxyPruneRequest { settings }).unwrap();

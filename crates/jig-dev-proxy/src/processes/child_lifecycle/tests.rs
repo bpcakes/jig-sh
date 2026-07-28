@@ -143,33 +143,29 @@ fn best_effort_direct_child_cleanup(child: &mut Child) {
     let deadline = Instant::now() + REAP_TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
             Ok(None) => break,
             Err(error)
                 if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
-            Err(_) => return,
+            Ok(Some(_)) | Err(_) => return,
         }
     }
 
     loop {
         match child.kill() {
-            Ok(()) => break,
             Err(error)
                 if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
-            Err(_) => break,
+            Ok(()) | Err(_) => break,
         }
     }
 
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
             Ok(None) if Instant::now() < deadline => {
                 thread::sleep(Duration::from_millis(10));
             }
-            Ok(None) => return,
             Err(error)
                 if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
-            Err(_) => return,
+            Ok(_) | Err(_) => return,
         }
     }
 }
@@ -1870,9 +1866,8 @@ fn linux_proc_scan_treats_vanished_and_dead_members_as_absent() {
             _ => unreachable!(),
         },
         |pid| match pid {
-            10 => Ok(None),
+            10 | 14 => Ok(None),
             11 => Ok(Some(9)),
-            14 => Ok(None),
             _ => panic!("unexpected fallback lookup for {pid}"),
         },
         || true,

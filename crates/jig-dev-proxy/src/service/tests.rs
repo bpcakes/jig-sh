@@ -829,10 +829,7 @@ fn service_state_dir_parsers_decode_generated_values() {
         systemd_quote(&format!("JIG_PROXY_STATE_DIR={state_dir}")).unwrap()
     );
 
-    assert_eq!(
-        plist_service_state_dir(&plist).unwrap().as_deref(),
-        Some(state_dir)
-    );
+    assert_eq!(plist_service_state_dir(&plist).as_deref(), Some(state_dir));
     assert_eq!(
         systemd_service_state_dir(&systemd).unwrap().as_deref(),
         Some(state_dir)

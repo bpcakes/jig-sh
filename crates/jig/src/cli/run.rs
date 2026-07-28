@@ -274,16 +274,8 @@ const fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
     )
 }
 
-const fn check_human_output(command: &CheckCommand) -> HumanOutput {
-    match command {
-        CheckCommand::AgentMap(_)
-        | CheckCommand::AgentGuides
-        | CheckCommand::RustFileLoc(_)
-        | CheckCommand::NoModRs
-        | CheckCommand::MigrationImmutability(_)
-        | CheckCommand::SqlxUncheckedNonTest => HumanOutput::ToolExecution,
-        _ => HumanOutput::ToolExecution,
-    }
+const fn check_human_output(_command: &CheckCommand) -> HumanOutput {
+    HumanOutput::ToolExecution
 }
 
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {

@@ -120,8 +120,9 @@ pub(super) fn normalize_preflight_result(
                 "Development preflight reported cancellation without a pending termination request"
             ),
         },
-        Err(DevPreflightError::Failed(error)) => Err(error),
-        Err(DevPreflightError::CleanupUnconfirmed(error)) => Err(error),
+        Err(DevPreflightError::Failed(error) | DevPreflightError::CleanupUnconfirmed(error)) => {
+            Err(error)
+        }
     }
 }
 

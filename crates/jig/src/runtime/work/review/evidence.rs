@@ -131,6 +131,9 @@ pub(super) fn normalize_severity(value: &str) -> &'static str {
     }
 }
 
+// Unknown severities deliberately receive the warning rank; the named warning
+// arm remains explicit because this ordering is part of review policy.
+#[allow(clippy::match_same_arms)]
 pub(super) fn severity_rank(value: &str) -> u8 {
     match value {
         "critical" => 3,

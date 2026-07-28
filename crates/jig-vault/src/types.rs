@@ -19,6 +19,11 @@ impl SecretName {
     ///
     /// This permits path-like labels for operator organization. The returned
     /// value is not a filesystem-safe path component.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the name is empty, exceeds 128 bytes, or contains
+    /// characters outside the supported metadata alphabet.
     pub fn parse(name: &str) -> Result<Self> {
         if name.is_empty() {
             return Err(VaultError::new(
@@ -72,6 +77,13 @@ impl TryFrom<&str> for SecretName {
 pub struct EnvVarName(String);
 
 impl EnvVarName {
+    /// Parses a portable environment variable name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the name is empty, does not start with a letter or
+    /// underscore, or contains characters other than letters, digits, and
+    /// underscores.
     pub fn parse(name: &str) -> Result<Self> {
         if name.is_empty() {
             return Err(VaultError::new(

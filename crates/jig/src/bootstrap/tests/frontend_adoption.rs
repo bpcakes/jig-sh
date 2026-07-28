@@ -7775,10 +7775,9 @@ esac
         }
 
         let irrelevant = match package_manager {
-            "npm" => "bunfig.toml",
+            "npm" | "yarn" => "bunfig.toml",
             "pnpm" => ".yarnrc",
             "bun" => ".pnpmfile.cjs",
-            "yarn" => "bunfig.toml",
             _ => unreachable!(),
         };
         fs::write(repo.join(irrelevant), "irrelevant manager config\n").unwrap();

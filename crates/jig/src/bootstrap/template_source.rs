@@ -396,7 +396,7 @@ pub(super) fn prepare_update_template_source(
         return prepare_default_update_template_source(stored, opts.recopy, path_base);
     }
 
-    let resolved_source = resolve_update_template_source(opts, stored)?;
+    let resolved_source = resolve_update_template_source(opts, stored);
     let prepared = prepare_template_source_from_base(
         resolved_source.template,
         resolved_source.template_mode,
@@ -440,43 +440,37 @@ fn optional_answer_string(answers: &Table, key: &str) -> Option<String> {
 fn resolve_update_template_source<'a>(
     opts: &'a UpdateOpts,
     stored: &'a StoredTemplateState,
-) -> Result<ResolvedUpdateTemplateSource<'a>> {
+) -> ResolvedUpdateTemplateSource<'a> {
     if let Some(template) = opts.template.as_deref() {
-        return Ok(ResolvedUpdateTemplateSource::new(
+        return ResolvedUpdateTemplateSource::new(
             template,
             inherited_update_template_mode(template, opts.template_mode, stored),
-        ));
+        );
     }
 
     if opts.template_mode == Some(TemplateMode::Committed) {
         if let Some(template) = stored.template_local_path() {
-            return Ok(ResolvedUpdateTemplateSource::new(
-                template,
-                Some(TemplateMode::Committed),
-            ));
+            return ResolvedUpdateTemplateSource::new(template, Some(TemplateMode::Committed));
         }
 
         if is_remote_template_source(stored.source_path()) {
-            return Ok(ResolvedUpdateTemplateSource::new(
-                stored.source_path(),
-                None,
-            ));
+            return ResolvedUpdateTemplateSource::new(stored.source_path(), None);
         }
     }
 
-    Ok(ResolvedUpdateTemplateSource::new(
+    ResolvedUpdateTemplateSource::new(
         stored_update_source(stored),
         inherited_update_template_mode(stored_update_source(stored), opts.template_mode, stored),
-    ))
+    )
 }
 
 #[cfg(test)]
 pub(super) fn test_resolve_update_template_source(
     opts: &UpdateOpts,
     stored: &StoredTemplateState,
-) -> Result<(String, Option<TemplateMode>)> {
-    let resolved = resolve_update_template_source(opts, stored)?;
-    Ok((resolved.template.to_string(), resolved.template_mode))
+) -> (String, Option<TemplateMode>) {
+    let resolved = resolve_update_template_source(opts, stored);
+    (resolved.template.to_string(), resolved.template_mode)
 }
 
 fn prepare_default_update_template_source(

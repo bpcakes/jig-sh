@@ -21,10 +21,21 @@ mod tests;
 /// up owned children before returning. The TUI joins the collection worker
 /// before restoring the terminal and exiting.
 pub trait SnapshotSource: Send + Sync {
+    /// Collects one aggregate snapshot, observing cooperative cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a diagnostic string when collection, decoding, or owned-child
+    /// cleanup prevents a complete snapshot.
     fn snapshot(&self, cancelled: &dyn Fn() -> bool) -> Result<Value, String>;
 }
 
 /// Runs the interactive terminal dashboard until the operator quits.
+///
+/// # Errors
+///
+/// Returns an error when terminal setup, event polling, snapshot collection,
+/// rendering, or terminal restoration fails.
 pub fn run(
     source: impl SnapshotSource + 'static,
     refresh_interval: Duration,

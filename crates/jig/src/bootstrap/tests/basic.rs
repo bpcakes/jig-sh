@@ -6236,7 +6236,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
     let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
     assert_eq!(ctx.repo_name(), "demo");
     assert!(!ctx.required_commands().is_empty());
-    assert_eq!(crate::policy::contract_check(&ctx).unwrap().exit_status, 0);
+    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 
     run_update(UpdateOpts {
         path: repo.clone(),
@@ -6314,7 +6314,7 @@ fn minimal_frontend_keeps_metadata_without_enabling_web_harness_capabilities() {
             .iter()
             .all(|tool| !tool.contains("typescript"))
     );
-    assert_eq!(crate::policy::contract_check(&ctx).unwrap().exit_status, 0);
+    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]
@@ -7168,7 +7168,7 @@ fn minimal_expansion_adds_generated_frontend_commands_around_project_overrides()
         assert!(config["commands"][key].as_str().is_some(), "missing {key}");
     }
     let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).unwrap().exit_status, 0);
+    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]
@@ -7321,7 +7321,7 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     assert_eq!(ids.len(), gates.len());
 
     let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).unwrap().exit_status, 0);
+    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]
@@ -7403,7 +7403,7 @@ fn full_readoption_drops_argument_taking_tools_from_preserved_work_config() {
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains(r#""name": "jig.migration_add""#));
     let ctx = crate::context::RepoContext::load_from(&repo).unwrap();
-    assert_eq!(crate::policy::contract_check(&ctx).unwrap().exit_status, 0);
+    assert_eq!(crate::policy::contract_check(&ctx).exit_status, 0);
 }
 
 #[test]

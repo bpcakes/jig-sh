@@ -351,9 +351,10 @@ fn sanitize_terminal_text(value: &str) -> String {
             State::OperatingSystemCommand if character == '\x1b' => {
                 State::OperatingSystemCommandEscape
             }
-            State::OperatingSystemCommand => State::OperatingSystemCommand,
             State::OperatingSystemCommandEscape if character == '\\' => State::Text,
-            State::OperatingSystemCommandEscape => State::OperatingSystemCommand,
+            State::OperatingSystemCommand | State::OperatingSystemCommandEscape => {
+                State::OperatingSystemCommand
+            }
         };
     }
     output

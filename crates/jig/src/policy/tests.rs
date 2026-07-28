@@ -108,7 +108,7 @@ fn contract_check_allows_minimal_footprint_to_omit_launcher_files() {
     write_footprint_contract_repo(temp.path(), "minimal");
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 0, "{}", output.stderr);
 }
@@ -138,7 +138,7 @@ fn contract_check_still_validates_minimal_commands_and_tools() {
     .unwrap();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(
@@ -163,7 +163,7 @@ fn contract_check_still_requires_launcher_files_for_full_footprint() {
     write_footprint_contract_repo(temp.path(), "full");
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(
@@ -206,7 +206,7 @@ fn contract_check_rejects_make_tool_kind() {
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(
@@ -250,7 +250,7 @@ typescript_lint_command = "scripts/check-webapps.sh lint"
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 0, "{}", output.stderr);
 }
@@ -279,7 +279,7 @@ typescript_lint_command = "npm run lint"
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 0, "{}", output.stderr);
 }
@@ -309,7 +309,7 @@ rust_test_command = "true"
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(output.stderr.contains(tool::FMT_CHECK), "{}", output.stderr);
@@ -342,7 +342,7 @@ coverage_threshold = 80
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(
@@ -393,7 +393,7 @@ coverage_threshold = 80
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 0, "{}", output.stderr);
 }
@@ -427,7 +427,7 @@ rust_test_command = "true"
         .write_contract();
 
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = contract_check(&ctx).unwrap();
+    let output = contract_check(&ctx);
 
     assert_eq!(output.exit_status, 1);
     assert!(output.stderr.contains("missing in [commands]"));

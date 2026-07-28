@@ -290,6 +290,8 @@ fn resolved_review_threshold(fail_on: Option<&str>, severity: Option<&str>) -> &
         .unwrap_or("critical")
 }
 
+// Unknown thresholds fail closed to the same strict level as explicit `critical`.
+#[allow(clippy::match_same_arms)]
 fn normalize_review_threshold(value: &str) -> &'static str {
     match value {
         "high" | "critical" => "critical",

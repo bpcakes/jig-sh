@@ -24,19 +24,19 @@ pub(super) fn dispatch(ctx: &RepoContext, command: AgentCommand) -> Result<JsonV
     // Agent tooling commands describe or mutate local client setup, not repo
     // work evidence, so they intentionally do not record receipts.
     match command {
-        AgentCommand::Doctor => doctor(ctx),
+        AgentCommand::Doctor => Ok(doctor(ctx)),
         AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts),
     }
 }
 
-pub(super) fn doctor(ctx: &RepoContext) -> Result<JsonValue> {
+pub(super) fn doctor(ctx: &RepoContext) -> JsonValue {
     doctor_with_codex_support_probe(ctx, codex_supports_plugin_marketplaces)
 }
 
 pub(super) fn doctor_with_codex_support_probe(
     ctx: &RepoContext,
     mut probe: impl FnMut(&str) -> CodexSupportProbeResult,
-) -> Result<JsonValue> {
+) -> JsonValue {
     let progress = CliProgress::new("agent doctor");
     progress.header("inspect local Codex tooling");
     progress.info("repo", ctx.root().display());
@@ -128,7 +128,7 @@ pub(super) fn doctor_with_codex_support_probe(
         progress.blocked("Codex marketplace setup is incomplete");
     }
 
-    Ok(json!({
+    json!({
         "ok": codex_ready && all_marketplaces_ready,
         "command": "agent doctor",
         "codex": {
@@ -146,7 +146,7 @@ pub(super) fn doctor_with_codex_support_probe(
         },
         "marketplaces": marketplaces,
         "next_steps": next_steps
-    }))
+    })
 }
 
 fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue> {

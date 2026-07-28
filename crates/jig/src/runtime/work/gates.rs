@@ -492,6 +492,9 @@ fn gate_changed_paths<T: GateReceiptView>(receipt: Option<&T>) -> (Vec<String>, 
     (paths, total, total > MAX_GATE_CHANGED_PATHS)
 }
 
+// A declared unsupported gate and an unrecognized future status both block as
+// unsupported, but retaining the named arm documents the stable wire value.
+#[allow(clippy::match_same_arms)]
 fn collect_required_gate_failure(
     gate: &WorkGate,
     status: &Value,

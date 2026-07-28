@@ -732,7 +732,7 @@ impl PromptRegistry {
             }
         }
         let mut warnings = Vec::new();
-        for pack in self.pack_names(&mut warnings)? {
+        for pack in self.pack_names(&mut warnings) {
             match self.read_optional_at(
                 PromptNamespace::Pack(pack.clone()),
                 self.pack_prompt_path(&pack, name),
@@ -781,7 +781,7 @@ impl PromptRegistry {
             prompts.extend(self.scan_dir(PromptNamespace::Repo, repo_dir, &mut warnings)?);
         }
         if include_packs {
-            for pack in self.pack_names(&mut warnings)? {
+            for pack in self.pack_names(&mut warnings) {
                 let prompts_dir = self.packs_dir.join(&pack.0).join("prompts");
                 prompts.extend(self.scan_dir(
                     PromptNamespace::Pack(pack),
@@ -818,9 +818,9 @@ impl PromptRegistry {
         Ok(prompts)
     }
 
-    fn pack_names(&self, warnings: &mut Vec<String>) -> Result<Vec<PackName>> {
+    fn pack_names(&self, warnings: &mut Vec<String>) -> Vec<PackName> {
         if !self.packs_dir.exists() {
-            return Ok(Vec::new());
+            return Vec::new();
         }
         let mut names = Vec::new();
         let entries = match fs::read_dir(&self.packs_dir) {
@@ -830,7 +830,7 @@ impl PromptRegistry {
                     "Skipping prompt packs in {}: {error:#}",
                     self.packs_dir.display()
                 ));
-                return Ok(Vec::new());
+                return Vec::new();
             }
         };
         for entry in entries {
@@ -866,7 +866,7 @@ impl PromptRegistry {
             }
         }
         names.sort();
-        Ok(names)
+        names
     }
 
     fn read_at(
@@ -920,7 +920,7 @@ impl PromptRegistry {
     }
 }
 
-pub(crate) fn format_prompt_human_output(output: &Value) -> Result<String> {
+pub(crate) fn format_prompt_human_output(output: &Value) -> String {
     let command = output["command"].as_str().unwrap_or("prompt");
     match command {
         "prompt list" | "prompt search" => {
@@ -932,24 +932,23 @@ pub(crate) fn format_prompt_human_output(output: &Value) -> Result<String> {
                 lines.push("no prompts".to_string());
             }
             lines.push(String::new());
-            Ok(lines.join("\n"))
+            lines.join("\n")
         }
-        "prompt copy" => Ok(format!(
+        "prompt copy" => format!(
             "{command}: {}\n",
             output["qualified_name"]
                 .as_str()
                 .or_else(|| output["name"].as_str())
                 .unwrap_or("")
-        )),
-        "prompt edit" if output["editor"].as_bool() == Some(false) => Ok(format!(
+        ),
+        "prompt edit" if output["editor"].as_bool() == Some(false) => format!(
             "{command}: {}\npath: {}\n",
             output["name"].as_str().unwrap_or(""),
             output["path"].as_str().unwrap_or("")
-        )),
-        "prompt add" | "prompt edit" | "prompt remove" => Ok(format!(
-            "{command}: {}\n",
-            output["name"].as_str().unwrap_or("")
-        )),
+        ),
+        "prompt add" | "prompt edit" | "prompt remove" => {
+            format!("{command}: {}\n", output["name"].as_str().unwrap_or(""))
+        }
         "prompt import" => {
             let count = output["imported"].as_array().map(Vec::len).unwrap_or(0);
             let overwritten = output["imported"]
@@ -958,21 +957,17 @@ pub(crate) fn format_prompt_human_output(output: &Value) -> Result<String> {
                 .flatten()
                 .filter(|entry| entry["overwritten"].as_bool() == Some(true))
                 .count();
-            Ok(format!(
-                "prompt import: {count} prompts imported, {overwritten} overwritten\n"
-            ))
+            format!("prompt import: {count} prompts imported, {overwritten} overwritten\n")
         }
         "prompt export" => {
             let count = output["prompt_count"].as_u64().unwrap_or(0);
             if let Some(path) = output["output"].as_str() {
-                Ok(format!(
-                    "prompt export: {count} prompts written to {path}\n"
-                ))
+                format!("prompt export: {count} prompts written to {path}\n")
             } else {
-                Ok(format!("prompt export: {count} prompts\n"))
+                format!("prompt export: {count} prompts\n")
             }
         }
-        _ => Ok(format!("{command}: ok\n")),
+        _ => format!("{command}: ok\n"),
     }
 }
 

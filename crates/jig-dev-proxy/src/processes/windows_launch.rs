@@ -126,7 +126,10 @@ fn plan_resolved_windows_command_with_interpreter(
             resolved.canonical_path.into_os_string(),
         ));
     }
+    #[cfg(windows)]
     let command_shim = command_shim_launch_path(&resolved.launch_path)?;
+    #[cfg(not(windows))]
+    let command_shim = command_shim_launch_path(&resolved.launch_path);
 
     Ok(WindowsCommandPlan::CommandInterpreter {
         command_interpreter: resolve_interpreter(environment.command_interpreter.as_deref())?,
@@ -258,8 +261,8 @@ fn command_shim_launch_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn command_shim_launch_path(path: &Path) -> io::Result<PathBuf> {
-    Ok(path.to_path_buf())
+fn command_shim_launch_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 #[cfg(windows)]

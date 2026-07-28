@@ -458,7 +458,7 @@ fn run_pr_repair(
 
     let worker_output = parse_pr_worker_output(&worker.output.stdout)?;
     let push = commit_and_push(&worktree, &item.head_ref, &base_head)?;
-    let review_thread_posts = post_review_thread_updates(ctx, pull_request, &worker_output)?;
+    let review_thread_posts = post_review_thread_updates(ctx, pull_request, &worker_output);
     let status = if review_thread_posts.failed {
         "failed"
     } else {
@@ -569,7 +569,7 @@ fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
     worker_output: &Value,
-) -> Result<ReviewThreadPostResult> {
+) -> ReviewThreadPostResult {
     let empty = Vec::new();
     let replies = worker_output
         .get("review_thread_replies")
@@ -674,10 +674,10 @@ fn post_review_thread_updates(
             "resolve_skip_reason": resolve_skip_reason,
         }));
     }
-    Ok(ReviewThreadPostResult {
+    ReviewThreadPostResult {
         posts: json!(posts),
         failed,
-    })
+    }
 }
 
 fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {

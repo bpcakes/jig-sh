@@ -105,8 +105,8 @@ fn remove_job_entry_if_generation<H>(
 }
 
 #[cfg(not(windows))]
-pub(super) const fn register_app_child(_child: &mut Child) -> Result<AppProcessLease> {
-    Ok(AppProcessLease)
+pub(super) const fn register_app_child(_child: &mut Child) -> AppProcessLease {
+    AppProcessLease
 }
 
 #[cfg(windows)]
@@ -865,8 +865,7 @@ fn terminate_registered_windows_job_with(
     let release = release_job();
     match (confirmation, release) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
         (Err(error), Err(release_error)) => Err(error.context(format!(
             "app process job handle release also failed: {release_error:#}"
         ))),

@@ -718,6 +718,7 @@ fn spawn_child_with_cleanup_report(
     // App commands are trusted repo-configured dev processes and intentionally
     // inherit the caller's environment. Derived app coordinates are replaced
     // below; only the background proxy clears the broader environment.
+    #[cfg(windows)]
     let working_directory = child_working_directory(&spec.dir).with_context(|| {
         format!(
             "Development app '{}' directory {} cannot be represented safely for a child process",
@@ -725,6 +726,9 @@ fn spawn_child_with_cleanup_report(
             spec.dir.display()
         )
     })?;
+    #[cfg(not(windows))]
+    let working_directory = child_working_directory(&spec.dir);
+    #[cfg(windows)]
     let mut command =
         build_app_child_command(argv, &working_directory, dev_env).with_context(|| {
             format!(
@@ -732,6 +736,8 @@ fn spawn_child_with_cleanup_report(
                 argv[0], spec.name
             )
         })?;
+    #[cfg(not(windows))]
+    let mut command = build_app_child_command(argv, &working_directory, dev_env);
     command.current_dir(&working_directory);
     apply_dev_child_environment(
         &mut command,
@@ -785,6 +791,7 @@ fn spawn_child_with_cleanup_report(
         pid: child.id(),
         start_token: process_start_token(child.id()),
     };
+    #[cfg(windows)]
     let process_lease = match register_app_child(&mut child) {
         Ok(lease) => lease,
         Err(error) => {
@@ -802,6 +809,8 @@ fn spawn_child_with_cleanup_report(
             });
         }
     };
+    #[cfg(not(windows))]
+    let process_lease = register_app_child(&mut child);
     let output = match CapturedAppOutput::from_child(&mut child, &spec.name) {
         Ok(output) => output,
         Err(failure) => {
@@ -926,8 +935,8 @@ fn child_working_directory(path: &Path) -> Result<std::path::PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn child_working_directory(path: &Path) -> Result<std::path::PathBuf> {
-    Ok(path.to_path_buf())
+fn child_working_directory(path: &Path) -> std::path::PathBuf {
+    path.to_path_buf()
 }
 
 #[cfg(windows)]
@@ -944,10 +953,10 @@ fn build_app_child_command(
     argv: &[String],
     _working_directory: &Path,
     _dev_env: &[(String, String)],
-) -> Result<Command> {
+) -> Command {
     let mut command = Command::new(&argv[0]);
     command.args(&argv[1..]);
-    Ok(command)
+    command
 }
 
 fn remove_route_best_effort(

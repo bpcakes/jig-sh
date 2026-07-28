@@ -366,7 +366,7 @@ impl RepoContext {
             );
         }
 
-        let current_session_path = resolve_current_session_path(&root)?;
+        let current_session_path = resolve_current_session_path(&root);
 
         Ok(Self {
             root,
@@ -605,6 +605,9 @@ const fn default_proxy_http_port() -> u16 {
     1355
 }
 
+// Serde requires this default function to return the field's `Option<u16>`
+// type; `Some` means HTTPS is configured by default rather than mandatory.
+#[allow(clippy::unnecessary_wraps)]
 const fn default_proxy_https_port() -> Option<u16> {
     Some(1443)
 }
@@ -946,7 +949,7 @@ fn find_optional_repo_root_from(start: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
-fn resolve_current_session_path(root: &Path) -> Result<PathBuf> {
+fn resolve_current_session_path(root: &Path) -> PathBuf {
     let output = Command::new("git")
         .current_dir(root)
         .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE])
@@ -957,16 +960,16 @@ fn resolve_current_session_path(root: &Path) -> Result<PathBuf> {
             let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !resolved.is_empty() {
                 let path = PathBuf::from(&resolved);
-                return Ok(if path.is_absolute() {
+                return if path.is_absolute() {
                     path
                 } else {
                     root.join(path)
-                });
+                };
             }
         }
     }
 
-    Ok(root.join(".agent/.cache").join(CURRENT_SESSION_FILE))
+    root.join(".agent/.cache").join(CURRENT_SESSION_FILE)
 }
 
 #[cfg(test)]

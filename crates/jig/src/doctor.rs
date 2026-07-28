@@ -427,8 +427,9 @@ fn unquote_shell_value(value: &str) -> &str {
 }
 
 fn contract_check(ctx: &RepoContext) -> DoctorCheck {
-    match crate::policy::contract_check(ctx) {
-        Ok(output) if output.exit_status == 0 => check(
+    let output = crate::policy::contract_check(ctx);
+    if output.exit_status == 0 {
+        check(
             "contract",
             "Contract",
             true,
@@ -436,8 +437,9 @@ fn contract_check(ctx: &RepoContext) -> DoctorCheck {
             "valid",
             output.stdout.trim().to_string(),
         )
-        .with_data(json!({ "exit_status": output.exit_status })),
-        Ok(output) => check(
+        .with_data(json!({ "exit_status": output.exit_status }))
+    } else {
+        check(
             "contract",
             "Contract",
             true,
@@ -447,19 +449,10 @@ fn contract_check(ctx: &RepoContext) -> DoctorCheck {
         )
         .with_fix("Run `scripts/jig check contract --no-receipt` for the full contract report.")
         .with_data(json!({
-                "exit_status": output.exit_status,
-                "stdout": output.stdout,
-                "stderr": output.stderr,
-        })),
-        Err(error) => check(
-            "contract",
-            "Contract",
-            true,
-            false,
-            "error",
-            error.to_string(),
-        )
-        .with_fix("Run `scripts/jig check contract --no-receipt` for the full contract report."),
+            "exit_status": output.exit_status,
+            "stdout": output.stdout,
+            "stderr": output.stderr,
+        }))
     }
 }
 
@@ -2339,60 +2332,47 @@ fn agent_check(ctx: &RepoContext, process_control: DoctorProcessControl<'_>) -> 
             },
         )
     });
-    match output {
-        Ok(output) => {
-            let ok = output["ok"].as_bool().unwrap_or(false);
-            let probe_incomplete = output["codex"]["probe_error"].is_string();
-            let configured = output["marketplaces"].as_array().map(Vec::len).unwrap_or(0);
-            let registered = output["marketplaces"]
-                .as_array()
-                .map(|marketplaces| {
-                    marketplaces
-                        .iter()
-                        .filter(|marketplace| marketplace["registered"].as_bool().unwrap_or(false))
-                        .count()
-                })
-                .unwrap_or(0);
-            let detail = if probe_incomplete {
-                "Codex marketplace capability verification is incomplete".into()
-            } else if configured == 0 {
-                "no agent skill marketplaces configured".into()
-            } else {
-                format!("{registered}/{configured} configured marketplace(s) registered")
-            };
-            let fix = output["next_steps"]
-                .as_array()
-                .and_then(|steps| agent_next_step(steps))
-                .map(str::to_string);
-            // Agent skills improve the Codex/MCP experience, but a repository
-            // with valid config, runtime, contract, and tools is operational.
-            check(
-                "agent_skills",
-                "Agent skills",
-                false,
-                ok,
-                if probe_incomplete {
-                    "error"
-                } else if ok {
-                    "installed"
-                } else {
-                    "missing"
-                },
-                detail,
-            )
-            .with_optional_fix(fix.as_deref())
-            .with_data(output)
-        }
-        Err(error) => check(
-            "agent_skills",
-            "Agent skills",
-            false,
-            false,
-            "error",
-            error.to_string(),
-        )
-        .with_fix("Run `scripts/jig agent doctor` for agent tooling details."),
-    }
+    let ok = output["ok"].as_bool().unwrap_or(false);
+    let probe_incomplete = output["codex"]["probe_error"].is_string();
+    let configured = output["marketplaces"].as_array().map(Vec::len).unwrap_or(0);
+    let registered = output["marketplaces"]
+        .as_array()
+        .map(|marketplaces| {
+            marketplaces
+                .iter()
+                .filter(|marketplace| marketplace["registered"].as_bool().unwrap_or(false))
+                .count()
+        })
+        .unwrap_or(0);
+    let detail = if probe_incomplete {
+        "Codex marketplace capability verification is incomplete".into()
+    } else if configured == 0 {
+        "no agent skill marketplaces configured".into()
+    } else {
+        format!("{registered}/{configured} configured marketplace(s) registered")
+    };
+    let fix = output["next_steps"]
+        .as_array()
+        .and_then(|steps| agent_next_step(steps))
+        .map(str::to_string);
+    // Agent skills improve the Codex/MCP experience, but a repository
+    // with valid config, runtime, contract, and tools is operational.
+    check(
+        "agent_skills",
+        "Agent skills",
+        false,
+        ok,
+        if probe_incomplete {
+            "error"
+        } else if ok {
+            "installed"
+        } else {
+            "missing"
+        },
+        detail,
+    )
+    .with_optional_fix(fix.as_deref())
+    .with_data(output)
 }
 
 fn agent_next_step(steps: &[Value]) -> Option<&str> {
@@ -4154,9 +4134,9 @@ fn shell_command_may_persist_variable_change(
         ShellCommandName::Executable {
             force_external: true,
             ..
-        } => return false,
+        }
+        | ShellCommandName::NoExternalExecutable { .. } => return false,
         ShellCommandName::AmbiguousWrapper { .. } => return true,
-        ShellCommandName::NoExternalExecutable { .. } => return false,
     };
     let command = shell_word_value(&words[index]);
     if matches!(command.as_str(), "." | "source" | "eval") {

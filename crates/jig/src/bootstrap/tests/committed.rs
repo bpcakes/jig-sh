@@ -398,7 +398,7 @@ fn resolve_update_template_source_prefers_stored_local_checkout_for_explicit_com
         no_input: true,
     };
 
-    let (template, template_mode) = test_resolve_update_template_source(&opts, &stored).unwrap();
+    let (template, template_mode) = test_resolve_update_template_source(&opts, &stored);
 
     assert_eq!(template, "/tmp/template");
     assert_eq!(template_mode, Some(TemplateMode::Committed));
@@ -418,7 +418,7 @@ fn resolve_update_template_source_falls_back_to_remote_for_legacy_committed_repo
         no_input: true,
     };
 
-    let (template, template_mode) = test_resolve_update_template_source(&opts, &stored).unwrap();
+    let (template, template_mode) = test_resolve_update_template_source(&opts, &stored);
 
     assert_eq!(template, "https://example.com/template.git");
     assert_eq!(template_mode, None);

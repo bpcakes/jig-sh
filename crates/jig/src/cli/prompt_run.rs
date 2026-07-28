@@ -339,7 +339,7 @@ fn print_prompt_output(output: serde_json::Value, json_output: bool) -> Result<(
         print_json(&output)
     } else {
         crate::prompt_registry::print_prompt_warnings(&output);
-        print_human_summary(crate::prompt_registry::format_prompt_human_output(&output)?)
+        print_human_summary(crate::prompt_registry::format_prompt_human_output(&output))
     }
 }
 

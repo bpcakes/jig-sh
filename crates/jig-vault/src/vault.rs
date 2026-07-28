@@ -44,6 +44,12 @@ pub struct VaultStatus {
 }
 
 impl Vault {
+    /// Resolves a vault handle without opening encrypted state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault home is invalid, unsafe, or cannot be
+    /// resolved and hardened.
     pub fn resolve(explicit_home: Option<PathBuf>) -> Result<Self> {
         Ok(Self {
             store: VaultStore::resolve(explicit_home)?,
@@ -54,19 +60,45 @@ impl Vault {
         self.store.root()
     }
 
+    /// Reports whether the vault state file exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the protected state path cannot be inspected
+    /// safely.
     pub fn exists(&self) -> Result<bool> {
         self.store.exists()
     }
 
+    /// Resolves a vault home and reports whether initialized state exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault home or state path is invalid, unsafe,
+    /// or cannot be inspected.
     pub fn status(explicit_home: Option<PathBuf>) -> Result<VaultStatus> {
         let (root, exists) = VaultStore::inspect(explicit_home)?;
         Ok(VaultStatus { root, exists })
     }
 
+    /// Initializes a new encrypted vault and audit chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the passphrase is invalid, vault state already
+    /// exists, stale audit state is present, cryptography fails, or protected
+    /// files cannot be created safely.
     pub fn init(&self, passphrase: &SecretString) -> Result<()> {
         self.store.init(passphrase)
     }
 
+    /// Creates or updates one encrypted secret.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the name or value is invalid, unlocking or audit
+    /// verification fails, or the audit and encrypted state cannot be written
+    /// safely.
     pub fn set_secret(
         &self,
         passphrase: &SecretString,
@@ -76,18 +108,44 @@ impl Vault {
         self.store.set_secret(passphrase, name, value)
     }
 
+    /// Removes one encrypted secret when it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the name is invalid, unlocking or audit
+    /// verification fails, or the audit and encrypted state cannot be written
+    /// safely.
     pub fn remove_secret(&self, passphrase: &SecretString, name: &str) -> Result<bool> {
         self.store.remove_secret(passphrase, name)
     }
 
+    /// Lists secret metadata without returning plaintext values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when vault state cannot be read, authenticated,
+    /// decrypted, decoded, or validated safely.
     pub fn list(&self, passphrase: &SecretString) -> Result<Vec<SecretRecord>> {
         self.store.list(passphrase)
     }
 
+    /// Verifies the vault's tamper-evident audit chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault cannot be unlocked or the audit log
+    /// cannot be read and verified.
     pub fn verify_audit(&self, passphrase: &SecretString) -> Result<AuditVerification> {
         self.store.verify_audit(passphrase)
     }
 
+    /// Runs a command with brokered secret environment and file mappings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault cannot be unlocked, audit or secret
+    /// resolution fails, process-tree supervision is unavailable, the command
+    /// fails to start, output exceeds safety bounds, or cleanup is incomplete.
     pub fn run_brokered(
         &self,
         passphrase: &SecretString,
@@ -353,7 +411,7 @@ impl VaultStore {
         self.edit_with_audit(
             passphrase,
             AuditAction::SecretRemove,
-            |vault| vault.remove_secret(&name),
+            |vault| Ok(vault.remove_secret(&name)),
             |removed| {
                 serde_json::json!({
                     "secret_name": name.as_str(),
@@ -584,6 +642,12 @@ impl VaultStore {
     }
 }
 
+/// Validates a passphrase for new vault creation.
+///
+/// # Errors
+///
+/// Returns an error when the passphrase is shorter than
+/// [`MIN_MASTER_PASSPHRASE_LEN`] bytes.
 pub fn validate_new_vault_passphrase(passphrase: &SecretString) -> Result<()> {
     validate_new_vault_passphrase_inner(passphrase).map_err(|error| {
         VaultError::new(
@@ -636,8 +700,8 @@ impl OpenVault {
         Ok(())
     }
 
-    pub(crate) fn remove_secret(&mut self, name: &SecretName) -> AnyResult<bool> {
-        Ok(self.state.secrets.remove(name.as_str()).is_some())
+    pub(crate) fn remove_secret(&mut self, name: &SecretName) -> bool {
+        self.state.secrets.remove(name.as_str()).is_some()
     }
 
     pub(crate) fn secret_value(&self, name: &SecretName) -> AnyResult<SecretBytes> {

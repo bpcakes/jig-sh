@@ -40,9 +40,9 @@ fn parses_check_namespace_commands() {
     ] {
         let parsed = Cli::try_parse_from(["jig", "check", command]).unwrap();
         match (parsed.command, expected) {
-            (CommandKind::Check(CheckCommand::TypeScriptLint(_)), "lint") => {}
-            (CommandKind::Check(CheckCommand::TypeScriptBuild(_)), "build") => {}
-            (CommandKind::Check(CheckCommand::TypeScriptCoverage(_)), "coverage") => {}
+            (CommandKind::Check(CheckCommand::TypeScriptLint(_)), "lint")
+            | (CommandKind::Check(CheckCommand::TypeScriptBuild(_)), "build")
+            | (CommandKind::Check(CheckCommand::TypeScriptCoverage(_)), "coverage") => {}
             (other, _) => panic!("expected check {command} command, got {other:?}"),
         }
     }

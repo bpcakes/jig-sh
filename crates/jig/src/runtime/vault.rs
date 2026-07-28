@@ -336,10 +336,9 @@ pub(crate) fn capture_new_passphrase() -> Result<()> {
     capture_passphrase_with_prompt(PromptKind::NewVault)?;
     let validation = {
         let captured = captured_passphrase_lock()?;
-        let passphrase = captured.as_ref().ok_or_else(|| {
+        validate_new_vault_passphrase(captured.as_ref().ok_or_else(|| {
             anyhow!("vault passphrase capture unexpectedly produced no passphrase")
-        })?;
-        validate_new_vault_passphrase(passphrase)
+        })?)
     };
     if let Err(error) = validation {
         clear_captured_passphrase()?;
@@ -349,7 +348,11 @@ pub(crate) fn capture_new_passphrase() -> Result<()> {
 }
 
 fn require_captured_passphrase() -> Result<()> {
-    if captured_passphrase_lock()?.is_some() {
+    let passphrase_is_captured = {
+        let captured = captured_passphrase_lock()?;
+        captured.is_some()
+    };
+    if passphrase_is_captured {
         return Ok(());
     }
     Err(anyhow!(
@@ -387,8 +390,10 @@ enum PromptKind {
 
 pub(crate) fn capture_passphrase_from_env() -> Result<()> {
     let Some(value) = std::env::var_os(PASSPHRASE_ENV) else {
-        let mut captured = captured_passphrase_lock()?;
-        *captured = None;
+        {
+            let mut captured = captured_passphrase_lock()?;
+            *captured = None;
+        }
         return Ok(());
     };
     // Keep a malformed environment value intact so the operator can inspect or
@@ -402,8 +407,10 @@ pub(crate) fn capture_passphrase_from_env() -> Result<()> {
     unsafe {
         std::env::remove_var(PASSPHRASE_ENV);
     }
-    let mut captured = captured_passphrase_lock()?;
-    *captured = Some(passphrase);
+    {
+        let mut captured = captured_passphrase_lock()?;
+        *captured = Some(passphrase);
+    }
     Ok(())
 }
 
@@ -436,22 +443,29 @@ fn secret_string_from_zeroizing(mut value: Zeroizing<String>) -> SecretString {
 }
 
 fn set_captured_passphrase(passphrase: SecretString) -> Result<()> {
-    let mut captured = captured_passphrase_lock()?;
-    *captured = Some(passphrase);
+    {
+        let mut captured = captured_passphrase_lock()?;
+        *captured = Some(passphrase);
+    }
     Ok(())
 }
 
 fn clear_captured_passphrase() -> Result<()> {
-    let mut captured = captured_passphrase_lock()?;
-    *captured = None;
+    {
+        let mut captured = captured_passphrase_lock()?;
+        *captured = None;
+    }
     Ok(())
 }
 
 fn passphrase() -> Result<SecretString> {
-    let mut captured = captured_passphrase_lock()?;
+    let passphrase = {
+        let mut captured = captured_passphrase_lock()?;
+        captured.take()
+    };
     // Each CLI invocation dispatches exactly one vault operation after capture,
     // so consume the passphrase instead of keeping process-global key material.
-    if let Some(passphrase) = captured.take() {
+    if let Some(passphrase) = passphrase {
         return Ok(passphrase);
     }
     Err(anyhow!(

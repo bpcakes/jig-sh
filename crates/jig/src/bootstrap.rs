@@ -1133,7 +1133,7 @@ impl InitMutationTransaction {
                     continue;
                 }
             };
-            if !init_snapshots_match(&snapshot, &mutation.before)? {
+            if !init_snapshots_match(&snapshot, &mutation.before) {
                 cleanup_failures.push(format!(
                     "{}: retained preimage changed; preserving recovery artifact {}",
                     relative.display(),
@@ -1464,7 +1464,7 @@ impl InitMutationTransaction {
         )?;
         let quarantined = self.snapshot_absolute_path(&quarantine)?;
         let root_check = self.verify_destination_identity();
-        let matches_expected = init_snapshots_match(&quarantined, &expected)?;
+        let matches_expected = init_snapshots_match(&quarantined, &expected);
         if root_check.is_err() || !matches_expected {
             let restore =
                 path::rename_entry_noreplace(&quarantine, &self.destination.join(relative));
@@ -1543,7 +1543,7 @@ impl InitMutationTransaction {
                 target_is_directory: commit.target_is_directory,
                 handle: commit.handle,
             };
-            if !init_snapshots_match(&current, &committed)? {
+            if !init_snapshots_match(&current, &committed) {
                 bail!(
                     "Private init symlink output {} was replaced immediately after publication",
                     self.destination.join(relative).display()
@@ -1559,7 +1559,7 @@ impl InitMutationTransaction {
             target_is_directory: commit.target_is_directory,
             handle: commit.handle,
         };
-        if !init_snapshots_match(&current, &committed)? {
+        if !init_snapshots_match(&current, &committed) {
             bail!(
                 "Init symlink output {} was replaced immediately after publication",
                 self.destination.join(relative).display()
@@ -1661,7 +1661,7 @@ impl InitMutationTransaction {
                 );
             }
         };
-        if !init_snapshots_match(&actual, expected)? {
+        if !init_snapshots_match(&actual, expected) {
             return Err(restore_changed_disposal_quarantine(
                 &disposal,
                 inspected_path,
@@ -1814,13 +1814,7 @@ impl InitMutationTransaction {
                     continue;
                 }
             };
-            let matches_before = match init_snapshots_match(&current, &mutation.before) {
-                Ok(matches) => matches,
-                Err(error) => {
-                    failures.push(format!("{}: {error:#}", relative.display()));
-                    continue;
-                }
-            };
+            let matches_before = init_snapshots_match(&current, &mutation.before);
             if matches_before && mutation.original_quarantine.is_none() {
                 continue;
             }
@@ -1855,8 +1849,7 @@ impl InitMutationTransaction {
                         continue;
                     }
                 };
-                let is_jig = any_init_snapshot_matches(&quarantined, &mutation.expected_jig_states)
-                    .unwrap_or(false);
+                let is_jig = any_init_snapshot_matches(&quarantined, &mutation.expected_jig_states);
                 if !is_jig {
                     let retained_preimage = mutation
                         .original_quarantine
@@ -2135,20 +2128,17 @@ fn cleanup_private_staging(
     }
 }
 
-fn any_init_snapshot_matches(
-    state: &InitPathSnapshot,
-    candidates: &[InitPathSnapshot],
-) -> Result<bool> {
+fn any_init_snapshot_matches(state: &InitPathSnapshot, candidates: &[InitPathSnapshot]) -> bool {
     for candidate in candidates {
-        if init_snapshots_match(state, candidate)? {
-            return Ok(true);
+        if init_snapshots_match(state, candidate) {
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
-fn init_snapshots_match(left: &InitPathSnapshot, right: &InitPathSnapshot) -> Result<bool> {
-    Ok(match (left, right) {
+fn init_snapshots_match(left: &InitPathSnapshot, right: &InitPathSnapshot) -> bool {
+    match (left, right) {
         (InitPathSnapshot::Missing, InitPathSnapshot::Missing) => true,
         (InitPathSnapshot::Regular(left), InitPathSnapshot::Regular(right)) => {
             path::repository_file_commits_match(left, right)
@@ -2172,7 +2162,7 @@ fn init_snapshots_match(left: &InitPathSnapshot, right: &InitPathSnapshot) -> Re
                 && left_is_directory == right_is_directory
         }
         _ => false,
-    })
+    }
 }
 
 fn restore_changed_disposal_quarantine(

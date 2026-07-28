@@ -291,6 +291,9 @@ fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> 
             );
         }
         let status = String::from_utf8_lossy(&field[..2]).to_string();
+        #[cfg(unix)]
+        let path = path_buf_from_git_bytes(&field[3..]);
+        #[cfg(not(unix))]
         let path = path_buf_from_git_bytes(&field[3..])?;
         index += 1;
 
@@ -304,7 +307,14 @@ fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> 
                 bail!("Malformed git status --porcelain -z output: empty original path");
             }
             index += 1;
-            Some(path_buf_from_git_bytes(original)?)
+            #[cfg(unix)]
+            {
+                Some(path_buf_from_git_bytes(original))
+            }
+            #[cfg(not(unix))]
+            {
+                Some(path_buf_from_git_bytes(original)?)
+            }
         } else {
             None
         };
@@ -319,8 +329,8 @@ fn parse_porcelain_status_z(stdout: &[u8]) -> Result<Vec<PorcelainStatusEntry>> 
 }
 
 #[cfg(unix)]
-fn path_buf_from_git_bytes(bytes: &[u8]) -> Result<PathBuf> {
-    Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+fn path_buf_from_git_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(OsString::from_vec(bytes.to_vec()))
 }
 
 #[cfg(not(unix))]

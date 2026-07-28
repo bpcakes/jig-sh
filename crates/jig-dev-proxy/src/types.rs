@@ -60,6 +60,11 @@ pub enum AppKind {
 }
 
 impl AppKind {
+    /// Parses a configured development application kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `value` is not a supported application kind.
     pub fn from_config(value: &str) -> Result<Self> {
         match value {
             "env-port" => Ok(Self::EnvPort),

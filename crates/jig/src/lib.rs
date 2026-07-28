@@ -70,6 +70,12 @@ mod ui;
 // generated harness skips in summary output.
 pub(crate) const CARGO_SKIP_OUTPUT_PREFIX: &str = "No Cargo.toml found; skipping cargo ";
 
+/// Runs the Jig command-line interface.
+///
+/// # Errors
+///
+/// Returns an error when command parsing, repository loading, command
+/// execution, structured output, or cleanup fails.
 pub fn run() -> anyhow::Result<()> {
     cli::run()
 }

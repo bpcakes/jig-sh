@@ -106,22 +106,22 @@ pub(crate) fn run_check(ctx: &RepoContext, command: PolicyCheckCommand) -> Resul
     }
 }
 
-pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+pub(crate) fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
     if let Err(error) = validate_contract(ctx) {
         let mut stderr = String::new();
         for error in error.errors {
             writeln!(&mut stderr, "ERROR: {error}")
                 .expect("writing contract errors to a String cannot fail");
         }
-        return Ok(NativeToolOutput {
+        return NativeToolOutput {
             exit_status: 1,
             stdout: String::new(),
             stderr,
-        });
+        };
     }
 
     let manifest_path = ctx.root().join(".agent/jig-contract.json");
-    Ok(NativeToolOutput {
+    NativeToolOutput {
         exit_status: 0,
         stdout: format!(
             "jig contract check passed.\n  - manifest: {}\n  - jig version: {}\n  - tool definitions: {}\n",
@@ -130,7 +130,7 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
             ctx.tool_specs().len()
         ),
         stderr: String::new(),
-    })
+    }
 }
 
 pub(crate) fn validate_contract(
@@ -263,7 +263,7 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     if slug.is_empty() {
         bail!("Migration name {name:?} must contain at least one alphanumeric character.");
     }
-    let timestamp = utc_timestamp()?;
+    let timestamp = utc_timestamp();
     let base = ctx
         .root()
         .join(migration_dir)
@@ -673,9 +673,9 @@ fn slugify(value: &str) -> String {
     slug.trim_matches('_').to_string()
 }
 
-fn utc_timestamp() -> Result<String> {
+fn utc_timestamp() -> String {
     let now = time::OffsetDateTime::now_utc();
-    Ok(format!(
+    format!(
         "{:04}{:02}{:02}{:02}{:02}{:02}",
         now.year(),
         u8::from(now.month()),
@@ -683,7 +683,7 @@ fn utc_timestamp() -> Result<String> {
         now.hour(),
         now.minute(),
         now.second()
-    ))
+    )
 }
 
 #[cfg(test)]

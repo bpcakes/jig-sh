@@ -221,7 +221,7 @@ fn expected_native_launch_path(path: PathBuf) -> PathBuf {
 }
 
 fn expected_command_shim_path(path: PathBuf) -> PathBuf {
-    command_shim_launch_path(&path).unwrap()
+    command_shim_launch_path(&path)
 }
 
 #[test]

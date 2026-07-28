@@ -877,8 +877,7 @@ async fn tls_cache_reloads_after_freshness_ttl() {
     }
 
     cache.acceptor().await.unwrap();
-    let inner = cache.inner.read().unwrap();
-    assert!(inner.loaded_at.unwrap() > stale_loaded_at);
+    assert!(cache.inner.read().unwrap().loaded_at.unwrap() > stale_loaded_at);
 }
 
 #[cfg(unix)]

@@ -4,18 +4,42 @@ use serde_json::{Value, json};
 use crate::types::{DevRequest, DevStatusRequest, DevStopRequest};
 use crate::{dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request};
 
+/// Resolves and runs a development request.
+///
+/// # Errors
+///
+/// Returns an error when request resolution, workspace discovery, preflight,
+/// process supervision, proxy startup, or cleanup fails.
 pub fn dev(request: DevRequest) -> Result<Value> {
     dev_resolved(resolve_dev_request(request)?)
 }
 
+/// Reports registered development sessions for a repository.
+///
+/// # Errors
+///
+/// Returns an error when repository identity or protected session state cannot
+/// be resolved, read, validated, or pruned safely.
 pub fn dev_status(request: DevStatusRequest) -> Result<Value> {
     dev_sessions::status(request)
 }
 
+/// Requests a supervised development session to stop.
+///
+/// # Errors
+///
+/// Returns an error when session state is invalid, the authenticated control
+/// channel fails, or the owning supervisor cannot confirm cleanup.
 pub fn dev_stop(request: DevStopRequest) -> Result<Value> {
     dev_sessions::stop(request)
 }
 
+/// Runs an already resolved development request.
+///
+/// # Errors
+///
+/// Returns an error when preflight, process supervision, proxy startup, app
+/// readiness, route publication, or cleanup fails.
 pub fn dev_resolved(request: crate::ResolvedDevRequest) -> Result<Value> {
     dev_resolved_with_preflight(request, |_, _| Ok(()))
 }

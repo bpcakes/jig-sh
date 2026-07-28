@@ -34,6 +34,12 @@ struct UiSecurity {
 }
 
 impl UiServer {
+    /// Binds a new loopback-only UI server on the requested port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the listener cannot be bound or inspected, or
+    /// secure random capability generation fails.
     pub fn bind(port: u16) -> Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).with_context(|| {
             format!("Failed to bind 127.0.0.1:{port}. Pass --port to choose a free port.")
@@ -57,19 +63,21 @@ impl UiServer {
     }
 
     pub fn bootstrap_url(&self) -> String {
-        let guard = self
-            .security
-            .bootstrap_capability
-            .lock()
-            .expect("bootstrap capability mutex poisoned");
-        let capability = guard
-            .as_ref()
-            .expect("bootstrap URL is requested before the server starts");
+        let capability = {
+            let guard = self
+                .security
+                .bootstrap_capability
+                .lock()
+                .expect("bootstrap capability mutex poisoned");
+            encode_capability(
+                guard
+                    .as_ref()
+                    .expect("bootstrap URL is requested before the server starts"),
+            )
+        };
         format!(
             "{}{}?{BOOTSTRAP_QUERY}={}",
-            self.security.origin,
-            self.security.namespace,
-            encode_capability(capability)
+            self.security.origin, self.security.namespace, capability
         )
     }
 
@@ -80,6 +88,12 @@ impl UiServer {
         format!("{}api/snapshot", self.security.namespace)
     }
 
+    /// Serves dashboard requests until the listener or a worker fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when listener configuration, request acceptance, worker
+    /// execution, or worker shutdown fails.
     pub fn serve(self, provider: &dyn SnapshotProvider) -> Result<()> {
         self.listener
             .set_nonblocking(true)

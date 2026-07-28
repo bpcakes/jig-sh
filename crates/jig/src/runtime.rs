@@ -23,7 +23,7 @@ pub(crate) type CodexSupportProbeResult = std::result::Result<bool, String>;
 pub(crate) fn agent_doctor_with_codex_support_probe(
     ctx: &RepoContext,
     probe: impl FnMut(&str) -> CodexSupportProbeResult,
-) -> Result<Value> {
+) -> Value {
     agent::doctor_with_codex_support_probe(ctx, probe)
 }
 
@@ -270,7 +270,7 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
     // commands can start processes, install services, or mutate trust stores
     // and must not become agent-callable by adding names to tool_defs.
     match MemoryTool::from_name(name) {
-        Some(MemoryTool::AgentDoctor) => agent::doctor(ctx),
+        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(ctx)),
         Some(MemoryTool::Goal) => work::goal_from_args(ctx, args),
         Some(MemoryTool::Start) => work::start_from_args(ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),

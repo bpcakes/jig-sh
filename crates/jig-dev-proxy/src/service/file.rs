@@ -37,10 +37,13 @@ pub(super) fn installed_service_state_dir(path: &Path) -> Result<Option<PathBuf>
     Ok(service_state_dir_from_body(&body)?.map(PathBuf::from))
 }
 
+// The platform-neutral boundary remains fallible because the systemd parser
+// validates quoting and escaping even though the macOS plist parser is lenient.
+#[allow(clippy::unnecessary_wraps)]
 fn service_state_dir_from_body(body: &str) -> Result<Option<String>> {
     #[cfg(target_os = "macos")]
     {
-        plist_service_state_dir(body)
+        Ok(plist_service_state_dir(body))
     }
 
     #[cfg(target_os = "linux")]
@@ -56,17 +59,11 @@ fn service_state_dir_from_body(body: &str) -> Result<Option<String>> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-pub(super) fn plist_service_state_dir(body: &str) -> Result<Option<String>> {
-    let Some((_, after_key)) = body.split_once("<key>JIG_PROXY_STATE_DIR</key>") else {
-        return Ok(None);
-    };
-    let Some((_, after_string_open)) = after_key.split_once("<string>") else {
-        return Ok(None);
-    };
-    let Some((raw, _)) = after_string_open.split_once("</string>") else {
-        return Ok(None);
-    };
-    Ok(Some(xml_unescape(raw)))
+pub(super) fn plist_service_state_dir(body: &str) -> Option<String> {
+    let (_, after_key) = body.split_once("<key>JIG_PROXY_STATE_DIR</key>")?;
+    let (_, after_string_open) = after_key.split_once("<string>")?;
+    let (raw, _) = after_string_open.split_once("</string>")?;
+    Some(xml_unescape(raw))
 }
 
 #[cfg(any(target_os = "linux", test))]

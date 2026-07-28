@@ -189,6 +189,9 @@ pub(super) fn infer_rust_crate_roots_from_scan(
 }
 
 // Jig crate roots are parent directories whose direct children are crates.
+// Keep the optional inference boundary so callers can treat this like the
+// neighboring best-effort detectors without manufacturing a sentinel root.
+#[allow(clippy::unnecessary_wraps)]
 pub(super) fn crate_root_from_workspace_member(member: &str) -> Option<String> {
     let path = member.trim().trim_end_matches('/');
     if path.is_empty() || path == "." {

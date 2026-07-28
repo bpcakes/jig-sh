@@ -10,6 +10,12 @@ pub struct BrokeredEnv {
 }
 
 impl BrokeredEnv {
+    /// Creates a secret-to-environment mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination is a preserved environment
+    /// variable that brokered secret injection must not replace.
     pub fn new(var: EnvVarName, secret_name: SecretName) -> Result<Self> {
         if is_preserved_env_var_name(var.as_str()) {
             return Err(crate::VaultError::new(
@@ -23,6 +29,12 @@ impl BrokeredEnv {
         Ok(Self { var, secret_name })
     }
 
+    /// Parses a `VAR=SECRET_NAME` environment mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the mapping shape, environment variable, or secret
+    /// name is invalid, or the destination environment variable is preserved.
     pub fn parse(value: &str) -> Result<Self> {
         let (var, secret_name) = value.split_once('=').ok_or_else(|| {
             crate::VaultError::new(
@@ -60,6 +72,12 @@ pub struct BrokeredFile {
 }
 
 impl BrokeredFile {
+    /// Creates a secret-to-temporary-file environment mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on unsupported platforms or when the destination is a
+    /// preserved environment variable.
     pub fn new(var: EnvVarName, secret_name: SecretName) -> Result<Self> {
         #[cfg(not(unix))]
         {
@@ -88,6 +106,13 @@ impl BrokeredFile {
         }
     }
 
+    /// Parses a `VAR=SECRET_NAME` temporary-file mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the mapping shape, environment variable, or secret
+    /// name is invalid, the destination is preserved, or the platform cannot
+    /// provide owner-only temporary secret files.
     pub fn parse(value: &str) -> Result<Self> {
         let (var, secret_name) = value.split_once('=').ok_or_else(|| {
             crate::VaultError::new(
@@ -132,10 +157,22 @@ pub struct BrokeredRun {
 }
 
 impl BrokeredRun {
+    /// Creates a brokered command with environment mappings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command is empty or mappings target duplicate
+    /// or conflicting environment variables.
     pub fn new(command: Vec<String>, env: Vec<BrokeredEnv>) -> Result<Self> {
         Self::with_files(command, env, Vec::new())
     }
 
+    /// Creates a brokered command with environment and temporary-file mappings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the command is empty, either mapping set contains
+    /// duplicate destinations, or environment and file mappings conflict.
     pub fn with_files(
         command: Vec<String>,
         env: Vec<BrokeredEnv>,

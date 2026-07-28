@@ -1,0 +1,1 @@
+Remove the unused jig-status-tui dependency, flatten every safe unnecessary wrapper after auditing callers, tighten significant guard lifetimes, merge only behaviorally clear identical match arms, add all missing Errors documentation, verify the requested lints and workspace, and commit the result.

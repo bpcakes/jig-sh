@@ -723,10 +723,9 @@ fn terminate_spawn_failure_child(child: &mut Child, deadline: Option<Instant>) {
     };
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return,
             Ok(None) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Ok(Some(_)) | Err(_) => return,
         }
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             return;
