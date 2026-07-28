@@ -1,12 +1,15 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
 use serde_json::Value;
+
+use crate::cancellation::ensure_status_collection_active;
 use tempfile::NamedTempFile;
 use ulid::Ulid;
 
@@ -616,7 +619,79 @@ pub(super) fn state_lock_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
-    read_jsonl_with_data_lock(path, FileExt::lock_shared)
+    read_jsonl_with_cancellation(path, &|| false)
+}
+
+pub(super) fn read_jsonl_with_cancellation<T: DeserializeOwned>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<T>> {
+    ensure_state_read_active(cancelled)?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+        }
+    };
+
+    loop {
+        ensure_state_read_active(cancelled)?;
+        match FileExt::try_lock_shared(&file) {
+            Ok(true) => break,
+            Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                return read_stable_unlocked_snapshot_with_cancellation(path, cancelled);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+            }
+        }
+    }
+
+    let result = (|| {
+        ensure_state_read_active(cancelled)?;
+        // Match the writer's data-file-then-cache-lock acquisition order. The
+        // cache lock is deliberately opportunistic: reads never create state,
+        // but wait cancellably when an existing writer owns it.
+        let cache_lock = lock_existing_cache_with_cancellation(path, cancelled)?;
+        let result = parse_jsonl_file_with_cancellation(&file, path, false, cancelled);
+        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
+        match (result, cache_unlock) {
+            (Ok(items), Ok(())) => Ok(items),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error).context("Failed to unlock state cache file"),
+        }
+    })();
+    let data_unlock = FileExt::unlock(&file);
+    match (result, data_unlock) {
+        (Ok(items), Ok(())) => Ok(items),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error).context("Failed to unlock state data file"),
+    }
+}
+
+const DATA_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+fn lock_existing_cache_with_cancellation(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<File>> {
+    let lock = match File::open(state_lock_path(path)) {
+        Ok(lock) => lock,
+        Err(_) => return Ok(None),
+    };
+    loop {
+        ensure_state_read_active(cancelled)?;
+        match FileExt::try_lock_shared(&lock) {
+            Ok(true) => return Ok(Some(lock)),
+            Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return Ok(None),
+        }
+    }
 }
 
 pub(super) fn read_receipt_window(path: &Path, limit: usize) -> Result<Vec<ReceiptRecord>> {
@@ -779,6 +854,7 @@ pub(super) fn read_jsonl_locked<T: DeserializeOwned>(
     parse_jsonl_file(&file, path, false)
 }
 
+#[cfg(test)]
 pub(super) fn read_jsonl_with_data_lock<T: DeserializeOwned>(
     path: &Path,
     lock_data: impl FnMut(&File) -> io::Result<()>,
@@ -789,6 +865,7 @@ pub(super) fn read_jsonl_with_data_lock<T: DeserializeOwned>(
     })
 }
 
+#[cfg(test)]
 pub(super) fn read_jsonl_with_io<T: DeserializeOwned>(
     path: &Path,
     mut lock_data: impl FnMut(&File) -> io::Result<()>,
@@ -857,17 +934,76 @@ fn read_stable_unlocked_snapshot<T: DeserializeOwned>(
     unreachable!("unlocked snapshot sampling always returns")
 }
 
+fn read_stable_unlocked_snapshot_with_cancellation<T: DeserializeOwned>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<T>> {
+    let mut previous_invalid = None;
+    for sample in 0..UNLOCKED_SNAPSHOT_SAMPLES {
+        ensure_state_read_active(cancelled)?;
+        let bytes = read_snapshot_with_cancellation(path, cancelled)?;
+        match parse_jsonl_snapshot_with_cancellation(&bytes, path, true, cancelled)? {
+            ParsedSnapshot::Complete(items) => return Ok(items),
+            ParsedSnapshot::InvalidFinal { prefix, error } => {
+                if previous_invalid.as_ref() == Some(&bytes) {
+                    return Err(error);
+                }
+                if sample + 1 == UNLOCKED_SNAPSHOT_SAMPLES {
+                    return Ok(prefix);
+                }
+                previous_invalid = Some(bytes);
+            }
+        }
+    }
+    unreachable!("unlocked snapshot sampling always returns")
+}
+
+const JSONL_READ_CHUNK: usize = 16 * 1024;
+
+fn read_snapshot_with_cancellation(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<u8>> {
+    let file = File::open(path)
+        .with_context(|| format!("Failed to read unlocked snapshot {}", path.display()))?;
+    read_file_with_cancellation(&file, path, cancelled)
+}
+
+fn read_file_with_cancellation(
+    file: &File,
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<u8>> {
+    let mut reader = file;
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; JSONL_READ_CHUNK];
+    loop {
+        ensure_state_read_active(cancelled)?;
+        let read = reader
+            .read(&mut chunk)
+            .with_context(|| format!("Failed to read state stream {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        ensure_state_read_active(cancelled)?;
+    }
+    Ok(bytes)
+}
+
 fn parse_jsonl_file<T: DeserializeOwned>(
     file: &File,
     path: &Path,
     allow_partial_final: bool,
 ) -> Result<Vec<T>> {
-    let mut bytes = Vec::new();
-    let mut reader = file;
-    reader
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("Failed to read state stream {}", path.display()))?;
-    match parse_jsonl_snapshot(&bytes, path, allow_partial_final)? {
+    parse_jsonl_file_with_cancellation(file, path, allow_partial_final, &|| false)
+}
+
+fn parse_jsonl_file_with_cancellation<T: DeserializeOwned>(
+    file: &File,
+    path: &Path,
+    allow_partial_final: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<T>> {
+    let bytes = read_file_with_cancellation(file, path, cancelled)?;
+    match parse_jsonl_snapshot_with_cancellation(&bytes, path, allow_partial_final, cancelled)? {
         ParsedSnapshot::Complete(items) => Ok(items),
         ParsedSnapshot::InvalidFinal { error, .. } => Err(error),
     }
@@ -886,10 +1022,23 @@ fn parse_jsonl_snapshot<T: DeserializeOwned>(
     path: &Path,
     allow_partial_final: bool,
 ) -> Result<ParsedSnapshot<T>> {
+    parse_jsonl_snapshot_with_cancellation(bytes, path, allow_partial_final, &|| false)
+}
+
+fn parse_jsonl_snapshot_with_cancellation<T: DeserializeOwned>(
+    bytes: &[u8],
+    path: &Path,
+    allow_partial_final: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ParsedSnapshot<T>> {
+    ensure_state_read_active(cancelled)?;
     let final_record_is_unterminated = !bytes.is_empty() && !bytes.ends_with(b"\n");
-    let records = bytes.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+    let mut records = bytes.split(|byte| *byte == b'\n').peekable();
     let mut items = Vec::new();
-    for (index, record) in records.iter().enumerate() {
+    let mut index = 0;
+    while let Some(record) = records.next() {
+        ensure_state_read_active(cancelled)?;
+        index += 1;
         if record.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
@@ -898,13 +1047,13 @@ fn parse_jsonl_snapshot<T: DeserializeOwned>(
             Err(error)
                 if allow_partial_final
                     && final_record_is_unterminated
-                    && index + 1 == records.len() =>
+                    && records.peek().is_none() =>
             {
                 return Ok(ParsedSnapshot::InvalidFinal {
                     prefix: items,
                     error: anyhow::Error::new(error).context(format!(
                         "Failed to parse JSONL record {} in {}",
-                        index + 1,
+                        index,
                         path.display()
                     )),
                 });
@@ -913,14 +1062,19 @@ fn parse_jsonl_snapshot<T: DeserializeOwned>(
                 return Err(error).with_context(|| {
                     format!(
                         "Failed to parse JSONL record {} in {}",
-                        index + 1,
+                        index,
                         path.display()
                     )
                 });
             }
         }
     }
+    ensure_state_read_active(cancelled)?;
     Ok(ParsedSnapshot::Complete(items))
+}
+
+fn ensure_state_read_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 pub(crate) fn now_ms() -> u64 {

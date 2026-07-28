@@ -1,0 +1,1 @@
+Address cancellable fingerprint staging, cancellation propagation, large package-detail rendering, extension truncation, and sanitization collisions. Add focused regression coverage and run Rust gates.

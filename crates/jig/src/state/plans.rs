@@ -6,11 +6,13 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
 use super::events::{
-    PlanEvent, append_jsonl, append_text, ensure_state_layout, new_id, now_ms, read_jsonl, rel_path,
+    PlanEvent, append_jsonl, append_text, ensure_state_layout, new_id, now_ms, read_jsonl,
+    read_jsonl_with_cancellation, rel_path,
 };
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
 
@@ -166,16 +168,105 @@ pub(crate) fn ensure_plan_exists(ctx: &RepoContext, plan_id: &str) -> Result<()>
     }
 }
 
+pub(crate) fn ensure_plan_exists_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    match plan_status_with_cancellation(ctx, plan_id, cancelled)? {
+        Some(_) => Ok(()),
+        None => bail!("Plan not found: {plan_id}"),
+    }
+}
+
 pub(crate) fn plan_status(ctx: &RepoContext, plan_id: &str) -> Result<Option<PlanStatus>> {
     ensure_state_layout(ctx)?;
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(plan_status_from_events(&events, plan_id))
 }
 
+pub(crate) fn plan_status_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<PlanStatus>> {
+    ensure_plan_scan_active(cancelled)?;
+    ensure_state_layout(ctx)?;
+    let events =
+        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let mut opened = false;
+    let mut closed = false;
+    for event in &events {
+        ensure_plan_scan_active(cancelled)?;
+        if event.plan_id() != plan_id {
+            continue;
+        }
+        match event {
+            PlanEvent::Open { .. } => {
+                opened = true;
+                closed = false;
+            }
+            PlanEvent::Close { .. } => closed = true,
+            _ => {}
+        }
+    }
+    ensure_plan_scan_active(cancelled)?;
+    Ok(match (opened, closed) {
+        (true, false) => Some(PlanStatus::Open),
+        (true, true) => Some(PlanStatus::Closed),
+        (false, _) => None,
+    })
+}
+
 pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {
     ensure_state_layout(ctx)?;
     let events = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
     Ok(open_plans(&events))
+}
+
+pub(crate) fn open_plan_summaries_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<Value>> {
+    ensure_plan_scan_active(cancelled)?;
+    ensure_state_layout(ctx)?;
+    let events =
+        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    let mut closed = HashSet::new();
+    let mut opened = BTreeMap::<String, (&str, Option<&str>)>::new();
+    for event in &events {
+        ensure_plan_scan_active(cancelled)?;
+        match event {
+            PlanEvent::Open {
+                plan_id,
+                title,
+                body_path,
+                ..
+            } => {
+                opened.insert(plan_id.clone(), (title.as_str(), body_path.as_deref()));
+            }
+            PlanEvent::Close { plan_id, .. } => {
+                closed.insert(plan_id.clone());
+            }
+            _ => {}
+        }
+    }
+    ensure_plan_scan_active(cancelled)?;
+    Ok(opened
+        .into_iter()
+        .filter(|(plan_id, _)| !closed.contains(plan_id))
+        .map(|(plan_id, (title, body_path))| {
+            json!({
+                "plan_id": plan_id,
+                "title": title,
+                "body_path": body_path,
+            })
+        })
+        .collect())
+}
+
+fn ensure_plan_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 #[cfg(test)]

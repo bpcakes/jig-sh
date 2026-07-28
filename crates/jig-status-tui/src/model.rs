@@ -1,8 +1,16 @@
+use std::collections::{BTreeMap, HashMap};
+
 use serde::Deserialize;
 use serde_json::Value;
 
+mod package_detail;
+mod support;
 mod wire;
 
+use package_detail::{AcceptanceCheckView, PackageDetailState};
+pub(crate) use package_detail::{DETAIL_SECTION_ITEM_LIMIT, EXTENSION_ROW_LIMIT};
+pub(crate) use support::sanitize_text;
+use support::{array_len, fallback, moved_index, nonempty, sanitize_value};
 use wire::*;
 
 const STATUS_SCHEMA_VERSION: u64 = 1;
@@ -196,19 +204,25 @@ impl From<ProviderWire> for ProviderView {
         let blockers = packages
             .iter()
             .flat_map(|package| {
-                package
-                    .blockers
-                    .iter()
-                    .enumerate()
-                    .map(move |(index, blocker)| BlockerItemView {
-                        key: format!("{}:{}:{index}", package.id, blocker.code),
-                        package_id: package.id.clone(),
-                        package_title: package.title.clone(),
-                        specification: package.specification.clone(),
-                        implementation: package.implementation.clone(),
-                        verification: package.verification.clone(),
-                        blocker: blocker.clone(),
-                    })
+                let mut occurrences = HashMap::<BlockerAnchor, usize>::new();
+                package.blockers.iter().map(move |blocker| BlockerItemView {
+                    key: {
+                        let anchor = BlockerAnchor::new(&package.id, blocker);
+                        let occurrence = occurrences.entry(anchor.clone()).or_default();
+                        let key = BlockerKey {
+                            anchor,
+                            occurrence: *occurrence,
+                        };
+                        *occurrence += 1;
+                        key
+                    },
+                    package_id: package.id.clone(),
+                    package_title: package.title.clone(),
+                    specification: package.specification.clone(),
+                    implementation: package.implementation.clone(),
+                    verification: package.verification.clone(),
+                    blocker: blocker.clone(),
+                })
             })
             .collect::<Vec<_>>();
         let summary = wire
@@ -371,8 +385,10 @@ pub(crate) struct PackageView {
     pub(crate) dependencies: Vec<String>,
     pub(crate) acceptance_complete: u64,
     pub(crate) acceptance_total: u64,
+    pub(crate) acceptance_checks: Vec<AcceptanceCheckView>,
     pub(crate) blockers: Vec<BlockerView>,
     pub(crate) evidence: Vec<EvidenceView>,
+    pub(crate) extensions: BTreeMap<String, Value>,
 }
 
 impl From<PackageWire> for PackageView {
@@ -393,8 +409,10 @@ impl From<PackageWire> for PackageView {
             dependencies: wire.dependencies,
             acceptance_complete,
             acceptance_total,
+            acceptance_checks: wire.acceptance_checks.into_iter().map(Into::into).collect(),
             blockers: wire.blockers.into_iter().map(Into::into).collect(),
             evidence: wire.evidence.into_iter().map(Into::into).collect(),
+            extensions: wire.extensions,
         }
     }
 }
@@ -405,6 +423,7 @@ pub(crate) struct FacetView {
     pub(crate) category: String,
     pub(crate) summary: Option<String>,
     pub(crate) source: Option<SourceView>,
+    pub(crate) digest: Option<String>,
 }
 
 impl From<FacetWire> for FacetView {
@@ -414,6 +433,7 @@ impl From<FacetWire> for FacetView {
             category: fallback(wire.category, "unknown"),
             summary: wire.summary,
             source: wire.source.map(Into::into),
+            digest: wire.digest,
         }
     }
 }
@@ -437,9 +457,34 @@ impl From<BlockerWire> for BlockerView {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BlockerAnchor {
+    package_id: String,
+    code: String,
+    related_work_package: Option<String>,
+    source_path: Option<String>,
+}
+
+impl BlockerAnchor {
+    fn new(package_id: &str, blocker: &BlockerView) -> Self {
+        Self {
+            package_id: package_id.to_owned(),
+            code: blocker.code.clone(),
+            related_work_package: blocker.related_work_package.clone(),
+            source_path: blocker.source.as_ref().map(|source| source.path.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BlockerKey {
+    anchor: BlockerAnchor,
+    occurrence: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct BlockerItemView {
-    pub(crate) key: String,
+    pub(crate) key: BlockerKey,
     pub(crate) package_id: String,
     pub(crate) package_title: String,
     pub(crate) specification: FacetView,
@@ -453,6 +498,7 @@ pub(crate) struct EvidenceView {
     pub(crate) kind: String,
     pub(crate) reference: String,
     pub(crate) source: Option<SourceView>,
+    pub(crate) digest: Option<String>,
 }
 
 impl From<EvidenceWire> for EvidenceView {
@@ -461,6 +507,7 @@ impl From<EvidenceWire> for EvidenceView {
             kind: fallback(wire.kind, "unknown"),
             reference: fallback(wire.reference, "<unknown>"),
             source: wire.source.map(Into::into),
+            digest: wire.digest,
         }
     }
 }
@@ -560,6 +607,7 @@ pub(crate) struct App {
     pub(crate) package_index: usize,
     pub(crate) blocker_index: usize,
     pub(crate) blocked_only: bool,
+    pub(crate) package_detail: PackageDetailState,
 }
 
 impl Default for App {
@@ -574,6 +622,7 @@ impl Default for App {
             package_index: 0,
             blocker_index: 0,
             blocked_only: false,
+            package_detail: PackageDetailState::default(),
         }
     }
 }
@@ -613,15 +662,16 @@ impl App {
             })
             .unwrap_or(0);
         self.blocker_index = blocker_key
-            .as_deref()
+            .as_ref()
             .and_then(|key| {
                 self.current_provider()?
                     .blockers
                     .iter()
-                    .position(|blocker| blocker.key == key)
+                    .position(|blocker| &blocker.key == key)
             })
             .unwrap_or(0);
         self.clamp_selections();
+        self.reconcile_package_detail();
     }
 
     pub(crate) fn accept_error(&mut self, error: String) {
@@ -654,6 +704,9 @@ impl App {
 
     pub(crate) fn select_tab(&mut self, tab: Tab) {
         self.tab = tab;
+        if tab != Tab::Packages {
+            self.close_package_detail();
+        }
     }
 
     pub(crate) fn cycle_tab(&mut self, backwards: bool) {
@@ -664,6 +717,9 @@ impl App {
             (self.tab.index() + 1) % len
         };
         self.tab = Tab::ALL[index];
+        if self.tab != Tab::Packages {
+            self.close_package_detail();
+        }
     }
 
     pub(crate) fn switch_provider(&mut self, backwards: bool) {
@@ -682,11 +738,13 @@ impl App {
         };
         self.package_index = 0;
         self.blocker_index = 0;
+        self.close_package_detail();
     }
 
     pub(crate) fn toggle_blocked_only(&mut self) {
         self.blocked_only = !self.blocked_only;
         self.package_index = 0;
+        self.close_package_detail();
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
@@ -734,50 +792,4 @@ impl App {
                 .saturating_sub(1),
         );
     }
-}
-
-fn moved_index(current: usize, len: usize, delta: isize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    current
-        .saturating_add_signed(delta)
-        .min(len.saturating_sub(1))
-}
-
-fn fallback(value: String, fallback: &str) -> String {
-    nonempty(value).unwrap_or_else(|| fallback.to_owned())
-}
-
-fn nonempty(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then_some(value)
-}
-
-fn array_len(value: &Value, key: &str) -> usize {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0)
-}
-
-fn sanitize_value(value: &mut Value) {
-    match value {
-        Value::String(text) => *text = sanitize_text(text),
-        Value::Array(values) => values.iter_mut().for_each(sanitize_value),
-        Value::Object(values) => values.values_mut().for_each(sanitize_value),
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
-
-fn sanitize_text(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_control() {
-                '\u{fffd}'
-            } else {
-                character
-            }
-        })
-        .collect()
 }

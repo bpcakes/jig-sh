@@ -4,12 +4,13 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
 use super::events::{
     DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, append_jsonl, ensure_state_layout,
-    new_id, now_ms, read_jsonl,
+    new_id, now_ms, read_jsonl, read_jsonl_with_cancellation,
 };
 use super::plans::open_plans;
 use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
@@ -160,10 +161,30 @@ pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
 }
 
 pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
-    let sessions = read_jsonl::<SessionEvent>(&ctx.state_file("sessions.jsonl"))?;
-    let plans = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?;
-    let decisions = read_jsonl::<DecisionRecord>(&ctx.state_file("decisions.jsonl"))?;
+    state_summary_with_cancellation(ctx, &|| false)
+}
+
+pub(crate) fn state_summary_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_state_summary_active(cancelled)?;
+    let sessions =
+        read_jsonl_with_cancellation::<SessionEvent>(&ctx.state_file("sessions.jsonl"), cancelled)?;
+    ensure_state_summary_active(cancelled)?;
+    let plans =
+        read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
+    ensure_state_summary_active(cancelled)?;
+    let receipts = read_jsonl_with_cancellation::<ReceiptRecord>(
+        &ctx.state_file("receipts.jsonl"),
+        cancelled,
+    )?;
+    ensure_state_summary_active(cancelled)?;
+    let decisions = read_jsonl_with_cancellation::<DecisionRecord>(
+        &ctx.state_file("decisions.jsonl"),
+        cancelled,
+    )?;
+    ensure_state_summary_active(cancelled)?;
 
     let open_plans = open_plans(&plans);
     let session_count = sessions.iter().filter(|session| session.is_start()).count();
@@ -184,6 +205,9 @@ pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
         .take(STATE_SUMMARY_RECENT_LIMIT)
         .map(decision_summary)
         .collect::<Vec<_>>();
+    ensure_state_summary_active(cancelled)?;
+    let current_session_id = current_session(ctx)?;
+    ensure_state_summary_active(cancelled)?;
 
     Ok(json!({
         "ok": true,
@@ -193,7 +217,7 @@ pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
             "source_commit": ctx.source_commit(),
             "source_path": ctx.source_path(),
         },
-        "current_session_id": current_session(ctx)?,
+        "current_session_id": current_session_id,
         "counts": {
             "sessions": session_count,
             "session_events": sessions.len(),
@@ -208,6 +232,10 @@ pub(crate) fn state_summary(ctx: &RepoContext) -> Result<Value> {
         "recent_receipts": recent_receipts,
         "recent_decisions": recent_decisions,
     }))
+}
+
+fn ensure_state_summary_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 fn receipt_summary(receipt: &ReceiptRecord) -> Value {

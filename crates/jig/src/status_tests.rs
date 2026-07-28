@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use super::*;
+use crate::test_env::TestRepoBuilder;
 
 const PROVIDER_ID: &str = "factorish.test-status";
 
@@ -146,6 +147,14 @@ fn runner_accepts_one_valid_document_and_never_trusts_nonzero_stdout() {
     let output = run_provider_inner(temp.path(), &valid).unwrap();
     assert_eq!(output.decoded.provider.id, PROVIDER_ID);
 
+    let read_only_git = provider(vec![
+        "sh".into(),
+        "-c".into(),
+        "test \"$GIT_OPTIONAL_LOCKS\" = 0 && cat report.json".into(),
+    ]);
+    let output = run_provider_inner(temp.path(), &read_only_git).unwrap();
+    assert_eq!(output.decoded.provider.id, PROVIDER_ID);
+
     let failed = provider(vec![
         "sh".into(),
         "-c".into(),
@@ -207,21 +216,229 @@ fn runner_cancels_an_in_flight_provider_tree_promptly() {
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn repository_observation_cancels_an_in_flight_git_status_promptly() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    fs::write(root.path().join("README.md"), "fixture").unwrap();
+    init_git_repo(root.path());
+    let hook = root.path().join("slow-fsmonitor.sh");
+    let started_marker = root.path().join("fsmonitor-started");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nsleep 30\n",
+            started_marker.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hook, permissions).unwrap();
+    git(
+        root.path(),
+        &["config", "core.fsmonitor", &hook.display().to_string()],
+    );
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let trigger = Arc::clone(&cancelled);
+    let marker = started_marker.clone();
+    let setter = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            marker.exists(),
+            "git status did not start the fsmonitor hook"
+        );
+        trigger.store(true, Ordering::SeqCst);
+    });
+
+    let started = Instant::now();
+    let result =
+        observe_git_checkout_with_cancellation(root.path(), &|| cancelled.load(Ordering::SeqCst));
+    setter.join().unwrap();
+
+    assert!(matches!(result, Err(GitProbeError::Cancelled)));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "Git observation cancellation took {:?}",
+        started.elapsed()
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn aggregate_cancels_an_open_plan_gate_fingerprint_git_process_promptly() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempdir().unwrap();
+    TestRepoBuilder::new(root.path())
+        .repo_name("cancelled-gate-fingerprint-fixture")
+        .config(
+            r#"
+sqlx_enabled = false
+"#,
+        )
+        .required_commands(["bootstrap_command"])
+        .write();
+    init_git_repo(root.path());
+
+    let ctx = RepoContext::load_from(root.path()).unwrap();
+    crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Open plan", "# Open plan\n").unwrap();
+
+    let hook = root.path().join(".agent/slow-gate-fsmonitor.sh");
+    let count = root.path().join(".agent/fsmonitor-count");
+    let started_marker = root.path().join(".agent/gate-fingerprint-started");
+    fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\ncount=0\nif test -f '{count}'; then read count < '{count}'; fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > '{count}'\nif test \"$count\" -ge 2; then touch '{started}'; sleep 30; fi\n",
+            count = count.display(),
+            started = started_marker.display(),
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hook, permissions).unwrap();
+    git(
+        root.path(),
+        &["config", "core.fsmonitor", &hook.display().to_string()],
+    );
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let trigger = Arc::clone(&cancelled);
+    let marker = started_marker.clone();
+    let setter = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            marker.exists(),
+            "the open-plan gate fingerprint did not start its Git status probe"
+        );
+        trigger.store(true, Ordering::SeqCst);
+    });
+
+    let started = Instant::now();
+    let error = snapshot_with_cancellation(&ctx, &|| cancelled.load(Ordering::SeqCst)).unwrap_err();
+    setter.join().unwrap();
+
+    assert_eq!(error.to_string(), "status collection was cancelled");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "gate fingerprint cancellation took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        fs::read_to_string(count)
+            .unwrap()
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+            >= 2
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn aggregate_stops_after_provider_cancellation_without_post_provider_collection() {
+    let root = tempdir().unwrap();
+    TestRepoBuilder::new(root.path())
+        .repo_name("cancelled-status-fixture")
+        .config(format!(
+            r#"
+sqlx_enabled = false
+
+[[status.providers]]
+id = "{PROVIDER_ID}"
+argv = ["sh", "provider.sh"]
+timeout_seconds = 2
+"#
+        ))
+        .required_commands(["bootstrap_command"])
+        .write();
+    fs::write(
+        root.path().join("provider-report.json"),
+        serde_json::to_vec(&report_value("complete", None)).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        root.path().join("provider.sh"),
+        "#!/bin/sh\nprintf '%s' \"$$\" > provider.pid\ncat provider-report.json\ntouch provider-finished\n",
+    )
+    .unwrap();
+
+    let ctx = RepoContext::load_from(root.path()).unwrap();
+    let cancelled_after_provider_exit = || {
+        if !root.path().join("provider-finished").exists() {
+            return false;
+        }
+        let pid = fs::read_to_string(root.path().join("provider.pid"))
+            .unwrap()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        // The provider writes its completion marker before exiting. While the
+        // provider runner is still polling or owns an unreaped zombie, signal
+        // zero succeeds. Cancellation therefore becomes true only after the
+        // provider runner has observed and reaped the successful child.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    };
+    let error = snapshot_with_cancellation(&ctx, &cancelled_after_provider_exit).unwrap_err();
+
+    assert_eq!(error.to_string(), "status collection was cancelled");
+    // This fixture is deliberately not a Git checkout. Reaching the
+    // post-provider probes would produce a partial snapshot instead.
+    assert!(!root.path().join(".agent/state").exists());
+}
+
+#[test]
+fn work_snapshot_propagates_a_non_sticky_typed_cancellation() {
+    use std::cell::Cell;
+
+    let root = tempdir().unwrap();
+    TestRepoBuilder::new(root.path())
+        .repo_name("typed-cancellation-fixture")
+        .config(
+            r#"
+sqlx_enabled = false
+"#,
+        )
+        .required_commands(["bootstrap_command"])
+        .write();
+    let ctx = RepoContext::load_from(root.path()).unwrap();
+    let calls = Cell::new(0);
+
+    let result = work_snapshot(&ctx, &|| {
+        let current = calls.get();
+        calls.set(current + 1);
+        current == 1
+    });
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("non-sticky cancellation was converted into a partial work snapshot"),
+    };
+
+    assert!(is_status_collection_cancellation(&error));
+    assert_eq!(calls.get(), 2);
+}
+
 #[cfg(unix)]
 #[test]
 fn aggregate_joins_provider_git_work_gate_and_loop_state_without_writes() {
     let outer = tempdir().unwrap();
     let root = outer.path().join("repo");
     let report_path = root.join("provider-report.json");
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        format!(
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "status-fixture"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
+    TestRepoBuilder::new(&root)
+        .repo_name("status-fixture")
+        .config(format!(
+            r#"
 sqlx_enabled = false
 
 [[status.providers]]
@@ -229,22 +446,10 @@ id = "{PROVIDER_ID}"
 argv = ["cat", "provider-report.json"]
 timeout_seconds = 2
 "#
-        ),
-    )
-    .unwrap();
+        ))
+        .required_commands(["bootstrap_command"])
+        .write();
     fs::write(root.join(".gitignore"), "provider-report.json\n").unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_vec_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["bootstrap_command"],
-            "tools": []
-        }))
-        .unwrap(),
-    )
-    .unwrap();
     init_git_repo(&root);
     let original_revision = git_text_for_test(&root, &["rev-parse", "HEAD"]);
     fs::write(

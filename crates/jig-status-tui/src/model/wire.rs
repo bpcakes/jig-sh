@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::{CategoryCounts, DiagnosticCounts};
 
@@ -110,6 +111,7 @@ pub(super) struct PackageWire {
     pub(super) acceptance_checks: Vec<AcceptanceCheckWire>,
     pub(super) blockers: Vec<BlockerWire>,
     pub(super) evidence: Vec<EvidenceWire>,
+    pub(super) extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Default, Deserialize)]
@@ -119,12 +121,18 @@ pub(super) struct FacetWire {
     pub(super) category: String,
     pub(super) summary: Option<String>,
     pub(super) source: Option<SourceWire>,
+    pub(super) digest: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(super) struct AcceptanceCheckWire {
+    pub(super) ordinal: u64,
+    pub(super) id: Option<String>,
+    pub(super) state: String,
     pub(super) category: String,
+    pub(super) target: Option<String>,
+    pub(super) source: Option<SourceWire>,
 }
 
 #[derive(Default, Deserialize)]
@@ -142,6 +150,7 @@ pub(super) struct EvidenceWire {
     pub(super) kind: String,
     pub(super) reference: String,
     pub(super) source: Option<SourceWire>,
+    pub(super) digest: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

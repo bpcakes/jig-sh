@@ -144,7 +144,7 @@ scripts/jig status --json
 scripts/jig status --tui
 ```
 
-The terminal dashboard has Overview, Packages, and Blockers views, background refresh, provider switching, and stable package/blocker selection. The command is read-only and keeps provider failures visible as partial status. It is separate from `jig ui`, the browser-based work/receipt flight recorder. See [Status-provider protocol](docs/status-provider.md#terminal-dashboard).
+The terminal dashboard has Overview, Packages, and Blockers views, background refresh, provider switching, and stable package/blocker selection. Press Enter on a package for a scrollable detail view covering facets, dependencies, acceptance checks, blockers, evidence, and provider-specific details. The command is read-only and keeps provider failures visible as partial status. It is separate from `jig ui`, the browser-based work/receipt flight recorder. See [Status-provider protocol](docs/status-provider.md#terminal-dashboard).
 
 ### Flight recorder UI
 

@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use fs4::fs_std::FileExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+
+use crate::cancellation::ensure_status_collection_active;
 use ulid::Ulid;
 
 use crate::command::{
@@ -186,6 +189,15 @@ fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
 }
 
 fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
+    status_with_cancellation(ctx, request, &|| false)
+}
+
+pub(super) fn status_with_cancellation(
+    ctx: &RepoContext,
+    request: LoopStatusRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_status_active(cancelled)?;
     let workflows = if let Some(workflow) = request.workflow.as_deref() {
         vec![
             resolve_workflow(
@@ -205,21 +217,30 @@ fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
             .map(|workflow| workflow.value())
             .collect::<Vec<_>>()
     };
+    ensure_status_active(cancelled)?;
 
-    let attempts = AttemptStore::new(ctx).snapshot_read_only()?;
-    let attempt_sections = AttemptSections::new(&attempts, now_ms());
+    let attempts = AttemptStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
+    ensure_status_active(cancelled)?;
+    let attempt_sections = AttemptSections::new_with_cancellation(&attempts, now_ms(), cancelled)?;
+    ensure_status_active(cancelled)?;
+    let leases = LeaseStore::new(ctx).active_leases_read_only_with_cancellation(cancelled)?;
+    ensure_status_active(cancelled)?;
 
     Ok(json!({
         "ok": true,
         "command": "loop status",
         "workflows": workflows,
-        "leases": LeaseStore::new(ctx).active_leases_read_only()?,
+        "leases": leases,
         "attempts": attempts,
         "waiting_attempts": attempt_sections.waiting,
         "needs_attention": {
             "exhausted_attempts": attempt_sections.needs_attention,
         },
     }))
+}
+
+fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Value> {
@@ -615,8 +636,12 @@ impl LeaseStore {
         })
     }
 
-    fn active_leases_read_only(&self) -> Result<Vec<LeaseRecord>> {
-        let mut store = read_json_or_default::<LeaseFile>(&self.path)?;
+    fn active_leases_read_only_with_cancellation(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<LeaseRecord>> {
+        let mut store = read_json_or_default_with_cancellation::<LeaseFile>(&self.path, cancelled)?;
+        ensure_status_active(cancelled)?;
         store.prune_expired(now_ms());
         Ok(store.leases.into_values().collect())
     }
@@ -660,18 +685,30 @@ struct AttemptSections {
 
 impl AttemptSections {
     fn new(attempts: &[AttemptRecord], now_ms: u64) -> Self {
-        Self {
-            waiting: attempts
-                .iter()
-                .filter(|attempt| attempt.in_backoff(now_ms))
-                .cloned()
-                .collect(),
-            needs_attention: attempts
-                .iter()
-                .filter(|attempt| attempt.exhausted)
-                .cloned()
-                .collect(),
+        Self::new_with_cancellation(attempts, now_ms, &|| false)
+            .expect("an always-false callback cannot cancel attempt classification")
+    }
+
+    fn new_with_cancellation(
+        attempts: &[AttemptRecord],
+        now_ms: u64,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Self> {
+        let mut waiting = Vec::new();
+        let mut needs_attention = Vec::new();
+        for attempt in attempts {
+            ensure_status_active(cancelled)?;
+            if attempt.in_backoff(now_ms) {
+                waiting.push(attempt.clone());
+            }
+            if attempt.exhausted {
+                needs_attention.push(attempt.clone());
+            }
         }
+        Ok(Self {
+            waiting,
+            needs_attention,
+        })
     }
 
     fn blocks_idle(&self) -> bool {
@@ -753,11 +790,16 @@ impl AttemptStore {
         self.with_locked(|store| Ok(store.attempts.values().cloned().collect()))
     }
 
-    fn snapshot_read_only(&self) -> Result<Vec<AttemptRecord>> {
-        Ok(read_json_or_default::<AttemptFile>(&self.path)?
-            .attempts
-            .into_values()
-            .collect())
+    fn snapshot_read_only_with_cancellation(
+        &self,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<AttemptRecord>> {
+        Ok(
+            read_json_or_default_with_cancellation::<AttemptFile>(&self.path, cancelled)?
+                .attempts
+                .into_values()
+                .collect(),
+        )
     }
 
     fn clear_attempt(&mut self, workflow_id: &str, item_key: &str) -> Result<bool> {
@@ -801,9 +843,32 @@ fn read_json_or_default<T>(path: &Path) -> Result<T>
 where
     T: Default + DeserializeOwned,
 {
+    read_json_or_default_with_cancellation(path, &|| false)
+}
+
+fn read_json_or_default_with_cancellation<T>(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<T>
+where
+    T: Default + DeserializeOwned,
+{
+    ensure_status_active(cancelled)?;
     match File::open(path) {
-        Ok(file) => serde_json::from_reader(file)
-            .with_context(|| format!("Failed to parse {}", path.display())),
+        Ok(mut file) => {
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            loop {
+                ensure_status_active(cancelled)?;
+                let read = file
+                    .read(&mut chunk)
+                    .with_context(|| format!("Failed to read {}", path.display()))?;
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..read]);
+            }
+            ensure_status_active(cancelled)?;
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("Failed to parse {}", path.display()))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
         Err(error) => Err(error).with_context(|| format!("Failed to read {}", path.display())),
     }
@@ -832,11 +897,30 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use serde_json::json;
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn read_only_loop_cache_scan_observes_cancellation_between_chunks() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("large.json");
+        fs::write(
+            &path,
+            format!("{{\"padding\":\"{}\"}}", "x".repeat(256 * 1024)),
+        )
+        .unwrap();
+        let checks = AtomicUsize::new(0);
+
+        let error = read_json_or_default_with_cancellation::<Value>(&path, &|| {
+            checks.fetch_add(1, Ordering::SeqCst) >= 2
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "status collection was cancelled");
+    }
 
     #[test]
     fn attempt_store_exhausts_after_budget_and_clears_on_success() {
@@ -873,28 +957,8 @@ mod tests {
     }
 
     fn write_loop_fixture_repo(root: &Path) {
-        fs::create_dir_all(root.join(".agent")).unwrap();
-        fs::write(
-            root.join(".jig.toml"),
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join(".agent/jig-contract.json"),
-            serde_json::to_string_pretty(&json!({
-                "contract_version": 3,
-                "tool_namespace": "jig",
-                "jig_version": "0.2.0-beta.1",
-                "required_commands": [],
-                "tools": [],
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        crate::test_env::TestRepoBuilder::new(root)
+            .required_commands(Vec::<String>::new())
+            .write();
     }
 }

@@ -95,6 +95,14 @@ pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Resu
     gates::gates(ctx, WorkGatesRequest { plan_id })
 }
 
+pub(super) fn gates_snapshot_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    gates::snapshot_with_cancellation(ctx, plan_id, cancelled)
+}
+
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
     let session = session_start(ctx)?;
     let plan = plans_open(ctx, plan)?;

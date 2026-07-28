@@ -2,17 +2,26 @@ use std::fs;
 use std::io::{Read, Write, copy};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use tempfile::NamedTempFile;
 
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+use crate::doctor::{
+    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
+};
 use crate::process::{format_exit_status, require_success, run_checked_output_with_context};
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
+const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -99,7 +108,79 @@ fn repo_diff_stat(root: &Path) -> Result<DiffStat> {
 }
 
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
-    let status = git_output(
+    repo_worktree_fingerprint_inner(root, FingerprintCollection::Blocking)
+}
+
+pub(crate) fn repo_worktree_fingerprint_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled))
+}
+
+pub(crate) fn is_worktree_fingerprint_cancellation(error: &anyhow::Error) -> bool {
+    error.is::<WorktreeFingerprintCancelled>()
+}
+
+#[derive(Clone, Copy)]
+enum FingerprintCollection<'a> {
+    Blocking,
+    Cancellable(&'a dyn Fn() -> bool),
+}
+
+impl FingerprintCollection<'_> {
+    fn ensure_active(self) -> Result<()> {
+        if matches!(self, Self::Cancellable(cancelled) if cancelled()) {
+            return Err(WorktreeFingerprintCancelled.into());
+        }
+        Ok(())
+    }
+
+    fn git_output(self, root: &Path, args: &[&str], label: &str) -> Result<Output> {
+        match self {
+            Self::Blocking => git_output(root, args, label),
+            Self::Cancellable(cancelled) => {
+                git_output_with_cancellation(root, args, label, cancelled)
+            }
+        }
+    }
+
+    fn git_hash_object(self, root: &Path, input: &[u8]) -> Result<String> {
+        match self {
+            Self::Blocking => git_hash_object(root, input),
+            Self::Cancellable(cancelled) => {
+                git_hash_object_with_cancellation(root, input, cancelled)
+            }
+        }
+    }
+
+    fn git_hash_file(self, root: &Path, full_path: &Path) -> Result<String> {
+        match self {
+            Self::Blocking => git_hash_file(root, full_path),
+            Self::Cancellable(cancelled) => {
+                git_hash_file_with_cancellation(root, full_path, cancelled)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WorktreeFingerprintCancelled;
+
+impl std::fmt::Display for WorktreeFingerprintCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("worktree fingerprint collection was cancelled")
+    }
+}
+
+impl std::error::Error for WorktreeFingerprintCancelled {}
+
+fn repo_worktree_fingerprint_inner(
+    root: &Path,
+    collection: FingerprintCollection<'_>,
+) -> Result<String> {
+    collection.ensure_active()?;
+    let status = collection.git_output(
         root,
         &[
             "status",
@@ -112,12 +193,14 @@ pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
         ],
         "git status --porcelain",
     )?;
-    let unstaged = git_output(
+    collection.ensure_active()?;
+    let unstaged = collection.git_output(
         root,
         &["diff", "--binary", "--", ".", ":(exclude).agent/**"],
         "git diff --binary",
     )?;
-    let staged = git_output(
+    collection.ensure_active()?;
+    let staged = collection.git_output(
         root,
         &[
             "diff",
@@ -129,7 +212,8 @@ pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
         ],
         "git diff --cached --binary",
     )?;
-    let untracked = untracked_file_contents(root, &status.stdout)?;
+    collection.ensure_active()?;
+    let untracked = untracked_file_contents(root, &status.stdout, collection)?;
 
     let mut input = Vec::new();
     input.extend_from_slice(b"status\0");
@@ -141,13 +225,19 @@ pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
     input.extend_from_slice(b"\0untracked\0");
     input.extend_from_slice(&untracked);
 
-    git_hash_object(root, &input)
+    collection.ensure_active()?;
+    collection.git_hash_object(root, &input)
 }
 
-fn untracked_file_contents(root: &Path, status_stdout: &[u8]) -> Result<Vec<u8>> {
+fn untracked_file_contents(
+    root: &Path,
+    status_stdout: &[u8],
+    collection: FingerprintCollection<'_>,
+) -> Result<Vec<u8>> {
     let mut contents = Vec::new();
     let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
     for entry in parse_porcelain_status_z(status_stdout)? {
+        collection.ensure_active()?;
         if entry.status != "??" {
             continue;
         }
@@ -167,9 +257,11 @@ fn untracked_file_contents(root: &Path, status_stdout: &[u8]) -> Result<Vec<u8>>
             &full_path,
             &metadata,
             &mut remaining_inline_bytes,
+            collection,
         )?;
         contents.push(0);
     }
+    collection.ensure_active()?;
     Ok(contents)
 }
 
@@ -244,7 +336,9 @@ fn append_untracked_path_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
+    collection: FingerprintCollection<'_>,
 ) -> Result<()> {
+    collection.ensure_active()?;
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
         contents.extend_from_slice(b"symlink\0");
@@ -266,6 +360,7 @@ fn append_untracked_path_fingerprint(
             full_path,
             metadata,
             remaining_inline_bytes,
+            collection,
         )?;
         return Ok(());
     }
@@ -281,9 +376,11 @@ fn append_untracked_file_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
+    collection: FingerprintCollection<'_>,
 ) -> Result<()> {
+    collection.ensure_active()?;
     if metadata.len() > MAX_INLINE_UNTRACKED_BYTES || metadata.len() > *remaining_inline_bytes {
-        append_hashed_file_fingerprint(contents, root, full_path)?;
+        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
         return Ok(());
     }
 
@@ -294,9 +391,10 @@ fn append_untracked_file_fingerprint(
         .take(MAX_INLINE_UNTRACKED_BYTES + 1)
         .read_to_end(&mut bytes)
         .with_context(|| format!("Failed to read untracked file {}", full_path.display()))?;
+    collection.ensure_active()?;
 
     if bytes.len() as u64 > MAX_INLINE_UNTRACKED_BYTES {
-        append_hashed_file_fingerprint(contents, root, full_path)?;
+        append_hashed_file_fingerprint(contents, root, full_path, collection)?;
         return Ok(());
     }
 
@@ -310,9 +408,10 @@ fn append_hashed_file_fingerprint(
     contents: &mut Vec<u8>,
     root: &Path,
     full_path: &Path,
+    collection: FingerprintCollection<'_>,
 ) -> Result<()> {
     contents.extend_from_slice(b"file-hash\0");
-    contents.extend_from_slice(git_hash_file(root, full_path)?.as_bytes());
+    contents.extend_from_slice(collection.git_hash_file(root, full_path)?.as_bytes());
     Ok(())
 }
 
@@ -332,6 +431,7 @@ fn system_time_key(time: Option<SystemTime>) -> u128 {
 fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
     let mut command = Command::new("git");
     command.current_dir(root).args(args);
+    configure_read_only_git_environment(&mut command);
 
     run_checked_output_with_context(
         &mut command,
@@ -347,13 +447,106 @@ fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
     )
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn git_output_with_cancellation(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Output> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_git_command_with_cancellation(root, &mut command, label, cancelled)?;
+    require_success(&output, |output| {
+        format!(
+            "{label} failed with {}.\nstdout:\n{}\nstderr:\n{}",
+            format_exit_status(&output.status),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })?;
+    Ok(output)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn git_output_with_cancellation(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Output> {
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    let output = git_output(root, args, label)?;
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    Ok(output)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn run_git_command_with_cancellation(
+    root: &Path,
+    command: &mut Command,
+    label: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Output> {
+    configure_read_only_git_environment(command);
+    let output = match run_owned_process_tree_with_output_limits(
+        command,
+        Duration::MAX,
+        ProcessOutputLimits {
+            stdout: usize::MAX,
+            stderr: usize::MAX,
+        },
+        cancelled,
+    ) {
+        Ok(output) => output,
+        Err(OwnedProcessTreeError::Cancelled) => {
+            return Err(WorktreeFingerprintCancelled.into());
+        }
+        Err(error) => {
+            return Err(anyhow::Error::new(error)
+                .context(format!("Failed to run {label} in {}", root.display())));
+        }
+    };
+    let stdout = output
+        .stdout
+        .context("supervised Git command did not capture stdout")?;
+    let stderr = output
+        .stderr
+        .context("supervised Git command did not capture stderr")?;
+    if !stdout.complete || !stderr.complete {
+        bail!(
+            "Failed to capture complete output from {label} in {}",
+            root.display()
+        );
+    }
+    if stdout.truncated || stderr.truncated {
+        bail!(
+            "Unexpected bounded output from {label} in {}",
+            root.display()
+        );
+    }
+    Ok(Output {
+        status: output.status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+    })
+}
+
 fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
         .args(["hash-object", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_read_only_git_environment(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
 
@@ -379,15 +572,81 @@ fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn git_hash_object_with_cancellation(
+    root: &Path,
+    input: &[u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    let mut input_file =
+        NamedTempFile::new().context("Failed to stage worktree fingerprint hash input")?;
+    write_fingerprint_hash_input(&mut input_file, input, cancelled)?;
+    let stdin = input_file
+        .reopen()
+        .context("Failed to reopen worktree fingerprint hash input")?;
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output =
+        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
+    require_success(&output, |output| {
+        format!(
+            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
+            format_exit_status(&output.status),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    })?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn write_fingerprint_hash_input(
+    writer: &mut impl Write,
+    input: &[u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let collection = FingerprintCollection::Cancellable(cancelled);
+    for chunk in input.chunks(FINGERPRINT_HASH_WRITE_CHUNK) {
+        collection.ensure_active()?;
+        writer
+            .write_all(chunk)
+            .context("Failed to write worktree fingerprint hash input")?;
+    }
+    collection.ensure_active()?;
+    writer
+        .flush()
+        .context("Failed to flush worktree fingerprint hash input")?;
+    collection.ensure_active()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn git_hash_object_with_cancellation(
+    root: &Path,
+    input: &[u8],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    let hash = git_hash_object(root, input)?;
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    Ok(hash)
+}
+
 fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
     let mut file = fs::File::open(full_path)
         .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
         .args(["hash-object", "--stdin"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_read_only_git_environment(&mut command);
+    let mut child = command
         .spawn()
         .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
 
@@ -413,6 +672,52 @@ fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
     })?;
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn git_hash_file_with_cancellation(
+    root: &Path,
+    full_path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    let file = fs::File::open(full_path)
+        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .args(["hash-object", "--stdin"])
+        .stdin(Stdio::from(file))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output =
+        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
+    require_success(&output, |output| {
+        format!(
+            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
+            format_exit_status(&output.status),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    })?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn git_hash_file_with_cancellation(
+    root: &Path,
+    full_path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    let hash = git_hash_file(root, full_path)?;
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    Ok(hash)
+}
+
+fn configure_read_only_git_environment(command: &mut Command) {
+    // Receipt and gate fingerprint probes are observational. In particular,
+    // `git status` must not refresh stat data by taking an optional index lock.
+    command.env("GIT_OPTIONAL_LOCKS", "0");
 }
 
 pub(crate) fn parse_diff_stat_output(stdout: &str) -> Result<DiffStat> {
@@ -441,8 +746,43 @@ fn parse_numstat_count(field: &str, line_number: usize, kind: &str) -> Result<u6
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::ffi::OsStr;
     use std::time::{Duration, UNIX_EPOCH};
     use tempfile::tempdir;
+
+    #[test]
+    fn read_only_git_commands_disable_optional_locks() {
+        let mut command = Command::new("git");
+        command.env("GIT_OPTIONAL_LOCKS", "1");
+
+        configure_read_only_git_environment(&mut command);
+
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == OsStr::new("GIT_OPTIONAL_LOCKS"))
+                .and_then(|(_, value)| value),
+            Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn fingerprint_hash_staging_checks_cancellation_between_chunks() {
+        let input = vec![b'x'; FINGERPRINT_HASH_WRITE_CHUNK * 3];
+        let checks = Cell::new(0);
+        let mut staged = Vec::new();
+
+        let error = write_fingerprint_hash_input(&mut staged, &input, &|| {
+            let current = checks.get();
+            checks.set(current + 1);
+            current >= 1
+        })
+        .unwrap_err();
+
+        assert!(is_worktree_fingerprint_cancellation(&error));
+        assert_eq!(staged.len(), FINGERPRINT_HASH_WRITE_CHUNK);
+    }
 
     #[test]
     fn parse_diff_stat_output_counts_binary_files_without_swallowing_other_errors() {

@@ -7,16 +7,20 @@ use serde_json::{Value, json};
 use time::{Date, Month};
 use ulid::Ulid;
 
+use crate::cancellation::{ensure_status_collection_active, status_collection_cancellation};
 use crate::context::RepoContext;
 use crate::git_receipts::{
     GitReceiptMetadata, collect_git_receipt_metadata,
-    collect_git_receipt_metadata_without_worktree_fingerprint, repo_worktree_fingerprint,
+    collect_git_receipt_metadata_without_worktree_fingerprint,
+    is_worktree_fingerprint_cancellation, repo_worktree_fingerprint,
+    repo_worktree_fingerprint_with_cancellation,
 };
 use crate::tool_defs::tool;
 
 use super::events::{
     ReceiptRecord, append_jsonl, ensure_state_layout, new_id, now_ms, read_jsonl,
-    read_jsonl_locked, truncate, with_jsonl_write_lock, write_jsonl_locked,
+    read_jsonl_locked, read_jsonl_with_cancellation, truncate, with_jsonl_write_lock,
+    write_jsonl_locked,
 };
 use super::sessions::current_session;
 
@@ -189,16 +193,29 @@ pub(crate) fn latest_plan_tool_receipt(
     plan_id: &str,
     tool_name: &str,
 ) -> Result<Option<ToolReceiptStatus>> {
+    latest_plan_tool_receipt_with_cancellation(ctx, plan_id, tool_name, &|| false)
+}
+
+pub(crate) fn latest_plan_tool_receipt_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tool_name: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<ToolReceiptStatus>> {
+    ensure_receipt_scan_active(cancelled)?;
     ensure_state_layout(ctx)?;
-    Ok(
-        read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?
-            .into_iter()
-            .rev()
-            .find(|receipt| {
-                receipt.plan_id.as_deref() == Some(plan_id) && receipt.tool_name == tool_name
-            })
-            .map(tool_receipt_status),
-    )
+    let receipts = read_jsonl_with_cancellation::<ReceiptRecord>(
+        &ctx.state_file("receipts.jsonl"),
+        cancelled,
+    )?;
+    for receipt in receipts.into_iter().rev() {
+        ensure_receipt_scan_active(cancelled)?;
+        if receipt.plan_id.as_deref() == Some(plan_id) && receipt.tool_name == tool_name {
+            return Ok(Some(tool_receipt_status(receipt)));
+        }
+    }
+    ensure_receipt_scan_active(cancelled)?;
+    Ok(None)
 }
 
 fn protected_receipt_ids(receipts: &[ReceiptRecord]) -> BTreeSet<String> {
@@ -358,32 +375,59 @@ pub(crate) fn latest_plan_work_check_receipt_for_tool(
     tool_name: &str,
     tool_receipt_id: &str,
 ) -> Result<Option<ToolReceiptStatus>> {
+    latest_plan_work_check_receipt_for_tool_with_cancellation(
+        ctx,
+        plan_id,
+        tool_name,
+        tool_receipt_id,
+        &|| false,
+    )
+}
+
+pub(crate) fn latest_plan_work_check_receipt_for_tool_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tool_name: &str,
+    tool_receipt_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<ToolReceiptStatus>> {
+    ensure_receipt_scan_active(cancelled)?;
     ensure_state_layout(ctx)?;
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?;
-    let Some(tool_receipt_index) = receipts
-        .iter()
-        .position(|receipt| receipt.id == tool_receipt_id)
-    else {
+    let receipts = read_jsonl_with_cancellation::<ReceiptRecord>(
+        &ctx.state_file("receipts.jsonl"),
+        cancelled,
+    )?;
+    let mut tool_receipt_index = None;
+    for (index, receipt) in receipts.iter().enumerate() {
+        ensure_receipt_scan_active(cancelled)?;
+        if receipt.id == tool_receipt_id {
+            tool_receipt_index = Some(index);
+            break;
+        }
+    }
+    let Some(tool_receipt_index) = tool_receipt_index else {
         return Ok(None);
     };
 
-    let mut candidate_batches =
-        receipts
-            .iter()
-            .skip(tool_receipt_index + 1)
-            .rev()
-            .filter(|receipt| {
-                receipt.plan_id.as_deref() == Some(plan_id)
-                    && receipt.tool_name == tool::WORK_CHECK
-                    && receipt.exit_status == 0
-                    && receipt_args_include_tool(receipt, tool_name)
-            });
-
-    let exact_batch = candidate_batches
-        .clone()
-        .find(|receipt| receipt_args_include_receipt_id(receipt, tool_receipt_id));
-    let legacy_batch = candidate_batches.find(|receipt| !receipt_args_has_receipt_ids(receipt));
-
+    let mut exact_batch = None;
+    let mut legacy_batch = None;
+    for receipt in receipts.iter().skip(tool_receipt_index + 1).rev() {
+        ensure_receipt_scan_active(cancelled)?;
+        if receipt.plan_id.as_deref() != Some(plan_id)
+            || receipt.tool_name != tool::WORK_CHECK
+            || receipt.exit_status != 0
+            || !receipt_args_include_tool(receipt, tool_name)
+        {
+            continue;
+        }
+        if exact_batch.is_none() && receipt_args_include_receipt_id(receipt, tool_receipt_id) {
+            exact_batch = Some(receipt);
+        }
+        if legacy_batch.is_none() && !receipt_args_has_receipt_ids(receipt) {
+            legacy_batch = Some(receipt);
+        }
+    }
+    ensure_receipt_scan_active(cancelled)?;
     Ok(exact_batch
         .or(legacy_batch)
         .cloned()
@@ -395,30 +439,68 @@ pub(crate) fn latest_plan_work_review_receipt_for_gate(
     plan_id: &str,
     gate_id: &str,
 ) -> Result<Option<WorkReviewReceiptStatus>> {
+    latest_plan_work_review_receipt_for_gate_with_cancellation(ctx, plan_id, gate_id, &|| false)
+}
+
+pub(crate) fn latest_plan_work_review_receipt_for_gate_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    gate_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<WorkReviewReceiptStatus>> {
+    ensure_receipt_scan_active(cancelled)?;
     ensure_state_layout(ctx)?;
-    Ok(
-        read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?
-            .into_iter()
-            .rev()
-            .find(|receipt| {
-                receipt.plan_id.as_deref() == Some(plan_id)
-                    && receipt.tool_name == tool::WORK_REVIEW
-                    && receipt.args.get("gate_id").and_then(Value::as_str) == Some(gate_id)
-            })
-            .map(work_review_receipt_status),
-    )
+    let receipts = read_jsonl_with_cancellation::<ReceiptRecord>(
+        &ctx.state_file("receipts.jsonl"),
+        cancelled,
+    )?;
+    for receipt in receipts.into_iter().rev() {
+        ensure_receipt_scan_active(cancelled)?;
+        if receipt.plan_id.as_deref() == Some(plan_id)
+            && receipt.tool_name == tool::WORK_REVIEW
+            && receipt.args.get("gate_id").and_then(Value::as_str) == Some(gate_id)
+        {
+            return Ok(Some(work_review_receipt_status(receipt)));
+        }
+    }
+    ensure_receipt_scan_active(cancelled)?;
+    Ok(None)
+}
+
+fn ensure_receipt_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 pub(crate) fn current_worktree_fingerprint(ctx: &RepoContext) -> CurrentWorktreeFingerprint {
-    match repo_worktree_fingerprint(ctx.root()) {
-        Ok(fingerprint) => CurrentWorktreeFingerprint {
+    current_worktree_fingerprint_from_result(repo_worktree_fingerprint(ctx.root()))
+        .expect("blocking worktree fingerprint collection cannot be cancelled")
+}
+
+pub(crate) fn current_worktree_fingerprint_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<CurrentWorktreeFingerprint> {
+    current_worktree_fingerprint_from_result(repo_worktree_fingerprint_with_cancellation(
+        ctx.root(),
+        cancelled,
+    ))
+}
+
+fn current_worktree_fingerprint_from_result(
+    result: Result<String>,
+) -> Result<CurrentWorktreeFingerprint> {
+    match result {
+        Ok(fingerprint) => Ok(CurrentWorktreeFingerprint {
             fingerprint: Some(fingerprint),
             error: None,
-        },
-        Err(error) => CurrentWorktreeFingerprint {
+        }),
+        Err(error) if is_worktree_fingerprint_cancellation(&error) => {
+            Err(status_collection_cancellation())
+        }
+        Err(error) => Ok(CurrentWorktreeFingerprint {
             fingerprint: None,
             error: Some(format!("{error:#}")),
-        },
+        }),
     }
 }
 

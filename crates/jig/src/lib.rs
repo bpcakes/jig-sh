@@ -1,5 +1,6 @@
 mod agent_guides;
 mod bootstrap;
+mod cancellation;
 mod cli;
 mod command;
 mod context;
@@ -82,37 +83,14 @@ pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
 
 #[cfg(all(test, not(feature = "dev-proxy")))]
 mod no_dev_proxy_feature_tests {
-    use std::fs;
-
-    use serde_json::json;
     use tempfile::tempdir;
+
+    use crate::test_env::TestRepoBuilder;
 
     use super::*;
 
     fn write_minimal_repo(root: &std::path::Path) {
-        fs::create_dir_all(root.join(".agent")).unwrap();
-        fs::write(
-            root.join(".jig.toml"),
-            r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-"#,
-        )
-        .unwrap();
-        fs::write(
-            root.join(".agent/jig-contract.json"),
-            serde_json::to_string_pretty(&json!({
-                "contract_version": 3,
-                "tool_namespace": "jig",
-                "jig_version": "0.2.0-beta.1",
-                "required_commands": ["contract_check_command"],
-                "tools": [],
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        TestRepoBuilder::new(root).write();
     }
 
     #[test]

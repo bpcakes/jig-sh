@@ -8,7 +8,9 @@
 
 - `src/lib.rs`: snapshot-source contract and public TUI entrypoint.
 - `src/model.rs`: additive-field-tolerant aggregate view model and navigation state.
+- `src/model/package_detail.rs`: package-detail DTOs, modal state, and scroll bounds.
 - `src/render.rs`: Ratatui layout, widgets, colors, and compact terminal behavior.
+- `src/render/package_detail.rs`: full package-detail presentation and generic extension rendering.
 - `src/runtime.rs`: terminal lifecycle, keyboard events, refresh worker, and cancellation.
 
 ## Edit here for X

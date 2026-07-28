@@ -70,26 +70,27 @@ pub(crate) fn run(source: impl SnapshotSource + 'static, refresh_interval: Durat
         }
 
         if event::poll(EVENT_POLL_INTERVAL).context("failed to poll terminal input")? {
-            match event::read().context("failed to read terminal input")? {
-                Event::Key(key) if is_actionable_key(key) => match handle_key(&mut app, key) {
-                    RuntimeAction::Continue => dirty = true,
-                    RuntimeAction::Refresh => {
-                        if worker.is_some() {
-                            app.refresh_queued = true;
-                        } else {
-                            app.refreshing = true;
-                            worker = Some(RefreshWorker::spawn(Arc::clone(&source))?);
-                        }
-                        dirty = true;
+            match handle_event(
+                &mut app,
+                event::read().context("failed to read terminal input")?,
+            ) {
+                RuntimeAction::Ignore => {}
+                RuntimeAction::Redraw => dirty = true,
+                RuntimeAction::Refresh => {
+                    if worker.is_some() {
+                        app.refresh_queued = true;
+                    } else {
+                        app.refreshing = true;
+                        worker = Some(RefreshWorker::spawn(Arc::clone(&source))?);
                     }
-                    RuntimeAction::Quit => {
-                        if let Some(mut active) = worker.take() {
-                            active.cancel_and_join();
-                        }
-                        return Ok(());
+                    dirty = true;
+                }
+                RuntimeAction::Quit => {
+                    if let Some(mut active) = worker.take() {
+                        active.cancel_and_join();
                     }
-                },
-                _ => {}
+                    return Ok(());
+                }
             }
         }
     }
@@ -116,77 +117,129 @@ fn is_actionable_key(key: KeyEvent) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeAction {
-    Continue,
+    Ignore,
+    Redraw,
     Refresh,
     Quit,
 }
 
+fn handle_event(app: &mut App, event: Event) -> RuntimeAction {
+    match event {
+        Event::Key(key) if is_actionable_key(key) => handle_key(app, key),
+        Event::Resize(_, _) => RuntimeAction::Redraw,
+        _ => RuntimeAction::Ignore,
+    }
+}
+
 fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
-    if key.code == KeyCode::Esc
-        || key.code == KeyCode::Char('q')
+    if key.code == KeyCode::Char('q')
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
     {
         return RuntimeAction::Quit;
     }
+    if app.package_detail_is_open() {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Backspace => {
+                app.close_package_detail();
+                RuntimeAction::Redraw
+            }
+            KeyCode::Char('r') => RuntimeAction::Refresh,
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.scroll_package_detail(-1);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.scroll_package_detail(1);
+                RuntimeAction::Redraw
+            }
+            KeyCode::PageUp => {
+                app.scroll_package_detail(-8);
+                RuntimeAction::Redraw
+            }
+            KeyCode::PageDown => {
+                app.scroll_package_detail(8);
+                RuntimeAction::Redraw
+            }
+            KeyCode::Home => {
+                app.move_package_detail_to_edge(false);
+                RuntimeAction::Redraw
+            }
+            KeyCode::End => {
+                app.move_package_detail_to_edge(true);
+                RuntimeAction::Redraw
+            }
+            _ => RuntimeAction::Ignore,
+        };
+    }
+    if key.code == KeyCode::Esc {
+        return RuntimeAction::Quit;
+    }
     match key.code {
         KeyCode::Char('r') => RuntimeAction::Refresh,
+        KeyCode::Enter => {
+            if app.open_package_detail() {
+                RuntimeAction::Redraw
+            } else {
+                RuntimeAction::Ignore
+            }
+        }
         KeyCode::Tab => {
             app.cycle_tab(false);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::BackTab => {
             app.cycle_tab(true);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char('1') => {
             app.select_tab(Tab::Overview);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char('2') => {
             app.select_tab(Tab::Packages);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char('3') => {
             app.select_tab(Tab::Blockers);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char('[') => {
             app.switch_provider(true);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char(']') => {
             app.switch_provider(false);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Up | KeyCode::Char('k') => {
             app.move_selection(-1);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Down | KeyCode::Char('j') => {
             app.move_selection(1);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::PageUp => {
             app.move_selection(-10);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::PageDown => {
             app.move_selection(10);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Home => {
             app.move_to_edge(false);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::End => {
             app.move_to_edge(true);
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
         KeyCode::Char('b') => {
             app.toggle_blocked_only();
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         }
-        _ => RuntimeAction::Continue,
+        _ => RuntimeAction::Redraw,
     }
 }
 
@@ -319,7 +372,7 @@ mod tests {
         let mut app = App::default();
         assert_eq!(
             handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-            RuntimeAction::Continue
+            RuntimeAction::Redraw
         );
         assert_eq!(app.tab, Tab::Packages);
         assert_eq!(
@@ -334,6 +387,52 @@ mod tests {
                 &mut app,
                 KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
             ),
+            RuntimeAction::Quit
+        );
+    }
+
+    #[test]
+    fn resize_events_request_an_immediate_redraw() {
+        let mut app = App::default();
+
+        assert_eq!(
+            handle_event(&mut app, Event::Resize(120, 40)),
+            RuntimeAction::Redraw
+        );
+    }
+
+    #[test]
+    fn enter_opens_package_detail_and_escape_returns_before_quitting() {
+        let mut app = App::default();
+        app.accept_snapshot(serde_json::json!({
+            "schema_version": 1,
+            "repository": {},
+            "providers": [{
+                "id": "provider",
+                "report": {
+                    "work_packages": [{
+                        "id": "WP-001",
+                        "specification": {},
+                        "implementation": {},
+                        "verification": {}
+                    }]
+                }
+            }]
+        }));
+        app.select_tab(Tab::Packages);
+
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            RuntimeAction::Redraw
+        );
+        assert!(app.package_detail_is_open());
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            RuntimeAction::Redraw
+        );
+        assert!(!app.package_detail_is_open());
+        assert_eq!(
+            handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             RuntimeAction::Quit
         );
     }

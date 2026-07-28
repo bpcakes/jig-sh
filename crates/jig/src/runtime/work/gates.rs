@@ -3,21 +3,53 @@ use std::collections::BTreeMap;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
+use crate::cancellation::ensure_status_collection_active;
 use crate::command::{WorkEvidenceRequest, WorkGatesRequest};
 use crate::context::{RepoContext, WorkGate};
 use crate::state::{
     PlanStatus, ToolReceiptStatus, WorkReviewReceiptStatus, current_worktree_fingerprint,
-    ensure_plan_exists, latest_plan_tool_receipt, latest_plan_work_check_receipt_for_tool,
-    latest_plan_work_review_receipt_for_gate, open_plan_summaries, plan_status,
+    current_worktree_fingerprint_with_cancellation, ensure_plan_exists,
+    ensure_plan_exists_with_cancellation, latest_plan_tool_receipt,
+    latest_plan_tool_receipt_with_cancellation, latest_plan_work_check_receipt_for_tool,
+    latest_plan_work_check_receipt_for_tool_with_cancellation,
+    latest_plan_work_review_receipt_for_gate,
+    latest_plan_work_review_receipt_for_gate_with_cancellation, open_plan_summaries,
+    open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
 };
 
 use super::tools::validate_check_tool;
 
 const MAX_GATE_CHANGED_PATHS: usize = 100;
 
+#[derive(Clone, Copy)]
+enum GateCollection<'a> {
+    Blocking,
+    Cancellable(&'a dyn Fn() -> bool),
+}
+
+impl GateCollection<'_> {
+    fn ensure_active(self) -> Result<()> {
+        match self {
+            Self::Blocking => Ok(()),
+            Self::Cancellable(cancelled) => ensure_gate_collection_active(cancelled),
+        }
+    }
+}
+
 pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
     gate_status(ctx, &plan_id)
+}
+
+pub(super) fn snapshot_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_gate_collection_active(cancelled)?;
+    let plan_id = resolve_work_plan_id_with_cancellation(ctx, plan_id, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    gate_status_with_cancellation(ctx, &plan_id, cancelled)
 }
 
 pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
@@ -62,21 +94,54 @@ pub(super) fn ensure_required_gates_passed(ctx: &RepoContext, plan_id: &str) -> 
 }
 
 fn gate_status(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
-    let plan_state = match plan_status(ctx, plan_id)? {
-        Some(PlanStatus::Open) => "open",
-        Some(PlanStatus::Closed) => "closed",
-        None => bail!("Plan not found: {plan_id}"),
-    };
+    let plan_state = resolve_plan_state(ctx, plan_id)?;
+    gate_status_with_current_fingerprint(
+        ctx,
+        plan_id,
+        plan_state,
+        current_worktree_fingerprint(ctx),
+        GateCollection::Blocking,
+    )
+}
+
+fn gate_status_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_gate_collection_active(cancelled)?;
+    let plan_state = resolve_plan_state_with_cancellation(ctx, plan_id, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    gate_status_with_current_fingerprint(
+        ctx,
+        plan_id,
+        plan_state,
+        current_fingerprint,
+        GateCollection::Cancellable(cancelled),
+    )
+}
+
+fn gate_status_with_current_fingerprint(
+    ctx: &RepoContext,
+    plan_id: &str,
+    plan_state: &'static str,
+    current_fingerprint: crate::state::CurrentWorktreeFingerprint,
+    collection: GateCollection<'_>,
+) -> Result<Value> {
+    collection.ensure_active()?;
     let mut gates = Vec::new();
     let mut missing_required = Vec::new();
     let mut failed_required = Vec::new();
     let mut stale_required = Vec::new();
     let mut unknown_required = Vec::new();
     let mut unsupported_required = Vec::new();
-    let current_fingerprint = current_worktree_fingerprint(ctx);
 
     for gate in ctx.work_gates() {
-        let status = gate_status_value(ctx, plan_id, &gate, &current_fingerprint)?;
+        collection.ensure_active()?;
+        let status = gate_status_value(ctx, plan_id, &gate, &current_fingerprint, collection)?;
+        collection.ensure_active()?;
         collect_required_gate_failure(
             &gate,
             &status,
@@ -88,6 +153,7 @@ fn gate_status(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
         );
         gates.push(status);
     }
+    collection.ensure_active()?;
 
     let gates_ok = missing_required.is_empty()
         && failed_required.is_empty()
@@ -112,6 +178,28 @@ fn gate_status(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
     }))
 }
 
+fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> {
+    Ok(match plan_status(ctx, plan_id)? {
+        Some(PlanStatus::Open) => "open",
+        Some(PlanStatus::Closed) => "closed",
+        None => bail!("Plan not found: {plan_id}"),
+    })
+}
+
+fn resolve_plan_state_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<&'static str> {
+    Ok(
+        match plan_status_with_cancellation(ctx, plan_id, cancelled)? {
+            Some(PlanStatus::Open) => "open",
+            Some(PlanStatus::Closed) => "closed",
+            None => bail!("Plan not found: {plan_id}"),
+        },
+    )
+}
+
 fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<String> {
     if let Some(plan_id) = requested {
         ensure_plan_exists(ctx, &plan_id)?;
@@ -119,7 +207,28 @@ fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<
     }
 
     let open_plans = open_plan_summaries(ctx)?;
-    match open_plans.as_slice() {
+    resolve_open_plan_id(&open_plans)
+}
+
+fn resolve_work_plan_id_with_cancellation(
+    ctx: &RepoContext,
+    requested: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    ensure_gate_collection_active(cancelled)?;
+    if let Some(plan_id) = requested {
+        ensure_plan_exists_with_cancellation(ctx, &plan_id, cancelled)?;
+        ensure_gate_collection_active(cancelled)?;
+        return Ok(plan_id);
+    }
+
+    let open_plans = open_plan_summaries_with_cancellation(ctx, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    resolve_open_plan_id(&open_plans)
+}
+
+fn resolve_open_plan_id(open_plans: &[Value]) -> Result<String> {
+    match open_plans {
         [plan] => plan["plan_id"]
             .as_str()
             .map(str::to_string)
@@ -129,6 +238,10 @@ fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<
         ),
         _ => bail!("Multiple open work plans. Pass --plan-id to choose which plan to inspect."),
     }
+}
+
+fn ensure_gate_collection_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
 }
 
 fn latest_passing_gates(status: &Value) -> Vec<Value> {
@@ -183,24 +296,45 @@ fn gate_status_value(
     plan_id: &str,
     gate: &WorkGate,
     current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+    collection: GateCollection<'_>,
 ) -> Result<Value> {
+    collection.ensure_active()?;
     match gate {
         WorkGate::Check(gate) => {
             let tool_name = gate.tool.as_str();
             validate_check_tool(ctx, tool_name, "Work gate")?;
-            let receipt = latest_plan_tool_receipt(ctx, plan_id, tool_name)?;
+            collection.ensure_active()?;
+            let receipt = match collection {
+                GateCollection::Blocking => latest_plan_tool_receipt(ctx, plan_id, tool_name)?,
+                GateCollection::Cancellable(cancelled) => {
+                    latest_plan_tool_receipt_with_cancellation(ctx, plan_id, tool_name, cancelled)?
+                }
+            };
+            collection.ensure_active()?;
             let freshness_receipt = match &receipt {
                 Some(receipt) if receipt.exit_status == 0 => {
                     // Freshness is anchored to the batch work-check receipt
                     // when available, since that receipt captures the
                     // before/after worktree fingerprint for the gate run.
-                    latest_plan_work_check_receipt_for_tool(
-                        ctx,
-                        plan_id,
-                        tool_name,
-                        &receipt.receipt_id,
-                    )?
-                    .or_else(|| Some(receipt.clone()))
+                    let latest = match collection {
+                        GateCollection::Blocking => latest_plan_work_check_receipt_for_tool(
+                            ctx,
+                            plan_id,
+                            tool_name,
+                            &receipt.receipt_id,
+                        )?,
+                        GateCollection::Cancellable(cancelled) => {
+                            latest_plan_work_check_receipt_for_tool_with_cancellation(
+                                ctx,
+                                plan_id,
+                                tool_name,
+                                &receipt.receipt_id,
+                                cancelled,
+                            )?
+                        }
+                    };
+                    collection.ensure_active()?;
+                    latest.or_else(|| Some(receipt.clone()))
                 }
                 _ => receipt.clone(),
             };
@@ -248,7 +382,18 @@ fn gate_status_value(
         }
         WorkGate::CodexReview(gate) => {
             let skill = gate.skill.as_str();
-            let receipt = latest_plan_work_review_receipt_for_gate(ctx, plan_id, &gate.id)?;
+            collection.ensure_active()?;
+            let receipt = match collection {
+                GateCollection::Blocking => {
+                    latest_plan_work_review_receipt_for_gate(ctx, plan_id, &gate.id)?
+                }
+                GateCollection::Cancellable(cancelled) => {
+                    latest_plan_work_review_receipt_for_gate_with_cancellation(
+                        ctx, plan_id, &gate.id, cancelled,
+                    )?
+                }
+            };
+            collection.ensure_active()?;
             let freshness = gate_freshness(&receipt, current_fingerprint);
             let freshness_reason = gate_freshness_reason(&receipt, current_fingerprint, freshness);
             let (changed_paths, changed_path_count, changed_paths_truncated) =

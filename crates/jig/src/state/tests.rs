@@ -6,38 +6,20 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use super::events::{
-    SessionEvent, read_jsonl_with_data_lock, read_jsonl_with_io, read_receipt_window_with_bytes,
-    receipts_for_plan_with_lock, state_lock_path, with_jsonl_write_lock, write_jsonl_locked,
+    SessionEvent, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
+    read_receipt_window_with_bytes, receipts_for_plan_with_lock, state_lock_path,
+    with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::*;
 use crate::context::RepoContext;
 use crate::git_receipts::DiffStat;
+use crate::test_env::TestRepoBuilder;
 use crate::tool_defs::tool;
 
 fn write_fixture_repo(root: &Path) {
-    fs::create_dir_all(root.join(".agent")).unwrap();
-    fs::write(
-        root.join(".jig.toml"),
-        r#"_src_path = "/tmp/template"
-_commit = "abc123"
-repo_name = "demo"
-default_branch = "main"
-jig_version = "0.2.0-beta.1"
-"#,
-    )
-    .unwrap();
-    fs::write(
-        root.join(".agent/jig-contract.json"),
-        serde_json::to_string_pretty(&json!({
-            "contract_version": 3,
-            "tool_namespace": "jig",
-            "jig_version": "0.2.0-beta.1",
-            "required_commands": ["rust_fmt_check_command"],
-            "tools": [],
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    TestRepoBuilder::new(root)
+        .required_commands(["rust_fmt_check_command"])
+        .write();
 }
 
 #[test]
@@ -403,6 +385,81 @@ fn jsonl_read_waits_for_existing_data_file_lock() {
             .unwrap();
         assert_eq!(values, vec![json!({ "id": 1 })]);
     });
+}
+
+#[test]
+fn cancellable_jsonl_read_stops_while_data_file_lock_is_held() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    fs::write(&path, b"{\"id\":1}\n").unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+
+    let reader_path = path.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = Arc::clone(&cancelled);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (read_tx, read_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = read_jsonl_with_cancellation::<Value>(&reader_path, &|| {
+            reader_cancelled.load(Ordering::SeqCst)
+        });
+        read_tx.send(result).unwrap();
+    });
+
+    started_rx.recv().unwrap();
+    assert!(read_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    cancelled.store(true, Ordering::SeqCst);
+    let result = match read_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result,
+        Err(error) => {
+            FileExt::unlock(&lock).unwrap();
+            reader.join().unwrap();
+            panic!("cancellable read stayed blocked on the data lock: {error}");
+        }
+    };
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "status collection was cancelled"
+    );
+    FileExt::unlock(&lock).unwrap();
+    reader.join().unwrap();
+}
+
+#[test]
+fn cancellable_jsonl_read_checks_between_records() {
+    use std::cell::Cell;
+
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    let records = (0..100)
+        .map(|id| format!("{{\"id\":{id}}}\n"))
+        .collect::<String>();
+    fs::write(&path, records).unwrap();
+    let checks = Cell::new(0);
+
+    let error = read_jsonl_with_cancellation::<Value>(&path, &|| {
+        let current = checks.get();
+        checks.set(current + 1);
+        current >= 12
+    })
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "status collection was cancelled");
+    assert!(checks.get() > 12);
 }
 
 #[test]
@@ -970,6 +1027,61 @@ fn state_summary_is_read_only_and_counts_state_records() {
         output["recent_receipts"][0]["tool_name"],
         tool::SESSION_START
     );
+}
+
+#[test]
+fn cancellable_state_summary_stops_during_stream_collection() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    fs::create_dir_all(ctx.state_dir()).unwrap();
+    let plans_path = ctx.state_file("plans.jsonl");
+    fs::write(&plans_path, b"").unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&plans_path)
+        .unwrap();
+    FileExt::lock_exclusive(&lock).unwrap();
+
+    let reader_ctx = ctx.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let reader_cancelled = Arc::clone(&cancelled);
+    let (started_tx, started_rx) = mpsc::channel();
+    let (summary_tx, summary_rx) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = super::sessions::state_summary_with_cancellation(&reader_ctx, &|| {
+            reader_cancelled.load(Ordering::SeqCst)
+        });
+        summary_tx.send(result).unwrap();
+    });
+
+    started_rx.recv().unwrap();
+    assert!(summary_rx.recv_timeout(Duration::from_millis(100)).is_err());
+    cancelled.store(true, Ordering::SeqCst);
+    let result = match summary_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result,
+        Err(error) => {
+            FileExt::unlock(&lock).unwrap();
+            reader.join().unwrap();
+            panic!("state summary stayed blocked on a state stream: {error}");
+        }
+    };
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "status collection was cancelled"
+    );
+    FileExt::unlock(&lock).unwrap();
+    reader.join().unwrap();
 }
 
 #[test]

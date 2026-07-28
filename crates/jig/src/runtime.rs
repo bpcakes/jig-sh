@@ -105,11 +105,27 @@ pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) ->
     work::gates_snapshot(ctx, plan_id)
 }
 
+pub(crate) fn work_gates_snapshot_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    work::gates_snapshot_with_cancellation(ctx, plan_id, cancelled)
+}
+
 /// Read-only loop workflow status for `jig ui`; reuses `loop status`.
 pub(crate) fn loop_status_snapshot(ctx: &RepoContext) -> Result<Value> {
-    loops::dispatch(
+    loop_status_snapshot_with_cancellation(ctx, &|| false)
+}
+
+pub(crate) fn loop_status_snapshot_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    loops::status_with_cancellation(
         ctx,
-        crate::command::LoopCommand::Status(crate::command::LoopStatusRequest { workflow: None }),
+        crate::command::LoopStatusRequest { workflow: None },
+        cancelled,
     )
 }
 

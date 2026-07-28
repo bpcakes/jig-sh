@@ -13,12 +13,18 @@ use events::{PlanEvent, ReceiptRecord, read_jsonl, truncate};
 pub(crate) use plans::seed_open_plan_for_test;
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
-    ensure_plan_is_open, open_plan_summaries, plan_status, plans_append, plans_close, plans_open,
+    ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
+    open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
+    plans_append, plans_close, plans_open,
 };
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ToolReceiptStatus, WorkReviewReceiptStatus,
-    current_worktree_fingerprint, latest_plan_tool_receipt,
-    latest_plan_work_check_receipt_for_tool, latest_plan_work_review_receipt_for_gate,
+    current_worktree_fingerprint, current_worktree_fingerprint_with_cancellation,
+    latest_plan_tool_receipt, latest_plan_tool_receipt_with_cancellation,
+    latest_plan_work_check_receipt_for_tool,
+    latest_plan_work_check_receipt_for_tool_with_cancellation,
+    latest_plan_work_review_receipt_for_gate,
+    latest_plan_work_review_receipt_for_gate_with_cancellation,
 };
 pub(crate) use receipts::{ReceiptInput, ReceiptListFilter, receipts_list, record_receipt};
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive};
@@ -26,7 +32,9 @@ use receipts::{StateToolReceipt, record_successful_state_tool};
 #[cfg(test)]
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
-pub(crate) use sessions::{SessionEndRequest, session_end, session_start, state_summary};
+pub(crate) use sessions::{
+    SessionEndRequest, session_end, session_start, state_summary, state_summary_with_cancellation,
+};
 pub(crate) use timeline::{
     DecisionStreamRecord, PlanStreamEvent, ReceiptStreamRecord, StateStreams, plan_detail_streams,
     plan_receipts, state_streams,

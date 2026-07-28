@@ -4,24 +4,33 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use jig_contract::status_provider::v1::{Category, DiagnosticLevel, Outcome, Report};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::cancellation::{
+    ensure_status_collection_active, is_status_collection_cancellation,
+    status_collection_cancellation,
+};
 use crate::context::{RepoContext, StatusProviderConfig};
 use crate::doctor::{
     OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
 };
 use crate::process::format_exit_status;
-use crate::runtime::{loop_status_snapshot, work_gates_snapshot};
-use crate::state::{now_ms, state_summary};
+use crate::runtime::{
+    loop_status_snapshot_with_cancellation, work_gates_snapshot_with_cancellation,
+};
+use crate::state::{now_ms, state_summary_with_cancellation};
 
 mod git;
 pub(crate) mod tui;
 
+#[cfg(test)]
+use git::input_freshness;
 use git::{
-    GitCheckoutObservation, InputFreshness, git_text, input_freshness, observe_git_checkout,
+    GitCheckoutObservation, GitProbeError, InputFreshness, git_text_with_cancellation,
+    input_freshness_with_cancellation, observe_git_checkout_with_cancellation,
 };
 
 const STATUS_SCHEMA_VERSION: u64 = 1;
@@ -36,29 +45,41 @@ pub(crate) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
-    let runs = ctx
-        .status_providers()
-        .iter()
-        .map(|provider| run_provider(ctx.root(), provider, cancelled))
-        .collect::<Vec<_>>();
+    let mut runs = Vec::new();
+    for provider in ctx.status_providers() {
+        ensure_collection_active(cancelled)?;
+        runs.push(run_provider(ctx.root(), provider, cancelled));
+        ensure_collection_active(cancelled)?;
+    }
 
     // Providers are contractually read-only. Observe repository and Jig state
     // after they return so a concurrent local edit is reflected as stale or
     // dirty rather than being hidden by an earlier snapshot.
-    let (repository, root_git, mut errors) = repository_snapshot(ctx);
-    let (work, work_errors) = work_snapshot(ctx);
+    ensure_collection_active(cancelled)?;
+    let (repository, root_git, mut errors) = repository_snapshot(ctx, cancelled)?;
+    ensure_collection_active(cancelled)?;
+    let (work, work_errors) = work_snapshot(ctx, cancelled)?;
     errors.extend(work_errors);
-    let (loops, loop_error) = loop_snapshot(ctx);
+    ensure_collection_active(cancelled)?;
+    let (loops, loop_error) = loop_snapshot(ctx, cancelled)?;
     if let Some(error) = loop_error {
         errors.push(error);
     }
 
+    ensure_collection_active(cancelled)?;
     let mut git_inputs = BTreeMap::new();
     git_inputs.insert(".".to_string(), root_git);
-    let providers = runs
-        .into_iter()
-        .map(|run| provider_snapshot(ctx.root(), run, &mut git_inputs))
-        .collect::<Vec<_>>();
+    let mut providers = Vec::with_capacity(runs.len());
+    for run in runs {
+        ensure_collection_active(cancelled)?;
+        providers.push(provider_snapshot(
+            ctx.root(),
+            run,
+            &mut git_inputs,
+            cancelled,
+        )?);
+    }
+    ensure_collection_active(cancelled)?;
     let partial = !errors.is_empty()
         || providers
             .iter()
@@ -77,6 +98,18 @@ pub(crate) fn snapshot_with_cancellation(
         errors,
     })
     .map_err(Into::into)
+}
+
+fn ensure_collection_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    ensure_status_collection_active(cancelled)
+}
+
+fn propagate_git_cancellation<T>(result: std::result::Result<T, GitProbeError>) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(GitProbeError::Cancelled) => Err(status_collection_cancellation()),
+        Err(GitProbeError::Failed(message)) => Err(anyhow!(message)),
+    }
 }
 
 #[derive(Serialize)]
@@ -122,12 +155,18 @@ struct StatusCollectionError {
 
 fn repository_snapshot(
     ctx: &RepoContext,
-) -> (
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(
     RepositorySnapshot,
     GitCheckoutObservation,
     Vec<StatusCollectionError>,
-) {
-    let root_git = observe_git_checkout(ctx.root());
+)> {
+    ensure_collection_active(cancelled)?;
+    let root_git = propagate_git_cancellation(observe_git_checkout_with_cancellation(
+        ctx.root(),
+        cancelled,
+    ))?;
+    ensure_collection_active(cancelled)?;
     let mut errors = root_git
         .errors
         .iter()
@@ -138,9 +177,18 @@ fn repository_snapshot(
         })
         .collect::<Vec<_>>();
 
-    let branch = git_text(ctx.root(), &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
-    let upstream = local_upstream_snapshot(ctx.root(), &mut errors);
-    (
+    let branch = match git_text_with_cancellation(
+        ctx.root(),
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        cancelled,
+    ) {
+        Ok(branch) => Some(branch),
+        Err(GitProbeError::Failed(_)) => None,
+        Err(GitProbeError::Cancelled) => return Err(status_collection_cancellation()),
+    };
+    ensure_collection_active(cancelled)?;
+    let upstream = local_upstream_snapshot(ctx.root(), &mut errors, cancelled)?;
+    Ok((
         RepositorySnapshot {
             name: ctx.repo_name().to_string(),
             default_branch: ctx.default_branch().to_string(),
@@ -152,14 +200,16 @@ fn repository_snapshot(
         },
         root_git,
         errors,
-    )
+    ))
 }
 
 fn local_upstream_snapshot(
     root: &Path,
     errors: &mut Vec<StatusCollectionError>,
-) -> Option<UpstreamSnapshot> {
-    let reference = git_text(
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<UpstreamSnapshot>> {
+    ensure_collection_active(cancelled)?;
+    let reference = match git_text_with_cancellation(
         root,
         &[
             "rev-parse",
@@ -167,22 +217,30 @@ fn local_upstream_snapshot(
             "--symbolic-full-name",
             "@{upstream}",
         ],
-    )
-    .ok()?;
-    let counts = match git_text(
+        cancelled,
+    ) {
+        Ok(reference) => reference,
+        Err(GitProbeError::Failed(_)) => return Ok(None),
+        Err(GitProbeError::Cancelled) => return Err(status_collection_cancellation()),
+    };
+    ensure_collection_active(cancelled)?;
+    let counts = match git_text_with_cancellation(
         root,
         &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+        cancelled,
     ) {
         Ok(counts) => counts,
-        Err(message) => {
+        Err(GitProbeError::Failed(message)) => {
             errors.push(StatusCollectionError {
                 scope: "repository.upstream".into(),
                 code: "git_upstream_comparison_failed",
                 message,
             });
-            return None;
+            return Ok(None);
         }
+        Err(GitProbeError::Cancelled) => return Err(status_collection_cancellation()),
     };
+    ensure_collection_active(cancelled)?;
     let mut fields = counts.split_whitespace();
     let ahead = fields.next().and_then(|field| field.parse::<u64>().ok());
     let behind = fields.next().and_then(|field| field.parse::<u64>().ok());
@@ -192,7 +250,7 @@ fn local_upstream_snapshot(
             code: "git_upstream_output_invalid",
             message: format!("git rev-list returned unexpected counts: {counts:?}"),
         });
-        return None;
+        return Ok(None);
     };
     let state = match (ahead, behind) {
         (0, 0) => "in_sync",
@@ -200,20 +258,26 @@ fn local_upstream_snapshot(
         (0, _) => "behind",
         _ => "diverged",
     };
-    Some(UpstreamSnapshot {
+    Ok(Some(UpstreamSnapshot {
         reference,
         ahead,
         behind,
         state,
         basis: "local_tracking_ref",
-    })
+    }))
 }
 
-fn work_snapshot(ctx: &RepoContext) -> (Value, Vec<StatusCollectionError>) {
-    let state = match state_summary(ctx) {
+fn work_snapshot(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Value, Vec<StatusCollectionError>)> {
+    ensure_collection_active(cancelled)?;
+    let state = match state_summary_with_cancellation(ctx, cancelled) {
         Ok(state) => state,
+        Err(error) if is_status_collection_cancellation(&error) => return Err(error),
         Err(error) => {
-            return (
+            ensure_collection_active(cancelled)?;
+            return Ok((
                 json!({
                     "state": null,
                     "gates": [],
@@ -223,24 +287,31 @@ fn work_snapshot(ctx: &RepoContext) -> (Value, Vec<StatusCollectionError>) {
                     code: "work_state_unavailable",
                     message: format!("{error:#}"),
                 }],
-            );
+            ));
         }
     };
+    ensure_collection_active(cancelled)?;
 
     let mut errors = Vec::new();
-    let gates = state["open_plans"]
+    let open_plan_ids = state["open_plans"]
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[])
         .iter()
         .filter_map(|plan| plan["plan_id"].as_str())
-        .map(
-            |plan_id| match work_gates_snapshot(ctx, Some(plan_id.to_string())) {
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let mut gates = Vec::with_capacity(open_plan_ids.len());
+    for plan_id in open_plan_ids {
+        ensure_collection_active(cancelled)?;
+        gates.push(
+            match work_gates_snapshot_with_cancellation(ctx, Some(plan_id.clone()), cancelled) {
                 Ok(snapshot) => json!({
                     "plan_id": plan_id,
                     "snapshot": snapshot,
                     "error": null,
                 }),
+                Err(error) if is_status_collection_cancellation(&error) => return Err(error),
                 Err(error) => {
                     let message = format!("{error:#}");
                     errors.push(StatusCollectionError {
@@ -255,21 +326,27 @@ fn work_snapshot(ctx: &RepoContext) -> (Value, Vec<StatusCollectionError>) {
                     })
                 }
             },
-        )
-        .collect::<Vec<_>>();
+        );
+        ensure_collection_active(cancelled)?;
+    }
 
-    (
+    Ok((
         json!({
             "state": state,
             "gates": gates,
         }),
         errors,
-    )
+    ))
 }
 
-fn loop_snapshot(ctx: &RepoContext) -> (Value, Option<StatusCollectionError>) {
-    match loop_status_snapshot(ctx) {
+fn loop_snapshot(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(Value, Option<StatusCollectionError>)> {
+    ensure_collection_active(cancelled)?;
+    let snapshot = match loop_status_snapshot_with_cancellation(ctx, cancelled) {
         Ok(snapshot) => (snapshot, None),
+        Err(error) if is_status_collection_cancellation(&error) => return Err(error),
         Err(error) => (
             Value::Null,
             Some(StatusCollectionError {
@@ -278,7 +355,9 @@ fn loop_snapshot(ctx: &RepoContext) -> (Value, Option<StatusCollectionError>) {
                 message: format!("{error:#}"),
             }),
         ),
-    }
+    };
+    ensure_collection_active(cancelled)?;
+    Ok(snapshot)
 }
 
 struct ProviderRun {
@@ -580,15 +659,21 @@ fn sanitize_observer_environment(command: &mut Command) {
             command.env_remove(name);
         }
     }
+    // Providers and Jig's own probes are observational. Restore this control
+    // only after removing inherited Git variables so `git status` cannot
+    // refresh stat data through an optional index lock.
+    command.env("GIT_OPTIONAL_LOCKS", "0");
 }
 
 fn provider_snapshot(
     root: &Path,
     run: ProviderRun,
     git_inputs: &mut BTreeMap<String, GitCheckoutObservation>,
-) -> ProviderSnapshot {
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ProviderSnapshot> {
+    ensure_collection_active(cancelled)?;
     let Some(report) = run.report else {
-        return ProviderSnapshot {
+        return Ok(ProviderSnapshot {
             id: run.id,
             status: "failed",
             duration_ms: run.duration_ms,
@@ -596,27 +681,29 @@ fn provider_snapshot(
             summary: None,
             input_freshness: Vec::new(),
             error: run.failure,
-        };
+        });
     };
     let status = match report.decoded.outcome {
         Outcome::Complete => "complete",
         Outcome::Partial => "partial",
     };
-    let input_freshness = report
-        .decoded
-        .inputs
-        .iter()
-        .map(|input| input_freshness(root, input, git_inputs))
-        .collect();
-    ProviderSnapshot {
+    let mut freshness = Vec::with_capacity(report.decoded.inputs.len());
+    for input in &report.decoded.inputs {
+        ensure_collection_active(cancelled)?;
+        freshness.push(propagate_git_cancellation(
+            input_freshness_with_cancellation(root, input, git_inputs, cancelled),
+        )?);
+    }
+    ensure_collection_active(cancelled)?;
+    Ok(ProviderSnapshot {
         id: run.id,
         status,
         duration_ms: run.duration_ms,
         summary: Some(ProviderSummary::from_report(&report.decoded)),
         report: Some(report.raw),
-        input_freshness,
+        input_freshness: freshness,
         error: None,
-    }
+    })
 }
 
 #[derive(Serialize)]

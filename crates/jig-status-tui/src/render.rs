@@ -16,6 +16,8 @@ use crate::model::{
     SourceView, Tab,
 };
 
+mod package_detail;
+
 pub(crate) const MIN_WIDTH: u16 = 72;
 pub(crate) const MIN_HEIGHT: u16 = 20;
 
@@ -130,6 +132,10 @@ fn draw_content(frame: &mut Frame, area: Rect, app: &App) {
                 .wrap(Wrap { trim: true }),
             area,
         );
+        return;
+    }
+    if app.package_detail_is_open() {
+        package_detail::draw(frame, area, app);
         return;
     }
 
@@ -415,7 +421,7 @@ fn draw_packages(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         draw_package_table(frame, chunks[0], app, &packages);
     }
-    draw_package_detail(frame, chunks[1], app.selected_package());
+    draw_package_preview(frame, chunks[1], app.selected_package());
 }
 
 fn draw_package_table(frame: &mut Frame, area: Rect, app: &App, packages: &[&PackageView]) {
@@ -489,11 +495,11 @@ fn draw_package_table(frame: &mut Frame, area: Rect, app: &App, packages: &[&Pac
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn draw_package_detail(frame: &mut Frame, area: Rect, package: Option<&PackageView>) {
+fn draw_package_preview(frame: &mut Frame, area: Rect, package: Option<&PackageView>) {
     let Some(package) = package else {
         frame.render_widget(
             Paragraph::new("Select a package to inspect its facets and evidence.")
-                .block(panel("Package detail")),
+                .block(panel("Package preview")),
             area,
         );
         return;
@@ -548,7 +554,7 @@ fn draw_package_detail(frame: &mut Frame, area: Rect, package: Option<&PackageVi
     }
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel("Package detail"))
+            .block(panel("Package preview · Enter for full detail"))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -655,9 +661,13 @@ fn facet_line(label: &str, facet: &FacetView) -> Line<'static> {
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
+    if app.package_detail_is_open() {
+        package_detail::draw_footer(frame, area, app);
+        return;
+    }
     let selection_help = match app.tab {
         Tab::Overview => "",
-        Tab::Packages => "  j/k move  b blocked-only",
+        Tab::Packages => "  j/k move  Enter details  b blocked-only",
         Tab::Blockers => "  j/k move",
     };
     let first = Line::from(vec![

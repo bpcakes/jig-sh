@@ -59,7 +59,7 @@ libc = "0.2.177"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 # Ratatui 0.29 pins unicode-width 0.2.0 (conflicting with Jig's 0.2.2), while
 # 0.30 requires Rust 1.88. Keep the compatible 0.28 line with Crossterm 0.28.
-ratatui = { version = "=0.28.1", default-features = false, features = ["crossterm"] }
+ratatui = { version = "=0.28.1", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 # rpassword 7.5.2 uses let-chains that require newer Rust despite its declared
 # MSRV. Keep this exact pin so the workspace remains buildable on Rust 1.85.
 rpassword = "=7.4.0"

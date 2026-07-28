@@ -2,7 +2,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use serde_json::{Value, json};
 
 use crate::{
-    model::{App, Dashboard, Tab},
+    model::{App, DETAIL_SECTION_ITEM_LIMIT, Dashboard, Tab},
     render,
 };
 
@@ -111,7 +111,8 @@ fn fixture() -> Value {
                         "state": "needs_review",
                         "category": "blocked",
                         "summary": "Spec changed",
-                        "source": {"path": "docs/packages.md", "line": 10}
+                        "source": {"path": "docs/packages.md", "line": 10},
+                        "digest": "sha256:specification"
                     },
                     "implementation": {
                         "state": "not_started",
@@ -124,8 +125,11 @@ fn fixture() -> Value {
                     "dependencies": ["WP-000"],
                     "acceptance_checks": [{
                         "ordinal": 1,
+                        "id": "acceptance-one",
                         "state": "uncovered",
-                        "category": "pending"
+                        "category": "pending",
+                        "target": "test/models/order_test.rb:42",
+                        "source": {"path": "docs/packages.md", "line": 13}
                     }, {
                         "ordinal": 2,
                         "state": "uncovered",
@@ -140,8 +144,18 @@ fn fixture() -> Value {
                     "evidence": [{
                         "kind": "legacy_test",
                         "reference": "test/models/order_test.rb",
-                        "source": {"path": "legacy/app/test.rb", "line": 4}
-                    }]
+                        "source": {"path": "legacy/app/test.rb", "line": 4},
+                        "digest": "sha256:evidence"
+                    }],
+                    "extensions": {
+                        "factorish.rewrite": {
+                            "acceptance_check_text": [
+                                "First acceptance criterion",
+                                "Second acceptance criterion"
+                            ],
+                            "rails_route_actions": ["orders#show"]
+                        }
+                    }
                 }, {
                     "id": "WP-002",
                     "title": "Complete package",
@@ -207,6 +221,19 @@ fn model_decodes_version_one_and_ignores_additive_fields() {
     assert_eq!(dashboard.providers[0].packages.len(), 2);
     assert_eq!(dashboard.providers[0].blockers.len(), 1);
     assert_eq!(dashboard.providers[0].packages[1].acceptance_complete, 1);
+    assert_eq!(
+        dashboard.providers[0].packages[0].acceptance_checks[0]
+            .target
+            .as_deref(),
+        Some("test/models/order_test.rb:42")
+    );
+    assert_eq!(
+        dashboard.providers[0].packages[0]
+            .specification
+            .digest
+            .as_deref(),
+        Some("sha256:specification")
+    );
     assert_eq!(dashboard.providers[0].input_freshness[0].status, "stale");
 
     let mut unsupported = fixture();
@@ -222,6 +249,92 @@ fn model_decodes_version_one_and_ignores_additive_fields() {
         dashboard.providers[0].diagnostics[0].message,
         "unsafe\u{fffd}[31m diagnostic"
     );
+
+    let mut unsafe_key = fixture();
+    unsafe_key["providers"][0]["report"]["work_packages"][0]["extensions"] =
+        json!({"unsafe\u{1b}[31m": {"value": true}});
+    let dashboard = Dashboard::from_value(unsafe_key).unwrap();
+    assert!(
+        dashboard.providers[0].packages[0]
+            .extensions
+            .contains_key("unsafe\u{1b}[31m")
+    );
+}
+
+#[test]
+fn extension_key_sanitization_preserves_colliding_entries_for_rendering() {
+    let mut value = fixture();
+    value["providers"][0]["report"]["work_packages"][0]["extensions"] = json!({
+        "collision\u{1}": {"first": true},
+        "collision\u{2}": {"second": true}
+    });
+    let mut app = App::default();
+    app.accept_snapshot(value);
+    app.select_tab(Tab::Packages);
+    assert!(app.open_package_detail());
+
+    let extensions = &app.detail_package().unwrap().extensions;
+    assert_eq!(extensions.len(), 2);
+    assert!(extensions.contains_key("collision\u{1}"));
+    assert!(extensions.contains_key("collision\u{2}"));
+
+    let detail = render_text(&app, 120, 80);
+    assert!(detail.contains("first: true"));
+    assert!(detail.contains("second: true"));
+    assert!(!detail.contains('\u{1}'));
+    assert!(!detail.contains('\u{2}'));
+}
+
+#[test]
+fn extension_truncation_notice_only_appears_when_rows_are_omitted() {
+    let mut exact = fixture();
+    exact["providers"][0]["report"]["work_packages"][0]["extensions"] = json!({
+        "provider.exact": (0..199).collect::<Vec<_>>()
+    });
+    let mut app = App::default();
+    app.accept_snapshot(exact);
+    app.select_tab(Tab::Packages);
+    assert!(app.open_package_detail());
+    let _ = render_text(&app, 120, 80);
+    app.move_package_detail_to_edge(true);
+    assert!(!render_text(&app, 120, 80).contains("details truncated"));
+
+    let mut overflow = fixture();
+    overflow["providers"][0]["report"]["work_packages"][0]["extensions"] = json!({
+        "provider.overflow": (0..200).collect::<Vec<_>>()
+    });
+    app.accept_snapshot(overflow);
+    let _ = render_text(&app, 120, 80);
+    app.move_package_detail_to_edge(true);
+    assert!(render_text(&app, 120, 80).contains("details truncated after 200 rows"));
+}
+
+#[test]
+fn package_detail_bounds_large_sections_and_oversized_fields() {
+    let mut value = fixture();
+    let blockers = (0..=DETAIL_SECTION_ITEM_LIMIT)
+        .map(|index| {
+            json!({
+                "code": format!("blocker-{index}"),
+                "message": format!("{}TAIL-MARKER", "x".repeat(512)),
+            })
+        })
+        .collect::<Vec<_>>();
+    value["providers"][0]["report"]["work_packages"][0]["blockers"] = json!(blockers);
+
+    let mut app = App::default();
+    app.accept_snapshot(value);
+    app.select_tab(Tab::Packages);
+    assert!(app.open_package_detail());
+    let _ = render_text(&app, 120, 80);
+    app.move_package_detail_to_edge(true);
+
+    let detail = render_text(&app, 120, 80);
+    assert!(detail.contains("1 additional blockers omitted"));
+    assert!(!detail.contains("TAIL-MARKER"));
+    assert!(detail.contains('…'));
+    let _ = render_text(&app, 120, 80);
+    assert!(app.package_detail_scroll() <= u16::MAX as usize);
 }
 
 #[test]
@@ -256,6 +369,75 @@ fn navigation_filters_and_preserves_stable_selection_across_refresh() {
 }
 
 #[test]
+fn blocker_selection_survives_insertions_duplicate_codes_and_display_changes() {
+    let mut initial = fixture();
+    let selected = initial["providers"][0]["report"]["work_packages"][0]["blockers"][0].clone();
+    initial["providers"][0]["report"]["work_packages"][0]["blockers"] = json!([{
+        "code": "dependency_not_verified",
+        "message": "The first dependency is still pending",
+        "related_work_package": "WP-000",
+        "source": {"path": "docs/packages.md", "line": 11}
+    }, selected.clone()]);
+
+    let mut app = App::default();
+    app.accept_snapshot(initial);
+    app.select_tab(Tab::Blockers);
+    app.move_selection(1);
+    assert_eq!(
+        app.selected_blocker().unwrap().blocker.message,
+        "WP-000 must be verified first"
+    );
+
+    let mut refreshed = fixture();
+    let mut updated_selected = selected;
+    updated_selected["message"] = json!("WP-000 still needs verification");
+    updated_selected["source"]["line"] = json!(42);
+    refreshed["providers"][0]["report"]["work_packages"][0]["blockers"] = json!([{
+        "code": "acceptance_incomplete",
+        "message": "A newly discovered acceptance check is pending",
+        "related_work_package": "WP-098",
+        "source": {"path": "docs/packages.md", "line": 10}
+    }, {
+        "code": "dependency_not_verified",
+        "message": "The first dependency is still pending",
+        "related_work_package": "WP-000",
+        "source": {"path": "docs/packages.md", "line": 11}
+    }, updated_selected]);
+
+    app.accept_snapshot(refreshed);
+
+    assert_eq!(app.blocker_index, 2);
+    assert_eq!(
+        app.selected_blocker().unwrap().blocker.message,
+        "WP-000 still needs verification"
+    );
+}
+
+#[test]
+fn package_detail_opens_scrolls_and_survives_a_stable_refresh() {
+    let mut app = App::default();
+    app.accept_snapshot(fixture());
+    app.select_tab(Tab::Packages);
+
+    assert!(app.open_package_detail());
+    assert_eq!(app.detail_package().unwrap().id, "WP-001");
+    app.move_package_detail_to_edge(true);
+    assert!(app.package_detail_scroll() > 0);
+
+    app.accept_snapshot(fixture());
+    assert!(app.package_detail_is_open());
+    assert_eq!(app.detail_package().unwrap().id, "WP-001");
+
+    let mut removed = fixture();
+    removed["providers"][0]["report"]["work_packages"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    app.accept_snapshot(removed);
+    assert!(!app.package_detail_is_open());
+}
+
+#[test]
 fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() {
     let mut app = App::default();
     app.accept_snapshot(fixture());
@@ -274,6 +456,21 @@ fn renderer_surfaces_progress_freshness_packages_blockers_and_small_terminals() 
     assert!(packages.contains("WP-001"));
     assert!(packages.contains("Blocked package"));
     assert!(package_text.contains("BLOCKER dependency_not_verified"));
+    assert!(packages.contains("Enter for full detail"));
+
+    assert!(app.open_package_detail());
+    let detail = render_text(&app, 120, 80);
+    let detail_text = normalized(&detail);
+    assert!(detail.contains("Package detail"));
+    assert!(detail.contains("Progress facets"));
+    assert!(detail.contains("sha256:specification"));
+    assert!(detail_text.contains("#1 acceptance-one"));
+    assert!(detail.contains("test/models/order_test.rb:42"));
+    assert!(detail.contains("sha256:evidence"));
+    assert!(detail.contains("Provider-specific details"));
+    assert!(detail.contains("First acceptance criterion"));
+    assert!(detail.contains("Esc/Enter back"));
+    app.close_package_detail();
 
     app.select_tab(Tab::Blockers);
     let blockers = render_text(&app, 120, 36);
