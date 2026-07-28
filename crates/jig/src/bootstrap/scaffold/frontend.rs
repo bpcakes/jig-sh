@@ -373,7 +373,7 @@ fn admin_template_files() -> Vec<ScaffoldTemplateFile> {
         .collect()
 }
 
-fn scaffold_frontend_defaults(kind: ScaffoldFrontendKind) -> (u32, &'static str) {
+const fn scaffold_frontend_defaults(kind: ScaffoldFrontendKind) -> (u32, &'static str) {
     match kind {
         ScaffoldFrontendKind::Spa | ScaffoldFrontendKind::Admin => (80, "vite"),
         ScaffoldFrontendKind::Astro => (0, "env-port"),

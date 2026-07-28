@@ -105,7 +105,7 @@ fn remove_job_entry_if_generation<H>(
 }
 
 #[cfg(not(windows))]
-pub(super) fn register_app_child(_child: &mut Child) -> Result<AppProcessLease> {
+pub(super) const fn register_app_child(_child: &mut Child) -> Result<AppProcessLease> {
     Ok(AppProcessLease)
 }
 

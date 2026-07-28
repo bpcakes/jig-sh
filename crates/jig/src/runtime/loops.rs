@@ -673,7 +673,7 @@ struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    fn in_backoff(&self, now_ms: u64) -> bool {
+    const fn in_backoff(&self, now_ms: u64) -> bool {
         !self.exhausted && self.next_eligible_ms > now_ms
     }
 }

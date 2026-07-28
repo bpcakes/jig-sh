@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,18 +83,14 @@ fn sqlx_report(ctx: &RepoContext, prior_path: &Path) -> Result<SqlxReport> {
     body.push_str("# SQLx Unchecked Queries TODO\n\n");
     body.push_str("This checklist tracks every `sqlx::query*` call site under the configured Rust crate roots that is not yet using compile-time checked SQLx macros.\n\n");
     body.push_str("- Generated on: native jig\n");
-    body.push_str(&format!("- Unchecked call sites: {}\n", unchecked.len()));
-    body.push_str(&format!(
-        "- Compile-checked macro call sites already present: {checked_count}\n"
-    ));
-    body.push_str(&format!(
-        "- Files with unchecked call sites: {files_count}\n"
-    ));
-    body.push_str(&format!(
-        "- Non-test call sites: {}\n",
-        non_test_items.len()
-    ));
-    body.push_str(&format!("- Test call sites: {}\n\n", test_items.len()));
+    let _ = writeln!(body, "- Unchecked call sites: {}", unchecked.len());
+    let _ = writeln!(
+        body,
+        "- Compile-checked macro call sites already present: {checked_count}"
+    );
+    let _ = writeln!(body, "- Files with unchecked call sites: {files_count}");
+    let _ = writeln!(body, "- Non-test call sites: {}", non_test_items.len());
+    let _ = write!(body, "- Test call sites: {}\n\n", test_items.len());
     body.push_str("## TODO Items (Non-Test Code - Priority)\n\n");
     if non_test_items.is_empty() {
         body.push_str("_None_\n");

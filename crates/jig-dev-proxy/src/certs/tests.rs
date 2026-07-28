@@ -311,7 +311,7 @@ fn cert_temp_names_require_generated_suffix() {
 
 #[test]
 fn linux_trust_list_parser_finds_jig_ca_uris() {
-    let output = br#"
+    let output = br"
 pkcs11:id=%01;type=cert
     type: certificate
     label: Jig Dev Proxy Local CA
@@ -321,7 +321,7 @@ pkcs11:id=%02;type=cert
 pkcs11:id=%03;type=cert
     type: certificate
     label: Jig Dev Proxy Local CA
-"#;
+";
 
     assert_eq!(
         trust_list_jig_ca_uris(output),

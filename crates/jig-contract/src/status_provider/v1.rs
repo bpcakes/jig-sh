@@ -40,7 +40,7 @@ pub struct Report {
 impl Report {
     /// Creates a complete, empty observation for a provider.
     #[must_use]
-    pub fn complete(provider: Provider, observed_at_ms: u64) -> Self {
+    pub const fn complete(provider: Provider, observed_at_ms: u64) -> Self {
         Self {
             protocol: Protocol::V1,
             provider,

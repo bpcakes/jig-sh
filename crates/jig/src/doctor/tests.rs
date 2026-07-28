@@ -1235,7 +1235,7 @@ fn sqlx_driver_discovery_fails_open_for_dynamic_and_ambiguous_commands() {
     assert!(matches!(
         configured_sqlx_driver(
             temp.path(),
-            r#"cargo sqlx prepare --database-url \$DATABASE_URL"#,
+            r"cargo sqlx prepare --database-url \$DATABASE_URL",
             ambient,
         ),
         SqlxDriverResolution::Indeterminate(_)

@@ -1804,7 +1804,7 @@ fn github_ci_shape_reports_checks_lockfiles_cache_and_matrix() {
     fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
     fs::write(
         temp.path().join(".github/workflows/ci.yml"),
-        r#"jobs:
+        r"jobs:
   rust:
     name: cargo locked
     runs-on: ${{ matrix.os }}
@@ -1828,7 +1828,7 @@ fn github_ci_shape_reports_checks_lockfiles_cache_and_matrix() {
         with:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-"#,
+",
     )
     .unwrap();
 

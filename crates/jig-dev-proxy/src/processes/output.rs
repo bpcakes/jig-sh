@@ -48,15 +48,12 @@ impl CapturedAppOutput {
     pub(super) fn print_failure(&mut self, app_name: &str) {
         self.finish_progress();
         self.finish_readers();
-        let buffer = match self.buffer.lock() {
-            Ok(buffer) => buffer,
-            Err(_) => {
-                self.diagnostics
-                    .push("capture buffer mutex was poisoned".to_string());
-                print_capture_diagnostics(app_name, &mut self.diagnostics);
-                eprintln!("App '{app_name}' failed; its captured output could not be read");
-                return;
-            }
+        let Ok(buffer) = self.buffer.lock() else {
+            self.diagnostics
+                .push("capture buffer mutex was poisoned".to_string());
+            print_capture_diagnostics(app_name, &mut self.diagnostics);
+            eprintln!("App '{app_name}' failed; its captured output could not be read");
+            return;
         };
         let bytes = buffer.bytes.iter().copied().collect::<Vec<_>>();
         let truncated = buffer.truncated;
@@ -285,8 +282,7 @@ fn render_progress(state: &ProgressState, frame: &str) {
     let detail = truncate_display(&detail, terminal_width.saturating_sub(fixed_width));
     let line = if state.color {
         format!(
-            "\x1b[36m{frame}\x1b[0m \x1b[1;37m{}\x1b[0m \x1b[90m·\x1b[0m {detail} \x1b[90m{elapsed}\x1b[0m",
-            app_name
+            "\x1b[36m{frame}\x1b[0m \x1b[1;37m{app_name}\x1b[0m \x1b[90m·\x1b[0m {detail} \x1b[90m{elapsed}\x1b[0m"
         )
     } else {
         format!("{frame} {app_name} · {detail} {elapsed}")
@@ -697,8 +693,7 @@ mod tests {
         assert_eq!(
             diagnostics,
             [format!(
-                "stdout capture did not finish within {:?}; output may be incomplete",
-                OUTPUT_DRAIN_GRACE
+                "stdout capture did not finish within {OUTPUT_DRAIN_GRACE:?}; output may be incomplete"
             )]
         );
     }
@@ -744,12 +739,10 @@ mod tests {
             diagnostics,
             [
                 format!(
-                    "stderr capture did not finish within {:?}; output may be incomplete",
-                    OUTPUT_DRAIN_GRACE
+                    "stderr capture did not finish within {OUTPUT_DRAIN_GRACE:?}; output may be incomplete"
                 ),
                 format!(
-                    "stderr capture did not stop within {:?}; capture thread was detached",
-                    OUTPUT_STOP_GRACE
+                    "stderr capture did not stop within {OUTPUT_STOP_GRACE:?}; capture thread was detached"
                 ),
             ]
         );

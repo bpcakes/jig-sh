@@ -34,14 +34,14 @@ impl ServiceStatusSnapshot {
         }
     }
 
-    pub(crate) fn from_parts(value: Value, restart_risk: ServiceRestartRisk) -> Self {
+    pub(crate) const fn from_parts(value: Value, restart_risk: ServiceRestartRisk) -> Self {
         Self {
             value,
             restart_risk,
         }
     }
 
-    pub(crate) fn json_value(&self) -> &Value {
+    pub(crate) const fn json_value(&self) -> &Value {
         &self.value
     }
 
@@ -49,7 +49,7 @@ impl ServiceStatusSnapshot {
         self.value
     }
 
-    pub(crate) fn restart_risk(&self) -> ServiceRestartRisk {
+    pub(crate) const fn restart_risk(&self) -> ServiceRestartRisk {
         self.restart_risk
     }
 
@@ -252,11 +252,11 @@ fn service_state_dir_error(
     }
 }
 
-fn service_manager_active(service: &ServiceManagerStatus) -> bool {
+const fn service_manager_active(service: &ServiceManagerStatus) -> bool {
     service.loaded || service.enabled || service.running
 }
 
-pub(super) fn service_reload_hint() -> &'static str {
+pub(super) const fn service_reload_hint() -> &'static str {
     #[cfg(target_os = "macos")]
     {
         "Jig attempts to load the LaunchAgent with launchctl. If that fails, run launchctl bootstrap gui/$UID ~/Library/LaunchAgents/sh.jig.proxy.plist."

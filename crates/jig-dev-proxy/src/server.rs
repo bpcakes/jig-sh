@@ -560,9 +560,8 @@ async fn serve_http(
 ) -> Result<()> {
     let mut consecutive_accept_errors = 0u32;
     loop {
-        let permit = match limits.connections.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => bail!("jig proxy http connection limiter closed"),
+        let Ok(permit) = limits.connections.clone().acquire_owned().await else {
+            bail!("jig proxy http connection limiter closed")
         };
         let (stream, remote_addr) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -632,9 +631,8 @@ async fn serve_https(
 ) -> Result<()> {
     let mut consecutive_accept_errors = 0u32;
     loop {
-        let permit = match limits.connections.clone().acquire_owned().await {
-            Ok(permit) => permit,
-            Err(_) => bail!("jig proxy https connection limiter closed"),
+        let Ok(permit) = limits.connections.clone().acquire_owned().await else {
+            bail!("jig proxy https connection limiter closed")
         };
         let (stream, remote_addr) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -746,14 +744,11 @@ async fn handle_request(
     route_cache: RouteCache,
     limits: ProxyLimits,
 ) -> Result<Response<ProxyBody>, Infallible> {
-    let request_permit = match limits.requests.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return Ok(error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Too many proxy requests are active.",
-            ));
-        }
+    let Ok(request_permit) = limits.requests.clone().try_acquire_owned() else {
+        return Ok(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many proxy requests are active.",
+        ));
     };
     let response = match route_request(
         req,
@@ -886,7 +881,7 @@ async fn proxy_http(
     let path = parts
         .uri
         .path_and_query()
-        .map(|value| value.as_str())
+        .map(hyper::http::uri::PathAndQuery::as_str)
         .unwrap_or("/");
     let uri: Uri = format!(
         "http://{}:{}{}",
@@ -980,19 +975,16 @@ async fn websocket(
             "WebSocket upgrade requests with request bodies are not supported.",
         ));
     }
-    let websocket_permit = match websocket_limit.try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return Ok(error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Too many WebSocket tunnels are already open.",
-            ));
-        }
+    let Ok(websocket_permit) = websocket_limit.try_acquire_owned() else {
+        return Ok(error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Too many WebSocket tunnels are already open.",
+        ));
     };
     let path = req
         .uri()
         .path_and_query()
-        .map(|value| value.as_str())
+        .map(hyper::http::uri::PathAndQuery::as_str)
         .unwrap_or("/");
     if path.chars().any(|ch| ch.is_control() || ch == ' ') {
         return Ok(error_response(
@@ -1226,7 +1218,7 @@ fn websocket_extension_names<'a>(values: impl IntoIterator<Item = &'a str>) -> H
         .filter_map(|extension| extension.split(';').next())
         .map(str::trim)
         .filter(|extension| !extension.is_empty())
-        .map(|extension| extension.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -1263,7 +1255,7 @@ fn websocket_token_values<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<
         .flat_map(|value| value.split(','))
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 

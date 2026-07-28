@@ -200,7 +200,6 @@ fn parse_pnpm_workspace(text: &str) -> Result<Vec<String>> {
                 } else if !trimmed.is_empty() {
                     bail!("pnpm-workspace.yaml uses unsupported non-list packages entry");
                 }
-                continue;
             }
         }
     }

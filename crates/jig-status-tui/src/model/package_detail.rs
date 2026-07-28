@@ -60,7 +60,7 @@ impl App {
         was_open
     }
 
-    pub(crate) fn package_detail_is_open(&self) -> bool {
+    pub(crate) const fn package_detail_is_open(&self) -> bool {
         self.package_detail.package_id.is_some()
     }
 

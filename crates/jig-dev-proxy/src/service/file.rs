@@ -233,7 +233,7 @@ pub(super) fn service_path_text(path: &Path, label: &str) -> Result<String> {
         anyhow::bail!("{label} path must be absolute for service files");
     }
     let text = path.to_string_lossy().into_owned();
-    if text.chars().any(|ch| ch.is_control()) {
+    if text.chars().any(char::is_control) {
         anyhow::bail!("{label} path cannot contain control characters for service files");
     }
     Ok(text)

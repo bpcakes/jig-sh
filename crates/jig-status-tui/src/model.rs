@@ -752,7 +752,7 @@ impl App {
             Tab::Overview => {}
             Tab::Packages => {
                 self.package_index =
-                    moved_index(self.package_index, self.package_rows().len(), delta)
+                    moved_index(self.package_index, self.package_rows().len(), delta);
             }
             Tab::Blockers => {
                 let len = self

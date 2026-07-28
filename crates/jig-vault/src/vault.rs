@@ -335,7 +335,7 @@ impl VaultStore {
             passphrase,
             AuditAction::SecretSet,
             |vault| vault.set_secret(&name, value),
-            |_| {
+            |()| {
                 serde_json::json!({
                     "secret_name": name.as_str(),
                 })
@@ -796,7 +796,7 @@ fn now_ms() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
 }
 
-fn padded_base64_len(len: usize) -> usize {
+const fn padded_base64_len(len: usize) -> usize {
     len.div_ceil(3) * 4
 }
 

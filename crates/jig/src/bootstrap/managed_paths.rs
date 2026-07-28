@@ -257,7 +257,7 @@ pub(super) fn managed_block_spec(relative: &Path) -> Option<ManagedBlockSpec> {
         .copied()
 }
 
-pub(super) fn managed_block_specs() -> &'static [ManagedBlockSpec] {
+pub(super) const fn managed_block_specs() -> &'static [ManagedBlockSpec] {
     MANAGED_BLOCK_SPECS
 }
 

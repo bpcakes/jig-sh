@@ -33,7 +33,7 @@ impl Confidence {
         }
     }
 
-    pub(super) fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::High => "high",
             Self::Medium => "medium",

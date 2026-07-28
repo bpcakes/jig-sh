@@ -29,7 +29,7 @@ pub enum HarnessFootprint {
 }
 
 impl HarnessFootprint {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Full => "full",
             Self::Minimal => "minimal",
@@ -152,7 +152,7 @@ impl AnswerInput {
         })
     }
 
-    pub(super) fn shape(&self) -> &AnswerInputShape {
+    pub(super) const fn shape(&self) -> &AnswerInputShape {
         &self.shape
     }
 
@@ -274,7 +274,7 @@ impl RenderAnswers {
         &self.frontend_apps
     }
 
-    pub(super) fn harness_footprint(&self) -> HarnessFootprint {
+    pub(super) const fn harness_footprint(&self) -> HarnessFootprint {
         self.harness_footprint
     }
 
@@ -290,11 +290,11 @@ impl RenderAnswers {
         !self.dev_apps.is_empty() || !self.generated_frontend_dev_apps.is_empty()
     }
 
-    pub(super) fn sqlx_enabled(&self) -> bool {
+    pub(super) const fn sqlx_enabled(&self) -> bool {
         self.sqlx_enabled
     }
 
-    pub(super) fn schema_dump_enabled(&self) -> bool {
+    pub(super) const fn schema_dump_enabled(&self) -> bool {
         self.schema_dump_enabled
     }
 
@@ -314,7 +314,7 @@ impl RenderAnswers {
         !self.bootstrap_command.trim().is_empty()
     }
 
-    pub(super) fn has_legacy_dev_command(&self) -> bool {
+    pub(super) const fn has_legacy_dev_command(&self) -> bool {
         self.legacy_dev_command.is_some()
     }
 }
@@ -832,29 +832,22 @@ fn validate_frontend_app_dir(app_name: &str, value: &str) -> Result<()> {
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
     {
         bail!(
-            "frontend app '{app_name}' dir '{}' contains unsupported characters. Use a repo-relative path with ASCII letters, numbers, '/', '.', '-' or '_'; use forward slashes on every platform.",
-            value
+            "frontend app '{app_name}' dir '{value}' contains unsupported characters. Use a repo-relative path with ASCII letters, numbers, '/', '.', '-' or '_'; use forward slashes on every platform."
         );
     }
 
     let path = Path::new(value);
     if path.is_absolute() {
-        bail!("frontend app '{app_name}' dir '{}' must be relative", value);
+        bail!("frontend app '{app_name}' dir '{value}' must be relative");
     }
-    if value.split('/').any(|segment| segment.is_empty()) {
-        bail!(
-            "frontend app '{app_name}' dir '{}' must not contain empty path components",
-            value
-        );
+    if value.split('/').any(str::is_empty) {
+        bail!("frontend app '{app_name}' dir '{value}' must not contain empty path components");
     }
     if value == "." {
         return Ok(());
     }
     if value.split('/').any(|segment| segment == ".") {
-        bail!(
-            "frontend app '{app_name}' dir '{}' must not contain '.' path components",
-            value
-        );
+        bail!("frontend app '{app_name}' dir '{value}' must not contain '.' path components");
     }
 
     for component in path.components() {
@@ -862,18 +855,14 @@ fn validate_frontend_app_dir(app_name: &str, value: &str) -> Result<()> {
             Component::Normal(_) => {}
             Component::CurDir => {
                 bail!(
-                    "frontend app '{app_name}' dir '{}' must not contain '.' path components",
-                    value
+                    "frontend app '{app_name}' dir '{value}' must not contain '.' path components"
                 );
             }
             Component::ParentDir => {
-                bail!(
-                    "frontend app '{app_name}' dir '{}' must not contain '..'",
-                    value
-                );
+                bail!("frontend app '{app_name}' dir '{value}' must not contain '..'");
             }
             Component::RootDir | Component::Prefix(_) => {
-                bail!("frontend app '{app_name}' dir '{}' must be relative", value);
+                bail!("frontend app '{app_name}' dir '{value}' must be relative");
             }
         }
     }

@@ -124,7 +124,7 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
         .collect::<Vec<_>>();
 
     format!(
-        r#"# Goal Harness
+        r"# Goal Harness
 
 ## Objective
 
@@ -157,7 +157,7 @@ fn goal_body(ctx: &RepoContext, goal: &GoalHarness) -> String {
 ## Notes
 
 {notes}
-"#,
+",
         objective = goal.objective.as_str(),
         success = goal.success.as_str(),
         validations = markdown_bullets(&goal.validations, "No validation command specified."),

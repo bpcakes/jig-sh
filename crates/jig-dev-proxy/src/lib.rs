@@ -66,15 +66,15 @@ pub enum DevPreflightError {
 }
 
 impl DevPreflightError {
-    pub fn cancelled() -> Self {
+    pub const fn cancelled() -> Self {
         Self::Cancelled
     }
 
-    pub fn failed(error: anyhow::Error) -> Self {
+    pub const fn failed(error: anyhow::Error) -> Self {
         Self::Failed(error)
     }
 
-    pub fn cleanup_unconfirmed(error: anyhow::Error) -> Self {
+    pub const fn cleanup_unconfirmed(error: anyhow::Error) -> Self {
         Self::CleanupUnconfirmed(error)
     }
 }
@@ -383,7 +383,7 @@ fn proxy_stop_with_service_probe_and_terminator(
     }))
 }
 
-fn proxy_stop_target_pid(
+const fn proxy_stop_target_pid(
     pid: Option<u32>,
     pid_alive: bool,
     pid_matches_proxy: bool,
@@ -479,14 +479,12 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
     let pid = pid?;
     if service_keepalive_active {
         return Some(format!(
-            "Jig proxy PID file points at process {}, but no process was stopped and runtime files were kept because a proxy user service may restart the proxy. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it.",
-            pid
+            "Jig proxy PID file points at process {pid}, but no process was stopped and runtime files were kept because a proxy user service may restart the proxy. Run `jig proxy service uninstall` to disable the keepalive service, or `jig proxy service status` to inspect it."
         ));
     }
     if service_status_uncertain {
         return Some(format!(
-            "Jig proxy PID file points at process {}, but no process was stopped and runtime files were kept because Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may restart it; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`.",
-            pid
+            "Jig proxy PID file points at process {pid}, but no process was stopped and runtime files were kept because Jig could not inspect the proxy user service status. Run `jig proxy service status` to verify whether an installed service may restart it; if status reports missing state-dir metadata, reinstall it with `jig proxy service install --accept-service-scope`."
         ));
     }
     let service_suffix = if service_keepalive_active {
@@ -498,32 +496,27 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
     };
     if pid_alive && !handshake_ok {
         return Some(format!(
-            "PID file points at process {}, but it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.{}",
-            pid, service_suffix
+            "PID file points at process {pid}, but it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.{service_suffix}"
         ));
     }
     if pid_alive && handshake_ok && !pid_matches_proxy {
         let Some(health_pid) = health_pid else {
             return Some(format!(
-                "A Jig proxy answered the stored health check, but the health response did not include a PID while the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process.{}",
-                pid, service_suffix
+                "A Jig proxy answered the stored health check, but the health response did not include a PID while the PID file points at {pid}. Runtime files were kept to avoid terminating an unrelated process.{service_suffix}"
             ));
         };
         return Some(format!(
-            "A Jig proxy answered on the stored port as PID {}, but the PID file points at {}. Runtime files were kept to avoid terminating an unrelated process; use the matching JIG_PROXY_STATE_DIR or stop the other proxy explicitly.{}",
-            health_pid, pid, service_suffix
+            "A Jig proxy answered on the stored port as PID {health_pid}, but the PID file points at {pid}. Runtime files were kept to avoid terminating an unrelated process; use the matching JIG_PROXY_STATE_DIR or stop the other proxy explicitly.{service_suffix}"
         ));
     }
     if pid_alive && handshake_ok {
         return Some(format!(
-            "Jig proxy process {} answered the health check but did not exit after stop signals. Runtime files were kept because the process may still own its ports.{}",
-            pid, service_suffix
+            "Jig proxy process {pid} answered the health check but did not exit after stop signals. Runtime files were kept because the process may still own its ports.{service_suffix}"
         ));
     }
     if !pid_alive {
         return Some(format!(
-            "Stale Jig proxy PID file for process {} was found and cleared.{}",
-            pid, service_suffix
+            "Stale Jig proxy PID file for process {pid} was found and cleared.{service_suffix}"
         ));
     }
     None
@@ -777,7 +770,7 @@ fn proxy_service_status_snapshot(
     service::status_if_installed_for_state_dir(settings, state_dir)
 }
 
-fn proxy_exe_note() -> &'static str {
+const fn proxy_exe_note() -> &'static str {
     "If this path came from JIG_DEV_BIN, restart the long-running proxy after rebuilding or replacing that binary."
 }
 

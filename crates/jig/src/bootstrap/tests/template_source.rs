@@ -601,7 +601,7 @@ fn default_template_mode_rejects_local_only_mode_before_clone() {
     })
     .unwrap_err();
 
-    let error_chain = format!("{:#}", error);
+    let error_chain = format!("{error:#}");
     assert!(error_chain.contains("--template-mode only applies to local git template paths."));
     assert!(error_chain.contains("Omit --template-mode for remote templates"));
 }

@@ -33,7 +33,7 @@ impl RepoScan {
         scan
     }
 
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             files: Vec::new(),
             dirs: Vec::new(),

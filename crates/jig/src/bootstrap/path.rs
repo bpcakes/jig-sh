@@ -27,7 +27,7 @@ pub(crate) struct RepositoryDirectoryCommit {
     pub(crate) identity: RepositoryEntryIdentity,
     // Retaining the directory handle prevents reuse of its device/inode or
     // volume/file-index identity for the lifetime of the transaction.
-    pub(crate) _handle: Arc<File>,
+    pub(crate) handle: Arc<File>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,7 +53,7 @@ pub(crate) struct RepositoryFileCommit {
     // Keeping the published inode open prevents identity reuse during the
     // transaction. Ownership still compares the complete fingerprint after
     // quarantine, so same-inode in-place writes are never accepted.
-    pub(crate) _handle: Arc<File>,
+    pub(crate) handle: Arc<File>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,7 +61,7 @@ pub(crate) struct RepositorySymlinkCommit {
     pub(crate) identity: RepositoryEntryIdentity,
     pub(crate) target: PathBuf,
     pub(crate) target_is_directory: bool,
-    pub(crate) _handle: Arc<File>,
+    pub(crate) handle: Arc<File>,
 }
 
 pub(crate) fn validate_portable_planned_file_collisions<I, P>(paths: I) -> Result<()>
@@ -165,7 +165,7 @@ fn portable_planned_file_components(path: &Path) -> Result<Vec<Vec<u8>>> {
     Ok(components)
 }
 
-fn is_windows_forbidden_component_byte(byte: u8) -> bool {
+const fn is_windows_forbidden_component_byte(byte: u8) -> bool {
     byte.is_ascii_control() || matches!(byte, b'<' | b'>' | b':' | b'"' | b'|' | b'?' | b'*')
 }
 
@@ -438,7 +438,7 @@ pub(crate) fn repository_symlink_commit_at(path: &Path) -> Result<RepositorySyml
         identity,
         target,
         target_is_directory,
-        _handle: handle,
+        handle,
     })
 }
 
@@ -455,7 +455,7 @@ fn repository_symlink_is_directory(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
-fn repository_symlink_is_directory(_metadata: &fs::Metadata) -> bool {
+const fn repository_symlink_is_directory(_metadata: &fs::Metadata) -> bool {
     // Unix creation does not distinguish file and directory symlinks. Keeping
     // this generation property independent of the mutable target also makes
     // snapshot comparison stable for broken or concurrently changed targets.
@@ -473,7 +473,7 @@ pub(crate) fn repository_directory_commit_at(path: &Path) -> Result<RepositoryDi
     }
     Ok(RepositoryDirectoryCommit {
         identity,
-        _handle: Arc::new(directory),
+        handle: Arc::new(directory),
     })
 }
 
@@ -488,7 +488,7 @@ pub(crate) fn repository_directory_commit_matches_path(
         )
     })?;
     Ok(repository_metadata_is_real_directory(&metadata)
-        && repository_file_identity(&commit._handle)? == commit.identity
+        && repository_file_identity(&commit.handle)? == commit.identity
         && repository_path_identity(path)? == commit.identity)
 }
 
@@ -848,7 +848,7 @@ fn copy_repository_symlink_atomic_with(
         identity,
         target,
         target_is_directory,
-        _handle: handle,
+        handle,
     })
 }
 
@@ -866,14 +866,11 @@ fn cleanup_temporary_symlink_with(
     primary: anyhow::Error,
     before_quarantine_identity_check: impl FnOnce(&Path),
 ) -> anyhow::Error {
-    let parent = match temporary.parent() {
-        Some(parent) => parent,
-        None => {
-            return anyhow::anyhow!(
-                "{primary:#}\nTemporary symlink has no parent for safe cleanup: {}",
-                temporary.display()
-            );
-        }
+    let Some(parent) = temporary.parent() else {
+        return anyhow::anyhow!(
+            "{primary:#}\nTemporary symlink has no parent for safe cleanup: {}",
+            temporary.display()
+        );
     };
     let name = temporary
         .file_name()
@@ -891,7 +888,7 @@ fn cleanup_temporary_symlink_with(
                 break;
             }
             Err(error) => match fs::symlink_metadata(&candidate) {
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(inspect_error) if inspect_error.kind() == ErrorKind::NotFound => {
                     return if error.kind() == ErrorKind::NotFound {
                         primary
@@ -1139,7 +1136,7 @@ fn write_repository_file_atomic_with(
         content_length: fingerprint.content_length,
         content_sha256: fingerprint.content_sha256,
         permission_identity: fingerprint.permission_identity,
-        _handle: Arc::new(published),
+        handle: Arc::new(published),
     })
 }
 
@@ -1208,7 +1205,7 @@ pub(crate) fn repository_file_fingerprint_at(path: &Path) -> Result<RepositoryFi
         content_length: fingerprint.content_length,
         content_sha256: fingerprint.content_sha256,
         permission_identity: fingerprint.permission_identity,
-        _handle: Arc::new(file),
+        handle: Arc::new(file),
     })
 }
 
@@ -1510,7 +1507,7 @@ fn is_hfs_git_metadata_alias(component: &str) -> bool {
     }) && normalized.next().is_none()
 }
 
-fn is_hfs_ignored(character: char) -> bool {
+const fn is_hfs_ignored(character: char) -> bool {
     matches!(
         character,
         '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
@@ -1735,7 +1732,7 @@ pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathB
     Ok(resolved)
 }
 
-fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<()> {
+const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<()> {
     #[cfg(any(
         target_os = "linux",
         target_os = "android",
@@ -1924,7 +1921,7 @@ fn ensure_atomic_noreplace_publication_supported_with(
                 break;
             }
             Err(error) => match fs::symlink_metadata(&candidate) {
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(inspect_error) if inspect_error.kind() == ErrorKind::NotFound => {
                     let preserved = probe.keep();
                     bail!(

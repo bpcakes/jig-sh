@@ -68,7 +68,7 @@ pub(crate) mod commands {
         }
     }
 
-    pub(crate) fn can_run_without_context(command: &ProxyCommand) -> bool {
+    pub(crate) const fn can_run_without_context(command: &ProxyCommand) -> bool {
         if matches!(command, ProxyCommand::Start(opts) if opts.foreground) {
             return true;
         }
@@ -564,15 +564,9 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
 
     let detail = stderr.trim();
     if detail.is_empty() {
-        bail!(
-            "Frontend dependency readiness check failed for {app_dir} with status {}",
-            status
-        );
+        bail!("Frontend dependency readiness check failed for {app_dir} with status {status}");
     }
-    bail!(
-        "Frontend dependency readiness check failed for {app_dir} with status {}: {detail}",
-        status
-    )
+    bail!("Frontend dependency readiness check failed for {app_dir} with status {status}: {detail}")
 }
 
 fn dependency_readiness_usage_is_legacy(stderr: &str) -> bool {
@@ -585,11 +579,11 @@ fn bash_requirement_hint() -> &'static str {
 }
 
 #[cfg(not(windows))]
-fn bash_requirement_hint() -> &'static str {
+const fn bash_requirement_hint() -> &'static str {
     "Bash is required for generated web-app checks; install Bash and ensure `bash` is on PATH."
 }
 
-fn service_action(command: &ProxyServiceCommand) -> &'static str {
+const fn service_action(command: &ProxyServiceCommand) -> &'static str {
     match command {
         ProxyServiceCommand::Install(_) => "install user service",
         ProxyServiceCommand::Uninstall(_) => "remove user service",
@@ -597,7 +591,7 @@ fn service_action(command: &ProxyServiceCommand) -> &'static str {
     }
 }
 
-fn service_runtime_detail(command: &ProxyServiceCommand) -> &'static str {
+const fn service_runtime_detail(command: &ProxyServiceCommand) -> &'static str {
     match command {
         ProxyServiceCommand::Install(_) => "write and load service file",
         ProxyServiceCommand::Uninstall(_) => "unload and remove service file",
@@ -605,7 +599,7 @@ fn service_runtime_detail(command: &ProxyServiceCommand) -> &'static str {
     }
 }
 
-fn service_failure_message(command: &ProxyServiceCommand) -> &'static str {
+const fn service_failure_message(command: &ProxyServiceCommand) -> &'static str {
     match command {
         ProxyServiceCommand::Install(_) => "service install did not complete",
         ProxyServiceCommand::Uninstall(_) => "service uninstall did not complete",
@@ -801,8 +795,7 @@ fn app_from_dev_config(
     } else {
         if kind == jig_dev_proxy::AppKind::Vite {
             bail!(
-                "dev app '{}' uses kind = \"vite\" and must set argv instead of shell-form command",
-                name
+                "dev app '{name}' uses kind = \"vite\" and must set argv instead of shell-form command"
             );
         }
         let command = app
@@ -812,17 +805,10 @@ fn app_from_dev_config(
         jig_dev_proxy::CommandSpec::Shell(command)
     };
     let target_host = app.host.clone().unwrap_or_else(|| "127.0.0.1".into());
-    let target_ip = jig_dev_proxy::parse_ip_literal(&target_host).with_context(|| {
-        format!(
-            "dev app '{}' host '{}' must be an IP literal",
-            name, target_host
-        )
-    })?;
+    let target_ip = jig_dev_proxy::parse_ip_literal(&target_host)
+        .with_context(|| format!("dev app '{name}' host '{target_host}' must be an IP literal"))?;
     if app.proxy && !jig_dev_proxy::ip_is_loopback(target_ip) {
-        bail!(
-            "dev app '{}' uses proxying and must target a loopback IP literal",
-            name
-        );
+        bail!("dev app '{name}' uses proxying and must target a loopback IP literal");
     }
     Ok(jig_dev_proxy::AppRunSpec::new(name, dir, command, hostname)
         .with_kind(kind)
@@ -933,7 +919,7 @@ fn build_settings(
     })
 }
 
-fn flag_override(default: bool, enable: bool, disable: bool) -> bool {
+const fn flag_override(default: bool, enable: bool, disable: bool) -> bool {
     match (enable, disable) {
         (true, false) => true,
         (false, true) => false,

@@ -179,7 +179,7 @@ impl VaultConfig {
         }
     }
 
-    pub(crate) fn allow_global(&self) -> bool {
+    pub(crate) const fn allow_global(&self) -> bool {
         self.allow_global
     }
 }
@@ -388,7 +388,7 @@ impl RepoContext {
         &self.manifest.tools
     }
 
-    pub(crate) fn contract_version(&self) -> u32 {
+    pub(crate) const fn contract_version(&self) -> u32 {
         self.manifest.contract_version
     }
 
@@ -420,11 +420,11 @@ impl RepoContext {
         self.config.harness_footprint == HarnessFootprintConfig::Minimal
     }
 
-    pub(crate) fn sqlx_enabled(&self) -> bool {
+    pub(crate) const fn sqlx_enabled(&self) -> bool {
         self.config.sqlx_enabled
     }
 
-    pub(crate) fn schema_dump_enabled(&self) -> bool {
+    pub(crate) const fn schema_dump_enabled(&self) -> bool {
         self.config.schema_dump_enabled
     }
 
@@ -501,12 +501,12 @@ impl RepoContext {
         configured_frontend_app_metadata(&self.config, app).kind
     }
 
-    pub(crate) fn vault_config(&self) -> &VaultConfig {
+    pub(crate) const fn vault_config(&self) -> &VaultConfig {
         &self.config.vault
     }
 
     #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-    pub(crate) fn dev_config(&self) -> &DevConfig {
+    pub(crate) const fn dev_config(&self) -> &DevConfig {
         &self.config.dev
     }
 
@@ -522,7 +522,7 @@ impl RepoContext {
         self.config.work.refinements()
     }
 
-    pub(crate) fn loop_config(&self) -> &LoopConfig {
+    pub(crate) const fn loop_config(&self) -> &LoopConfig {
         &self.config.loop_config
     }
 
@@ -597,15 +597,15 @@ fn non_empty_command<'a>(key: &str, command: &'a str) -> Result<&'a str> {
     Ok(command)
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
-fn default_proxy_http_port() -> u16 {
+const fn default_proxy_http_port() -> u16 {
     1355
 }
 
-fn default_proxy_https_port() -> Option<u16> {
+const fn default_proxy_https_port() -> Option<u16> {
     Some(1443)
 }
 
@@ -883,9 +883,7 @@ fn validate_dev_app_env_prefixes<'a>(
         let prefix = jig_core::dev_app_env_prefix(name);
         if let Some(previous) = prefixes.insert(prefix.clone(), name) {
             bail!(
-                "{section} entries '{}' and '{}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique",
-                previous,
-                name
+                "{section} entries '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
             );
         }
     }

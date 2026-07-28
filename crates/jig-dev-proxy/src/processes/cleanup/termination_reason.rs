@@ -19,11 +19,11 @@ impl TerminationReason {
         }
     }
 
-    pub(crate) fn signal(self) -> i32 {
+    pub(crate) const fn signal(self) -> i32 {
         self.signal
     }
 
-    pub(crate) fn exit_status(self) -> i32 {
+    pub(crate) const fn exit_status(self) -> i32 {
         if self.requested_stop {
             0
         } else {
@@ -31,11 +31,11 @@ impl TerminationReason {
         }
     }
 
-    pub(crate) fn is_requested_stop(self) -> bool {
+    pub(crate) const fn is_requested_stop(self) -> bool {
         self.requested_stop
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         if self.requested_stop {
             return "dev stop";
         }

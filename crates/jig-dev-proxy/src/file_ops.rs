@@ -174,7 +174,7 @@ pub(crate) fn replace_backup_for_path_exists(path: &Path) -> bool {
         return false;
     };
     fs::read_dir(parent).is_ok_and(|entries| {
-        entries.filter_map(|entry| entry.ok()).any(|entry| {
+        entries.filter_map(std::result::Result::ok).any(|entry| {
             entry
                 .file_name()
                 .to_str()

@@ -84,7 +84,7 @@ impl Default for ToolRequest {
 }
 
 impl ToolRequest {
-    pub(crate) fn new(plan_id: Option<String>, record_receipt: bool) -> Self {
+    pub(crate) const fn new(plan_id: Option<String>, record_receipt: bool) -> Self {
         Self {
             plan_id,
             record_receipt,

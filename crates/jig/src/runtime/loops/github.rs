@@ -324,8 +324,8 @@ fn review_thread_page(
     gh_json(ctx, args, &[0])
 }
 
-fn review_threads_query() -> &'static str {
-    r#"
+const fn review_threads_query() -> &'static str {
+    r"
 query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -370,7 +370,7 @@ query($owner: String!, $name: String!, $number: Int!, $threadsAfter: String) {
     }
   }
 }
-"#
+"
 }
 
 fn normalize_review_thread(thread: &Value) -> Value {

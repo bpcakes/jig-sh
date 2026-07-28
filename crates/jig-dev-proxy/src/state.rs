@@ -92,7 +92,11 @@ pub(crate) struct ProcessRouteOwnership {
 }
 
 impl ProcessRouteOwnership {
-    pub(crate) fn new(hostname: RouteHostname, owner_pid: u32, owner_start_token: String) -> Self {
+    pub(crate) const fn new(
+        hostname: RouteHostname,
+        owner_pid: u32,
+        owner_start_token: String,
+    ) -> Self {
         Self {
             hostname,
             owner_pid,
@@ -782,7 +786,7 @@ fn enter_lock_order_guard(kind: LockKind) -> Result<LockOrderGuard> {
             ROUTE_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
         }
         LockKind::Cert => {
-            if ROUTE_LOCK_DEPTH.with(|depth| depth.get()) != 0 {
+            if ROUTE_LOCK_DEPTH.with(std::cell::Cell::get) != 0 {
                 anyhow::bail!("cert lock cannot be acquired while a route lock is held");
             }
             CERT_LOCK_DEPTH.with(|depth| depth.set(depth.get() + 1));
@@ -805,7 +809,7 @@ impl Drop for LockOrderGuard {
 }
 
 impl LockedFile {
-    fn new(file: File, label: &'static str) -> Self {
+    const fn new(file: File, label: &'static str) -> Self {
         Self {
             file,
             label,
@@ -931,9 +935,8 @@ fn read_routes_from_file(file: &mut File) -> Result<Vec<Route>> {
 }
 
 fn read_routes_from_path(path: &Path) -> Result<Vec<Route>> {
-    let mut file = match open_read_no_follow_maybe_missing(path)? {
-        Some(file) => file,
-        None => return Ok(Vec::new()),
+    let Some(mut file) = open_read_no_follow_maybe_missing(path)? else {
+        return Ok(Vec::new());
     };
     ensure_private_state_file_permissions(path, &file)?;
     read_routes_from_file(&mut file)
@@ -1202,8 +1205,7 @@ fn lock_state_file_interruptible(
             Ok(false) => {
                 if Instant::now() >= deadline {
                     anyhow::bail!(
-                        "Timed out waiting for Jig proxy {label} after {:?}",
-                        STATE_LOCK_TIMEOUT
+                        "Timed out waiting for Jig proxy {label} after {STATE_LOCK_TIMEOUT:?}"
                     );
                 }
                 std::thread::sleep(STATE_LOCK_POLL_INTERVAL);

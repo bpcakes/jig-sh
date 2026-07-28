@@ -1,6 +1,6 @@
 use super::answers::RenderAnswers;
 
-pub(super) fn jig_launcher(minimal_footprint: bool) -> &'static str {
+pub(super) const fn jig_launcher(minimal_footprint: bool) -> &'static str {
     if minimal_footprint {
         "jig"
     } else {

@@ -39,7 +39,7 @@ impl AdoptInference {
         }
     }
 
-    pub(super) fn rust_stack_label(&self) -> &'static str {
+    pub(super) const fn rust_stack_label(&self) -> &'static str {
         if matches!(
             self.rust_crate_root_source_kind,
             RustCrateRootSourceKind::WorkspaceMembers | RustCrateRootSourceKind::WorkspaceFallback

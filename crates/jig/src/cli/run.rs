@@ -181,7 +181,7 @@ pub(crate) fn run() -> Result<()> {
     }
 }
 
-fn dev_human_output(opts: &DevOpts) -> HumanOutput {
+const fn dev_human_output(opts: &DevOpts) -> HumanOutput {
     match &opts.command {
         None => HumanOutput::Dev,
         Some(DevSubcommand::Status(_)) => HumanOutput::DevStatus,
@@ -243,7 +243,7 @@ fn exec_dev_with_process_identity(ctx: &RepoContext) -> std::io::Error {
 }
 
 #[cfg(test)]
-pub(super) fn test_command_reports_failure_with_ok(command: &CommandKind) -> bool {
+pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) -> bool {
     // Proxy commands expose host-cleanup/status operations that can complete
     // with `ok: false` in their JSON payload. Multi-app `jig dev` also uses
     // `ok: false` when the first child exits unsuccessfully. Agent doctor is a
@@ -258,11 +258,11 @@ pub(super) fn test_command_reports_failure_with_ok(command: &CommandKind) -> boo
     }
 }
 
-fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
+const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
     matches!(command, AgentCommand::Doctor)
 }
 
-fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
+const fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
     matches!(
         command,
         CheckCommand::AgentMap(_)
@@ -274,7 +274,7 @@ fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
     )
 }
 
-fn check_human_output(command: &CheckCommand) -> HumanOutput {
+const fn check_human_output(command: &CheckCommand) -> HumanOutput {
     match command {
         CheckCommand::AgentMap(_)
         | CheckCommand::AgentGuides
@@ -286,7 +286,7 @@ fn check_human_output(command: &CheckCommand) -> HumanOutput {
     }
 }
 
-fn agent_human_output(command: &AgentCommand) -> HumanOutput {
+const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     match command {
         AgentCommand::Doctor => HumanOutput::AgentDoctor,
         AgentCommand::Bootstrap(_) => HumanOutput::AgentBootstrap,
@@ -316,7 +316,7 @@ fn work_human_output(command: &WorkCommand, json_output: bool) -> Result<HumanOu
     }
 }
 
-fn loop_human_output(command: &LoopCommand) -> HumanOutput {
+const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
     match command {
         LoopCommand::Tick(_) => HumanOutput::LoopTick,
         LoopCommand::Status(_) => HumanOutput::LoopStatus,
@@ -325,7 +325,7 @@ fn loop_human_output(command: &LoopCommand) -> HumanOutput {
     }
 }
 
-fn state_human_output(command: &StateCommand) -> HumanOutput {
+const fn state_human_output(command: &StateCommand) -> HumanOutput {
     match command {
         StateCommand::Summary => HumanOutput::StateSummary,
         StateCommand::Archive(_) => HumanOutput::StateArchive,

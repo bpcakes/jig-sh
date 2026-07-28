@@ -198,7 +198,7 @@ where
     serde_json::from_value(args).context("Invalid work tool arguments")
 }
 
-fn session_end_request_for_finish(outcome: Option<String>) -> SessionEndRequest {
+const fn session_end_request_for_finish(outcome: Option<String>) -> SessionEndRequest {
     SessionEndRequest {
         session_id: None,
         outcome,

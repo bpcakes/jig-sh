@@ -250,8 +250,7 @@ pub(super) fn infer_sqlx(
             out.signals.push(format!("migration directory {dir}"));
         } else {
             let warning = format!(
-                "multiple migration directories detected; using alphabetically first {} unless overridden",
-                dir
+                "multiple migration directories detected; using alphabetically first {dir} unless overridden"
             );
             push_scan_warning(warnings, root, &warning);
             if let Some(migration_dir) = &mut out.migration_dir {
@@ -437,7 +436,7 @@ fn migration_dir_sql_source<'a>(path: &'a Path, scan: &'a RepoScan) -> Option<&'
             relative.components().count() <= MAX_MIGRATION_SQL_DEPTH + 1
                 && migration_sql_file_is_supported(entry_path)
         })
-        .map(|path| path.as_path())
+        .map(std::path::PathBuf::as_path)
 }
 
 fn migration_sql_file_is_supported(path: &Path) -> bool {

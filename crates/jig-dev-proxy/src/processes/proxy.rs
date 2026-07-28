@@ -135,7 +135,7 @@ struct ProxyStartupChild {
 }
 
 impl ProxyStartupChild {
-    fn child_mut(&mut self) -> &mut Child {
+    const fn child_mut(&mut self) -> &mut Child {
         self.child
             .as_mut()
             .expect("proxy startup child is present until authenticated readiness")
@@ -200,7 +200,7 @@ impl ProxyStartLock {
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
             let mode = file.metadata()?.permissions().mode() & 0o777;
             if mode != 0o600 {
-                bail!("proxy start lock permissions are {:o}; expected 600", mode);
+                bail!("proxy start lock permissions are {mode:o}; expected 600");
             }
         }
         if !lock_proxy_start_file_interruptible(&file, cancelled)? {
@@ -329,8 +329,7 @@ fn lock_proxy_start_file_interruptible(file: &File, cancelled: &impl Fn() -> boo
             Ok(false) => {
                 if Instant::now() >= deadline {
                     bail!(
-                        "Timed out waiting for proxy start lock after {:?}",
-                        PROXY_START_LOCK_TIMEOUT
+                        "Timed out waiting for proxy start lock after {PROXY_START_LOCK_TIMEOUT:?}"
                     );
                 }
                 thread::sleep(Duration::from_millis(100));
@@ -596,7 +595,7 @@ fn ensure_no_unregistered_proxy_on_requested_port_interruptible(
     Ok(LockOutcome::Acquired(()))
 }
 
-pub(super) fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
+pub(super) const fn proxy_health_failed(misses: &mut u8, ready: bool) -> bool {
     if ready {
         *misses = 0;
         return false;

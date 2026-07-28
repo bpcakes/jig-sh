@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -48,7 +49,7 @@ pub(crate) fn render(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     for guide in nested {
         nested_count += 1;
         let label = guide.trim_end_matches("/AGENTS.md");
-        body.push_str(&format!("- [{label}](./{guide})\n"));
+        let _ = writeln!(body, "- [{label}](./{guide})");
     }
     if nested_count == 0 {
         body.push_str("_None yet_\n");

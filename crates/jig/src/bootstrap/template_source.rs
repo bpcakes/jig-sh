@@ -31,7 +31,11 @@ pub(super) struct TemplateIdentity {
 }
 
 impl TemplateIdentity {
-    fn new(source: String, resolved_commit: Option<String>, local_path: Option<String>) -> Self {
+    const fn new(
+        source: String,
+        resolved_commit: Option<String>,
+        local_path: Option<String>,
+    ) -> Self {
         Self {
             source,
             resolved_commit,
@@ -106,7 +110,7 @@ pub(super) enum TemplateRenderSource {
 }
 
 impl PreparedTemplateSource {
-    fn new(
+    const fn new(
         source: String,
         render_source: TemplateRenderSource,
         resolved_commit: Option<String>,
@@ -124,7 +128,7 @@ impl PreparedTemplateSource {
         self.identity.source()
     }
 
-    pub(super) fn render_source(&self) -> &TemplateRenderSource {
+    pub(super) const fn render_source(&self) -> &TemplateRenderSource {
         &self.render_source
     }
 
@@ -198,7 +202,7 @@ struct ResolvedUpdateTemplateSource<'a> {
 }
 
 impl<'a> ResolvedUpdateTemplateSource<'a> {
-    fn new(template: &'a str, template_mode: Option<TemplateMode>) -> Self {
+    const fn new(template: &'a str, template_mode: Option<TemplateMode>) -> Self {
         Self {
             template,
             template_mode,
@@ -337,7 +341,7 @@ fn clone_template_source(template: &str) -> Result<TempDir> {
         .args(["--no-replace-objects", "clone", "--quiet", template])
         .arg(destination.as_os_str())
         .output()
-        .with_context(|| format!("Failed to start {}", git_program))?;
+        .with_context(|| format!("Failed to start {git_program}"))?;
     require_success(&output, |output| {
         format!(
             "git clone {template} failed.\nstdout:\n{}\nstderr:\n{}",
@@ -523,7 +527,7 @@ fn parse_template_mode_answer(value: &str) -> Result<TemplateMode> {
         "working-tree" => bail!(
             "Unsupported legacy template mode 'working-tree' in {ANSWERS_FILE}. Re-adopt the repo or update it from a committed template source before running jig update."
         ),
-        other => bail!("Unsupported template mode '{other}' in {}", ANSWERS_FILE),
+        other => bail!("Unsupported template mode '{other}' in {ANSWERS_FILE}"),
     }
 }
 

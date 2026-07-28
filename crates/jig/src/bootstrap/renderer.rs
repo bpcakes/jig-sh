@@ -102,7 +102,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     if !answers_path.exists() {
         request
             .progress
-            .blocked(format!("staging render did not produce {}", ANSWERS_FILE));
+            .blocked(format!("staging render did not produce {ANSWERS_FILE}"));
         bail!(
             "Staging render did not produce {} in {}",
             ANSWERS_FILE,

@@ -97,9 +97,8 @@ struct DevSessionsDocument<'a> {
 }
 
 pub(super) fn read_from_path(path: &Path) -> Result<Vec<DevSessionRecord>> {
-    let mut file = match open_read_no_follow_maybe_missing(path)? {
-        Some(file) => file,
-        None => return Ok(Vec::new()),
+    let Some(mut file) = open_read_no_follow_maybe_missing(path)? else {
+        return Ok(Vec::new());
     };
     ensure_private_state_file_permissions(path, &file)?;
     file.seek(SeekFrom::Start(0))?;
@@ -142,8 +141,7 @@ pub(super) fn write_to_path(path: &Path, sessions: &[DevSessionRecord]) -> Resul
     let persisted_len = document_len.saturating_add(1);
     if persisted_len > MAX_DEV_SESSIONS_FILE_BYTES {
         bail!(
-            "Jig development sessions document is {} bytes, above the {MAX_DEV_SESSIONS_FILE_BYTES} byte limit",
-            persisted_len
+            "Jig development sessions document is {persisted_len} bytes, above the {MAX_DEV_SESSIONS_FILE_BYTES} byte limit"
         );
     }
 

@@ -497,7 +497,7 @@ fn tcp_listener_pids(target_host: &str, port: u16) -> Result<Vec<u32>> {
 }
 
 #[cfg(target_os = "macos")]
-fn lsof_command() -> &'static str {
+const fn lsof_command() -> &'static str {
     "/usr/sbin/lsof"
 }
 

@@ -768,7 +768,7 @@ struct CategoryCounts {
 }
 
 impl CategoryCounts {
-    fn add(&mut self, category: Category) {
+    const fn add(&mut self, category: Category) {
         match category {
             Category::Unknown => self.unknown += 1,
             Category::Pending => self.pending += 1,

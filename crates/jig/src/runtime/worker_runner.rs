@@ -27,7 +27,7 @@ pub(crate) enum CodexExecMode {
 }
 
 impl CodexExecMode {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Exec => "exec",
             Self::Review => "review",
@@ -42,7 +42,7 @@ pub(crate) enum CodexPrompt<'a> {
 }
 
 impl CodexPrompt<'_> {
-    fn delivery(self) -> &'static str {
+    const fn delivery(self) -> &'static str {
         match self {
             Self::Argument(_) => "argument",
             Self::Stdin(_) => "stdin",
@@ -129,11 +129,7 @@ pub(crate) fn run_codex_exec(
                     error: Some(&message),
                 },
             )?;
-            bail!(
-                "Codex worker invocation failed; receipt {}: {}",
-                receipt_id,
-                message
-            );
+            bail!("Codex worker invocation failed; receipt {receipt_id}: {message}");
         }
     }
 }
@@ -267,19 +263,16 @@ fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Re
     };
 
     let timeout = codex_timeout()?;
-    let status = match child
+    let Some(status) = child
         .wait_timeout(timeout)
         .context("Failed to wait for worker process")?
-    {
-        Some(status) => status,
-        None => {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
-            bail!(
-                "Worker process timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
+    else {
+        terminate_worker_process(&mut child);
+        let _ = child.wait();
+        bail!(
+            "Worker process timed out after {} seconds",
+            timeout.as_secs()
+        );
     };
 
     if let Some(writer) = writer {

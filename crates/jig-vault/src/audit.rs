@@ -21,7 +21,7 @@ pub(crate) enum AuditAction {
 }
 
 impl AuditAction {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::BrokeredRunFailed => "brokered_run_failed",
             Self::BrokeredRunFinish => "brokered_run_finish",
@@ -172,7 +172,7 @@ fn verify_chain_for_append_unlocked(
     }
 }
 
-fn empty_verified_audit_log() -> VerifiedAuditLog {
+const fn empty_verified_audit_log() -> VerifiedAuditLog {
     VerifiedAuditLog {
         verification: AuditVerification {
             event_count: 0,

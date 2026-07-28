@@ -135,10 +135,10 @@ pub(crate) fn lock_env() -> EnvLockGuard {
     static CWD_LOCK: Mutex<()> = Mutex::new(());
     let lock = ENV_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let cwd_lock = CWD_LOCK
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     EnvLockGuard {
         _jig_repo_root: EnvVarGuard::remove("JIG_REPO_ROOT"),
         _jig_invoke_cwd: EnvVarGuard::remove("JIG_INVOKE_CWD"),

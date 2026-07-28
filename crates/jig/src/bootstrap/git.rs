@@ -121,7 +121,7 @@ pub(super) fn init_git_repo_with_validation(
         let with_branch = with_branch_command
             .args(["init", "-b", default_branch])
             .output()
-            .with_context(|| format!("Failed to start {}", git_program))?;
+            .with_context(|| format!("Failed to start {git_program}"))?;
         staged.require_identity("after running git init")?;
         if !with_branch.status.success() {
             if !git_init_branch_flag_unsupported(&with_branch) {
@@ -139,7 +139,7 @@ pub(super) fn init_git_repo_with_validation(
             let fallback = fallback_command
                 .arg("init")
                 .output()
-                .with_context(|| format!("Failed to start {}", git_program))?;
+                .with_context(|| format!("Failed to start {git_program}"))?;
             staged.require_identity("after running fallback git init")?;
             require_success(&fallback, |output| {
                 format!(
@@ -2012,7 +2012,7 @@ fn rename_to_unique_sibling(source: &Path, prefix: &str) -> Result<PathBuf> {
         match super::path::rename_entry_noreplace(source, &candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) => match fs::symlink_metadata(&candidate) {
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(inspect_error) if inspect_error.kind() == io::ErrorKind::NotFound => {
                     return Err(error).with_context(|| {
                         format!(
@@ -2068,7 +2068,7 @@ fn set_git_head_branch(
             &format!("refs/heads/{default_branch}"),
         ])
         .output()
-        .with_context(|| format!("Failed to start {}", git_program))?;
+        .with_context(|| format!("Failed to start {git_program}"))?;
     require_success(&output, |output| {
         format!(
             "git symbolic-ref HEAD refs/heads/{default_branch} failed.\nstdout:\n{}\nstderr:\n{}",

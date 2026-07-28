@@ -30,7 +30,12 @@ pub(super) enum SessionEvent {
 }
 
 impl SessionEvent {
-    pub(super) fn start(id: String, session_id: String, timestamp_ms: u64, summary: Value) -> Self {
+    pub(super) const fn start(
+        id: String,
+        session_id: String,
+        timestamp_ms: u64,
+        summary: Value,
+    ) -> Self {
         Self::Start {
             id,
             session_id,
@@ -39,7 +44,7 @@ impl SessionEvent {
         }
     }
 
-    pub(super) fn end(
+    pub(super) const fn end(
         id: String,
         session_id: String,
         timestamp_ms: u64,
@@ -53,7 +58,7 @@ impl SessionEvent {
         }
     }
 
-    pub(super) fn is_start(&self) -> bool {
+    pub(super) const fn is_start(&self) -> bool {
         matches!(self, Self::Start { .. })
     }
 
@@ -65,7 +70,7 @@ impl SessionEvent {
         }
     }
 
-    pub(super) fn timestamp_ms(&self) -> u64 {
+    pub(super) const fn timestamp_ms(&self) -> u64 {
         match self {
             Self::Start { timestamp_ms, .. }
             | Self::End { timestamp_ms, .. }
@@ -121,7 +126,7 @@ pub(super) enum PlanEvent {
 }
 
 impl PlanEvent {
-    pub(super) fn open(
+    pub(super) const fn open(
         id: String,
         plan_id: String,
         timestamp_ms: u64,
@@ -137,7 +142,7 @@ impl PlanEvent {
         }
     }
 
-    pub(super) fn append(
+    pub(super) const fn append(
         id: String,
         plan_id: String,
         timestamp_ms: u64,
@@ -151,7 +156,7 @@ impl PlanEvent {
         }
     }
 
-    pub(super) fn close(
+    pub(super) const fn close(
         id: String,
         plan_id: String,
         timestamp_ms: u64,
@@ -174,7 +179,7 @@ impl PlanEvent {
         }
     }
 
-    pub(super) fn timestamp_ms(&self) -> u64 {
+    pub(super) const fn timestamp_ms(&self) -> u64 {
         match self {
             Self::Open { timestamp_ms, .. }
             | Self::Append { timestamp_ms, .. }
@@ -190,7 +195,7 @@ impl PlanEvent {
         }
     }
 
-    pub(super) fn is_open(&self) -> bool {
+    pub(super) const fn is_open(&self) -> bool {
         matches!(self, Self::Open { .. })
     }
 }

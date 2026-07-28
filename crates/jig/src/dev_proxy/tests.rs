@@ -1215,11 +1215,11 @@ fn configured_zero_proxy_ports_are_rejected_but_explicit_zero_is_ephemeral() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
-            r#"
+            r"
 
 [dev]
 proxy_port = 0
-"#,
+",
         )
         .write();
 
@@ -1246,8 +1246,8 @@ fn explicit_read_only_state_dir_must_exist() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
-            r#"
-"#,
+            r"
+",
         )
         .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -1287,8 +1287,8 @@ fn settings_does_not_create_missing_state_dir() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
-            r#"
-"#,
+            r"
+",
         )
         .write();
     let missing = temp.path().join("missing-state");
@@ -1309,8 +1309,8 @@ fn service_status_settings_allow_missing_state_dir() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
-            r#"
-"#,
+            r"
+",
         )
         .write();
     let missing = temp.path().join("missing-state");
@@ -1590,11 +1590,11 @@ fn proxy_runtime_flags_can_disable_configured_https_and_lan() {
     let temp = tempdir().unwrap();
     write_config(
         temp.path(),
-        r#"
+        r"
 [dev]
 https = true
 lan = true
-"#,
+",
     );
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
@@ -1617,12 +1617,12 @@ fn proxy_http_and_https_ports_must_differ() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
-            r#"
+            r"
 
 [dev]
 proxy_port = 1555
 https_port = 1555
-"#,
+",
         )
         .write();
 

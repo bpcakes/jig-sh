@@ -121,7 +121,11 @@ pub(super) fn health_request_allowed<B>(
             .headers()
             .get(HOST)
             .and_then(|value| value.to_str().ok())
-            .or_else(|| req.uri().authority().map(|authority| authority.as_str()))
+            .or_else(|| {
+                req.uri()
+                    .authority()
+                    .map(hyper::http::uri::Authority::as_str)
+            })
             .is_some_and(loopback_health_host)
         && constant_time_ascii_eq(supplied_token, health_token)
 }
@@ -373,7 +377,7 @@ pub(super) fn append_via(headers: &mut HeaderMap, version: Version) {
     headers.append(VIA, header_value_or_default(via_value(version), VIA_VALUE));
 }
 
-pub(super) fn via_value(version: Version) -> &'static str {
+pub(super) const fn via_value(version: Version) -> &'static str {
     match version {
         Version::HTTP_2 => "2.0 jig",
         _ => VIA_VALUE,

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
@@ -82,7 +83,7 @@ pub(super) enum BootstrapVaultCommand {
 }
 
 impl BootstrapVaultCommand {
-    fn invocation(self) -> &'static str {
+    const fn invocation(self) -> &'static str {
         match self {
             Self::Init => "jig init",
             Self::Adopt => "jig adopt --write",
@@ -121,7 +122,7 @@ fn prepare_bootstrap_vault(
     })
 }
 
-pub(super) fn should_pre_capture_bootstrap_vault(
+pub(super) const fn should_pre_capture_bootstrap_vault(
     requested: bool,
     no_input: bool,
     defaults: bool,
@@ -237,15 +238,15 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
         }
         let name = preset["name"].as_str().unwrap_or("<unknown>");
         let summary_text = preset["summary"].as_str().unwrap_or("");
-        summary.push_str(&format!("  {name}\n"));
+        let _ = writeln!(summary, "  {name}");
         if !summary_text.is_empty() {
-            summary.push_str(&format!("    {summary_text}\n"));
+            let _ = writeln!(summary, "    {summary_text}");
         }
         if let Some(defaults) = preset["defaults"].as_array() {
             if !defaults.is_empty() {
                 summary.push_str("    defaults:\n");
                 for default in defaults.iter().filter_map(serde_json::Value::as_str) {
-                    summary.push_str(&format!("      - {default}\n"));
+                    let _ = writeln!(summary, "      - {default}");
                 }
             }
         }
@@ -253,7 +254,7 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
             if !layout.is_empty() {
                 summary.push_str("    generated layout:\n");
                 for path in layout.iter().filter_map(serde_json::Value::as_str) {
-                    summary.push_str(&format!("      - {path}\n"));
+                    let _ = writeln!(summary, "      - {path}");
                 }
             }
         }
@@ -263,7 +264,7 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
                 for frontend in frontends {
                     let shorthand = frontend["name"].as_str().unwrap_or("<unknown>");
                     let expands_to = frontend["expands_to"].as_str().unwrap_or("");
-                    summary.push_str(&format!("      - {shorthand}: {expands_to}\n"));
+                    let _ = writeln!(summary, "      - {shorthand}: {expands_to}");
                 }
             }
         }
@@ -271,19 +272,19 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
             if !examples.is_empty() {
                 summary.push_str("    examples:\n");
                 for example in examples.iter().filter_map(serde_json::Value::as_str) {
-                    summary.push_str(&format!("      {example}\n"));
+                    let _ = writeln!(summary, "      {example}");
                 }
             }
         }
         if let Some(ownership) = preset["ownership"].as_str() {
             summary.push_str("    ownership:\n");
-            summary.push_str(&format!("      - {ownership}\n"));
+            let _ = writeln!(summary, "      - {ownership}");
         }
         if let Some(non_goals) = preset["non_goals"].as_array() {
             if !non_goals.is_empty() {
                 summary.push_str("    non-goals:\n");
                 for non_goal in non_goals.iter().filter_map(serde_json::Value::as_str) {
-                    summary.push_str(&format!("      - {non_goal}\n"));
+                    let _ = writeln!(summary, "      - {non_goal}");
                 }
             }
         }
@@ -301,24 +302,26 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
     let created = array_len(&report["files_created"]);
     let modified = array_len(&report["files_modified"]);
     let removed = array_len(&report["files_removed"]);
-    summary.push_str(&format!(
-        "  managed files: {created} created, {modified} modified, {removed} removed\n"
-    ));
+    let _ = writeln!(
+        summary,
+        "  managed files: {created} created, {modified} modified, {removed} removed"
+    );
 
     if let Some(scaffold) = output.get("scaffold").filter(|value| !value.is_null()) {
         let preset = scaffold["preset"].as_str().unwrap_or("<unknown>");
         let db = scaffold["db"].as_str().unwrap_or("<unknown>");
-        summary.push_str(&format!("  scaffold: {preset}"));
+        let _ = write!(summary, "  scaffold: {preset}");
         if let Some(repo_name) = scaffold["repo_name"].as_str() {
-            summary.push_str(&format!(" for {repo_name}"));
+            let _ = write!(summary, " for {repo_name}");
         }
-        summary.push_str(&format!(" (db: {db})\n"));
+        let _ = writeln!(summary, " (db: {db})");
         let scaffold_created = array_len(&scaffold["files_created"]);
         let scaffold_modified = array_len(&scaffold["files_modified"]);
         let scaffold_unchanged = array_len(&scaffold["files_unchanged"]);
-        summary.push_str(&format!(
-            "  scaffold files: {scaffold_created} created, {scaffold_modified} modified, {scaffold_unchanged} unchanged\n"
-        ));
+        let _ = writeln!(
+            summary,
+            "  scaffold files: {scaffold_created} created, {scaffold_modified} modified, {scaffold_unchanged} unchanged"
+        );
 
         if let Some(frontends) = scaffold["frontends"].as_array() {
             if !frontends.is_empty() {
@@ -327,7 +330,7 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
                     .filter_map(|frontend| frontend["name"].as_str())
                     .collect::<Vec<_>>();
                 if !names.is_empty() {
-                    summary.push_str(&format!("  frontends: {}\n", names.join(", ")));
+                    let _ = writeln!(summary, "  frontends: {}", names.join(", "));
                 }
             }
         }
@@ -335,21 +338,22 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
             if !notices.is_empty() {
                 summary.push_str("  frontend notes:\n");
                 for notice in notices.iter().filter_map(serde_json::Value::as_str) {
-                    summary.push_str(&format!("    - {notice}\n"));
+                    let _ = writeln!(summary, "    - {notice}");
                 }
             }
         }
     }
 
     if let Some(git_initialized) = output["git_initialized"].as_bool() {
-        summary.push_str(&format!(
-            "  git: {}\n",
+        let _ = writeln!(
+            summary,
+            "  git: {}",
             if git_initialized {
                 "initialized"
             } else {
                 "already present"
             }
-        ));
+        );
     }
 
     push_vault_summary(&mut summary, &output["vault"]);
@@ -358,10 +362,10 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
         if !notes.is_empty() {
             summary.push_str("  notes:\n");
             for note in notes.iter().take(5).filter_map(serde_json::Value::as_str) {
-                summary.push_str(&format!("    - {note}\n"));
+                let _ = writeln!(summary, "    - {note}");
             }
             if notes.len() > 5 {
-                summary.push_str(&format!("    - and {} more\n", notes.len() - 5));
+                let _ = writeln!(summary, "    - and {} more", notes.len() - 5);
             }
         }
     }
@@ -370,7 +374,7 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
         if !steps.is_empty() {
             summary.push_str("  next steps:\n");
             for step in steps.iter().filter_map(serde_json::Value::as_str) {
-                summary.push_str(&format!("    - {step}\n"));
+                let _ = writeln!(summary, "    - {step}");
             }
         }
     }
@@ -391,9 +395,10 @@ pub(super) fn format_update_human_summary(output: &serde_json::Value) -> String 
     let modified = array_len(&report["files_modified"]);
     let removed = array_len(&report["files_removed"]);
     let unchanged = array_len(&report["files_unchanged"]);
-    summary.push_str(&format!(
-        "  managed files: {created} created, {modified} modified, {removed} removed, {unchanged} unchanged\n"
-    ));
+    let _ = writeln!(
+        summary,
+        "  managed files: {created} created, {modified} modified, {removed} removed, {unchanged} unchanged"
+    );
 
     if let Some(conflicts) = report["conflicts"].as_array() {
         if !conflicts.is_empty() {
@@ -420,9 +425,10 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
     let created = array_len(&report["files_created"]);
     let modified = array_len(&report["files_modified"]);
     let removed = array_len(&report["files_removed"]);
-    summary.push_str(&format!(
-        "  managed files: {created} created, {modified} modified, {removed} removed\n"
-    ));
+    let _ = writeln!(
+        summary,
+        "  managed files: {created} created, {modified} modified, {removed} removed"
+    );
 
     push_vault_summary(&mut summary, &output["vault"]);
 
@@ -430,7 +436,7 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         if !review.is_empty() {
             summary.push_str("  review:\n");
             for item in review.iter().filter_map(serde_json::Value::as_str) {
-                summary.push_str(&format!("    - {item}\n"));
+                let _ = writeln!(summary, "    - {item}");
             }
         }
     }
@@ -439,10 +445,10 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         if !notes.is_empty() {
             summary.push_str("  notes:\n");
             for note in notes.iter().take(8).filter_map(serde_json::Value::as_str) {
-                summary.push_str(&format!("    - {note}\n"));
+                let _ = writeln!(summary, "    - {note}");
             }
             if notes.len() > 8 {
-                summary.push_str(&format!("    - and {} more\n", notes.len() - 8));
+                let _ = writeln!(summary, "    - and {} more", notes.len() - 8);
             }
         }
     }
@@ -455,16 +461,16 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
 
     if let Some(warnings) = output["detection_report"]["warnings"].as_array() {
         if !warnings.is_empty() {
-            summary.push_str(&format!("  warnings: {}\n", warnings.len()));
+            let _ = writeln!(summary, "  warnings: {}", warnings.len());
             for warning in warnings
                 .iter()
                 .take(5)
                 .filter_map(serde_json::Value::as_str)
             {
-                summary.push_str(&format!("    - {warning}\n"));
+                let _ = writeln!(summary, "    - {warning}");
             }
             if warnings.len() > 5 {
-                summary.push_str(&format!("    - and {} more\n", warnings.len() - 5));
+                let _ = writeln!(summary, "    - and {} more", warnings.len() - 5);
             }
         }
     }
@@ -473,7 +479,7 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
         if !steps.is_empty() {
             summary.push_str("  next steps:\n");
             for step in steps.iter().filter_map(serde_json::Value::as_str) {
-                summary.push_str(&format!("    - {step}\n"));
+                let _ = writeln!(summary, "    - {step}");
             }
         }
     }
@@ -481,19 +487,19 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
 }
 
 fn push_conflict_summary(summary: &mut String, label: &str, conflicts: &[serde_json::Value]) {
-    summary.push_str(&format!("  {label}: {}\n", conflicts.len()));
+    let _ = writeln!(summary, "  {label}: {}", conflicts.len());
     for conflict in conflicts.iter().take(10) {
         let Some(path) = conflict["path"].as_str() else {
             continue;
         };
         if let Some(detail) = conflict["detail"].as_str() {
-            summary.push_str(&format!("    - {path}: {detail}\n"));
+            let _ = writeln!(summary, "    - {path}: {detail}");
         } else {
-            summary.push_str(&format!("    - {path}\n"));
+            let _ = writeln!(summary, "    - {path}");
         }
     }
     if conflicts.len() > 10 {
-        summary.push_str(&format!("    - and {} more\n", conflicts.len() - 10));
+        let _ = writeln!(summary, "    - and {} more", conflicts.len() - 10);
     }
 }
 
@@ -507,7 +513,7 @@ fn push_vault_summary(summary: &mut String, vault: &serde_json::Value) {
         return;
     }
     if let Some(reason) = vault["skipped_reason"].as_str() {
-        summary.push_str(&format!("  vault: skipped ({reason})\n"));
+        let _ = writeln!(summary, "  vault: skipped ({reason})");
         return;
     }
     let status = if vault["created"].as_bool().unwrap_or(false) {
@@ -517,16 +523,16 @@ fn push_vault_summary(summary: &mut String, vault: &serde_json::Value) {
     } else {
         "not initialized"
     };
-    summary.push_str(&format!("  vault: {status}"));
+    let _ = write!(summary, "  vault: {status}");
     if let Some(scope) = vault["vault_scope"].as_str() {
-        summary.push_str(&format!(" ({scope})"));
+        let _ = write!(summary, " ({scope})");
     }
     summary.push('\n');
 }
 
 fn push_summary_field(summary: &mut String, label: &str, value: Option<&str>) {
     if let Some(value) = value {
-        summary.push_str(&format!("  {label}: {value}\n"));
+        let _ = writeln!(summary, "  {label}: {value}");
     }
 }
 

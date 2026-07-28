@@ -340,15 +340,16 @@ fn write_atomic_text(path: &Path, contents: &str) -> AnyResult<()> {
     result
 }
 
-fn sync_parent_dir(_path: &Path) -> AnyResult<()> {
+fn sync_parent_dir(path: &Path) -> AnyResult<()> {
     #[cfg(unix)]
     {
-        let path = _path;
         let dir = File::open(path)
             .with_context(|| format!("failed to open parent directory {}", path.display()))?;
         dir.sync_all()
             .with_context(|| format!("failed to sync parent directory {}", path.display()))?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -413,10 +414,9 @@ fn ensure_tree_has_no_symlinks(root: &Path, path: &Path) -> AnyResult<()> {
     Ok(())
 }
 
-fn ensure_private_dir_permissions(_path: &Path) -> AnyResult<()> {
+fn ensure_private_dir_permissions(path: &Path) -> AnyResult<()> {
     #[cfg(unix)]
     {
-        let path = _path;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
             format!("failed to set vault home permissions on {}", path.display())
         })?;
@@ -438,13 +438,14 @@ fn ensure_private_dir_permissions(_path: &Path) -> AnyResult<()> {
             );
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
-fn ensure_create_ancestor_is_not_shared_writable(_path: &Path) -> AnyResult<()> {
+fn ensure_create_ancestor_is_not_shared_writable(path: &Path) -> AnyResult<()> {
     #[cfg(unix)]
     {
-        let path = _path;
         // This checks the first existing ancestor that would own creation of
         // the vault home. Higher ancestors are outside the directory-entry
         // boundary this local state store can harden.
@@ -470,6 +471,8 @@ fn ensure_create_ancestor_is_not_shared_writable(_path: &Path) -> AnyResult<()> 
             break;
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -569,7 +572,7 @@ mod tests {
     fn resolve_rejects_empty_env_home() {
         let _guard = ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::env::var_os(VAULT_HOME_ENV);
         unsafe {
             std::env::set_var(VAULT_HOME_ENV, "");
@@ -592,7 +595,7 @@ mod tests {
 
         let _guard = ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = std::env::var_os(VAULT_HOME_ENV);
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join(PathBuf::from(std::ffi::OsString::from_vec(

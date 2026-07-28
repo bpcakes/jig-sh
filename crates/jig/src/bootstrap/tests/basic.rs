@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_env::CurrentDirGuard;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 #[cfg(unix)]
 use std::process::Command;
 
@@ -589,10 +590,11 @@ fn initial_next_steps_and_notes_are_tailored_to_rendered_config() {
 fn write_answers_fixture(dir: &Path, sqlx_enabled: Option<bool>) {
     let mut body = String::from("default_branch = \"main\"\n");
     if let Some(sqlx_enabled) = sqlx_enabled {
-        body.push_str(&format!(
-            "sqlx_enabled = {}\n",
+        let _ = writeln!(
+            body,
+            "sqlx_enabled = {}",
             if sqlx_enabled { "true" } else { "false" }
-        ));
+        );
     }
     fs::write(dir.join(".jig.toml"), body).unwrap();
 }
@@ -2086,7 +2088,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     );
     assert!(web_vite_config.contains(r#""http://api.my-app.localhost:1355""#));
     assert!(web_vite_config.contains(r#""/api""#));
-    assert!(web_vite_config.contains(r#"target: apiOrigin"#));
+    assert!(web_vite_config.contains(r"target: apiOrigin"));
     assert!(!web_vite_config.contains("apiOrigin ?"));
     assert!(web_vite_config.contains(r#"host: "127.0.0.1""#));
     assert!(web_vite_config.contains("strictPort: true"));
@@ -2118,7 +2120,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_playwright.contains("cargo run --locked -p my-app-api"));
     assert!(web_playwright.contains("-- --bootstrap-database"));
     assert!(web_playwright.contains("my_app_web_e2e"));
-    assert!(web_playwright.contains(r#"url: `${apiOrigin}/health/ready`"#));
+    assert!(web_playwright.contains(r"url: `${apiOrigin}/health/ready`"));
     assert!(web_playwright.contains("reuseExistingServer: false"));
     assert!(web_playwright.contains("E2E_SERVER_TIMEOUT_MS"));
     assert!(web_playwright.contains("E2E_GLOBAL_TIMEOUT_MS"));
@@ -3240,7 +3242,7 @@ fn scaffold_playwright_api_environment_overrides_hostile_inherited_bindings() {
     for fixed_binding in [
         r#"HOST: "127.0.0.1""#,
         "PORT: String(apiPort)",
-        r#"BIND_ADDR: `127.0.0.1:${apiPort}`"#,
+        r"BIND_ADDR: `127.0.0.1:${apiPort}`",
     ] {
         assert!(
             api_server_config.contains(fixed_binding),
@@ -9548,7 +9550,7 @@ edition = "2024"
     fs::write(repo.join("crates/api/src/lib.rs"), "").unwrap();
     fs::write(
         repo.join("Justfile"),
-        r#"fmt-check:
+        r"fmt-check:
     cargo fmt --all -- --check
 clippy:
     cargo hack clippy --workspace --all-targets -- -D warnings
@@ -9556,7 +9558,7 @@ test:
     cargo nextest run --workspace
 test-locked:
     cargo nextest run --workspace --locked
-"#,
+",
     )
     .unwrap();
     fs::write(
@@ -9643,20 +9645,20 @@ edition = "2024"
     .unwrap();
     fs::write(
         repo.join("Justfile"),
-        r#"clippy:
+        r"clippy:
     cargo clippy --workspace --all-targets -- -D warnings
-"#,
+",
     )
     .unwrap();
     fs::write(
         repo.join("Makefile"),
-        r#"fmt-check:
+        r"fmt-check:
 	cargo fmt --all -- --check
 test:
 	cargo test --workspace
 test-locked:
 	cargo test --workspace --locked
-"#,
+",
     )
     .unwrap();
 
@@ -9763,9 +9765,9 @@ edition = "2024"
     fs::write(repo.join(".config/nextest.toml"), "[profile.default]\n").unwrap();
     fs::write(
         repo.join("Justfile"),
-        r#"test:
+        r"test:
     cargo test --workspace
-"#,
+",
     )
     .unwrap();
 
@@ -9816,10 +9818,10 @@ edition = "2024"
     .unwrap();
     fs::write(
         repo.join("Makefile"),
-        r#"test := cargo test --workspace
+        r"test := cargo test --workspace
 fmt-check:
 	cargo fmt --all -- --check
-"#,
+",
     )
     .unwrap();
 
@@ -9930,9 +9932,9 @@ frontend_apps = []
     .unwrap();
     fs::write(
         repo.join("Justfile"),
-        r#"test:
+        r"test:
     cargo nextest run --workspace
-"#,
+",
     )
     .unwrap();
 
@@ -10362,10 +10364,10 @@ fn adopt_no_input_without_defaults_uses_inferred_no_sqlx_profile() {
 #[test]
 fn bootstrap_invocation_cwd_rejects_invalid_env_values() {
     let _guard = lock_env();
-    let _relative = EnvVarGuard::set(path::INVOCATION_CWD_ENV, "relative");
+    let relative = EnvVarGuard::set(path::INVOCATION_CWD_ENV, "relative");
     let error = path::bootstrap_invocation_cwd().unwrap_err().to_string();
     assert!(error.contains("JIG_INVOKE_CWD must be an absolute path"));
-    drop(_relative);
+    drop(relative);
 
     let temp = tempdir().unwrap();
     let missing = temp.path().join("missing");

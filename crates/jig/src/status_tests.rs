@@ -279,9 +279,9 @@ fn aggregate_cancels_an_open_plan_gate_fingerprint_git_process_promptly() {
     TestRepoBuilder::new(root.path())
         .repo_name("cancelled-gate-fingerprint-fixture")
         .config(
-            r#"
+            r"
 sqlx_enabled = false
-"#,
+",
         )
         .required_commands(["bootstrap_command"])
         .write();
@@ -406,9 +406,9 @@ fn work_snapshot_propagates_a_non_sticky_typed_cancellation() {
     TestRepoBuilder::new(root.path())
         .repo_name("typed-cancellation-fixture")
         .config(
-            r#"
+            r"
 sqlx_enabled = false
-"#,
+",
         )
         .required_commands(["bootstrap_command"])
         .write();
@@ -420,9 +420,8 @@ sqlx_enabled = false
         calls.set(current + 1);
         current == 1
     });
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("non-sticky cancellation was converted into a partial work snapshot"),
+    let Err(error) = result else {
+        panic!("non-sticky cancellation was converted into a partial work snapshot")
     };
 
     assert!(is_status_collection_cancellation(&error));

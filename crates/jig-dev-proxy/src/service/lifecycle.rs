@@ -115,11 +115,11 @@ fn unload_missing_service_file(
     })
 }
 
-fn service_manager_active(service: &ServiceManagerStatus) -> bool {
+const fn service_manager_active(service: &ServiceManagerStatus) -> bool {
     service.loaded || service.enabled || service.running
 }
 
-fn missing_service_file_uninstall_warning(
+const fn missing_service_file_uninstall_warning(
     attempted_unload: bool,
     status_uncertain: bool,
     unload_ok: bool,

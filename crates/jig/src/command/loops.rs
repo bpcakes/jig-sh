@@ -43,6 +43,6 @@ fn default_until() -> String {
     "idle".into()
 }
 
-fn default_max_ticks() -> u32 {
+const fn default_max_ticks() -> u32 {
     10
 }

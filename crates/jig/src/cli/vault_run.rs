@@ -30,14 +30,14 @@ pub(super) fn run_vault_command(command: VaultCommand, json_output: bool) -> Res
     require_json_ok(true, &output)
 }
 
-fn vault_human_output(command: &VaultCommand) -> HumanOutput {
+const fn vault_human_output(command: &VaultCommand) -> HumanOutput {
     match command {
         VaultCommand::Run(_) => HumanOutput::VaultRun,
         _ => HumanOutput::VaultGeneric,
     }
 }
 
-fn vault_command_requires_passphrase(command: &crate::command::VaultCommand) -> bool {
+const fn vault_command_requires_passphrase(command: &crate::command::VaultCommand) -> bool {
     !matches!(command, crate::command::VaultCommand::Status(_))
 }
 
@@ -58,7 +58,7 @@ pub(super) fn apply_repo_vault_scope(command: &mut crate::command::VaultCommand)
     )
 }
 
-pub(super) fn vault_options_mut(
+pub(super) const fn vault_options_mut(
     command: &mut crate::command::VaultCommand,
 ) -> &mut crate::command::VaultRuntimeOptions {
     match command {

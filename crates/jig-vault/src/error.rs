@@ -32,7 +32,7 @@ impl VaultError {
         }
     }
 
-    pub fn kind(&self) -> VaultErrorKind {
+    pub const fn kind(&self) -> VaultErrorKind {
         self.kind
     }
 
@@ -96,7 +96,7 @@ impl ClassifiedVaultError {
         }
     }
 
-    fn kind(&self) -> VaultErrorKind {
+    const fn kind(&self) -> VaultErrorKind {
         self.kind
     }
 }

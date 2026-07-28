@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io::Write;
 
 use anyhow::{Result, anyhow};
@@ -335,7 +336,7 @@ enum WorkCheckSummaryStatus {
 }
 
 impl WorkCheckSummaryStatus {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Passed => "passed",
             Self::Failed => "failed",
@@ -392,7 +393,7 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
         let mut line = format!("  - {id}: {status}{freshness}, {required_label}{tool}");
         if !matches!(status, "passed" | "missing") {
             if let Some(reason) = value_str(gate, "freshness_reason") {
-                line.push_str(&format!("; {reason}"));
+                let _ = write!(line, "; {reason}");
             }
         }
         lines.push(line);

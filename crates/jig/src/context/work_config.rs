@@ -52,7 +52,7 @@ impl WorkGate {
         }
     }
 
-    pub(crate) fn required(&self) -> bool {
+    pub(crate) const fn required(&self) -> bool {
         match self {
             Self::Check(gate) => gate.required,
             Self::CodexReview(gate) => gate.required,
@@ -279,7 +279,7 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
     }
 }
 
-fn unsupported_work_gate(id: String, kind: String, required: bool) -> WorkGate {
+const fn unsupported_work_gate(id: String, kind: String, required: bool) -> WorkGate {
     WorkGate::Unsupported(UnsupportedWorkGate { id, kind, required })
 }
 
@@ -395,6 +395,6 @@ fn unique_gate_id(base: String, existing_ids: &mut HashSet<String>) -> String {
     unreachable!("unbounded gate id search should always find an unused suffix")
 }
 
-fn default_required() -> bool {
+const fn default_required() -> bool {
     true
 }

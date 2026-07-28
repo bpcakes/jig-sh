@@ -681,7 +681,7 @@ fn install_transactionally<T>(
     Ok(installed)
 }
 
-fn signal_label(signal: i32) -> &'static str {
+const fn signal_label(signal: i32) -> &'static str {
     #[cfg(unix)]
     match signal {
         libc::SIGINT => "SIGINT",

@@ -159,8 +159,7 @@ id = "custom"
 kind = "check"
 tool = "jig.custom_check"
 {refinement_config}
-"#,
-            refinement_config = refinement_config
+"#
         ))
         .required_commands(["custom_check_command"])
         .tool(json!({

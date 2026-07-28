@@ -182,7 +182,7 @@ impl MemoryTool {
         }
     }
 
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::AgentDoctor => tool::AGENT_DOCTOR,
             Self::Goal => tool::WORK_GOAL,
@@ -200,7 +200,7 @@ impl MemoryTool {
         }
     }
 
-    fn description(self) -> &'static str {
+    const fn description(self) -> &'static str {
         match self {
             Self::AgentDoctor => "Report local Codex agent tooling status for this repo.",
             Self::Goal => {

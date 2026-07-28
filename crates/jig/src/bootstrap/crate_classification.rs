@@ -8,12 +8,10 @@ pub(super) fn non_production_crate_reason(
     relative_crate_dir: &Path,
     package_name: Option<&str>,
 ) -> Option<String> {
-    for segment in relative_crate_dir.components().filter_map(|component| {
-        component
-            .as_os_str()
-            .to_str()
-            .map(|value| value.to_ascii_lowercase())
-    }) {
+    for segment in relative_crate_dir
+        .components()
+        .filter_map(|component| component.as_os_str().to_str().map(str::to_ascii_lowercase))
+    {
         if NON_PRODUCTION_SEGMENTS.contains(&segment.as_str()) {
             return Some(format!(
                 "crate path contains non-production segment '{segment}'"

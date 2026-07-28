@@ -1,6 +1,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -141,7 +142,9 @@ pub(crate) fn run() -> Result<Value> {
     }
 
     checks.push(vault_check(
-        ctx_result.as_ref().map_err(|error| error.to_string()),
+        ctx_result
+            .as_ref()
+            .map_err(std::string::ToString::to_string),
     ));
 
     Ok(output(
@@ -480,21 +483,21 @@ impl SqlxDriver {
         }
     }
 
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
             Self::Postgres => "postgres",
             Self::Sqlite => "sqlite",
         }
     }
 
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Postgres => "PostgreSQL",
             Self::Sqlite => "SQLite",
         }
     }
 
-    fn probe_url(self) -> &'static str {
+    const fn probe_url(self) -> &'static str {
         match self {
             // The generic URL parser accepts this URL, then the PostgreSQL
             // driver rejects the invalid sslmode before opening a socket.
@@ -504,7 +507,7 @@ impl SqlxDriver {
         }
     }
 
-    fn install_command(self) -> &'static str {
+    const fn install_command(self) -> &'static str {
         match self {
             Self::Postgres => {
                 "cargo install sqlx-cli --force --no-default-features --features rustls,postgres"
@@ -526,7 +529,7 @@ enum SqlxDriverSource {
 }
 
 impl SqlxDriverSource {
-    fn key(self) -> &'static str {
+    const fn key(self) -> &'static str {
         match self {
             Self::CommandFlag => "command_flag",
             Self::CommandAssignment => "command_assignment",
@@ -536,7 +539,7 @@ impl SqlxDriverSource {
         }
     }
 
-    fn description(self) -> &'static str {
+    const fn description(self) -> &'static str {
         match self {
             Self::CommandFlag => "a --database-url command option",
             Self::CommandAssignment => "a command-local DATABASE_URL assignment",
@@ -596,7 +599,7 @@ enum ShellEnvironmentIssue {
 }
 
 impl ShellEnvironmentIssue {
-    fn description(self) -> &'static str {
+    const fn description(self) -> &'static str {
         match self {
             Self::BashEnv => "BASH_ENV can execute a startup file",
             Self::PosixEnv => "ENV can execute a startup file in POSIX shell mode",
@@ -721,17 +724,14 @@ fn doctor_context_checks(ctx: &RepoContext) -> DoctorContextChecks {
                 DoctorProcessControl::allowed_without_signal_session(),
             );
         }
-        let signal_session = match DoctorSignalSession::start() {
-            Ok(session) => session,
-            Err(_) => {
-                return doctor_context_checks_with_process_control(
-                    ctx,
-                    &environment,
-                    DoctorProcessControl::unavailable(
-                        "the process-wide doctor signal session is unavailable",
-                    ),
-                );
-            }
+        let Ok(signal_session) = DoctorSignalSession::start() else {
+            return doctor_context_checks_with_process_control(
+                ctx,
+                &environment,
+                DoctorProcessControl::unavailable(
+                    "the process-wide doctor signal session is unavailable",
+                ),
+            );
         };
         let cancelled = || signal_session.cancelled();
         let mut checks = doctor_context_checks_with_process_control(
@@ -2282,7 +2282,7 @@ fn probe_sqlx_driver_with_timeout_and_environment_and_cancellation(
     )
 }
 
-fn driver_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
+const fn driver_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     match error {
         OwnedProcessTreeError::Start(_) => "the driver probe could not start",
         OwnedProcessTreeError::TimedOut => "the driver probe timed out",
@@ -2655,10 +2655,10 @@ fn vault_detail(output: &Value) -> String {
         output["vault_home"].as_str().unwrap_or("<unknown>")
     );
     if let Some(scope) = output["vault_scope"].as_str() {
-        detail.push_str(&format!(" scope={scope}"));
+        let _ = write!(detail, " scope={scope}");
     }
     if let Some(scope_id) = output["vault_scope_id"].as_str() {
-        detail.push_str(&format!(" scope_id={scope_id}"));
+        let _ = write!(detail, " scope_id={scope_id}");
     }
     detail
 }
@@ -2729,7 +2729,7 @@ enum RequiredProgramAmbiguity {
 }
 
 impl RequiredProgramAmbiguity {
-    fn description(self) -> &'static str {
+    const fn description(self) -> &'static str {
         match self {
             Self::ShellSyntax => "the configured Bash syntax cannot be analyzed safely",
             Self::ShellState => {
@@ -5263,7 +5263,7 @@ fn redirection_has_inline_target(redirection: &str) -> bool {
     redirection.len() > operator_len
 }
 
-fn is_shell_separator_char(ch: char) -> bool {
+const fn is_shell_separator_char(ch: char) -> bool {
     matches!(ch, ';' | '&' | '|' | '(' | ')')
 }
 
@@ -5962,9 +5962,8 @@ fn cargo_config_obscures_sqlx_alias(path: &Path) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(_) => return true,
     };
-    let config = match text.parse::<toml::Value>() {
-        Ok(config) => config,
-        Err(_) => return true,
+    let Ok(config) = text.parse::<toml::Value>() else {
+        return true;
     };
     if config.get("include").is_some() {
         return true;

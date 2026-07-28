@@ -142,14 +142,11 @@ pub(crate) fn run_owned_process_tree_with_output_limits(
         return Err(OwnedProcessTreeError::Cancelled);
     }
     let mut process = spawn_owned_process(command).map_err(OwnedProcessTreeError::Start)?;
-    let mut drains = match OwnedProcessOutputDrains::start(&mut process.child, limits) {
-        Ok(drains) => drains,
-        Err(_) => {
-            return match process.terminate_and_reap() {
-                Ok(_) => Err(OwnedProcessTreeError::Await),
-                Err(_) => Err(OwnedProcessTreeError::Cleanup),
-            };
-        }
+    let Ok(mut drains) = OwnedProcessOutputDrains::start(&mut process.child, limits) else {
+        return match process.terminate_and_reap() {
+            Ok(_) => Err(OwnedProcessTreeError::Await),
+            Err(_) => Err(OwnedProcessTreeError::Cleanup),
+        };
     };
     let wait_result = wait_for_owned_process(&mut process, timeout, &mut cancelled, &mut drains);
     let status = finish_owned_process_wait(&mut process, wait_result);
@@ -316,7 +313,7 @@ impl OutputDrain {
         }
     }
 
-    fn is_terminal(&self) -> bool {
+    const fn is_terminal(&self) -> bool {
         self.reader.is_none()
     }
 

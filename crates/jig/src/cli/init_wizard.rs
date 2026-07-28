@@ -49,7 +49,7 @@ enum InitInteractionPolicy {
 }
 
 impl InitInteractionPolicy {
-    fn resolve(opts: &InitOpts, terminals_available: bool) -> Self {
+    const fn resolve(opts: &InitOpts, terminals_available: bool) -> Self {
         if opts.defaults {
             Self::Defaults
         } else if opts.no_input {

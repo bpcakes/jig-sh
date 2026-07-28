@@ -93,7 +93,7 @@ pub(crate) struct WorkDecisionRequest {
     pub(crate) plan_id: Option<String>,
 }
 
-fn default_refine_max_iterations() -> usize {
+const fn default_refine_max_iterations() -> usize {
     DEFAULT_REFINE_MAX_ITERATIONS
 }
 

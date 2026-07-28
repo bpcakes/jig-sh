@@ -142,7 +142,7 @@ fn retained_directory_and_symlink_handles_reject_recreated_paths() {
         link_commit.identity
     );
     assert_eq!(
-        repository_file_identity(&link_commit._handle).unwrap(),
+        repository_file_identity(&link_commit.handle).unwrap(),
         link_commit.identity
     );
 }

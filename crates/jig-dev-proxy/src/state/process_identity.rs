@@ -33,7 +33,7 @@ fn pid_matches_owner(pid: u32, expected_start_token: Option<&str>) -> bool {
         .is_some_and(|current_start_token| current_start_token == expected_start_token)
 }
 
-pub(crate) fn process_start_tokens_supported() -> bool {
+pub(crate) const fn process_start_tokens_supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos"))
 }
 

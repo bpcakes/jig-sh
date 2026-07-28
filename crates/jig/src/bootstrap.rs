@@ -416,7 +416,7 @@ enum ScaffoldFrontendKind {
 }
 
 impl TemplateMode {
-    pub(super) fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Committed => "committed",
         }
@@ -442,7 +442,9 @@ enum InitPathSnapshot {
         identity: path::RepositoryEntryIdentity,
         target: PathBuf,
         target_is_directory: bool,
-        _handle: Arc<fs::File>,
+        // The open handle intentionally pins the symlink identity for the snapshot lifetime.
+        #[allow(dead_code)]
+        handle: Arc<fs::File>,
     },
 }
 
@@ -538,9 +540,7 @@ fn validate_retained_generation_budget(
     let planned_generation_count = planned.len().saturating_add(repeated_generation_count);
     if planned_generation_count > MAX_EXISTING_INIT_RETAINED_GENERATIONS {
         bail!(
-            "Existing-destination init plans {} generated file generations, exceeding the safe retained-generation limit of {}. Use a wholly missing destination so Jig can publish one privately staged tree, or reduce the explicit template/scaffold output set.",
-            planned_generation_count,
-            MAX_EXISTING_INIT_RETAINED_GENERATIONS
+            "Existing-destination init plans {planned_generation_count} generated file generations, exceeding the safe retained-generation limit of {MAX_EXISTING_INIT_RETAINED_GENERATIONS}. Use a wholly missing destination so Jig can publish one privately staged tree, or reduce the explicit template/scaffold output set."
         );
     }
     // Every planned leaf may acquire a preimage before Jig retains its first
@@ -771,7 +771,7 @@ impl InitMutationTransaction {
         &self.destination
     }
 
-    fn is_privately_staged(&self) -> bool {
+    const fn is_privately_staged(&self) -> bool {
         self.staged_publication.is_some()
     }
 
@@ -923,7 +923,7 @@ impl InitMutationTransaction {
             .unwrap_or(&mutation.before);
         match state {
             InitPathSnapshot::Regular(commit) => commit
-                ._handle
+                .handle
                 .metadata()
                 .map(|metadata| Some(metadata.permissions()))
                 .with_context(|| {
@@ -1541,7 +1541,7 @@ impl InitMutationTransaction {
                 identity: commit.identity,
                 target: commit.target,
                 target_is_directory: commit.target_is_directory,
-                _handle: commit._handle,
+                handle: commit.handle,
             };
             if !init_snapshots_match(&current, &committed)? {
                 bail!(
@@ -1557,7 +1557,7 @@ impl InitMutationTransaction {
             identity: commit.identity,
             target: commit.target,
             target_is_directory: commit.target_is_directory,
-            _handle: commit._handle,
+            handle: commit.handle,
         };
         if !init_snapshots_match(&current, &committed)? {
             bail!(
@@ -1623,7 +1623,7 @@ impl InitMutationTransaction {
             ));
             match fs::symlink_metadata(&candidate) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(candidate),
-                Ok(_) => continue,
+                Ok(_) => {}
                 Err(error) => {
                     return Err(error).with_context(|| {
                         format!("Failed to inspect recovery path {}", candidate.display())
@@ -1777,8 +1777,7 @@ impl InitMutationTransaction {
         let mut failures = Vec::new();
         if let Err(error) = self.verify_rollback_root_and_preexisting_ancestors() {
             failures.push(format!(
-                "{}; refusing to touch replacement root. Any retained preimages remain at their .jig-init-recovery paths",
-                error
+                "{error}; refusing to touch replacement root. Any retained preimages remain at their .jig-init-recovery paths"
             ));
             if let Err(cleanup) = self.close_write_staging() {
                 failures.push(format!("private write staging cleanup failed: {cleanup:#}"));
@@ -2025,7 +2024,7 @@ impl InitMutationTransaction {
                     identity: commit.identity,
                     target: commit.target,
                     target_is_directory: commit.target_is_directory,
-                    _handle: commit._handle,
+                    handle: commit.handle,
                 })
             }
         }
@@ -2044,7 +2043,7 @@ impl InitMutationTransaction {
                 identity: commit.identity,
                 target: commit.target,
                 target_is_directory: commit.target_is_directory,
-                _handle: commit._handle,
+                handle: commit.handle,
             });
         }
         if metadata.is_file() {
@@ -2389,7 +2388,7 @@ pub fn run_init(mut opts: InitOpts) -> Result<Value> {
         let default_branch = copy_result
             .default_branch
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Missing default_branch in staged {}", ANSWERS_FILE))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing default_branch in staged {ANSWERS_FILE}"))?;
         progress.step("initialize git", format!("default branch {default_branch}"));
         let git_initialized =
             init_git_repo_with_validation(&work_destination, default_branch, || {
@@ -3345,7 +3344,7 @@ impl ScaffoldFrontend {
 }
 
 impl ScaffoldFrontendKind {
-    fn custom_scaffold_label(self) -> &'static str {
+    const fn custom_scaffold_label(self) -> &'static str {
         match self {
             Self::Spa => "custom Vite SPA",
             Self::Admin => "custom Vite admin app",
@@ -3406,10 +3405,7 @@ impl ScaffoldOpts {
             {
                 if jig_core::dev_app_env_prefix(frontend_name) == backend_prefix {
                     bail!(
-                        "Rust React frontend app name '{}' conflicts with the reserved backend dev app '{}' because both derive dev environment prefix {}; choose another frontend name",
-                        frontend_name,
-                        RUST_REACT_BACKEND_DEV_APP_NAME,
-                        backend_prefix
+                        "Rust React frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{RUST_REACT_BACKEND_DEV_APP_NAME}' because both derive dev environment prefix {backend_prefix}; choose another frontend name"
                     );
                 }
             }
@@ -3443,7 +3439,7 @@ fn default_dev_app_kind() -> String {
     "env-port".into()
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 

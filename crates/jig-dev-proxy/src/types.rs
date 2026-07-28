@@ -108,7 +108,7 @@ impl AppRunSpec {
         }
     }
 
-    pub fn with_kind(mut self, kind: AppKind) -> Self {
+    pub const fn with_kind(mut self, kind: AppKind) -> Self {
         self.kind = kind;
         self
     }
@@ -118,12 +118,12 @@ impl AppRunSpec {
         self
     }
 
-    pub fn with_explicit_port(mut self, explicit_port: Option<u16>) -> Self {
+    pub const fn with_explicit_port(mut self, explicit_port: Option<u16>) -> Self {
         self.explicit_port = explicit_port;
         self
     }
 
-    pub fn with_proxy(mut self, proxy: bool) -> Self {
+    pub const fn with_proxy(mut self, proxy: bool) -> Self {
         self.proxy = proxy;
         self
     }
@@ -173,17 +173,17 @@ impl DevRequest {
         self
     }
 
-    pub fn with_discover_workspace(mut self, discover_workspace: bool) -> Self {
+    pub const fn with_discover_workspace(mut self, discover_workspace: bool) -> Self {
         self.discover_workspace = discover_workspace;
         self
     }
 
-    pub fn with_no_proxy(mut self, no_proxy: bool) -> Self {
+    pub const fn with_no_proxy(mut self, no_proxy: bool) -> Self {
         self.no_proxy = no_proxy;
         self
     }
 
-    pub fn with_replace(mut self, replace: bool) -> Self {
+    pub const fn with_replace(mut self, replace: bool) -> Self {
         self.replace = replace;
         self
     }
@@ -231,7 +231,7 @@ pub struct ProxyStartRequest {
 }
 
 impl ProxyStartRequest {
-    pub fn new(settings: ProxySettings, foreground: bool) -> Self {
+    pub const fn new(settings: ProxySettings, foreground: bool) -> Self {
         Self {
             settings,
             foreground,
@@ -246,7 +246,7 @@ pub struct ProxyStopRequest {
 }
 
 impl ProxyStopRequest {
-    pub fn new(settings: ProxySettings) -> Self {
+    pub const fn new(settings: ProxySettings) -> Self {
         Self { settings }
     }
 }
@@ -259,7 +259,7 @@ pub struct ProxyListRequest {
 }
 
 impl ProxyListRequest {
-    pub fn new(settings: ProxySettings, raw: bool) -> Self {
+    pub const fn new(settings: ProxySettings, raw: bool) -> Self {
         Self { settings, raw }
     }
 }
@@ -271,7 +271,7 @@ pub struct ProxyPruneRequest {
 }
 
 impl ProxyPruneRequest {
-    pub fn new(settings: ProxySettings) -> Self {
+    pub const fn new(settings: ProxySettings) -> Self {
         Self { settings }
     }
 }
@@ -284,7 +284,7 @@ pub struct ProxyRunRequest {
 }
 
 impl ProxyRunRequest {
-    pub fn new(settings: ProxySettings, spec: AppRunSpec) -> Self {
+    pub const fn new(settings: ProxySettings, spec: AppRunSpec) -> Self {
         Self { settings, spec }
     }
 }
@@ -318,7 +318,10 @@ impl ProxyAliasRequest {
         }
     }
 
-    pub fn with_accept_non_loopback_target(mut self, accept_non_loopback_target: bool) -> Self {
+    pub const fn with_accept_non_loopback_target(
+        mut self,
+        accept_non_loopback_target: bool,
+    ) -> Self {
         self.accept_non_loopback_target = accept_non_loopback_target;
         self
     }

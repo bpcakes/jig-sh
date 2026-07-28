@@ -8,7 +8,7 @@ where
     Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
-pub(crate) fn default_receipts_limit() -> usize {
+pub(crate) const fn default_receipts_limit() -> usize {
     crate::tool_defs::DEFAULT_RECEIPTS_LIMIT
 }
 

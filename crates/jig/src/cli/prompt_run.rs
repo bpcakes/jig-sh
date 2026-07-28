@@ -136,11 +136,11 @@ fn prompt_add_request(opts: PromptAddOpts) -> Result<crate::command::PromptAddRe
     }
 }
 
-fn prompt_add_needs_interaction(opts: &PromptAddOpts) -> bool {
+const fn prompt_add_needs_interaction(opts: &PromptAddOpts) -> bool {
     opts.name.is_none() || (opts.no_editor && opts.body.is_none() && opts.file.is_none())
 }
 
-fn prompt_add_uses_editor(opts: &PromptAddOpts) -> bool {
+const fn prompt_add_uses_editor(opts: &PromptAddOpts) -> bool {
     opts.name.is_some() && opts.body.is_none() && opts.file.is_none() && !opts.no_editor
 }
 

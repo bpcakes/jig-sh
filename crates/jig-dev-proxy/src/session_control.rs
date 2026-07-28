@@ -47,7 +47,7 @@ pub(crate) struct StopRequestError {
 }
 
 impl StopRequestError {
-    pub(crate) fn delivery_uncertain(&self) -> bool {
+    pub(crate) const fn delivery_uncertain(&self) -> bool {
         self.delivery_uncertain
     }
 
@@ -128,7 +128,7 @@ impl SessionControlServer {
         })
     }
 
-    pub(crate) fn port(&self) -> u16 {
+    pub(crate) const fn port(&self) -> u16 {
         self.port
     }
 
@@ -429,7 +429,7 @@ fn generate_token() -> Result<String> {
     Ok(token)
 }
 
-fn loopback_address(port: u16) -> SocketAddr {
+const fn loopback_address(port: u16) -> SocketAddr {
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
 }
 

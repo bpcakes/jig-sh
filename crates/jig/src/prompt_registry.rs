@@ -1059,7 +1059,7 @@ fn qualified_name(prompt: &LocatedPrompt) -> String {
     }
 }
 
-fn namespace_name(namespace: &PromptNamespace) -> &'static str {
+const fn namespace_name(namespace: &PromptNamespace) -> &'static str {
     match namespace {
         PromptNamespace::User => "user",
         PromptNamespace::Repo => "repo",
@@ -1638,7 +1638,7 @@ fn format_exit_status(status: &ExitStatus) -> String {
     }
 }
 
-fn default_prompt_version() -> u32 {
+const fn default_prompt_version() -> u32 {
     1
 }
 

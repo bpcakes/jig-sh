@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use super::super::scan::{RepoScan, push_scan_warning, read_limited_text, relative_path_string};
@@ -183,7 +184,7 @@ where
 }
 
 impl RustWrapperCommands {
-    fn complete(&self) -> bool {
+    const fn complete(&self) -> bool {
         self.fmt.is_some()
             && self.clippy.is_some()
             && self.test.is_some()
@@ -258,14 +259,16 @@ fn nested_manifest_command(manifest_paths: &[String], cargo_command: &str, label
     for manifest_path in manifest_paths {
         let manifest_path = crate::shell::quote(manifest_path);
         // Keep any cargo failure nonzero while still attempting later inferred manifests.
-        command.push_str(&format!(
+        let _ = write!(
+            command,
             "; jig_manifest={manifest_path}; if [ -f \"$jig_manifest\" ]; then found=1; {cargo_command} || rc=$?; fi"
-        ));
+        );
     }
-    command.push_str(&format!(
+    let _ = write!(
+        command,
         "; if [ \"$found\" -eq 0 ]; then printf '%s\\n' {}; fi",
         crate::shell::quote(&format!("{}{label}.", crate::CARGO_SKIP_OUTPUT_PREFIX))
-    ));
+    );
     command.push_str("; exit \"$rc\" )");
     command
 }

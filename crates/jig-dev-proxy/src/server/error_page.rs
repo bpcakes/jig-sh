@@ -119,7 +119,7 @@ fn html_error_response(status: StatusCode, template: ErrorPageTemplate<'_>) -> R
     response
 }
 
-fn error_title(status: StatusCode) -> (&'static str, &'static str) {
+const fn error_title(status: StatusCode) -> (&'static str, &'static str) {
     match status {
         StatusCode::BAD_REQUEST => ("BAD", "REQUEST."),
         StatusCode::FORBIDDEN => ("ACCESS", "DENIED."),

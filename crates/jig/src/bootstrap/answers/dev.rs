@@ -125,9 +125,7 @@ fn validate_dev_app_env_prefixes<'a>(names: impl IntoIterator<Item = &'a str>) -
         let prefix = jig_core::dev_app_env_prefix(name);
         if let Some(previous) = prefixes.insert(prefix.clone(), name) {
             bail!(
-                "dev apps '{}' and '{}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique",
-                previous,
-                name
+                "dev apps '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
             );
         }
     }

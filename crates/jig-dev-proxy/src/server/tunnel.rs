@@ -68,7 +68,7 @@ where
                 }
                 idle.as_mut().reset(TokioInstant::now() + idle_timeout);
             }
-            _ = &mut idle => {
+            () = &mut idle => {
                 log_tunnel_idle_timeout();
                 break;
             }

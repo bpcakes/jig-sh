@@ -138,7 +138,7 @@ impl RustCrateTopology {
 }
 
 impl RustCrateKind {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::Binary => "binary",
             Self::Library => "library",
@@ -149,7 +149,7 @@ impl RustCrateKind {
 }
 
 impl RustCrateRole {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::AppService => "app/service",
             Self::Support => "support",
@@ -159,7 +159,7 @@ impl RustCrateRole {
 }
 
 impl CrateGuideAction {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::Existing => "existing",
             Self::MissingProjectOwned => "missing_project_owned",

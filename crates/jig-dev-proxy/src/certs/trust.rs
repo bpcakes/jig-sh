@@ -50,8 +50,7 @@ fn trust_locked(store: &StateStore, accept_trust_scope: bool) -> Result<Value> {
     ensure_jig_ca_private_key(store)?;
     if !accept_trust_scope {
         bail!(
-            "Refusing to trust the Jig Dev Proxy local CA without --accept-trust-scope. {}",
-            GLOBAL_CA_TRUST_WARNING
+            "Refusing to trust the Jig Dev Proxy local CA without --accept-trust-scope. {GLOBAL_CA_TRUST_WARNING}"
         );
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -251,7 +250,7 @@ fn wait_child_with_timeout(child: &mut std::process::Child, action: &str) -> Res
             // prevent a platform trust helper from continuing after timeout.
             let _ = child.kill();
             let _ = child.wait();
-            bail!("{action} timed out after {:?}", TRUST_COMMAND_TIMEOUT);
+            bail!("{action} timed out after {TRUST_COMMAND_TIMEOUT:?}");
         }
         std::thread::sleep(StdDuration::from_millis(50));
     }
@@ -388,7 +387,7 @@ fn untrust_locked(store: &StateStore) -> Result<Value> {
 }
 
 #[cfg(any(target_os = "macos", test))]
-pub(super) fn macos_untrust_warning(removed: usize) -> Option<&'static str> {
+pub(super) const fn macos_untrust_warning(removed: usize) -> Option<&'static str> {
     if removed == 0 {
         Some("No trusted Jig Dev Proxy Local CA certificate was removed.")
     } else if removed >= MACOS_UNTRUST_REMOVAL_LIMIT {

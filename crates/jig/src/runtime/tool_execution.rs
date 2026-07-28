@@ -101,7 +101,7 @@ struct ManifestToolExecutionOptions {
 }
 
 impl ManifestToolExecutionOptions {
-    fn fail_fast(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
+    const fn fail_fast(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
         Self {
             record_receipt,
             collect_worktree_fingerprint,
@@ -109,7 +109,7 @@ impl ManifestToolExecutionOptions {
         }
     }
 
-    fn collect_result(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
+    const fn collect_result(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
         Self {
             record_receipt,
             collect_worktree_fingerprint,

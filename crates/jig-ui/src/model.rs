@@ -172,7 +172,7 @@ pub enum TimelineItem {
     Decision(DecisionTimelineView),
 }
 impl TimelineItem {
-    pub fn timestamp_ms(&self) -> Option<u64> {
+    pub const fn timestamp_ms(&self) -> Option<u64> {
         match self {
             Self::Receipt(v) => v.ended_at_ms,
             Self::Plan(v) => v.timestamp_ms,

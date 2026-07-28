@@ -41,7 +41,7 @@ pub enum TimelineShow {
 }
 
 impl TimelineShow {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::All => "all",
             Self::Receipts => "receipts",

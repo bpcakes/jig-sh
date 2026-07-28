@@ -136,8 +136,7 @@ fn commit_template_root_guide(template: &Path, contents: &str, message: &str) ->
     fs::write(
         template.join("templates/project/AGENTS.md.jinja"),
         format!(
-            "# Repository Guidelines\n\n<!-- BEGIN JIG MANAGED BLOCK -->\n{}<!-- END JIG MANAGED BLOCK -->\n",
-            contents
+            "# Repository Guidelines\n\n<!-- BEGIN JIG MANAGED BLOCK -->\n{contents}<!-- END JIG MANAGED BLOCK -->\n"
         ),
     )
     .unwrap();

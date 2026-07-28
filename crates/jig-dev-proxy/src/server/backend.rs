@@ -24,10 +24,7 @@ pub(super) async fn read_backend_headers(
         }
         buffer.extend_from_slice(&temp[..n]);
         if buffer.len() > MAX_BACKEND_HEADER_BYTES {
-            anyhow::bail!(
-                "Backend response headers exceeded {} bytes",
-                MAX_BACKEND_HEADER_BYTES
-            );
+            anyhow::bail!("Backend response headers exceeded {MAX_BACKEND_HEADER_BYTES} bytes");
         }
         if find_header_end(&buffer, header_scan_start).is_some() {
             break;
@@ -59,8 +56,7 @@ pub(super) async fn complete_backend_body(
     if let Some(content_length) = content_length {
         if content_length > MAX_BACKEND_DRAIN_BODY_BYTES {
             anyhow::bail!(
-                "Backend non-upgrade WebSocket response body exceeded {} bytes",
-                MAX_BACKEND_DRAIN_BODY_BYTES
+                "Backend non-upgrade WebSocket response body exceeded {MAX_BACKEND_DRAIN_BODY_BYTES} bytes"
             );
         }
         let mut body = buffered.to_vec();
@@ -99,11 +95,7 @@ pub(super) fn parse_backend_status(line: &[u8]) -> Result<StatusCode> {
     if !version.starts_with("HTTP/") {
         anyhow::bail!("Backend response status line did not start with HTTP/");
     }
-    if version
-        .as_bytes()
-        .iter()
-        .any(|byte| byte.is_ascii_whitespace())
-    {
+    if version.as_bytes().iter().any(u8::is_ascii_whitespace) {
         anyhow::bail!("Backend response protocol version contained whitespace");
     }
     if rest.as_bytes().first().is_none_or(|byte| *byte == b' ') {
@@ -132,10 +124,7 @@ pub(super) fn parse_backend_headers(mut bytes: &[u8]) -> Result<Vec<(HeaderName,
         let line = &bytes[pos..line_end];
         if !line.is_empty() {
             if headers.len() >= MAX_BACKEND_HEADER_COUNT {
-                anyhow::bail!(
-                    "Backend response exceeded {} headers",
-                    MAX_BACKEND_HEADER_COUNT
-                );
+                anyhow::bail!("Backend response exceeded {MAX_BACKEND_HEADER_COUNT} headers");
             }
             let colon = line
                 .iter()
@@ -217,10 +206,7 @@ pub(super) async fn read_chunked_body(stream: &mut TcpStream, buffered: Bytes) -
     let mut scanner = ChunkedMessageScanner::default();
     loop {
         if raw.len() > MAX_BACKEND_DRAIN_BODY_BYTES {
-            anyhow::bail!(
-                "Backend chunked response exceeded {} bytes",
-                MAX_BACKEND_DRAIN_BODY_BYTES
-            );
+            anyhow::bail!("Backend chunked response exceeded {MAX_BACKEND_DRAIN_BODY_BYTES} bytes");
         }
         if let Some(end) = scanner.scan(&raw)? {
             return decode_chunked_body(&raw[..end]);
@@ -303,8 +289,7 @@ pub(super) async fn read_to_end_limited(stream: &mut TcpStream, body: &mut Vec<u
                     return Ok(());
                 }
                 anyhow::bail!(
-                    "Backend non-upgrade WebSocket response body exceeded {} bytes",
-                    MAX_BACKEND_DRAIN_BODY_BYTES
+                    "Backend non-upgrade WebSocket response body exceeded {MAX_BACKEND_DRAIN_BODY_BYTES} bytes"
                 );
             }
             let remaining = MAX_BACKEND_DRAIN_BODY_BYTES - body.len();
@@ -330,8 +315,7 @@ pub(super) fn decode_chunked_body(raw: &[u8]) -> Result<Bytes> {
         if size == 0 {
             if decoded.len() > MAX_BACKEND_DRAIN_BODY_BYTES {
                 anyhow::bail!(
-                    "Backend chunked response exceeded {} bytes",
-                    MAX_BACKEND_DRAIN_BODY_BYTES
+                    "Backend chunked response exceeded {MAX_BACKEND_DRAIN_BODY_BYTES} bytes"
                 );
             }
             return Ok(Bytes::from(decoded));
@@ -347,10 +331,7 @@ pub(super) fn decode_chunked_body(raw: &[u8]) -> Result<Bytes> {
             .checked_add(size)
             .context("Backend chunked response size overflowed parser bounds")?;
         if decoded_len > MAX_BACKEND_DRAIN_BODY_BYTES {
-            anyhow::bail!(
-                "Backend chunked response exceeded {} bytes",
-                MAX_BACKEND_DRAIN_BODY_BYTES
-            );
+            anyhow::bail!("Backend chunked response exceeded {MAX_BACKEND_DRAIN_BODY_BYTES} bytes");
         }
         if raw.len() < chunk_end || raw.get(data_end..chunk_end) != Some(b"\r\n") {
             anyhow::bail!("Incomplete chunked response");

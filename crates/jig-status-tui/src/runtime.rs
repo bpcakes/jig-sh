@@ -111,7 +111,7 @@ fn require_terminal(stdin_is_terminal: bool, stdout_is_terminal: bool) -> Result
     }
 }
 
-fn is_actionable_key(key: KeyEvent) -> bool {
+const fn is_actionable_key(key: KeyEvent) -> bool {
     matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
 }
 

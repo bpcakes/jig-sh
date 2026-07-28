@@ -166,12 +166,12 @@ fn plan_index(events: &[PlanStreamEvent]) -> BTreeMap<String, PlanInfo> {
                 info.opened = true;
                 info.closed = false;
                 info.closed_at_ms = None;
-                info.resolution = None
+                info.resolution = None;
             }
             "close" => {
                 info.closed = true;
                 info.closed_at_ms = Some(event.timestamp_ms);
-                info.resolution = event.resolution.clone()
+                info.resolution = event.resolution.clone();
             }
             _ => {}
         }

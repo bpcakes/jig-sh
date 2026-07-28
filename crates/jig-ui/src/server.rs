@@ -141,7 +141,7 @@ fn serve_with_accept(
         while result.is_ok() {
             if let Ok(worker_result) = status_rx.try_recv() {
                 result = worker_result
-                    .and_then(|_| Err(anyhow!("Jig UI request worker stopped unexpectedly")));
+                    .and_then(|()| Err(anyhow!("Jig UI request worker stopped unexpectedly")));
                 break;
             }
             match accept() {
@@ -150,12 +150,12 @@ fn serve_with_accept(
                     match work_tx.try_send(stream) {
                         Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
                         Err(mpsc::TrySendError::Disconnected(_)) => {
-                            result = Err(anyhow!("all Jig UI request workers stopped"))
+                            result = Err(anyhow!("all Jig UI request workers stopped"));
                         }
                     }
                 }
                 Ok(None) => thread::sleep(Duration::from_millis(10)),
-                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -200,10 +200,10 @@ fn worker_loop(
         match received {
             Ok(stream) => {
                 if let Err(error) = handle_connection(provider, stream, security) {
-                    eprintln!("jig ui: request failed: {error:#}")
+                    eprintln!("jig ui: request failed: {error:#}");
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -254,10 +254,7 @@ fn read_request_head(stream: &mut TcpStream) -> Result<Vec<u8>> {
                 if matches!(
                     error.kind(),
                     ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
-                ) =>
-            {
-                continue;
-            }
+                ) => {}
             Err(error) => return Err(error).context("Failed while reading request head"),
         }
     }
@@ -324,11 +321,8 @@ fn authorize_request(
 
     if method == "GET" && target.starts_with(&format!("{}?", security.namespace)) {
         if let Some(candidate) = query_value(target, BOOTSTRAP_QUERY) {
-            let mut bootstrap = match security.bootstrap_capability.lock() {
-                Ok(value) => value,
-                Err(_) => {
-                    return Some(HttpResponse::text(500, "authorization state unavailable\n"));
-                }
+            let Ok(mut bootstrap) = security.bootstrap_capability.lock() else {
+                return Some(HttpResponse::text(500, "authorization state unavailable\n"));
             };
             let valid = bootstrap
                 .as_ref()
@@ -416,7 +410,7 @@ impl HttpResponse {
             headers: vec![],
         }
     }
-    fn json(status: u16, body: String) -> Self {
+    const fn json(status: u16, body: String) -> Self {
         Self {
             status,
             content_type: "application/json",
@@ -424,7 +418,7 @@ impl HttpResponse {
             headers: vec![],
         }
     }
-    fn html(body: String) -> Self {
+    const fn html(body: String) -> Self {
         Self {
             status: 200,
             content_type: "text/html; charset=utf-8",
@@ -450,9 +444,8 @@ fn respond(
     if method != "GET" {
         return HttpResponse::text(405, "method not allowed\n");
     }
-    let relative = match target.strip_prefix(namespace) {
-        Some(v) => v,
-        None => return HttpResponse::text(404, "not found\n"),
+    let Some(relative) = target.strip_prefix(namespace) else {
+        return HttpResponse::text(404, "not found\n");
     };
     let (path, query) = relative
         .split_once('?')
@@ -641,7 +634,7 @@ mod tests {
                         let _ = handle_connection(&FakeProvider, stream, &security);
                     });
                 }
-            })
+            });
         });
         let mut slow = TcpStream::connect(addr).unwrap();
         slow.write_all(b"G").unwrap();

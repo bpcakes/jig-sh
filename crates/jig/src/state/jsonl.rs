@@ -234,9 +234,8 @@ fn lock_existing_cache_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<File>> {
-    let lock = match File::open(state_lock_path(path)) {
-        Ok(lock) => lock,
-        Err(_) => return Ok(None),
+    let Ok(lock) = File::open(state_lock_path(path)) else {
+        return Ok(None);
     };
     loop {
         ensure_state_read_active(cancelled)?;
@@ -312,7 +311,7 @@ fn read_receipts_reverse_with_lock(
     loop {
         match lock_data(&file) {
             Ok(()) => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                 let mut read_snapshot = |path: &Path| {
                     fs::read(path).with_context(|| {
@@ -437,7 +436,7 @@ pub(super) fn read_jsonl_with_io<T: DeserializeOwned>(
     loop {
         match lock_data(&file) {
             Ok(()) => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
                 return read_stable_unlocked_snapshot(path, &mut read_snapshot);
             }

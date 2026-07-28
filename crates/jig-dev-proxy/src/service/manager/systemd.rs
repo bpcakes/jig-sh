@@ -165,7 +165,7 @@ impl SystemdLoadState {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Loaded => "loaded",
             Self::NotFound => "not-found",
@@ -219,7 +219,7 @@ impl SystemdEnabledState {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Enabled => "enabled",
             Self::EnabledRuntime => "enabled-runtime",
@@ -238,7 +238,7 @@ impl SystemdEnabledState {
         }
     }
 
-    fn is_enabled(self) -> bool {
+    const fn is_enabled(self) -> bool {
         matches!(self, Self::Enabled | Self::EnabledRuntime)
     }
 }
@@ -272,7 +272,7 @@ impl SystemdActiveState {
         }
     }
 
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
             Self::Reloading => "reloading",
@@ -285,7 +285,7 @@ impl SystemdActiveState {
         }
     }
 
-    fn is_manager_owned(self) -> bool {
+    const fn is_manager_owned(self) -> bool {
         matches!(self, Self::Active | Self::Reloading | Self::Activating)
     }
 }

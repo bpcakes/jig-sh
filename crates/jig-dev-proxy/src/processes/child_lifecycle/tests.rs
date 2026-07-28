@@ -146,10 +146,7 @@ fn best_effort_direct_child_cleanup(child: &mut Child) {
             Ok(Some(_)) => return,
             Ok(None) => break,
             Err(error)
-                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline =>
-            {
-                continue;
-            }
+                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
             Err(_) => return,
         }
     }
@@ -158,10 +155,7 @@ fn best_effort_direct_child_cleanup(child: &mut Child) {
         match child.kill() {
             Ok(()) => break,
             Err(error)
-                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline =>
-            {
-                continue;
-            }
+                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
             Err(_) => break,
         }
     }
@@ -174,10 +168,7 @@ fn best_effort_direct_child_cleanup(child: &mut Child) {
             }
             Ok(None) => return,
             Err(error)
-                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline =>
-            {
-                continue;
-            }
+                if error.kind() == io::ErrorKind::Interrupted && Instant::now() < deadline => {}
             Err(_) => return,
         }
     }
@@ -279,8 +270,8 @@ fn exhausted_reap_and_termination_are_pid_specific() {
         4343,
         deadline,
         1,
-        |_, _, _| panic!("an expired deadline must prevent signaling"),
-        |_, _, _| panic!("an expired deadline must prevent membership proofs"),
+        |(), _, _| panic!("an expired deadline must prevent signaling"),
+        |(), _, _| panic!("an expired deadline must prevent membership proofs"),
         || deadline,
         |_| panic!("an expired deadline must prevent sleeping"),
     )
@@ -302,13 +293,13 @@ fn forced_group_confirmation_resignals_before_every_membership_proof() {
         4343,
         deadline,
         2,
-        |_, _, _| {
+        |(), _, _| {
             let mut recorded = events.take();
             recorded.push("signal");
             events.set(recorded);
             Ok(())
         },
-        |_, _, _| {
+        |(), _, _| {
             let mut remaining = proofs.take();
             let proof = remaining.remove(0);
             proofs.set(remaining);
@@ -344,11 +335,11 @@ fn forced_group_confirmation_preserves_deadline_and_caps_its_sleep() {
         4343,
         deadline,
         2,
-        |_, _, _| {
+        |(), _, _| {
             signals.set(signals.get() + 1);
             Ok(())
         },
-        |_, _, _| {
+        |(), _, _| {
             proofs.set(proofs.get() + 1);
             Ok(true)
         },
@@ -380,7 +371,7 @@ fn pinned_group_resignal_refuses_lost_or_reaped_identity_before_signaling() {
         &mut (),
         4343,
         deadline,
-        |_| Ok(ChildObservation::ExitedReaped(exited)),
+        |()| Ok(ChildObservation::ExitedReaped(exited)),
         || now,
         |_, _| {
             signals.set(signals.get() + 1);
@@ -395,7 +386,7 @@ fn pinned_group_resignal_refuses_lost_or_reaped_identity_before_signaling() {
         &mut (),
         4343,
         deadline,
-        |_| Err(io::Error::from_raw_os_error(libc::ECHILD)),
+        |()| Err(io::Error::from_raw_os_error(libc::ECHILD)),
         || now,
         |_, _| {
             signals.set(signals.get() + 1);
@@ -419,7 +410,7 @@ fn pinned_group_resignal_does_not_signal_after_observation_exhausts_deadline() {
         &mut (),
         4343,
         deadline,
-        |_| {
+        |()| {
             clock.set(deadline);
             Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0)))
         },
@@ -452,7 +443,7 @@ fn esrch_group_resignal_still_requires_a_membership_proof() {
                 state,
                 pid,
                 deadline,
-                |_| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
+                |()| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
                 || now,
                 |target, signal| {
                     assert_eq!(target, -4343);
@@ -462,7 +453,7 @@ fn esrch_group_resignal_still_requires_a_membership_proof() {
                 },
             )
         },
-        |_, _, _| {
+        |(), _, _| {
             proofs.set(proofs.get() + 1);
             Ok(false)
         },
@@ -492,7 +483,7 @@ fn eperm_group_resignal_retries_until_the_atomic_snapshot_is_quiescent() {
                 state,
                 pid,
                 deadline,
-                |_| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
+                |()| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
                 || now,
                 |_, _| {
                     signals.set(signals.get() + 1);
@@ -500,7 +491,7 @@ fn eperm_group_resignal_retries_until_the_atomic_snapshot_is_quiescent() {
                 },
             )
         },
-        |_, _, _| {
+        |(), _, _| {
             let mut remaining = proofs.take();
             let live = remaining.remove(0);
             proofs.set(remaining);
@@ -531,12 +522,12 @@ fn unexpected_group_resignal_error_prevents_membership_proof() {
                 state,
                 pid,
                 deadline,
-                |_| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
+                |()| Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(0))),
                 || now,
                 |_, _| Err(io::Error::from_raw_os_error(libc::EIO)),
             )
         },
-        |_, _, _| {
+        |(), _, _| {
             proofs.set(proofs.get() + 1);
             Ok(false)
         },
@@ -1011,7 +1002,7 @@ fn unscannable_unix_exited_group_gets_term_grace_before_force() {
             clock.set(clock.get() + duration);
         },
         || false,
-        |_| {
+        |()| {
             cleanup_calls.set(cleanup_calls.get() + 1);
             Ok(())
         },
@@ -1032,7 +1023,7 @@ fn second_signal_bypasses_unscannable_unix_term_grace() {
         Instant::now,
         |_| sleeps.set(sleeps.get() + 1),
         || true,
-        |_| {
+        |()| {
             cleanup_calls.set(cleanup_calls.get() + 1);
             Ok(())
         },
@@ -1056,7 +1047,7 @@ fn exited_group_term_grace_preserves_the_callers_nearly_spent_deadline() {
         &mut (),
         4242,
         deadline,
-        |_, pid, received_deadline| {
+        |(), pid, received_deadline| {
             assert_eq!(pid, 4242);
             assert_eq!(received_deadline, deadline);
             scans.set(scans.get() + 1);
@@ -1070,7 +1061,7 @@ fn exited_group_term_grace_preserves_the_callers_nearly_spent_deadline() {
             clock.set(clock.get() + duration);
         },
         || false,
-        |_| {
+        |()| {
             cleanup_calls.set(cleanup_calls.get() + 1);
             Ok(())
         },
@@ -1096,7 +1087,7 @@ fn killed_leader_exit_preserves_the_original_confirmation_deadline() {
         &mut (),
         4343,
         deadline,
-        |_| {
+        |()| {
             let observation = observations.get();
             observations.set(observation + 1);
             if observation == 0 {
@@ -1113,7 +1104,7 @@ fn killed_leader_exit_preserves_the_original_confirmation_deadline() {
             sleeps.set(observed);
             clock.set(clock.get() + duration);
         },
-        |_, pid, received_deadline| {
+        |(), pid, received_deadline| {
             assert_eq!(pid, 4343);
             confirmed_deadline.set(Some(received_deadline));
             Err(anyhow!("injected confirmation failure"))

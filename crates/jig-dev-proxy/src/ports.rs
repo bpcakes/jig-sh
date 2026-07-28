@@ -171,7 +171,7 @@ pub(crate) fn local_lan_ip_for_ipv4_listener() -> Option<IpAddr> {
     }
 }
 
-fn ip_is_link_local(ip: IpAddr) -> bool {
+const fn ip_is_link_local(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => ip.is_link_local(),
         IpAddr::V6(ip) => ip.is_unicast_link_local(),

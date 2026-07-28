@@ -3,10 +3,10 @@
 #[allow(dead_code)]
 pub(super) const EMBEDDED_TEMPLATE_FILES_FROM_SNAPSHOT: bool = true;
 pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
-    EmbeddedTemplateFile { relative_path: ".agent/.cache/.gitignore.jinja", contents: r#"*
+    EmbeddedTemplateFile { relative_path: ".agent/.cache/.gitignore.jinja", contents: r"*
 !.gitignore
-"# },
-    EmbeddedTemplateFile { relative_path: ".agent/PLANS.md.jinja", contents: r#"# Codex Execution Plans (ExecPlans)
+" },
+    EmbeddedTemplateFile { relative_path: ".agent/PLANS.md.jinja", contents: r"# Codex Execution Plans (ExecPlans)
 
 This document defines the contract for a self-contained execution plan that another engineer or agent can implement without prior context.
 
@@ -53,7 +53,7 @@ Use this shape:
 ## Maintenance Rule
 
 When revising an ExecPlan, update every affected section so the file remains restartable from scratch.
-"# },
+" },
     EmbeddedTemplateFile { relative_path: ".agent/jig-contract.json.jinja", contents: r#"{
   "contract_version": 3,
   "tool_namespace": "jig",
@@ -162,15 +162,15 @@ When revising an ExecPlan, update every affected section so the file remains res
   ]
 }
 "# },
-    EmbeddedTemplateFile { relative_path: ".agent/plans/.gitkeep.jinja", contents: r#"
-"# },
-    EmbeddedTemplateFile { relative_path: ".agent/state/.gitkeep.jinja", contents: r#"
-"# },
-    EmbeddedTemplateFile { relative_path: ".gitattributes.jinja", contents: r#"# BEGIN JIG MANAGED BLOCK
+    EmbeddedTemplateFile { relative_path: ".agent/plans/.gitkeep.jinja", contents: r"
+" },
+    EmbeddedTemplateFile { relative_path: ".agent/state/.gitkeep.jinja", contents: r"
+" },
+    EmbeddedTemplateFile { relative_path: ".gitattributes.jinja", contents: r"# BEGIN JIG MANAGED BLOCK
 .agent/plans/*.md merge=union
 .agent/state/*.jsonl merge=union
 # END JIG MANAGED BLOCK
-"# },
+" },
     EmbeddedTemplateFile { relative_path: ".github/workflows/agent-map-check.yml.jinja", contents: r#"name: Agent Map Check
 
 on:
@@ -1038,7 +1038,7 @@ plugins = [[% for plugin in marketplace.plugins %]"<<[ plugin | replace("\\", "\
   }
 }
 "# },
-    EmbeddedTemplateFile { relative_path: "AGENTS.md.jinja", contents: r#"# Repository Guidelines
+    EmbeddedTemplateFile { relative_path: "AGENTS.md.jinja", contents: r"# Repository Guidelines
 
 <!-- BEGIN JIG MANAGED BLOCK -->
 This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in crate-level guides; keep generic agent workflow and repo policy here.
@@ -1149,8 +1149,8 @@ When a backend crate has a crate-level `AGENTS.md`, use these sections:
 - `## Invariants`
 - `## Common commands`
 <!-- END JIG MANAGED BLOCK -->
-"# },
-    EmbeddedTemplateFile { relative_path: "agent-map.md.jinja", contents: r#"# Agent Map
+" },
+    EmbeddedTemplateFile { relative_path: "agent-map.md.jinja", contents: r"# Agent Map
 
 Fast jump index for agent-facing guidance in this repository.
 
@@ -1161,7 +1161,7 @@ Fast jump index for agent-facing guidance in this repository.
 ## Project guides
 
 Run `scripts/jig agent-map generate` to rebuild this file from tracked `AGENTS.md` files.
-"# },
+" },
     EmbeddedTemplateFile { relative_path: "scripts/check-webapp-scripts.mjs.jinja", contents: r#"#!/usr/bin/env node
 
 // Rendered through Jinja so generated repos manage this helper with the rest

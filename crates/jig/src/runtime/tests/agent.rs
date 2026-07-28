@@ -184,8 +184,7 @@ fn agent_doctor_bounds_and_redacts_codex_probe_output() {
     write_codex_stub(
         &codex_path,
         &format!(
-            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 2000 ]; do printf '{}'; printf '{}' >&2; i=$((i + 1)); done\nexit 0\n",
-            secret, secret
+            "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 2000 ]; do printf '{secret}'; printf '{secret}' >&2; i=$((i + 1)); done\nexit 0\n"
         ),
     );
 

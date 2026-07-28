@@ -299,7 +299,7 @@ fn create_command_output_capture_dir() -> io::Result<PathBuf> {
         builder.mode(0o700);
         match builder.create(&dir) {
             Ok(()) => return Ok(dir),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
     }

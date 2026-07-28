@@ -315,7 +315,7 @@ fn expand_workspace_glob(
         return;
     }
     let segments = glob.split('/').collect::<Vec<_>>();
-    expand_segments(root, root, &segments, out, depth, warnings)
+    expand_segments(root, root, &segments, out, depth, warnings);
 }
 
 fn expand_optional_workspace_glob(

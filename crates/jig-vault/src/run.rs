@@ -438,7 +438,7 @@ impl CappedOutputDrain {
         Ok(())
     }
 
-    fn is_terminal(&self) -> bool {
+    const fn is_terminal(&self) -> bool {
         self.reader.is_none()
     }
 
@@ -479,7 +479,7 @@ impl CappedOutputDrains {
         self.stderr.poll()
     }
 
-    fn is_terminal(&self) -> bool {
+    const fn is_terminal(&self) -> bool {
         self.stdout.is_terminal() && self.stderr.is_terminal()
     }
 
@@ -2064,8 +2064,8 @@ mod tests {
             73,
             Instant::now() + Duration::from_secs(1),
             1,
-            |_, _, _| Err(io::Error::from_raw_os_error(libc::EPERM)),
-            |_, _, _| Err(anyhow!("sole-leader snapshot failed")),
+            |(), _, _| Err(io::Error::from_raw_os_error(libc::EPERM)),
+            |(), _, _| Err(anyhow!("sole-leader snapshot failed")),
             Instant::now,
             |_| {},
         )

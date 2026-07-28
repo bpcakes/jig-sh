@@ -154,7 +154,7 @@ fn ensure_for_hosts_locked_interruptible(
     Ok(LockOutcome::Acquired(certificate_paths(store)))
 }
 
-fn ensure_certificate_generation_supported() -> Result<()> {
+const fn ensure_certificate_generation_supported() -> Result<()> {
     #[cfg(windows)]
     {
         bail!(
@@ -239,11 +239,11 @@ struct CertFileState {
 }
 
 impl CertFileState {
-    fn is_complete(self) -> bool {
+    const fn is_complete(self) -> bool {
         self.ca_exists && self.ca_key_exists && self.leaf_exists && self.leaf_key_exists
     }
 
-    fn ca_pair_is_partial(self) -> bool {
+    const fn ca_pair_is_partial(self) -> bool {
         self.ca_exists != self.ca_key_exists
     }
 }

@@ -39,11 +39,11 @@ impl BrokeredEnv {
         Self::new(EnvVarName::parse(var)?, SecretName::parse(secret_name)?)
     }
 
-    pub fn var(&self) -> &EnvVarName {
+    pub const fn var(&self) -> &EnvVarName {
         &self.var
     }
 
-    pub fn secret_name(&self) -> &SecretName {
+    pub const fn secret_name(&self) -> &SecretName {
         &self.secret_name
     }
 
@@ -110,11 +110,11 @@ impl BrokeredFile {
         Self::new(EnvVarName::parse(var)?, SecretName::parse(secret_name)?)
     }
 
-    pub fn var(&self) -> &EnvVarName {
+    pub const fn var(&self) -> &EnvVarName {
         &self.var
     }
 
-    pub fn secret_name(&self) -> &SecretName {
+    pub const fn secret_name(&self) -> &SecretName {
         &self.secret_name
     }
 

@@ -317,7 +317,7 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
                     SecretBytes::new(b"secret-value".to_vec()),
                 )
             },
-            |_| serde_json::json!({"secret_name": "api_token"}),
+            |()| serde_json::json!({"secret_name": "api_token"}),
         )
         .unwrap();
 
@@ -337,7 +337,7 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
                     SecretBytes::new(b"other-secret".to_vec()),
                 )
             },
-            |_| serde_json::json!({"secret_name": "other"}),
+            |()| serde_json::json!({"secret_name": "other"}),
         )
         .unwrap_err()
         .to_string();

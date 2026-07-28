@@ -115,18 +115,18 @@ fn validate_loop_token(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn default_lease_ttl_seconds() -> u64 {
+const fn default_lease_ttl_seconds() -> u64 {
     DEFAULT_LEASE_TTL_SECONDS
 }
 
-fn default_max_attempts() -> u32 {
+const fn default_max_attempts() -> u32 {
     DEFAULT_MAX_ATTEMPTS
 }
 
-fn default_backoff_seconds() -> u64 {
+const fn default_backoff_seconds() -> u64 {
     DEFAULT_BACKOFF_SECONDS
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }

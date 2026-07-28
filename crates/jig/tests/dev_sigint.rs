@@ -41,7 +41,7 @@ enum ForegroundMode {
 }
 
 impl ForegroundMode {
-    fn command_name(self) -> &'static str {
+    const fn command_name(self) -> &'static str {
         match self {
             Self::Dev => "jig dev",
             Self::ProxyRun => "jig proxy run",
@@ -522,18 +522,15 @@ fn run_signal_case(case: SignalCase, mode: ForegroundMode, json_output: bool) {
         panic!("send {} to {}: {error}", case.label, mode.command_name());
     }
 
-    let status = match child
+    let Some(status) = child
         .wait_timeout(Duration::from_secs(10))
         .expect("wait for jig dev")
-    {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            terminate_verified_process(&helper_pid);
-            terminate_verified_process(&descendant_pid);
-            panic!("{} did not stop after {}", mode.command_name(), case.label);
-        }
+    else {
+        let _ = child.kill();
+        let _ = child.wait();
+        terminate_verified_process(&helper_pid);
+        terminate_verified_process(&descendant_pid);
+        panic!("{} did not stop after {}", mode.command_name(), case.label);
     };
 
     let helper_stopped = wait_for_verified_exit(&helper_pid, Duration::from_secs(5));
@@ -1239,7 +1236,7 @@ impl ForegroundChildGuard {
         }
     }
 
-    fn disarm(&mut self) {
+    const fn disarm(&mut self) {
         self.armed = false;
     }
 

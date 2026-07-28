@@ -166,10 +166,7 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
         .args(["plugin", "marketplace", "add", &marketplace_source])
         .output()
         .with_context(|| {
-            format!(
-                "Failed to run {} plugin marketplace add {}",
-                codex_bin, marketplace_source
-            )
+            format!("Failed to run {codex_bin} plugin marketplace add {marketplace_source}")
         });
     let output = progress.log_blocked_on_err(command_output)?;
     if !output.status.success() {
@@ -201,14 +198,14 @@ fn marketplace_requirement_message(count: usize) -> String {
     }
 }
 
-fn codex_probe_message(codex_available: bool) -> &'static str {
+const fn codex_probe_message(codex_available: bool) -> &'static str {
     match codex_available {
         true => "plugin marketplace support available",
         false => "plugin marketplace support unavailable",
     }
 }
 
-fn readiness_message(codex_required: bool, ready: bool) -> &'static str {
+const fn readiness_message(codex_required: bool, ready: bool) -> &'static str {
     match (codex_required, ready) {
         (false, _) => "not required",
         (true, true) => "registered",
@@ -320,8 +317,7 @@ fn marketplace_source_for_codex(source: &str, repo_root: &Path) -> Result<String
 
     if !valid_remote_marketplace_source(trimmed) {
         bail!(
-            "Codex marketplace source '{}' must be a local path, GitHub owner/repo shorthand, git@ URL, or https:// URL",
-            source
+            "Codex marketplace source '{source}' must be a local path, GitHub owner/repo shorthand, git@ URL, or https:// URL"
         );
     }
 

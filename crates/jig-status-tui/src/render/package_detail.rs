@@ -355,7 +355,7 @@ fn scalar_text(value: &Value) -> String {
     }
 }
 
-fn is_scalar(value: &Value) -> bool {
+const fn is_scalar(value: &Value) -> bool {
     !matches!(value, Value::Array(_) | Value::Object(_))
 }
 

@@ -7402,11 +7402,11 @@ fn generated_pnpm_custom_patch_fingerprints_are_required_and_repository_bounded(
             "must be repository-relative",
         ),
         (
-            r#"'C:\outside.patch'"#.to_owned(),
+            r"'C:\outside.patch'".to_owned(),
             "must be repository-relative",
         ),
         (
-            r#"'\\server\share\outside.patch'"#.to_owned(),
+            r"'\\server\share\outside.patch'".to_owned(),
             "must be repository-relative",
         ),
         ("custom".to_owned(), "must be a file"),

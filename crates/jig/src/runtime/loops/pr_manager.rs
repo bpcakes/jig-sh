@@ -723,8 +723,8 @@ fn resolve_review_thread(ctx: &RepoContext, thread_id: &str) -> Result<Value> {
     )
 }
 
-fn add_review_thread_reply_mutation() -> &'static str {
-    r#"
+const fn add_review_thread_reply_mutation() -> &'static str {
+    r"
 mutation($threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
     comment {
@@ -733,11 +733,11 @@ mutation($threadId: ID!, $body: String!) {
     }
   }
 }
-"#
+"
 }
 
-fn resolve_review_thread_mutation() -> &'static str {
-    r#"
+const fn resolve_review_thread_mutation() -> &'static str {
+    r"
 mutation($threadId: ID!) {
   resolveReviewThread(input: {threadId: $threadId}) {
     thread {
@@ -746,7 +746,7 @@ mutation($threadId: ID!) {
     }
   }
 }
-"#
+"
 }
 
 fn prepare_worktree(
