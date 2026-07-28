@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::file_ops;
 use crate::host::{RouteHostname, TargetHost};
+use crate::session_id::{MAX_SESSION_ID_BYTES, is_valid_session_id};
 use crate::types::Route;
 
 use super::{ensure_private_state_file_permissions, open_read_no_follow_maybe_missing};
@@ -14,7 +15,6 @@ use super::{ensure_private_state_file_permissions, open_read_no_follow_maybe_mis
 const VERSION: u32 = 1;
 pub(super) const FILE_NAME: &str = "dev-sessions.json";
 const STATE_FILE_FALLBACK: &str = "jig-dev-sessions-state";
-const MAX_SESSION_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 const MAX_DEV_SESSIONS_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -186,12 +186,7 @@ pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
-    if session_id.is_empty()
-        || session_id.len() > MAX_SESSION_ID_BYTES
-        || !session_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
+    if !is_valid_session_id(session_id) {
         bail!(
             "Jig development session id must be 1 to {MAX_SESSION_ID_BYTES} ASCII letters, digits, dots, dashes, or underscores"
         );
@@ -663,11 +658,14 @@ mod tests {
         );
 
         let invalid_session_id = session("contains spaces");
-        assert!(
-            validate_records(&[invalid_session_id])
-                .unwrap_err()
-                .to_string()
-                .contains("ASCII letters")
+        let error = validate_records(&[invalid_session_id])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!(
+                "Jig development session id must be 1 to {MAX_SESSION_ID_BYTES} ASCII letters, digits, dots, dashes, or underscores"
+            )
         );
     }
 

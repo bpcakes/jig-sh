@@ -9,8 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use subtle::ConstantTimeEq;
 
+use crate::session_id::{MAX_SESSION_ID_BYTES, is_valid_session_id};
+
 const PROTOCOL_VERSION: &str = "JIG-DEV-SESSION/1";
-const MAX_SESSION_ID_BYTES: usize = 128;
 const TOKEN_BYTES: usize = 32;
 const TOKEN_HEX_BYTES: usize = TOKEN_BYTES * 2;
 const MAX_REQUEST_BYTES: usize = 256;
@@ -394,12 +395,7 @@ fn drain_rejected_line(reader: &mut impl BufRead, limit: usize) -> io::Result<()
 }
 
 fn validate_session_id(session_id: &str) -> Result<()> {
-    if session_id.is_empty()
-        || session_id.len() > MAX_SESSION_ID_BYTES
-        || !session_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
+    if !is_valid_session_id(session_id) {
         bail!(
             "dev-session id must be 1 to {MAX_SESSION_ID_BYTES} ASCII letters, digits, dots, dashes, or underscores"
         );
@@ -484,7 +480,13 @@ mod tests {
 
     #[test]
     fn request_and_session_id_bounds_are_enforced() {
-        assert!(SessionControlServer::start("").is_err());
+        let error = SessionControlServer::start("").err().unwrap().to_string();
+        assert_eq!(
+            error,
+            format!(
+                "dev-session id must be 1 to {MAX_SESSION_ID_BYTES} ASCII letters, digits, dots, dashes, or underscores"
+            )
+        );
         assert!(SessionControlServer::start("contains spaces").is_err());
         assert!(SessionControlServer::start(&"a".repeat(MAX_SESSION_ID_BYTES + 1)).is_err());
 

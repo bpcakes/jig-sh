@@ -16,6 +16,7 @@ mod processes;
 mod server;
 mod service;
 mod session_control;
+mod session_id;
 mod state;
 mod types;
 #[cfg(any(windows, test))]
