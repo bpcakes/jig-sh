@@ -5,11 +5,12 @@ use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use super::events::{
-    SessionEvent, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
+use super::jsonl::{
+    read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
     read_receipt_window_with_bytes, receipts_for_plan_with_lock, state_lock_path,
     with_jsonl_write_lock, write_jsonl_locked,
 };
+use super::records::SessionEvent;
 use super::*;
 use crate::context::RepoContext;
 use crate::git_receipts::DiffStat;

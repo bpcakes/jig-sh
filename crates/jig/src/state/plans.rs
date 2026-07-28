@@ -10,11 +10,10 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
-use super::events::{
-    PlanEvent, append_jsonl, append_text, ensure_state_layout, new_id, now_ms, read_jsonl,
-    read_jsonl_with_cancellation, rel_path,
-};
+use super::jsonl::{append_jsonl, append_text, read_jsonl, read_jsonl_with_cancellation};
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
+use super::records::PlanEvent;
+use super::support::{ensure_state_layout, new_id, now_ms, rel_path};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct PlanOpenRequest {

@@ -5,10 +5,9 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::tool_defs::tool;
 
-pub(crate) use events::now_ms;
-use events::{DecisionRecord, append_jsonl, ensure_state_layout, new_id};
+use jsonl::append_jsonl;
 #[cfg(test)]
-use events::{PlanEvent, ReceiptRecord, read_jsonl, truncate};
+use jsonl::read_jsonl;
 #[cfg(test)]
 pub(crate) use plans::seed_open_plan_for_test;
 pub(crate) use plans::{
@@ -29,21 +28,30 @@ pub(crate) use receipts::{
 pub(crate) use receipts::{ReceiptInput, ReceiptListFilter, receipts_list, record_receipt};
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive};
 use receipts::{StateToolReceipt, record_successful_state_tool};
+use records::DecisionRecord;
+#[cfg(test)]
+use records::{PlanEvent, ReceiptRecord};
 #[cfg(test)]
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
 pub(crate) use sessions::{
     SessionEndRequest, session_end, session_start, state_summary, state_summary_with_cancellation,
 };
+pub(crate) use support::now_ms;
+#[cfg(test)]
+use support::truncate;
+use support::{ensure_state_layout, new_id};
 pub(crate) use timeline::{
     DecisionStreamRecord, PlanStreamEvent, ReceiptStreamRecord, StateStreams, plan_detail_streams,
     plan_receipts, state_streams,
 };
 
-mod events;
+mod jsonl;
 mod plans;
 mod receipts;
+mod records;
 mod sessions;
+mod support;
 mod timeline;
 
 #[derive(Debug, Deserialize)]

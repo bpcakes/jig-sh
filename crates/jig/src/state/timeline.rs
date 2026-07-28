@@ -2,11 +2,9 @@ use anyhow::Result;
 
 use crate::context::RepoContext;
 
-use super::events::{
-    DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, read_jsonl, read_receipt_window,
-    receipts_for_plan,
-};
+use super::jsonl::{read_jsonl, read_receipt_window, receipts_for_plan};
 use super::receipts::receipt_diff_summary;
+use super::records::{DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent};
 
 pub(crate) struct SessionStreamEvent {
     pub event: String,

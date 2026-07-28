@@ -8,12 +8,11 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
-use super::events::{
-    DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, append_jsonl, ensure_state_layout,
-    new_id, now_ms, read_jsonl, read_jsonl_with_cancellation,
-};
+use super::jsonl::{append_jsonl, read_jsonl, read_jsonl_with_cancellation};
 use super::plans::open_plans;
 use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
+use super::records::{DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent};
+use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
 

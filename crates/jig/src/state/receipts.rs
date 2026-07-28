@@ -17,12 +17,13 @@ use crate::git_receipts::{
 };
 use crate::tool_defs::tool;
 
-use super::events::{
-    ReceiptRecord, append_jsonl, ensure_state_layout, new_id, now_ms, read_jsonl,
-    read_jsonl_locked, read_jsonl_with_cancellation, truncate, with_jsonl_write_lock,
-    write_jsonl_locked,
+use super::jsonl::{
+    append_jsonl, read_jsonl, read_jsonl_locked, read_jsonl_with_cancellation,
+    with_jsonl_write_lock, write_jsonl_locked,
 };
+use super::records::ReceiptRecord;
 use super::sessions::current_session;
+use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 pub(crate) struct ReceiptInput<'a> {
     pub(crate) tool_name: &'a str,
