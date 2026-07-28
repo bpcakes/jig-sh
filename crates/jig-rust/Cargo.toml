@@ -5,9 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Rust feature-area checks and contract metadata for Jig."
-repository = "https://github.com/bpcakes/jig-sh"
-homepage = "https://github.com/bpcakes/jig-sh"
-documentation = "https://github.com/bpcakes/jig-sh/tree/master/docs"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 
 [dependencies]
 jig-contract.workspace = true
