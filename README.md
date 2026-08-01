@@ -37,22 +37,17 @@ Render the harness, check readiness, and run the work loop:
 # 1. Run the guided init (or `jig adopt .` inside an existing repo)
 jig init ./my-app
 
-# 2. See what setup remains
+# 2. Prepare the generated repo and verify its minimum contract
 cd ./my-app
-scripts/jig doctor
+scripts/jig setup
 
-# 3. Bootstrap and verify the contract
-scripts/jig bootstrap
-scripts/jig agent bootstrap        # if doctor reports missing marketplace registration
-scripts/jig check contract
-
-# 4. Do work behind gates
+# 3. Do work behind gates
 plan_id="$(scripts/jig work start --title "First change" --body "Validate the harness loop." --print-plan-id)"
 scripts/jig check test
 scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified" --outcome success
 ```
 
-`doctor` exits nonzero until required setup is complete and reports the next step to take. Human-readable output is the default; pass `--json` for structured automation output.
+`setup` runs doctor first, bootstraps project dependencies, registers configured agent tooling when needed, verifies the generated contract, and runs doctor again. It records the bootstrap and contract receipts. `doctor` remains the read-only diagnostic command and exits nonzero until required setup is complete. Human-readable output is the default; pass `--json` for structured automation output.
 
 ## How it works
 
@@ -68,6 +63,7 @@ scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified
 | --------------- | ---------------- | ----------------- | -------------- |
 | `check`         | yes              | yes               | no             |
 | `work`          | runtime-owned    | yes               | no             |
+| `state`         | runtime-owned    | no                | partly         |
 | `prompt`        | runtime-owned    | no                | partly         |
 | `dev` / `proxy` | runtime-owned    | no                | yes            |
 | `vault`         | runtime-owned    | no                | yes            |
@@ -104,7 +100,7 @@ This scaffolds a Cargo workspace (`apps/<repo>-api`, `crates/<repo>-core`, `crat
 
 Bare frontend names other than `web`, `landing`, `admin` and the compatible `marketing`, `astro`, and `admin-panel` aliases are custom names. Interactive init shows the resolved app kind and directory, then asks for confirmation so a typo such as `amdin` does not silently become a directory; non-interactive init calls the custom name out in the summary. Use an explicit kind such as `dashboard:spa`, `ops:admin`, or `campaign:astro` when a custom name is intentional. The Rust + React preset reserves `api` (case-insensitively) for its backend dev app, so use a name such as `api-client` for an API-facing frontend.
 
-The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig bootstrap`. Bootstrap creates or safely reuses the configured database, applies migrations, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. The app crate owns typed `AppConfig`/`AppState`; the API binary optionally loads `.env` with `dotenvy`; the HTTP crate owns the Axum router, handlers, middleware, and health endpoints. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
+The frontends share a private root JavaScript workspace, pinned Node/package-manager metadata, and one root lockfile; fresh Yarn workspaces use the `node-modules` linker for compatibility with the generated Vite and Astro apps. For a database-backed scaffold, export `DATABASE_URL` or copy `.env.example` to `.env` and configure it before running `scripts/jig setup` (or the narrower `scripts/jig bootstrap`). Bootstrap creates or safely reuses the configured database, applies migrations, installs frontend dependencies once, and records both the selected dependency inputs and installed artifact. `scripts/jig dev` verifies that exact state without installing packages, and frontend `dev` scripts only start their servers. Commit the generated root lockfile. The app crate owns typed `AppConfig`/`AppState`; the API binary optionally loads `.env` with `dotenvy`; the HTTP crate owns the Axum router, handlers, middleware, and health endpoints. Local `.env` files remain ignored. Preset application code is generated once and then becomes **project-owned** — `jig update` keeps the harness current but never migrates or overwrites your application source.
 
 **Adopt an existing repo.** `jig adopt` scans first and previews managed-file changes; re-run with `--write` after reviewing:
 
@@ -133,6 +129,14 @@ See [Adoption](docs/adoption.md) and [Configuration](docs/configuration.md) for 
 ### Structured work & receipts
 
 `work start` opens a plan, `check` runs gates, and `work finish` closes a plan only after fresh evidence exists. Contract and gate commands append receipts under `.agent/state/`, giving every change a reviewable trail. See [Developer UX](docs/developer-ux.md#work-receipts-and-gate-evidence).
+
+### Local state maintenance
+
+State repair and retention work locally; no hosted service is required. Start with `scripts/jig state diagnose`, adding `--deep` to analyze recursive session summaries and receipt payload growth. Preview a legacy-session repair with `scripts/jig state compact sessions --dry-run`, then run it without `--dry-run` to write an exact compressed backup under ignored `.agent/.cache/` before replacing the working-tree state. Restore that backup with `scripts/jig state restore --backup <backup-directory>`.
+
+`scripts/jig state archive --before <date>` compresses eligible old receipts into ignored local storage, creates an exact pre-rewrite recovery backup, and shrinks the active receipt stream. Restore that backup with the same `state restore` command. `scripts/jig state export receipts --before <date> --output <file.jsonl.gz>` creates a non-mutating export at a caller-selected path. Artifacts under `.agent/.cache/` are local recovery aids, so copy them elsewhere for durable retention. Working-tree compaction and archiving do not remove state blobs already reachable from Git history. See [Runtime State](docs/public-contract.md#runtime-state).
+
+Before applying a compaction, archive rewrite, or restore, stop Jig processes launched with older runtimes; current runtimes share the repository state lock, but a legacy writer waiting on a pre-opened inode cannot follow an atomic replacement. After verifying a rewrite, keep or copy the recovery artifact you need and remove obsolete ignored cache artifacts. `state diagnose` reports that cache usage separately.
 
 ### Rewrite status
 

@@ -1,0 +1,27 @@
+# <<[ package_name ]>>
+
+## Purpose
+
+Owns application configuration, shared application state, and business use cases for `<<[ repo_name ]>>`.
+
+## Key entrypoints
+
+- `src/lib.rs`: `AppConfig` parses environment settings and `AppState` carries typed runtime state.
+
+## Edit here for X
+
+- Add app-owned configuration fields, validation, and defaults in `AppConfig`.
+- Add business use cases and state accessors here before exposing them through HTTP handlers.
+- Keep transport DTOs, Axum extractors, and route wiring in `crates/<<[ package_name ]>>-http`.
+
+## Invariants
+
+- Parse environment configuration once at startup, then pass typed config into `AppState`.
+- Do not read request transport details in this crate.
+[% if db_enabled %]
+- Access persistence through the `<<[ package_name ]>>-db` boundary and keep DB wiring behind the `db` feature.
+[% endif %]
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>`

@@ -1,0 +1,180 @@
+_commit = "<<[ _jig.commit | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+_src_path = "<<[ _jig.src_path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+_template_mode = "<<[ _jig.template_mode | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+_template_local_path = "<<[ _jig.template_local_path | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+repo_name = "<<[ repo_name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+default_branch = "<<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+ci_github_runner = "<<[ ci_github_runner | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+jig_version = "<<[ jig_version | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+template_source_url = "<<[ template_source_url | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+harness_footprint = "<<[ harness_footprint | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+sqlx_enabled = [% if sqlx_enabled %]true[% else %]false[% endif %]
+rust_crate_roots = [[% for root in rust_crate_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
+[% if sqlx_enabled %]
+rust_migration_dir = "<<[ rust_migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
+schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]
+[% if sqlx_enabled and schema_dump_enabled %]
+schema_dump_command = "<<[ schema_dump_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
+[% if sqlx_enabled %]
+sqlx_check_command = "<<[ sqlx_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
+# Command values are project-owned. Generated Cargo defaults skip cleanly when
+# no manifests are found; with nested manifests they run each one in turn.
+# Review them against this repo's workspace layout and replace them when custom
+# orchestration is needed.
+bootstrap_command = "<<[ bootstrap_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if legacy_dev_command %]
+# Deprecated and ignored by generated commands; preserved only so you can migrate it into [dev] / [[dev.apps]].
+dev_command = "<<[ legacy_dev_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
+rust_fmt_check_command = "<<[ rust_fmt_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_clippy_command = "<<[ rust_clippy_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_test_command = "<<[ rust_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_test_locked_command = "<<[ rust_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+web_package_manager = "<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if frontend_apps | length == 0 %]
+frontend_apps = []
+[% else %]
+[% for app in frontend_apps %]
+[[frontend_apps]]
+name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+dir = "<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+coverage_threshold = <<[ app.coverage_threshold ]>>
+kind = "<<[ app.kind | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+role = "<<[ app.role | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endfor %]
+[% endif %]
+
+[vault]
+scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
+
+[% if frontend_harness_enabled %]
+# Extra command keys must use *_command names so contract required_commands
+# stay distinct from tool names and gate ids. Entries here override same-named
+# legacy top-level command fields.
+[commands]
+typescript_lint_command = "<<[ typescript_lint_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+typescript_typecheck_command = "<<[ typescript_typecheck_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+typescript_build_command = "<<[ typescript_build_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+typescript_coverage_command = "<<[ typescript_coverage_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+
+[% endif %]
+[dev]
+proxy_port = 1355
+https_port = 1443
+https = false
+# HTTPS listener ALPN only; cleartext proxy traffic remains HTTP/1.1.
+http2 = true
+lan = false
+# Must be localhost, local, test, internal, or a subdomain below one of them.
+tld = "localhost"
+# Set true to discover JavaScript workspace packages that expose dev scripts.
+workspace_discovery = false
+[% for app in dev_apps %]
+
+# Repo-local dev service.
+[[dev.apps]]
+name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if app.dir %]dir = "<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]kind = "<<[ app.kind | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if app.port %]port = <<[ app.port ]>>
+[% endif %][% if app.host %]host = "<<[ app.host | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %][% if not app.proxy %]proxy = false
+[% endif %][% if app.command %]command = "<<[ app.command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% else %]argv = [[% for arg in app.argv %]"<<[ arg | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
+[% endif %][% endfor %]
+[% for app in generated_frontend_dev_apps %]
+
+# Generated from [[frontend_apps]] so local dev uses explicit app settings while
+# web CI keeps its coverage threshold metadata above. Jig validates that name
+# and dir stay aligned with the matching frontend app.
+[[dev.apps]]
+name = "<<[ app.name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+dir = "<<[ app.dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+kind = "<<[ app.kind | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if web_package_manager == "npm" %]
+argv = ["npm", "--prefix=.", "--workspace=.", "--workspaces=true", "--include-workspace-root=true", "--global=false", "--location=project", "--if-present=false", "--include=dev", "--include=optional", "--include=peer", "run", "dev"]
+[% else %]
+argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", "run", "dev"]
+[% endif %]
+[% endfor %]
+
+[% if status.providers | length == 0 %]
+[status]
+providers = []
+[% else %]
+[% for provider in status.providers %]
+[[status.providers]]
+id = "<<[ provider.id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+argv = [[% for arg in provider.argv %]"<<[ arg | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
+timeout_seconds = <<[ provider.timeout_seconds ]>>
+[% endfor %]
+[% endif %]
+
+[[work.gates]]
+id = "contract"
+kind = "check"
+tool = "jig.contract_check"
+
+[[work.gates]]
+id = "tests"
+kind = "check"
+tool = "jig.test"
+
+[% if frontend_harness_enabled %]
+[[work.gates]]
+id = "typescript-lint"
+kind = "check"
+tool = "jig.typescript_lint"
+
+[[work.gates]]
+id = "typescript-typecheck"
+kind = "check"
+tool = "jig.typescript_typecheck"
+
+[[work.gates]]
+id = "typescript-build"
+kind = "check"
+tool = "jig.typescript_build"
+
+[[work.gates]]
+id = "typescript-coverage"
+kind = "check"
+tool = "jig.typescript_coverage"
+
+[% endif %]
+[% if sqlx_enabled %]
+[[work.gates]]
+id = "sqlx"
+kind = "check"
+tool = "jig.sqlx_check"
+
+[% endif %]
+[% if sqlx_enabled and schema_dump_enabled %]
+[[work.gates]]
+id = "schema"
+kind = "check"
+tool = "jig.schema_check"
+
+[[work.gates]]
+id = "schema-dump"
+kind = "check"
+tool = "jig.schema_dump"
+
+[% endif %]
+[% if agent_tooling.codex.marketplaces | length == 0 %]
+[agent_tooling.codex]
+marketplaces = []
+[% else %]
+[% for marketplace in agent_tooling.codex.marketplaces %]
+[[agent_tooling.codex.marketplaces]]
+id = "<<[ marketplace.id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+source = "<<[ marketplace.source | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+plugins = [[% for plugin in marketplace.plugins %]"<<[ plugin | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
+[% endfor %]
+[% endif %]

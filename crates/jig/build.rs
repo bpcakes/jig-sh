@@ -88,6 +88,7 @@ struct EmbeddedTemplateManifest<'a> {
     root: &'a str,
     output_file: &'a str,
     snapshot_file: &'a str,
+    snapshot_dir: &'a str,
     static_name: &'a str,
     entry_type: &'a str,
     from_snapshot_const: &'a str,
@@ -100,7 +101,9 @@ fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTem
     let output_path = out_dir.join(manifest.output_file);
     if env::var_os("JIG_EMBEDDED_TEMPLATE_SNAPSHOT").is_some() || !template_root.is_dir() {
         let snapshot = Path::new(manifest_dir).join(manifest.snapshot_file);
+        let snapshot_dir = Path::new(manifest_dir).join(manifest.snapshot_dir);
         println!("cargo:rerun-if-changed={}", snapshot.display());
+        println!("cargo:rerun-if-changed={}", snapshot_dir.display());
         fs::copy(&snapshot, &output_path).unwrap_or_else(|error| {
             panic!(
                 "failed to copy embedded template snapshot {} to {}: {error}",
@@ -118,6 +121,8 @@ fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTem
 
     if env::var_os("JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT").is_some() {
         let snapshot = Path::new(manifest_dir).join(manifest.snapshot_file);
+        let snapshot_dir = Path::new(manifest_dir).join(manifest.snapshot_dir);
+        replace_snapshot_directory(&snapshot_dir, &templates);
         replace_file(
             &snapshot,
             render_embedded_template_snapshot(&templates, &manifest).as_bytes(),
@@ -130,7 +135,7 @@ fn generate_embedded_template_manifest(manifest_dir: &str, manifest: EmbeddedTem
 
     let output = render_embedded_template_entries(
         &templates,
-        |path| format!("include_str!({:?})", path.display().to_string()),
+        |_, path| format!("include_str!({:?})", path.display().to_string()),
         &manifest,
         false,
     );
@@ -149,6 +154,7 @@ fn generate_embedded_template_manifests(manifest_dir: &str) {
             root: "../../templates/project",
             output_file: "embedded_templates.rs",
             snapshot_file: "src/bootstrap/embedded_templates_snapshot.rs",
+            snapshot_dir: "src/bootstrap/embedded_template_snapshots",
             static_name: "EMBEDDED_TEMPLATE_FILES",
             entry_type: "EmbeddedTemplateFile",
             from_snapshot_const: "EMBEDDED_TEMPLATE_FILES_FROM_SNAPSHOT",
@@ -161,6 +167,7 @@ fn generate_embedded_template_manifests(manifest_dir: &str) {
             root: "../../templates/scaffolds",
             output_file: "embedded_scaffold_templates.rs",
             snapshot_file: "src/bootstrap/scaffold/embedded_templates_snapshot.rs",
+            snapshot_dir: "src/bootstrap/scaffold/embedded_template_snapshots",
             static_name: "EMBEDDED_SCAFFOLD_TEMPLATE_FILES",
             entry_type: "EmbeddedScaffoldTemplateFile",
             from_snapshot_const: "EMBEDDED_SCAFFOLD_TEMPLATE_FILES_FROM_SNAPSHOT",
@@ -223,11 +230,9 @@ fn render_embedded_template_snapshot(
     output.push_str(manifest.snapshot_comment);
     output.push_str(&render_embedded_template_entries(
         templates,
-        |path| {
-            let contents = fs::read_to_string(path).unwrap_or_else(|error| {
-                panic!("failed to read template {}: {error}", path.display())
-            });
-            raw_string_literal(&contents)
+        |relative, _| {
+            let snapshot_path = format!("/{}/{}", manifest.snapshot_dir, relative);
+            format!("include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {snapshot_path:?}))")
         },
         manifest,
         true,
@@ -237,7 +242,7 @@ fn render_embedded_template_snapshot(
 
 fn render_embedded_template_entries(
     templates: &[(String, PathBuf)],
-    mut contents_expr: impl FnMut(&Path) -> String,
+    mut contents_expr: impl FnMut(&str, &Path) -> String,
     manifest: &EmbeddedTemplateManifest<'_>,
     from_snapshot: bool,
 ) -> String {
@@ -259,34 +264,14 @@ fn render_embedded_template_entries(
     for (relative, path) in templates {
         writeln!(
             output,
-            "    {} {{ relative_path: {relative:?}, contents: {} }},",
+            "    {} {{\n        relative_path: {relative:?},\n        contents: {},\n    }},",
             manifest.entry_type,
-            contents_expr(path),
+            contents_expr(relative, path),
         )
         .expect("writing generated template entries to string cannot fail");
     }
     output.push_str("];\n");
     output
-}
-
-fn raw_string_literal(contents: &str) -> String {
-    // Sixteen hashes leaves ample delimiter space for generated shell/docs content
-    // while keeping generated snapshots readable for normal template content.
-    for hash_count in 1..=16 {
-        let hashes = "#".repeat(hash_count);
-        let closing = format!("\"{hashes}");
-        if !contents.contains(&closing) {
-            return format!("r{hashes}\"{contents}\"{hashes}");
-        }
-    }
-    println!(
-        "cargo:warning=embedded template snapshot used an escaped string literal because raw string delimiters exceeded 16 hashes"
-    );
-    escaped_string_literal(contents)
-}
-
-fn escaped_string_literal(contents: &str) -> String {
-    format!("{contents:?}")
 }
 
 fn replace_file(path: &Path, contents: &[u8]) {
@@ -338,6 +323,74 @@ fn absolute_git_path(manifest_dir: &str, path: String) -> PathBuf {
         path
     } else {
         Path::new(manifest_dir).join(path)
+    }
+}
+
+fn replace_snapshot_directory(path: &Path, templates: &[(String, PathBuf)]) {
+    let process_id = std::process::id();
+    let staged = path.with_extension(format!("tmp.{process_id}"));
+    let displaced = path.with_extension(format!("old.{process_id}"));
+    for temporary in [&staged, &displaced] {
+        if temporary.exists() {
+            fs::remove_dir_all(temporary).unwrap_or_else(|error| {
+                panic!(
+                    "failed to remove stale embedded template snapshot directory {}: {error}",
+                    temporary.display()
+                )
+            });
+        }
+    }
+
+    fs::create_dir_all(&staged).unwrap_or_else(|error| {
+        panic!(
+            "failed to create staged embedded template snapshot directory {}: {error}",
+            staged.display()
+        )
+    });
+    for (relative, source) in templates {
+        let destination = staged.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).unwrap_or_else(|error| {
+                panic!(
+                    "failed to create embedded template snapshot directory {}: {error}",
+                    parent.display()
+                )
+            });
+        }
+        fs::copy(source, &destination).unwrap_or_else(|error| {
+            panic!(
+                "failed to stage embedded template snapshot {} at {}: {error}",
+                source.display(),
+                destination.display()
+            )
+        });
+    }
+
+    if path.exists() {
+        fs::rename(path, &displaced).unwrap_or_else(|error| {
+            panic!(
+                "failed to preserve prior embedded template snapshot directory {}: {error}",
+                path.display()
+            )
+        });
+    }
+    if let Err(error) = fs::rename(&staged, path) {
+        if displaced.exists() {
+            let _ = fs::rename(&displaced, path);
+        }
+        let _ = fs::remove_dir_all(&staged);
+        panic!(
+            "failed to publish embedded template snapshot directory {}: {error}",
+            path.display()
+        );
+    }
+    if displaced.exists() {
+        fs::remove_dir_all(&displaced).unwrap_or_else(|error| {
+            panic!(
+                "failed to remove prior embedded template snapshot directory {}: {error}",
+                displaced.display()
+            )
+        });
     }
 }
 

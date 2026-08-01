@@ -1,0 +1,116 @@
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_http as app_http_crate;
+use axum::{
+    Router,
+    body::{Body, to_bytes},
+    http::{HeaderMap, Method, Request, StatusCode, header},
+};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use tower::ServiceExt;
+
+use crate::responses::TestResponse;
+
+const TEST_BODY_LIMIT: usize = 1024 * 1024;
+
+#[derive(Clone)]
+pub struct TestApp {
+    router: Router,
+}
+
+impl TestApp {
+    pub fn new() -> Self {
+        Self::from_state(app_crate::AppState::for_tests())
+    }
+
+    pub fn from_state(state: app_crate::AppState) -> Self {
+        Self::from_router(app_http_crate::router(state))
+    }
+
+    pub fn from_router(router: Router) -> Self {
+        Self { router }
+    }
+
+    pub async fn request(&self, request: Request<Body>) -> TestResponse {
+        let response = self
+            .router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("test router returned an error");
+        let (parts, body) = response.into_parts();
+        let body = to_bytes(body, TEST_BODY_LIMIT)
+            .await
+            .expect("failed to read response body");
+        TestResponse::new(parts.status, parts.headers, body)
+    }
+
+    pub async fn request_with_headers(
+        &self,
+        method: Method,
+        uri: &str,
+        body: Option<Body>,
+        headers: HeaderMap,
+    ) -> TestResponse {
+        let mut builder = Request::builder().method(method).uri(uri);
+        let request_headers = builder.headers_mut().expect("request builder is valid");
+        request_headers.extend(headers);
+        self.request(
+            builder
+                .body(body.unwrap_or_else(Body::empty))
+                .expect("test request is valid"),
+        )
+        .await
+    }
+
+    pub async fn get(&self, uri: &str) -> TestResponse {
+        self.request(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .expect("test request is valid"),
+        )
+        .await
+    }
+
+    pub async fn get_json<T>(&self, uri: &str) -> T
+    where
+        T: DeserializeOwned,
+    {
+        self.get(uri).await.assert_status(StatusCode::OK).json()
+    }
+
+    pub async fn post_json<T, B>(&self, uri: &str, body: &B) -> T
+    where
+        T: DeserializeOwned,
+        B: Serialize + ?Sized,
+    {
+        self.try_post_json(uri, body)
+            .await
+            .assert_status(StatusCode::OK)
+            .json()
+    }
+
+    pub async fn try_post_json<B>(&self, uri: &str, body: &B) -> TestResponse
+    where
+        B: Serialize + ?Sized,
+    {
+        let json = serde_json::to_vec(body).expect("test JSON body serializes");
+        self.request(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json))
+                .expect("test request is valid"),
+        )
+        .await
+    }
+}
+
+impl Default for TestApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

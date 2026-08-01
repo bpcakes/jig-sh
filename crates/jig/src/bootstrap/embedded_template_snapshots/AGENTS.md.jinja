@@ -1,0 +1,111 @@
+# Repository Guidelines
+
+<!-- BEGIN JIG MANAGED BLOCK -->
+This repository uses the shared `jig.sh` workflow. Keep repo-local business rules and ownership guidance in crate-level guides; keep generic agent workflow and repo policy here.
+
+## Start Here
+
+- Use this file for repo-wide defaults.
+- Open [agent-map.md](./agent-map.md) before backend work.
+- Read the nearest crate-level `AGENTS.md` before changing a crate when one exists.
+- Use `.agent/PLANS.md` when writing an ExecPlan for a complex feature or refactor.
+- Use `scripts/jig` for the typed repo contract and `scripts/jig mcp` for MCP clients.
+- On a fresh machine, run `scripts/jig doctor`; follow its next step, including `scripts/jig agent bootstrap` when Jig Codex skills are missing.
+- For substantial work, use `scripts/jig work start`, `scripts/jig work check`, `scripts/jig work evidence`, `scripts/jig work gates`, and `scripts/jig work finish` to keep plans, receipts, and required gates connected.
+- Treat `.agent/state/*.jsonl` as append-only repo memory.
+
+## Compatibility And Cutovers
+
+- Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
+- Preserve compatibility or stage rollouts for persisted database state, queued job types, public API contracts, bookmarked routes, webhook boundaries, or source-of-truth moves that can straddle deploys.
+[% if sqlx_enabled %]
+- Never overwrite an existing database migration; add a new forward-only migration instead.
+[% endif %]
+
+## Backend Defaults
+
+- Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
+- Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
+[% if sqlx_enabled %]
+- SQL migrations live under `<<[ rust_migration_dir ]>>`.
+- SQLx metadata is committed in `<<[ rust_sqlx_metadata_dir ]>>`.
+[% endif %]
+- Keep transport logic thin and business logic in the owning crate.
+[% if sqlx_enabled %]
+- Keep transaction boundaries explicit and deterministic.
+[% endif %]
+
+## Frontend Defaults
+
+[% if frontend_apps | length > 0 -%]
+Configured web apps:
+
+[% for app in frontend_apps -%]
+- `<<[ app.name ]>>` in `<<[ app.dir ]>>`
+[% endfor %]
+
+Each configured app is expected to support `lint`, `typecheck`, `build:bundle`, and `test:coverage`.
+`test:coverage` must write `coverage/coverage-summary.json` in the app directory for threshold enforcement.
+Jig validates those scripts during adoption; generated web CI validates them again before running.
+Generated install steps select the package-manager project from workspace membership, not root-lock presence: npm, pnpm, Bun, and Yarn Classic members use the root project, while standalone apps and nested Yarn Berry projects use their app-local project.
+Generated npm installs pin real writes, lock creation, workspace participation, platform packages, executable links, and all dependency classes despite ambient install-shaping variables; registry/authentication, dependency layout, peer resolution, and install-script approval remain project-owned.
+Run package-local scripts through `scripts/check-webapps.sh run-script <app-dir> <script>` for the generated execution boundary; generated web and browser-E2E workflows do this for every package script. For npm it pins the exact current package and required-script behavior despite ambient npm selectors; explicit app environment plus registry, authentication, layout, peer, and lifecycle policy remain project-owned.
+The dependency checker supports stock macOS Bash 3.2, treats Yarn authority-enumeration failures as hard errors, and follows Bash-owned worker-job identity after an interrupted `wait` rather than probing a reaped PID.
+Dependency readiness treats a missing, empty, or exact cache-only real `node_modules` root equivalently. It ignores only real top-level tool-cache directories (`.cache`, `.vite`, `.vite-temp`, and `.tmp`) plus a regular `.DS_Store`; unknown entries, nested/type-replaced cache names, package entries, metadata, symlinks, and launchers remain attested.
+`[[frontend_apps]]` keeps CI, coverage, and semantic role metadata; generated `[[dev.apps]]` drives `scripts/jig dev` and takes precedence for local dev settings. When both sections are present, Jig requires a matching dev app name and dir for every frontend app. `kind` selects `vite` versus `env-port`; `role` selects `spa`, `admin`, or `astro` without guessing from the directory name. Extra `[[dev.apps]]` entries without `[[frontend_apps]]` are treated as dev-only and are not covered by generated web CI.
+Remove legacy `dev_command` keys; local dev now runs through `[dev]` and `[[dev.apps]]`.
+[% else -%]
+No web apps are configured in `.jig.toml`.
+[% endif %]
+
+## Preferred Commands
+
+- `scripts/jig bootstrap`
+- `scripts/jig doctor`
+- `scripts/jig dev`
+- `scripts/jig check test`
+- `scripts/jig check fmt`
+- `scripts/jig check clippy`
+- `scripts/jig work status`
+- `scripts/jig work evidence`
+[% if frontend_apps | length > 0 %]
+- `scripts/jig check typescript-lint`
+- `scripts/jig check typescript-typecheck`
+- `scripts/jig check typescript-build`
+- `scripts/jig check typescript-coverage`
+[% endif %]
+[% if sqlx_enabled %]
+- `scripts/jig check sqlx`
+[% if schema_dump_enabled %]
+- `scripts/jig check schema`
+- `scripts/jig schema-dump`
+[% endif %]
+- `scripts/jig migration-add NAME`
+[% endif %]
+- `scripts/jig check contract`
+
+## Done Means
+
+- Run the relevant local verification for the area you changed.
+- For backend changes, finish with `scripts/jig check test`.
+[% if frontend_apps | length > 0 %]
+- For frontend changes, run the relevant `scripts/jig check typescript-*` gates.
+[% endif %]
+[% if sqlx_enabled %]
+- For SQLx or migration changes, run `scripts/jig check sqlx`.
+[% if schema_dump_enabled %]
+- For schema-doc-enabled repos, run `scripts/jig check schema`.
+[% endif %]
+[% endif %]
+- Review the generated diff for stale docs, policy drift, or missing dependent updates.
+
+## Crate Guide Conventions
+
+When a backend crate has a crate-level `AGENTS.md`, use these sections:
+
+- `## Purpose`
+- `## Key entrypoints`
+- `## Edit here for X`
+- `## Invariants`
+- `## Common commands`
+<!-- END JIG MANAGED BLOCK -->

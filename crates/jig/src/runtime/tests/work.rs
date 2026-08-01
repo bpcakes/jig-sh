@@ -441,10 +441,11 @@ fn work_check_rejects_closed_plan_before_running_tools() {
 }
 
 #[test]
-fn work_check_collects_worktree_fingerprint_only_on_batch_receipt() {
+fn work_check_collects_change_metadata_only_on_batch_receipt() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     init_git_repo(temp.path());
+    fs::write(temp.path().join("outside-agent.txt"), "changed\n").unwrap();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     dispatch(
@@ -472,10 +473,82 @@ fn work_check_collects_worktree_fingerprint_only_on_batch_receipt() {
         .expect("work check batch receipt should be recorded");
 
     assert!(tool_receipt["worktree_fingerprint"].is_null());
+    assert_eq!(tool_receipt["changed_paths"], json!([]));
+    assert!(tool_receipt["changed_path_count"].is_null());
+    assert_eq!(tool_receipt["diff_stat"]["files"], 0);
     assert!(batch_receipt["worktree_fingerprint"].as_str().is_some());
+    assert_eq!(batch_receipt["changed_paths"], json!(["outside-agent.txt"]));
+    assert_eq!(batch_receipt["changed_path_count"], 1);
+    assert_eq!(batch_receipt["changed_paths_truncated"], false);
+    assert!(batch_receipt["changed_paths_digest"].as_str().is_some());
     assert_eq!(
         batch_receipt["args"]["receipt_ids"][0],
         tool_receipt["id"].as_str().unwrap()
+    );
+}
+
+#[test]
+fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
+    let temp = tempdir().unwrap();
+    write_fail_fast_check_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("outside-agent.txt"), "changed\n").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: vec!["jig.failing_check".into(), "jig.later_check".into()],
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("jig.failing_check failed with status 7"));
+    assert!(error.contains("command key: failing_check_command"));
+    assert!(!temp.path().join("later-check-ran.txt").exists());
+
+    let receipts_text = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .expect("failed work check should write child and batch receipts");
+    let receipts = receipts_text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let tool_receipt = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.failing_check")
+        .expect("failed tool receipt should be recorded");
+    let batch_receipt = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("failed work check batch receipt should be recorded");
+
+    assert_eq!(tool_receipt["exit_status"], 7);
+    assert!(tool_receipt["worktree_fingerprint"].is_null());
+    assert_eq!(tool_receipt["changed_paths"], json!([]));
+    assert!(tool_receipt["changed_path_count"].is_null());
+    assert!(tool_receipt["changed_paths_digest"].is_null());
+    assert_eq!(tool_receipt["diff_stat"]["files"], 0);
+
+    assert_eq!(batch_receipt["exit_status"], 7);
+    assert_eq!(
+        batch_receipt["args"]["tools"],
+        json!(["jig.failing_check", "jig.later_check"])
+    );
+    assert_eq!(
+        batch_receipt["args"]["receipt_ids"],
+        json!([tool_receipt["id"].as_str().unwrap()])
+    );
+    assert_eq!(batch_receipt["changed_paths"], json!(["outside-agent.txt"]));
+    assert_eq!(batch_receipt["changed_path_count"], 1);
+    assert_eq!(batch_receipt["changed_paths_truncated"], false);
+    assert!(batch_receipt["changed_paths_digest"].as_str().is_some());
+    assert!(batch_receipt["worktree_fingerprint"].as_str().is_some());
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["tool_name"] != "jig.later_check")
     );
 }
 
@@ -524,6 +597,40 @@ fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
             .unwrap()
             .contains("after fingerprint")
     );
+}
+
+#[test]
+fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
+    let temp = tempdir().unwrap();
+    write_mutating_check_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    crate::state::reset_work_gate_receipt_index_scan_count();
+    let gates = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            plan_id: Some("plan_1".into()),
+        })),
+    )
+    .unwrap();
+
+    assert_eq!(gates["gates"].as_array().unwrap().len(), 2);
+    assert_eq!(crate::state::work_gate_receipt_index_scan_count(), 1);
+
+    crate::state::reset_work_gate_receipt_index_scan_count();
+    let evidence = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Evidence(
+            crate::cli::WorkEvidenceOpts {
+                plan_id: Some("plan_1".into()),
+            },
+        )),
+    )
+    .unwrap();
+
+    assert_eq!(evidence["gates"].as_array().unwrap().len(), 2);
+    assert_eq!(crate::state::work_gate_receipt_index_scan_count(), 1);
 }
 
 #[test]

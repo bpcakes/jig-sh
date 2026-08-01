@@ -17,17 +17,17 @@ pub(crate) use plans::{
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::{
-    CurrentWorktreeFingerprint, ToolReceiptStatus, WorkReviewReceiptStatus,
+    CurrentWorktreeFingerprint, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptStatus,
     current_worktree_fingerprint, current_worktree_fingerprint_with_cancellation,
-    latest_plan_tool_receipt, latest_plan_tool_receipt_with_cancellation,
-    latest_plan_work_check_receipt_for_tool,
-    latest_plan_work_check_receipt_for_tool_with_cancellation,
-    latest_plan_work_review_receipt_for_gate,
-    latest_plan_work_review_receipt_for_gate_with_cancellation,
+    work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
 };
 pub(crate) use receipts::{ReceiptInput, ReceiptListFilter, receipts_list, record_receipt};
-pub(crate) use receipts::{StateArchiveRequest, receipts_archive};
+pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
+#[cfg(test)]
+pub(crate) use receipts::{
+    reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,
+};
 use records::DecisionRecord;
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
@@ -46,13 +46,22 @@ pub(crate) use timeline::{
     plan_receipts, state_streams,
 };
 
+mod compression;
+mod diagnostics;
 mod jsonl;
+mod maintenance;
 mod plans;
 mod receipts;
 mod records;
+mod session_compaction;
 mod sessions;
 mod support;
 mod timeline;
+
+pub(super) const MAINTENANCE_WRITER_COORDINATION_NOTE: &str = "Before applying a state rewrite, stop Jig processes launched with older runtimes that wrote through a pre-opened state-file handle. Current runtimes coordinate through the repository state lock.";
+
+pub(crate) use diagnostics::state_diagnose;
+pub(crate) use maintenance::{compact_sessions, restore_backup};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct DecisionAddRequest {

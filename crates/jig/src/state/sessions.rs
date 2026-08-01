@@ -1,6 +1,8 @@
+use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -8,10 +10,12 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::context::RepoContext;
 use crate::tool_defs::{args, tool};
 
-use super::jsonl::{append_jsonl, read_jsonl, read_jsonl_with_cancellation};
+use super::jsonl::{append_jsonl, read_jsonl, read_jsonl_with_cancellation, scan_jsonl_raw};
 use super::plans::open_plans;
 use super::receipts::{StateToolReceipt, receipt_diff_summary, record_successful_state_tool};
-use super::records::{DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent};
+use super::records::{
+    DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent, SessionEventEnvelope,
+};
 use super::support::{ensure_state_layout, new_id, now_ms};
 
 const STATE_SUMMARY_RECENT_LIMIT: usize = 10;
@@ -108,36 +112,85 @@ pub(crate) fn current_session(ctx: &RepoContext) -> Result<Option<String>> {
     }
 }
 
+pub(super) fn read_session_events(path: &Path) -> Result<Vec<SessionEvent>> {
+    read_session_events_with_cancellation(path, &|| false)
+}
+
+pub(super) fn read_session_events_with_cancellation(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<SessionEvent>> {
+    let mut canonical = HashMap::<String, (SessionEventEnvelope, u64)>::new();
+    scan_jsonl_raw(path, cancelled, |record| {
+        let envelope =
+            serde_json::from_slice::<SessionEventEnvelope>(record.bytes).with_context(|| {
+                format!(
+                    "Failed to parse session event envelope at JSONL record {} in {}",
+                    record.line_number,
+                    path.display()
+                )
+            })?;
+        match canonical.get(&envelope.id) {
+            Some((existing, _)) if existing == &envelope => {}
+            Some((_, first_line)) => {
+                bail!(
+                    "Conflicting session event envelope for ID `{}` at JSONL records {} and {} in {}",
+                    envelope.id,
+                    first_line,
+                    record.line_number,
+                    path.display()
+                );
+            }
+            None => {
+                canonical.insert(envelope.id.clone(), (envelope, record.line_number));
+            }
+        }
+        Ok(())
+    })?;
+
+    let mut canonical = canonical
+        .into_values()
+        .map(|(event, _)| event)
+        .collect::<Vec<_>>();
+    canonical.sort_by(|left, right| {
+        left.timestamp_ms
+            .cmp(&right.timestamp_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(canonical
+        .into_iter()
+        .map(SessionEventEnvelope::into_event)
+        .collect())
+}
+
 pub(super) fn build_summary(ctx: &RepoContext) -> Result<Value> {
-    let sessions = read_jsonl::<SessionEvent>(&ctx.state_file("sessions.jsonl"))?;
+    let sessions = read_session_events(&ctx.state_file("sessions.jsonl"))?;
     let plans = read_jsonl::<PlanEvent>(&ctx.state_file("plans.jsonl"))?;
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))?;
-    let decisions = read_jsonl::<DecisionRecord>(&ctx.state_file("decisions.jsonl"))?;
+    let receipts = summarize_receipts(&ctx.state_file("receipts.jsonl"), 5, &|| false)?;
+    let decisions = summarize_decisions(&ctx.state_file("decisions.jsonl"), 5, &|| false)?;
 
     let open_plans = open_plans(&plans);
 
     let recent_receipts = receipts
+        .recent
         .into_iter()
-        .rev()
-        .take(5)
         .map(|receipt| {
             json!({
-                "id": receipt.id,
-                "tool_name": receipt.tool_name,
-                "exit_status": receipt.exit_status,
+                "id": receipt["id"],
+                "tool_name": receipt["tool_name"],
+                "exit_status": receipt["exit_status"],
             })
         })
         .collect::<Vec<_>>();
 
     let recent_decisions = decisions
+        .recent
         .into_iter()
-        .rev()
-        .take(5)
         .map(|decision| {
             json!({
-                "id": decision.id,
-                "title": decision.title,
-                "selected_option": decision.selected_option,
+                "id": decision["id"],
+                "title": decision["title"],
+                "selected_option": decision["selected_option"],
             })
         })
         .collect::<Vec<_>>();
@@ -169,18 +222,20 @@ pub(crate) fn state_summary_with_cancellation(
 ) -> Result<Value> {
     ensure_state_summary_active(cancelled)?;
     let sessions =
-        read_jsonl_with_cancellation::<SessionEvent>(&ctx.state_file("sessions.jsonl"), cancelled)?;
+        read_session_events_with_cancellation(&ctx.state_file("sessions.jsonl"), cancelled)?;
     ensure_state_summary_active(cancelled)?;
     let plans =
         read_jsonl_with_cancellation::<PlanEvent>(&ctx.state_file("plans.jsonl"), cancelled)?;
     ensure_state_summary_active(cancelled)?;
-    let receipts = read_jsonl_with_cancellation::<ReceiptRecord>(
+    let receipts = summarize_receipts(
         &ctx.state_file("receipts.jsonl"),
+        STATE_SUMMARY_RECENT_LIMIT,
         cancelled,
     )?;
     ensure_state_summary_active(cancelled)?;
-    let decisions = read_jsonl_with_cancellation::<DecisionRecord>(
+    let decisions = summarize_decisions(
         &ctx.state_file("decisions.jsonl"),
+        STATE_SUMMARY_RECENT_LIMIT,
         cancelled,
     )?;
     ensure_state_summary_active(cancelled)?;
@@ -188,22 +243,6 @@ pub(crate) fn state_summary_with_cancellation(
     let open_plans = open_plans(&plans);
     let session_count = sessions.iter().filter(|session| session.is_start()).count();
     let plan_count = plans.iter().filter(|plan| plan.is_open()).count();
-    let failed_receipts = receipts
-        .iter()
-        .filter(|receipt| receipt.exit_status != 0)
-        .count();
-    let recent_receipts = receipts
-        .iter()
-        .rev()
-        .take(STATE_SUMMARY_RECENT_LIMIT)
-        .map(receipt_summary)
-        .collect::<Vec<_>>();
-    let recent_decisions = decisions
-        .iter()
-        .rev()
-        .take(STATE_SUMMARY_RECENT_LIMIT)
-        .map(decision_summary)
-        .collect::<Vec<_>>();
     ensure_state_summary_active(cancelled)?;
     let current_session_id = current_session(ctx)?;
     ensure_state_summary_active(cancelled)?;
@@ -223,14 +262,89 @@ pub(crate) fn state_summary_with_cancellation(
             "plans": plan_count,
             "plan_events": plans.len(),
             "open_plans": open_plans.len(),
-            "receipts": receipts.len(),
-            "failed_receipts": failed_receipts,
-            "decisions": decisions.len(),
+            "receipts": receipts.count,
+            "failed_receipts": receipts.failed,
+            "decisions": decisions.count,
         },
         "open_plans": open_plans,
-        "recent_receipts": recent_receipts,
-        "recent_decisions": recent_decisions,
+        "recent_receipts": receipts.recent,
+        "recent_decisions": decisions.recent,
     }))
+}
+
+struct ReceiptStreamSummary {
+    count: usize,
+    failed: usize,
+    recent: Vec<Value>,
+}
+
+fn summarize_receipts(
+    path: &Path,
+    limit: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ReceiptStreamSummary> {
+    let mut count = 0usize;
+    let mut failed = 0usize;
+    let mut recent = VecDeque::with_capacity(limit);
+    scan_jsonl_raw(path, cancelled, |record| {
+        let receipt = serde_json::from_slice::<ReceiptRecord>(record.bytes).with_context(|| {
+            format!(
+                "Failed to parse receipt JSONL record {} in {}",
+                record.line_number,
+                path.display()
+            )
+        })?;
+        count = count.saturating_add(1);
+        failed = failed.saturating_add(usize::from(receipt.exit_status != 0));
+        push_recent(&mut recent, limit, receipt_summary(&receipt));
+        Ok(())
+    })?;
+    Ok(ReceiptStreamSummary {
+        count,
+        failed,
+        recent: recent.into_iter().rev().collect(),
+    })
+}
+
+struct DecisionStreamSummary {
+    count: usize,
+    recent: Vec<Value>,
+}
+
+fn summarize_decisions(
+    path: &Path,
+    limit: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<DecisionStreamSummary> {
+    let mut count = 0usize;
+    let mut recent = VecDeque::with_capacity(limit);
+    scan_jsonl_raw(path, cancelled, |record| {
+        let decision =
+            serde_json::from_slice::<DecisionRecord>(record.bytes).with_context(|| {
+                format!(
+                    "Failed to parse decision JSONL record {} in {}",
+                    record.line_number,
+                    path.display()
+                )
+            })?;
+        count = count.saturating_add(1);
+        push_recent(&mut recent, limit, decision_summary(&decision));
+        Ok(())
+    })?;
+    Ok(DecisionStreamSummary {
+        count,
+        recent: recent.into_iter().rev().collect(),
+    })
+}
+
+fn push_recent(recent: &mut VecDeque<Value>, limit: usize, value: Value) {
+    if limit == 0 {
+        return;
+    }
+    if recent.len() == limit {
+        recent.pop_front();
+    }
+    recent.push_back(value);
 }
 
 fn ensure_state_summary_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
@@ -276,4 +390,228 @@ fn write_current_session(ctx: &RepoContext, session_id: Option<&str>) -> Result<
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod canonical_session_tests {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use serde_json::{Value, json};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn identical_envelopes_collapse_and_queries_sort_by_timestamp_then_id() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("sessions.jsonl");
+        let records = [
+            json!({
+                "id": "event-b",
+                "session_id": "session-b",
+                "event": "end",
+                "timestamp_ms": 1,
+                "outcome": "done"
+            }),
+            json!({
+                "id": "event-z",
+                "session_id": "session-z",
+                "event": "start",
+                "timestamp_ms": 2,
+                "outcome": null,
+                "summary": {"recent_sessions": [{"summary": {"legacy": true}}]}
+            }),
+            json!({
+                "id": "event-a",
+                "session_id": "session-a",
+                "event": "start",
+                "timestamp_ms": 1,
+                "outcome": null,
+                "summary": null
+            }),
+            json!({
+                "id": "event-z",
+                "session_id": "session-z",
+                "event": "start",
+                "timestamp_ms": 2,
+                "outcome": null,
+                "summary": null
+            }),
+        ];
+        let source = records
+            .iter()
+            .map(|record| format!("{}\n", serde_json::to_string(record).unwrap()))
+            .collect::<String>();
+        fs::write(&path, source).unwrap();
+
+        let events = read_session_events(&path).unwrap();
+        let ids = events
+            .into_iter()
+            .map(|event| {
+                serde_json::to_value(event).unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, ["event-a", "event-b", "event-z"]);
+    }
+
+    #[test]
+    fn every_conflicting_envelope_field_is_rejected_with_the_event_id() {
+        let base = json!({
+            "id": "same-id",
+            "session_id": "session-a",
+            "event": "end",
+            "timestamp_ms": 1,
+            "outcome": "done",
+            "summary": null
+        });
+        let conflicts = [
+            json!({
+                "id": "same-id",
+                "session_id": "session-b",
+                "event": "end",
+                "timestamp_ms": 1,
+                "outcome": "done"
+            }),
+            json!({
+                "id": "same-id",
+                "session_id": "session-a",
+                "event": "start",
+                "timestamp_ms": 1,
+                "outcome": "done"
+            }),
+            json!({
+                "id": "same-id",
+                "session_id": "session-a",
+                "event": "end",
+                "timestamp_ms": 2,
+                "outcome": "done"
+            }),
+            json!({
+                "id": "same-id",
+                "session_id": "session-a",
+                "event": "end",
+                "timestamp_ms": 1,
+                "outcome": "failed"
+            }),
+        ];
+
+        for conflict in conflicts {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("sessions.jsonl");
+            fs::write(
+                &path,
+                format!(
+                    "{}\n{}\n",
+                    serde_json::to_string(&base).unwrap(),
+                    serde_json::to_string(&conflict).unwrap()
+                ),
+            )
+            .unwrap();
+
+            let error = read_session_events(&path).unwrap_err().to_string();
+            assert!(error.contains("Conflicting session event envelope"));
+            assert!(error.contains("same-id"));
+            assert!(error.contains("records 1 and 2"));
+        }
+    }
+
+    #[test]
+    fn git_union_merge_duplicates_collapse_to_canonical_session_events() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.email", "jig-test@example.invalid"]);
+        git(root, &["config", "user.name", "Jig Test"]);
+        fs::write(root.join(".gitattributes"), "sessions.jsonl merge=union\n").unwrap();
+        let legacy = session_line("event-a", "session-a", 1, json!({"legacy": true}));
+        fs::write(root.join("sessions.jsonl"), format!("{legacy}\n")).unwrap();
+        git(root, &["add", ".gitattributes", "sessions.jsonl"]);
+        git(root, &["commit", "-q", "-m", "base"]);
+        let primary = git_output(root, &["branch", "--show-current"]);
+        git(root, &["branch", "stale"]);
+
+        let compact = session_line("event-a", "session-a", 1, Value::Null);
+        fs::write(root.join("sessions.jsonl"), format!("{compact}\n")).unwrap();
+        git(root, &["add", "sessions.jsonl"]);
+        git(root, &["commit", "-q", "-m", "compact"]);
+
+        git(root, &["checkout", "-q", "stale"]);
+        let stale_append = session_line("event-b", "session-b", 2, Value::Null);
+        fs::write(
+            root.join("sessions.jsonl"),
+            format!("{legacy}\n{stale_append}\n"),
+        )
+        .unwrap();
+        git(root, &["add", "sessions.jsonl"]);
+        git(root, &["commit", "-q", "-m", "stale append"]);
+
+        git(root, &["checkout", "-q", primary.trim()]);
+        git(root, &["merge", "-q", "--no-edit", "stale"]);
+
+        let merged = fs::read_to_string(root.join("sessions.jsonl")).unwrap();
+        assert!(
+            merged.lines().count() >= 3,
+            "union merge did not retain both physical event-a variants:\n{merged}"
+        );
+        let events = read_session_events(&root.join("sessions.jsonl")).unwrap();
+        let ids = events
+            .into_iter()
+            .map(|event| {
+                serde_json::to_value(event).unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["event-a", "event-b"]);
+    }
+
+    fn session_line(id: &str, session_id: &str, timestamp_ms: u64, summary: Value) -> String {
+        serde_json::to_string(&json!({
+            "id": id,
+            "session_id": session_id,
+            "event": "start",
+            "timestamp_ms": timestamp_ms,
+            "outcome": null,
+            "summary": summary,
+        }))
+        .unwrap()
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed:\nstdout: {}\nstderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_output(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed:\nstdout: {}\nstderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
 }

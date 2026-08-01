@@ -43,6 +43,54 @@ fn bare_init_defaults_to_rust_react_with_no_database_and_web() {
 }
 
 #[test]
+fn selected_package_manager_must_be_available_before_init_writes() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--defaults",
+        "--web-package-manager",
+        "yarn",
+        "--no-vault",
+    ]);
+    prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    let error = preflight_init_package_manager_with(&opts, |_| false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Selected web package manager 'yarn'"));
+    assert!(error.contains("No files were written"));
+
+    preflight_init_package_manager_with(&opts, |program| program == "yarn").unwrap();
+}
+
+#[test]
+fn harness_only_init_does_not_require_a_web_package_manager() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "harness-only",
+        "--no-input",
+        "--no-vault",
+    ]);
+    prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    preflight_init_package_manager_with(&opts, |_| false).unwrap();
+}
+
+#[test]
 fn json_output_does_not_disable_init_wizard() {
     let mut opts = init_opts(&["jig", "--json", "init", "demo", "--no-vault"]);
     let mut input = Cursor::new("harness-only\n");

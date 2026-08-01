@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+    <!-- Keep this deterministic so deployments can authorize its SHA-256 in script-src. -->
+    <script>
+      ;(() => {
+        const root = document.documentElement
+        // Renderer values are not length-bounded.
+        // prettier-ignore
+        const themeStorageKey = "<<[ package_name ]>>-theme"
+        let preference = "system"
+        try {
+          const stored = localStorage.getItem(themeStorageKey)
+          if (stored === "dark" || stored === "light" || stored === "system") {
+            preference = stored
+          }
+        } catch {
+          // Storage can be unavailable in hardened browsing modes; system theme remains safe.
+        }
+        const resolved =
+          preference === "system"
+            ? matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : preference
+        root.classList.add(resolved)
+        root.style.colorScheme = resolved
+        document
+          .querySelector('meta[name="theme-color"]')
+          ?.setAttribute("content", resolved === "dark" ? "#171717" : "#ffffff")
+      })()
+    </script>
+    <!-- prettier-ignore -->
+    <title><<[ title ]>></title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

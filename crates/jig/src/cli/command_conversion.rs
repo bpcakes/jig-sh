@@ -8,12 +8,13 @@ use super::{
     ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
     ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
     ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, ToolOpts, VaultAuditCommand,
-    VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts, VaultRuntimeOpts,
-    VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts,
-    VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
-    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
+    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
+    StateRestoreOpts, ToolOpts, VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand,
+    VaultInitOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts,
+    VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts,
+    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
+    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -415,7 +416,46 @@ impl From<StateCommand> for command::StateCommand {
     fn from(command: StateCommand) -> Self {
         match command {
             StateCommand::Summary => Self::Summary,
+            StateCommand::Diagnose(opts) => Self::Diagnose(opts.into()),
+            StateCommand::Compact { command } => match command {
+                StateCompactCommand::Sessions(opts) => Self::CompactSessions(opts.into()),
+            },
+            StateCommand::Restore(opts) => Self::Restore(opts.into()),
+            StateCommand::Export { command } => match command {
+                StateExportCommand::Receipts(opts) => Self::ExportReceipts(opts.into()),
+            },
             StateCommand::Archive(opts) => Self::Archive(opts.into()),
+        }
+    }
+}
+
+impl From<StateDiagnoseOpts> for command::StateDiagnoseRequest {
+    fn from(opts: StateDiagnoseOpts) -> Self {
+        Self { deep: opts.deep }
+    }
+}
+
+impl From<StateCompactSessionsOpts> for command::StateCompactSessionsRequest {
+    fn from(opts: StateCompactSessionsOpts) -> Self {
+        Self {
+            dry_run: opts.dry_run,
+        }
+    }
+}
+
+impl From<StateRestoreOpts> for command::StateRestoreRequest {
+    fn from(opts: StateRestoreOpts) -> Self {
+        Self {
+            backup: opts.backup,
+        }
+    }
+}
+
+impl From<StateExportReceiptsOpts> for command::StateExportReceiptsRequest {
+    fn from(opts: StateExportReceiptsOpts) -> Self {
+        Self {
+            before: opts.before,
+            output: opts.output,
         }
     }
 }
@@ -774,6 +814,59 @@ mod tests {
                 assert!(request.dry_run);
             }
             other => panic!("expected state archive request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_maintenance_conversion_preserves_arguments() {
+        let request: command::StateCommand =
+            StateCommand::Diagnose(StateDiagnoseOpts { deep: true }).into();
+        match request {
+            command::StateCommand::Diagnose(request) => assert!(request.deep),
+            other => panic!("expected state diagnose request, got {other:?}"),
+        }
+
+        let request: command::StateCommand = StateCommand::Compact {
+            command: StateCompactCommand::Sessions(StateCompactSessionsOpts { dry_run: true }),
+        }
+        .into();
+        match request {
+            command::StateCommand::CompactSessions(request) => {
+                assert!(request.dry_run);
+            }
+            other => {
+                panic!("expected state compact sessions request, got {other:?}")
+            }
+        }
+
+        let backup = std::path::PathBuf::from("backup/manifest.json");
+        let request: command::StateCommand = StateCommand::Restore(StateRestoreOpts {
+            backup: backup.clone(),
+        })
+        .into();
+        match request {
+            command::StateCommand::Restore(request) => {
+                assert_eq!(request.backup, backup);
+            }
+            other => panic!("expected state restore request, got {other:?}"),
+        }
+
+        let output = std::path::PathBuf::from("receipts.jsonl.gz");
+        let request: command::StateCommand = StateCommand::Export {
+            command: StateExportCommand::Receipts(StateExportReceiptsOpts {
+                before: "2026-01-01".into(),
+                output: output.clone(),
+            }),
+        }
+        .into();
+        match request {
+            command::StateCommand::ExportReceipts(request) => {
+                assert_eq!(request.before, "2026-01-01");
+                assert_eq!(request.output, output);
+            }
+            other => {
+                panic!("expected state export receipts request, got {other:?}")
+            }
         }
     }
 

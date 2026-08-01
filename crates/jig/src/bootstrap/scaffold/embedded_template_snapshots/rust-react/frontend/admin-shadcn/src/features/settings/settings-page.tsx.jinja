@@ -1,0 +1,49 @@
+import { SettingsIcon } from "lucide-react"
+
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+
+export function SettingsPage() {
+  return (
+    <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6">
+      <div>
+        <p className="text-sm font-medium text-muted-foreground">Settings</p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Project-owned configuration
+        </h1>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>No settings yet</CardTitle>
+          <CardDescription>Add product configuration here.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <SettingsIcon />
+              </EmptyMedia>
+              <EmptyTitle>Choose the first operational setting</EmptyTitle>
+              <EmptyDescription>
+                Authentication and privileged actions are intentionally not
+                faked by the scaffold.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </CardContent>
+      </Card>
+    </section>
+  )
+}

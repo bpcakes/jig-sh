@@ -13,6 +13,7 @@ use super::bootstrap_run::{
 };
 use super::output::{HumanOutput, emit, print_json};
 use super::prompt_run::run_prompt_command;
+use super::setup_run::run_setup_command;
 use super::structured_error::{
     is_json_output_already_emitted, json_error_payload, json_output_already_emitted,
     json_reported_error, require_foreground_status, require_json_ok,
@@ -124,6 +125,7 @@ fn run_command(cli: Cli) -> Result<()> {
             json_output,
             HumanOutput::ToolExecution,
         ),
+        CommandKind::Setup => run_setup_command(json_output),
         CommandKind::Check(command) => {
             let require_ok = check_command_reports_failure_with_ok(&command);
             let human_output = check_human_output(&command);
@@ -359,6 +361,10 @@ const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
 const fn state_human_output(command: &StateCommand) -> HumanOutput {
     match command {
         StateCommand::Summary => HumanOutput::StateSummary,
+        StateCommand::Diagnose(_) => HumanOutput::StateDiagnose,
+        StateCommand::Compact { .. } => HumanOutput::StateCompact,
+        StateCommand::Restore(_) => HumanOutput::StateRestore,
+        StateCommand::Export { .. } => HumanOutput::StateExport,
         StateCommand::Archive(_) => HumanOutput::StateArchive,
     }
 }

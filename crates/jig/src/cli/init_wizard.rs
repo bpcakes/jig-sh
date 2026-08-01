@@ -18,6 +18,26 @@ pub(super) fn prepare_init_interaction(opts: &mut InitOpts) -> Result<()> {
     prepare_merged_init_interaction(opts, policy, &mut input, &mut output)
 }
 
+pub(super) fn preflight_init_package_manager(opts: &InitOpts) -> Result<()> {
+    preflight_init_package_manager_with(opts, crate::doctor::program_available_on_path)
+}
+
+fn preflight_init_package_manager_with(
+    opts: &InitOpts,
+    available: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    if opts.scaffold.preset != Some(ScaffoldPreset::RustReact) {
+        return Ok(());
+    }
+    let package_manager = opts.answers.web_package_manager.as_deref().unwrap_or("bun");
+    if available(package_manager) {
+        return Ok(());
+    }
+    bail!(
+        "Selected web package manager '{package_manager}' is not available on PATH. Install or enable it, or rerun with --web-package-manager bun, npm, pnpm, or yarn. No files were written."
+    )
+}
+
 #[cfg(test)]
 fn prepare_init_interaction_with_io<R: BufRead, W: Write>(
     opts: &mut InitOpts,

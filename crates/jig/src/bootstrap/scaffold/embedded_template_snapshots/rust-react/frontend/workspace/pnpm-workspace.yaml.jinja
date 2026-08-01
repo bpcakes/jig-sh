@@ -1,0 +1,13 @@
+packages:
+[% for frontend in frontends %]
+  - <<[ frontend.dir | tojson ]>>
+[% endfor %]
+
+# pnpm otherwise selects a different virtual-store setting in CI, which can
+# make pre-run validation rewrite installed executable shims. Keep one layout.
+enableGlobalVirtualStore: false
+
+# esbuild needs its pinned install script to select the platform binary. Keep
+# this allowlist narrow: each addition authorizes dependency code execution.
+allowBuilds:
+  esbuild: true

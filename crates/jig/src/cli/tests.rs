@@ -549,6 +549,62 @@ fn parses_state_archive_command() {
 }
 
 #[test]
+fn parses_state_maintenance_commands() {
+    let cli = Cli::try_parse_from(["jig", "state", "diagnose", "--deep"]).unwrap();
+    match cli.command {
+        CommandKind::State(StateCommand::Diagnose(opts)) => assert!(opts.deep),
+        other => panic!("expected state diagnose command, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from(["jig", "state", "compact", "sessions", "--dry-run"]).unwrap();
+    match cli.command {
+        CommandKind::State(StateCommand::Compact {
+            command: StateCompactCommand::Sessions(opts),
+        }) => assert!(opts.dry_run),
+        other => panic!("expected state compact sessions command, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from([
+        "jig",
+        "state",
+        "restore",
+        "--backup",
+        ".agent/.cache/state-backups/sessions-1",
+    ])
+    .unwrap();
+    match cli.command {
+        CommandKind::State(StateCommand::Restore(opts)) => {
+            assert_eq!(
+                opts.backup,
+                std::path::PathBuf::from(".agent/.cache/state-backups/sessions-1")
+            );
+        }
+        other => panic!("expected state restore command, got {other:?}"),
+    }
+
+    let cli = Cli::try_parse_from([
+        "jig",
+        "state",
+        "export",
+        "receipts",
+        "--before",
+        "2026-01-01",
+        "--output",
+        "receipts.jsonl.gz",
+    ])
+    .unwrap();
+    match cli.command {
+        CommandKind::State(StateCommand::Export {
+            command: StateExportCommand::Receipts(opts),
+        }) => {
+            assert_eq!(opts.before, "2026-01-01");
+            assert_eq!(opts.output, std::path::PathBuf::from("receipts.jsonl.gz"));
+        }
+        other => panic!("expected state export receipts command, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_state_summary_command() {
     let cli = Cli::try_parse_from(["jig", "state", "summary"]).unwrap();
 
@@ -655,6 +711,33 @@ fn parses_top_level_doctor_command() {
 
     let rejected = Cli::try_parse_from(["jig", "doctor", "--summary"]);
     assert!(rejected.is_err());
+}
+
+#[test]
+fn parses_top_level_setup_command() {
+    let cli = Cli::try_parse_from(["jig", "setup"]).unwrap();
+    assert!(matches!(cli.command, CommandKind::Setup));
+
+    let with_json = Cli::try_parse_from(["jig", "setup", "--json"]).unwrap();
+    assert!(with_json.json);
+    assert!(matches!(with_json.command, CommandKind::Setup));
+}
+
+#[test]
+fn web_package_manager_cli_rejects_unknown_values_during_parsing() {
+    let accepted =
+        Cli::try_parse_from(["jig", "init", "demo", "--web-package-manager", "pnpm"]).unwrap();
+    let CommandKind::Init(opts) = accepted.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(opts.answers.web_package_manager.as_deref(), Some("pnpm"));
+
+    let rejected = Cli::try_parse_from(["jig", "init", "demo", "--web-package-manager", "cargo"])
+        .unwrap_err()
+        .to_string();
+    assert!(rejected.contains("possible values"));
+    assert!(rejected.contains("bun"));
+    assert!(rejected.contains("yarn"));
 }
 
 #[test]

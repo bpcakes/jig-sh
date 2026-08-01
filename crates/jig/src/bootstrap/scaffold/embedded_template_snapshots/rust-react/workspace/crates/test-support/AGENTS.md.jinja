@@ -1,0 +1,31 @@
+# <<[ package_name ]>>-test-support
+
+## Purpose
+
+Owns reusable test harness code only. It should make integration tests concise without becoming production code.
+
+## Key entrypoints
+
+- `src/lib.rs`: crate module exports and shared `TestApp` re-exports.
+- `src/app.rs`: in-memory Axum test app.
+- `src/http.rs`: HTTP request helpers.
+- `src/responses.rs`: response assertions and JSON decoding.
+[% if db_enabled %]
+- `src/db.rs`: database fixture helpers.
+[% endif %]
+- `tests/http.rs`: scaffold smoke tests for the HTTP boundary.
+
+## Edit here for X
+
+- Add fixtures, scenario builders, response assertions, and integration-test utilities here.
+- Keep production handlers in `crates/<<[ package_name ]>>-http` and use cases in `crates/<<[ package_name ]>>`.
+
+## Invariants
+
+- Do not add production-only code paths to this crate.
+- Prefer behavior assertions over implementation-detail assertions.
+- Keep test state construction explicit so DB-backed readiness cannot accidentally pass without a DB fixture.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-test-support`

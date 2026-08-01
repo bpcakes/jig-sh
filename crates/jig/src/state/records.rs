@@ -215,13 +215,30 @@ struct LegacySessionEvent {
 // serde_json validate and skip a legacy `summary` through its iterative
 // ignored-value path instead of materializing recursively embedded snapshots.
 // Never use this lossy type to rewrite the append-only session stream.
-#[derive(Deserialize)]
-struct SessionEventHeader {
-    id: String,
-    session_id: String,
-    event: String,
-    timestamp_ms: u64,
-    outcome: Option<String>,
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(super) struct SessionEventEnvelope {
+    pub(super) id: String,
+    pub(super) session_id: String,
+    pub(super) event: String,
+    pub(super) timestamp_ms: u64,
+    pub(super) outcome: Option<String>,
+}
+
+impl SessionEventEnvelope {
+    pub(super) fn into_event(self) -> SessionEvent {
+        match self.event.as_str() {
+            "start" => {
+                SessionEvent::start(self.id, self.session_id, self.timestamp_ms, Value::Null)
+            }
+            "end" => SessionEvent::end(self.id, self.session_id, self.timestamp_ms, self.outcome),
+            _ => SessionEvent::Unknown {
+                id: self.id,
+                session_id: self.session_id,
+                event: self.event,
+                timestamp_ms: self.timestamp_ms,
+            },
+        }
+    }
 }
 
 impl Serialize for SessionEvent {
@@ -279,27 +296,7 @@ impl<'de> Deserialize<'de> for SessionEvent {
     where
         D: Deserializer<'de>,
     {
-        let header = SessionEventHeader::deserialize(deserializer)?;
-        Ok(match header.event.as_str() {
-            "start" => Self::start(
-                header.id,
-                header.session_id,
-                header.timestamp_ms,
-                Value::Null,
-            ),
-            "end" => Self::end(
-                header.id,
-                header.session_id,
-                header.timestamp_ms,
-                header.outcome,
-            ),
-            _ => Self::Unknown {
-                id: header.id,
-                session_id: header.session_id,
-                event: header.event,
-                timestamp_ms: header.timestamp_ms,
-            },
-        })
+        Ok(SessionEventEnvelope::deserialize(deserializer)?.into_event())
     }
 }
 
@@ -435,6 +432,12 @@ pub(super) struct ReceiptRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) evidence: Option<Value>,
     pub(super) changed_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) changed_path_count: Option<usize>,
+    #[serde(default)]
+    pub(super) changed_paths_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) changed_paths_digest: Option<String>,
     pub(super) diff_stat: DiffStat,
     #[serde(default)]
     pub(super) git_status_error: Option<String>,

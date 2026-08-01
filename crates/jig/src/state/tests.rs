@@ -1,6 +1,8 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
+use flate2::read::GzDecoder;
 use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -12,6 +14,7 @@ use super::jsonl::{
 };
 use super::records::SessionEvent;
 use super::*;
+use crate::command::StateRestoreRequest;
 use crate::context::RepoContext;
 use crate::git_receipts::DiffStat;
 use crate::test_env::TestRepoBuilder;
@@ -352,6 +355,36 @@ fn jsonl_read_waits_for_atomic_rewrite_and_observes_replacement() {
         let values = read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert_eq!(values, vec![json!({ "id": "after" })]);
     });
+}
+
+#[test]
+fn jsonl_read_reopens_a_preopened_inode_after_atomic_rewrite() {
+    use std::cell::Cell;
+    use std::io::Write;
+
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    fs::write(&path, b"{\"id\":\"before\"}\n").unwrap();
+    let lock_attempts = Cell::new(0usize);
+
+    let values = read_jsonl_with_io::<Value>(
+        &path,
+        |_| {
+            let attempt = lock_attempts.get();
+            lock_attempts.set(attempt + 1);
+            if attempt == 0 {
+                let mut replacement = tempfile::NamedTempFile::new_in(temp.path()).unwrap();
+                replacement.write_all(b"{\"id\":\"after\"}\n").unwrap();
+                replacement.persist(&path).unwrap();
+            }
+            Ok(())
+        },
+        |_| unreachable!("the injected lock remains supported"),
+    )
+    .unwrap();
+
+    assert!(lock_attempts.get() >= 2);
+    assert_eq!(values, vec![json!({ "id": "after" })]);
 }
 
 #[test]
@@ -1047,6 +1080,9 @@ fn receipt_record(
         stderr_preview: String::new(),
         evidence: None,
         changed_paths: Vec::new(),
+        changed_path_count: None,
+        changed_paths_truncated: false,
+        changed_paths_digest: None,
         diff_stat,
         git_status_error: None,
         git_diff_stat_error: None,
@@ -1199,6 +1235,7 @@ fn receipts_archive_moves_old_unprotected_receipts() {
     new_receipt.ended_at_ms = 2_000;
     append_jsonl(&ctx.state_file("receipts.jsonl"), &old_receipt).unwrap();
     append_jsonl(&ctx.state_file("receipts.jsonl"), &new_receipt).unwrap();
+    let original = fs::read(ctx.state_file("receipts.jsonl")).unwrap();
 
     let output = receipts_archive(
         &ctx,
@@ -1215,16 +1252,85 @@ fn receipts_archive_moves_old_unprotected_receipts() {
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0].id, "receipt_new");
     let archive_path = output["archive_path"].as_str().unwrap();
-    let archived = read_jsonl::<ReceiptRecord>(Path::new(archive_path)).unwrap();
+    let archived = read_gzip_receipts(Path::new(archive_path));
     assert_eq!(archived.len(), 1);
     assert_eq!(archived[0].id, "receipt_old");
+    assert!(
+        archive_path.contains(".agent/.cache/state-archives/"),
+        "{archive_path}"
+    );
+    let recovery_path = Path::new(output["recovery_backup_path"].as_str().unwrap()).to_path_buf();
+    let restored = restore_backup(
+        &ctx,
+        StateRestoreRequest {
+            backup: recovery_path.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(restored["stream"], "receipts");
+    assert_eq!(restored["changed"], true);
+    assert_eq!(
+        fs::read(ctx.state_file("receipts.jsonl")).unwrap(),
+        original
+    );
+    fs::remove_file(ctx.state_file("receipts.jsonl")).unwrap();
+    let restored_missing = restore_backup(
+        &ctx,
+        StateRestoreRequest {
+            backup: recovery_path,
+        },
+    )
+    .unwrap();
+    assert_eq!(restored_missing["changed"], true);
+    assert!(restored_missing["recovery_backup_path"].is_null());
+    assert_eq!(
+        fs::read(ctx.state_file("receipts.jsonl")).unwrap(),
+        original
+    );
+    assert!(!ctx.state_dir().join("archive").exists());
 }
 
 #[test]
 fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
     let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+rust_test_command = "true"
+
+[[work.gates]]
+id = "tests"
+kind = "check"
+tool = "jig.test"
+
+[[work.gates]]
+id = "rust-review"
+kind = "codex_review"
+skill = "rust-review"
+"#,
+        )
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": tool::TEST,
+            "kind": "command",
+            "description": "Run tests.",
+            "command": "rust_test_command"
+        }))
+        .write();
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    seed_open_plan_for_test(&ctx, "plan_1", "Open plan", "# Plan\n").unwrap();
+    seed_open_plan_for_test(&ctx, "plan_2", "Closed plan", "# Plan\n").unwrap();
+    append_jsonl(
+        &ctx.state_file("plans.jsonl"),
+        &PlanEvent::close(
+            "plan-event-close-2".into(),
+            "plan_2".into(),
+            1,
+            Some("done".into()),
+        ),
+    )
+    .unwrap();
     ensure_state_layout(&ctx).unwrap();
     let mut old_direct = receipt_record("receipt_direct", tool::TEST, 0, DiffStat::default());
     old_direct.ended_at_ms = 10;
@@ -1235,6 +1341,13 @@ fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
         "tools": [tool::TEST],
         "receipt_ids": ["receipt_direct"],
     });
+    let mut old_review_worker = receipt_record(
+        "receipt_review_worker",
+        crate::tool_defs::WORKER_RUN_TOOL,
+        0,
+        DiffStat::default(),
+    );
+    old_review_worker.ended_at_ms = 25;
     let mut old_review =
         receipt_record("receipt_review", tool::WORK_REVIEW, 1, DiffStat::default());
     old_review.ended_at_ms = 30;
@@ -1242,6 +1355,9 @@ fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
         "plan_id": "plan_1",
         "gate_id": "rust-review",
     });
+    old_review.evidence = Some(json!({
+        "worker_receipt_id": "receipt_review_worker",
+    }));
     let mut unrelated_old = receipt_record(
         "receipt_unrelated_old",
         tool::CLIPPY,
@@ -1260,9 +1376,11 @@ fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
     unrelated_new.ended_at_ms = 2_000;
     append_jsonl(&ctx.state_file("receipts.jsonl"), &old_direct).unwrap();
     append_jsonl(&ctx.state_file("receipts.jsonl"), &old_batch).unwrap();
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &old_review_worker).unwrap();
     append_jsonl(&ctx.state_file("receipts.jsonl"), &old_review).unwrap();
     append_jsonl(&ctx.state_file("receipts.jsonl"), &unrelated_old).unwrap();
     append_jsonl(&ctx.state_file("receipts.jsonl"), &unrelated_new).unwrap();
+    let original = fs::read(ctx.state_file("receipts.jsonl")).unwrap();
 
     let output = receipts_archive(
         &ctx,
@@ -1274,7 +1392,7 @@ fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
     .unwrap();
 
     assert_eq!(output["receipts_archived"], 1);
-    assert_eq!(output["protected_receipts_retained"], 3);
+    assert_eq!(output["protected_receipts_retained"], 4);
     let retained = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl"))
         .unwrap()
         .into_iter()
@@ -1282,9 +1400,17 @@ fn receipts_archive_preserves_latest_gate_evidence_and_supporting_receipts() {
         .collect::<Vec<_>>();
     assert!(retained.contains(&"receipt_direct".into()));
     assert!(retained.contains(&"receipt_batch".into()));
+    assert!(retained.contains(&"receipt_review_worker".into()));
     assert!(retained.contains(&"receipt_review".into()));
     assert!(!retained.contains(&"receipt_unrelated_old".into()));
     assert!(retained.contains(&"receipt_unrelated_new".into()));
+    let recovery = Path::new(output["recovery_backup_path"].as_str().unwrap()).to_path_buf();
+    restore_backup(&ctx, StateRestoreRequest { backup: recovery }).unwrap();
+    assert_eq!(
+        fs::read(ctx.state_file("receipts.jsonl")).unwrap(),
+        original,
+        "receipt recovery must restore the exact interleaved physical stream"
+    );
 }
 
 #[test]
@@ -1304,20 +1430,61 @@ fn receipts_archive_dry_run_does_not_rewrite_state() {
     let output = receipts_archive(
         &ctx,
         StateArchiveRequest {
-            before: "1970-01-02".into(),
+            before: "1000".into(),
             dry_run: true,
         },
     )
     .unwrap();
 
     assert_eq!(output["receipts_archived"], 1);
-    assert_eq!(output["protected_receipts_retained"], 1);
+    assert_eq!(output["protected_receipts_retained"], 0);
     assert!(output["archive_path"].is_null());
     assert_eq!(
         fs::read_to_string(ctx.state_file("receipts.jsonl")).unwrap(),
         before
     );
     assert!(!ctx.state_dir().join("archive").exists());
+}
+
+#[test]
+fn receipts_export_writes_exact_gzip_without_mutating_active_state() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let mut old_receipt = receipt_record("receipt_old", tool::CLIPPY, 0, DiffStat::default());
+    old_receipt.ended_at_ms = 10;
+    let mut new_receipt = receipt_record("receipt_new", tool::CLIPPY, 0, DiffStat::default());
+    new_receipt.ended_at_ms = 2_000;
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &old_receipt).unwrap();
+    append_jsonl(&ctx.state_file("receipts.jsonl"), &new_receipt).unwrap();
+    let before = fs::read(ctx.state_file("receipts.jsonl")).unwrap();
+    let output_path = temp.path().join("exports/old-receipts.jsonl.gz");
+
+    let output = receipts_export(&ctx, "1000", &output_path).unwrap();
+
+    assert_eq!(output["receipts_exported"], 1);
+    assert_eq!(output["output_path"], output_path.display().to_string());
+    assert!(
+        output["sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
+    assert_eq!(fs::read(ctx.state_file("receipts.jsonl")).unwrap(), before);
+    let exported = read_gzip_receipts(&output_path);
+    assert_eq!(exported.len(), 1);
+    assert_eq!(exported[0].id, "receipt_old");
+}
+
+fn read_gzip_receipts(path: &Path) -> Vec<ReceiptRecord> {
+    let mut contents = String::new();
+    GzDecoder::new(fs::File::open(path).unwrap())
+        .read_to_string(&mut contents)
+        .unwrap();
+    contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
 }
 
 #[test]
@@ -1337,6 +1504,39 @@ fn receipts_archive_rejects_malformed_before_cutoff() {
     .to_string();
 
     assert!(error.contains("Invalid --before date"));
+}
+
+#[test]
+fn receipt_archive_and_export_reject_an_unterminated_final_record_before_publication() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    ensure_state_layout(&ctx).unwrap();
+    let mut receipt = receipt_record("receipt_torn", tool::CLIPPY, 0, DiffStat::default());
+    receipt.ended_at_ms = 10;
+    let source = serde_json::to_vec(&receipt).unwrap();
+    fs::write(ctx.state_file("receipts.jsonl"), &source).unwrap();
+
+    let archive_error = receipts_archive(
+        &ctx,
+        StateArchiveRequest {
+            before: "1000".into(),
+            dry_run: false,
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    let export_path = temp.path().join("export.jsonl.gz");
+    let export_error = receipts_export(&ctx, "1000", &export_path)
+        .unwrap_err()
+        .to_string();
+
+    assert!(archive_error.contains("not newline-terminated"));
+    assert!(export_error.contains("not newline-terminated"));
+    assert_eq!(fs::read(ctx.state_file("receipts.jsonl")).unwrap(), source);
+    assert!(!export_path.exists());
+    assert!(!temp.path().join(".agent/.cache/state-backups").exists());
+    assert!(!temp.path().join(".agent/.cache/state-archives").exists());
 }
 
 #[test]

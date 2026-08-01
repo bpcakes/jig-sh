@@ -1,0 +1,126 @@
+name: Rust Tests
+
+on:
+  pull_request:
+    paths:
+[% for root in rust_crate_roots %]
+      - <<[ (root ~ "/**") | tojson ]>>
+[% endfor %]
+[% if sqlx_enabled %]
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
+[% endif %]
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - ".clippy.toml"
+      - "clippy.toml"
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".cargo/**"
+      - ".github/workflows/rust-tests.yml"
+  push:
+    branches:
+      - <<[ default_branch | tojson ]>>
+    paths:
+[% for root in rust_crate_roots %]
+      - <<[ (root ~ "/**") | tojson ]>>
+[% endfor %]
+[% if sqlx_enabled %]
+      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
+[% endif %]
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - ".clippy.toml"
+      - "clippy.toml"
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".cargo/**"
+      - ".github/workflows/rust-tests.yml"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: scripts/jig check fmt
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+          components: rustfmt
+      - name: Run rustfmt check
+        run: scripts/jig check fmt
+
+  clippy:
+    name: scripts/jig check clippy
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+[% if sqlx_enabled %]
+    env:
+      SQLX_OFFLINE: "true"
+      SQLX_OFFLINE_DIR: <<[ ("${{ github.workspace }}/" ~ rust_sqlx_metadata_dir) | tojson ]>>
+[% endif %]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+          components: clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Run clippy
+        run: scripts/jig check clippy
+
+  test:
+    name: scripts/jig check test-locked
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+[% if sqlx_enabled %]
+    env:
+      SQLX_OFFLINE: "true"
+      SQLX_OFFLINE_DIR: <<[ ("${{ github.workspace }}/" ~ rust_sqlx_metadata_dir) | tojson ]>>
+[% endif %]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Run locked Rust tests
+        run: scripts/jig check test-locked

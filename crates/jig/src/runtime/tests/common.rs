@@ -119,6 +119,42 @@ tool = "jig.custom_check"
     write_open_plan(root);
 }
 
+pub(super) fn write_fail_fast_check_fixture_repo(root: &Path) {
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
+[commands]
+failing_check_command = "printf 'check failed\n' >&2; exit 7"
+later_check_command = "printf 'later check ran\n' > later-check-ran.txt"
+
+[[work.gates]]
+id = "failing"
+kind = "check"
+tool = "jig.failing_check"
+
+[[work.gates]]
+id = "later"
+kind = "check"
+tool = "jig.later_check"
+"#,
+        )
+        .required_commands(["failing_check_command", "later_check_command"])
+        .tool(json!({
+            "name": "jig.failing_check",
+            "kind": "command",
+            "description": "Run configured failing check.",
+            "command": "failing_check_command"
+        }))
+        .tool(json!({
+            "name": "jig.later_check",
+            "kind": "command",
+            "description": "Run configured later check.",
+            "command": "later_check_command"
+        }))
+        .write();
+    write_open_plan(root);
+}
+
 pub(super) fn write_review_fixture_repo(root: &Path) {
     write_review_fixture_repo_with_check(root, "printf 'check ok\\n'");
 }

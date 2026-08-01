@@ -157,6 +157,23 @@ pub(crate) fn run() -> Result<Value> {
     ))
 }
 
+pub(crate) fn program_available_on_path(program: &str) -> bool {
+    let Ok(command_cwd) = env::current_dir() else {
+        return false;
+    };
+    let Some(search_path) = env::var_os("PATH") else {
+        return false;
+    };
+    let path_extensions = env::var_os("PATHEXT");
+    resolve_program(
+        &command_cwd,
+        program,
+        Some(&search_path),
+        path_extensions.as_deref(),
+    )
+    .is_some()
+}
+
 pub(crate) fn format_summary(value: &Value) -> String {
     let ready = value["ok"].as_bool().unwrap_or(false);
     let mut lines = vec![format!(

@@ -1,0 +1,26 @@
+# <<[ package_name ]>>-db
+
+## Purpose
+
+Owns persistence for `<<[ repo_name ]>>`, including database pools, migrations, repositories, and persistence DTOs.
+
+## Key entrypoints
+
+- `src/lib.rs`: database connection, migration helper, and shared DB handle.
+- `../../migrations`: SQLx migrations generated for this application.
+
+## Edit here for X
+
+- Add SQLx queries, transaction helpers, repository functions, and persistence mappers here.
+- Keep HTTP DTOs in `crates/<<[ package_name ]>>-http` and business decisions in `crates/<<[ package_name ]>>`.
+
+## Invariants
+
+- Run migrations through the DB boundary before serving readiness.
+- Do not expose raw request data structures from this crate.
+- Keep database access feature-gated from the app crate through the `db` feature.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-db`
+- `sqlx migrate run`

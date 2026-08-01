@@ -145,6 +145,7 @@ pub struct AnswerOpts {
     #[arg(
         long,
         help_heading = "Common Answers",
+        value_parser = ["bun", "npm", "pnpm", "yarn"],
         help = "Web package manager for generated web app checks"
     )]
     pub web_package_manager: Option<String>,

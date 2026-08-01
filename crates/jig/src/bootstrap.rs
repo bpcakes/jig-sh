@@ -2906,14 +2906,7 @@ fn initial_next_steps(
                 .into(),
         );
     }
-    if result.bootstrap_command_configured {
-        steps.push("scripts/jig bootstrap".into());
-    }
-    steps.push("scripts/jig doctor".into());
-    if result.codex_skills_configured {
-        steps.push("scripts/jig agent bootstrap".into());
-    }
-    steps.push("scripts/jig check contract".into());
+    steps.push("scripts/jig setup".into());
     steps.push("scripts/jig check test".into());
     if result.dev_apps_configured {
         steps.push("scripts/jig dev".into());

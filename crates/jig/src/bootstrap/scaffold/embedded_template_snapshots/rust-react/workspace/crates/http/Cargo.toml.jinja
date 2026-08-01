@@ -1,0 +1,19 @@
+[package]
+name = "<<[ package_name ]>>-http"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+<<[ package_name ]>> = { path = "../<<[ package_name ]>>"[% if db_enabled %], features = ["db"][% endif %] }
+<<[ package_name ]>>-core = { path = "../<<[ package_name ]>>-core" }
+axum.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[features]
+default = []
+[% if db_enabled %]
+db = ["<<[ package_name ]>>/db"]
+[% endif %]

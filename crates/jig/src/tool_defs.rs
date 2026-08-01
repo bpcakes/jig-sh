@@ -96,8 +96,15 @@ pub(crate) mod cli_command {
     pub(crate) const PROXY_START: &str = "start";
     pub(crate) const PROXY_STOP: &str = "stop";
     pub(crate) const SCHEMA_DUMP: &str = "schema-dump";
+    pub(crate) const SETUP: &str = "setup";
     pub(crate) const STATE: &str = "state";
     pub(crate) const STATE_ARCHIVE: &str = "archive";
+    pub(crate) const STATE_COMPACT: &str = "compact";
+    pub(crate) const STATE_DIAGNOSE: &str = "diagnose";
+    pub(crate) const STATE_EXPORT: &str = "export";
+    pub(crate) const STATE_RECEIPTS: &str = "receipts";
+    pub(crate) const STATE_RESTORE: &str = "restore";
+    pub(crate) const STATE_SESSIONS: &str = "sessions";
     pub(crate) const STATE_SUMMARY: &str = "summary";
     pub(crate) const STATUS: &str = "status";
     pub(crate) const UI: &str = "ui";

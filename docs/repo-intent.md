@@ -105,8 +105,15 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 - `sessions.jsonl`: session start/end events and write-time summaries; recent-session references inside new summaries are shallow so history cannot recurse
 - `plans.jsonl`: plan open/append/close events
-- `receipts.jsonl`: tool execution evidence
+- `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
 - `decisions.jsonl`: structured decision records
+
+Normal writes append to these streams. Explicit maintenance uses streaming,
+validated whole-file rewrites: session compaction creates an exact recovery
+backup under ignored `.agent/.cache/state-backups/`, and receipt archiving writes
+compressed cold data under ignored `.agent/.cache/state-archives/`. Explicit
+receipt exports go only to the caller-selected path. None of these operations
+rewrite Git history.
 
 The current session pointer is cache state, not part of the durable JSONL record model.
 
@@ -120,7 +127,7 @@ The current session pointer is cache state, not part of the durable JSONL record
 
 **Compatibility is explicit.** Public execution tools are governed by `contract_version`. Breaking changes require a contract version bump, and downstream clients are expected to discover available tools instead of assuming optional SQLx/schema support.
 
-**Runtime memory is append-only.** State files are written as JSONL, readers tolerate missing files, and docs say application code should not edit records in place.
+**Runtime memory is append-only by default and locally repairable.** State files are written as JSONL, readers tolerate missing files, and application code should not edit records in place. Runtime-owned diagnostics, compaction, restore, archive, and export commands provide the bounded maintenance path.
 
 **Repo-specific ownership stays local.** The harness provides workflow and policy defaults, while application code, business rules, crate ownership, and schema dump details stay with the downstream repo.
 

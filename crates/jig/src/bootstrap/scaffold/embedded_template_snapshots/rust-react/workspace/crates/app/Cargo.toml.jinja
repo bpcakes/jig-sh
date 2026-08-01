@@ -1,0 +1,22 @@
+[package]
+name = "<<[ package_name ]>>"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+<<[ package_name ]>>-core = { path = "../<<[ package_name ]>>-core" }
+[% if db_enabled %]
+<<[ package_name ]>>-db = { path = "../<<[ package_name ]>>-db", optional = true }
+[% endif %]
+anyhow.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[features]
+default = []
+[% if db_enabled %]
+db = ["dep:<<[ package_name ]>>-db"]
+[% endif %]

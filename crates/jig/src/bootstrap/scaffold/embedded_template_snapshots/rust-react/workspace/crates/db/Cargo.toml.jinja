@@ -1,0 +1,15 @@
+[package]
+name = "<<[ package_name ]>>-db"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+[% if sqlx_driver == "sqlite" %]
+fs4.workspace = true
+url.workspace = true
+[% endif %]
+sqlx.workspace = true
+tokio.workspace = true

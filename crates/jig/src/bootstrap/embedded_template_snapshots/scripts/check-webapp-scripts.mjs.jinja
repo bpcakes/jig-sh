@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+
+// Rendered through Jinja so generated repos manage this helper with the rest
+// of the shared Jig template, even though this file has no template variables.
+import fs from "node:fs";
+import path from "node:path";
+
+const [, , appDir, ...requiredScripts] = process.argv;
+
+if (!appDir || requiredScripts.length === 0) {
+  console.error("Usage: check-webapp-scripts.mjs <app-dir> <script>...");
+  process.exit(2);
+}
+
+const packagePath = path.join(appDir, "package.json");
+let packageJson;
+
+try {
+  packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+} catch (error) {
+  console.error(`Failed to read ${packagePath}: ${error.message}`);
+  process.exit(1);
+}
+
+const scripts = packageJson.scripts ?? {};
+const missing = requiredScripts.filter((script) => {
+  const command = scripts[script];
+  return typeof command !== "string" || command.trim().length === 0;
+});
+
+if (missing.length > 0) {
+  console.error(
+    `Missing package.json scripts in ${appDir}: ${missing.join(", ")}. ` +
+      "Add them or remove this app from [[frontend_apps]] until web CI is ready.",
+  );
+  process.exit(1);
+}

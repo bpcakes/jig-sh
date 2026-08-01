@@ -1,0 +1,44 @@
+use ::<<[ module_name ]>>_core as app_core_crate;
+use ::<<[ module_name ]>>_test_support::TestApp;
+use axum::http::StatusCode;
+
+#[tokio::test]
+async fn health_returns_ok() {
+    let app = TestApp::new();
+
+    let response = app.get("/health/live").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.text(), "ok");
+}
+
+#[tokio::test]
+async fn readiness_reflects_state() {
+    let app = TestApp::new();
+
+    let response = app.get("/health/ready").await;
+
+    [% if db_enabled %]
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    [% else %]
+    assert_eq!(response.status(), StatusCode::OK);
+    [% endif %]
+}
+
+#[tokio::test]
+async fn responses_include_request_id() {
+    let app = TestApp::new();
+
+    let response = app.get("/health/live").await;
+
+    assert!(response.headers().contains_key("x-request-id"));
+}
+
+#[tokio::test]
+async fn version_returns_json() {
+    let app = TestApp::new();
+
+    let version: app_core_crate::AppVersion = app.get_json("/api/version").await;
+
+    assert_eq!(version.name, app_core_crate::APP_NAME);
+}

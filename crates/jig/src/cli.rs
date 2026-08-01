@@ -13,6 +13,7 @@ mod init_wizard;
 mod loops;
 mod prompt;
 mod proxy;
+mod setup_run;
 mod state;
 mod status_opts;
 mod vault;
@@ -31,7 +32,10 @@ pub(crate) use proxy::{
     ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
     ProxyStartOpts, ProxyStopOpts,
 };
-pub(crate) use state::{StateArchiveOpts, StateCommand};
+pub(crate) use state::{
+    StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
+    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
+};
 pub(crate) use status_opts::StatusOpts;
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
@@ -186,6 +190,9 @@ pub(crate) enum CommandKind {
     /// Run the configured project bootstrap command.
     #[command(name = tool_defs::cli_command::BOOTSTRAP, display_order = 50)]
     Bootstrap(ToolOpts),
+    /// Prepare a generated repo for first use and verify its minimum contract.
+    #[command(name = tool_defs::cli_command::SETUP, display_order = 55)]
+    Setup,
     /// Report repo harness readiness and the next command to fix setup.
     #[command(
         name = tool_defs::cli_command::DOCTOR,

@@ -1,0 +1,93 @@
+import { QueryClient } from "@tanstack/react-query";
+import {
+  RouterProvider,
+  createMemoryHistory,
+} from "@tanstack/react-router";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+
+import { AppProviders } from "@/app/providers";
+import { createAppRouter } from "@/app/router";
+
+afterEach(() => vi.unstubAllGlobals());
+
+function renderApp(initialEntry = "/") {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  const router = createAppRouter({
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+    queryClient,
+  });
+  render(
+    <AppProviders client={queryClient}>
+      <RouterProvider router={router} />
+    </AppProviders>,
+  );
+
+  return router;
+}
+
+it("renders application status from the Rust API", async () => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(new Response("", { status: 200 })));
+
+  renderApp();
+  expect(await screen.findByRole("heading", { name: "<<[ title ]>>" })).toBeDefined();
+  expect(await screen.findByText("<<[ repo_name ]>>")).toBeDefined();
+  expect(screen.getByText("0.1.0")).toBeDefined();
+  const serviceStatusCard = screen.getByRole("group", { name: "Rust API" });
+  expect(within(serviceStatusCard).getByText("Ready")).toBeDefined();
+});
+
+it("renders a connected API that is not ready", async () => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(new Response("", { status: 503 })));
+
+  renderApp();
+
+  expect(await screen.findByText("Not ready")).toBeDefined();
+});
+
+it("shows invalid API responses and retries", async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ name: false }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(new Response("", { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.2.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(new Response("", { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  renderApp();
+  expect(await screen.findByText(/did not contain string name and version fields/)).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("0.2.0")).toBeDefined();
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+});
+
+it("reports an unsuccessful API version response", async () => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+    .mockResolvedValueOnce(new Response("", { status: 503 })));
+
+  renderApp();
+
+  expect(await screen.findByText(/version request failed with status 503/)).toBeDefined();
+});
+
+it("renders the not-found route and navigates home", async () => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(new Response("", { status: 200 })));
+
+  renderApp("/missing");
+
+  expect(await screen.findByRole("heading", { name: "Page not found" })).toBeDefined();
+  fireEvent.click(screen.getByRole("link", { name: "Return home" }));
+  expect(await screen.findByText("<<[ repo_name ]>>")).toBeDefined();
+});

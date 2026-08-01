@@ -1,0 +1,35 @@
+use axum::{
+    body::Body,
+    http::{HeaderMap, Method, Request, header},
+};
+use serde::Serialize;
+
+pub fn request(method: Method, uri: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(body)
+        .expect("test request is valid")
+}
+
+pub fn json_request<B>(method: Method, uri: &str, body: &B) -> Request<Body>
+where
+    B: Serialize + ?Sized,
+{
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(body).expect("test JSON body serializes"),
+        ))
+        .expect("test request is valid")
+}
+
+pub fn headers(values: impl IntoIterator<Item = (&'static str, &'static str)>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for (name, value) in values {
+        headers.insert(name, value.parse().expect("test header value is valid"));
+    }
+    headers
+}

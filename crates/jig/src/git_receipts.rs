@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use tempfile::NamedTempFile;
 
@@ -22,6 +23,8 @@ use crate::process::{
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
 const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
+const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
+const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -33,6 +36,9 @@ pub(crate) struct DiffStat {
 #[derive(Debug, Default)]
 pub(crate) struct GitReceiptMetadata {
     pub(crate) changed_paths: Vec<String>,
+    pub(crate) changed_path_count: Option<usize>,
+    pub(crate) changed_paths_truncated: bool,
+    pub(crate) changed_paths_digest: Option<String>,
     pub(crate) diff_stat: DiffStat,
     pub(crate) git_status_error: Option<String>,
     pub(crate) git_diff_stat_error: Option<String>,
@@ -54,9 +60,24 @@ fn collect_git_receipt_metadata_with_options(
     root: &Path,
     collect_worktree_fingerprint: bool,
 ) -> GitReceiptMetadata {
-    let (changed_paths, git_status_error) = match repo_changed_paths(root) {
-        Ok(changed_paths) => (changed_paths, None),
-        Err(error) => (Vec::new(), Some(format!("{error:#}"))),
+    let (
+        changed_paths,
+        changed_path_count,
+        changed_paths_truncated,
+        changed_paths_digest,
+        git_status_error,
+    ) = match repo_changed_paths(root) {
+        Ok(changed_paths) => {
+            let changed_paths = bounded_changed_paths(changed_paths);
+            (
+                changed_paths.preview,
+                Some(changed_paths.total),
+                changed_paths.truncated,
+                Some(changed_paths.digest),
+                None,
+            )
+        }
+        Err(error) => (Vec::new(), None, false, None, Some(format!("{error:#}"))),
     };
     let (diff_stat, git_diff_stat_error) = match repo_diff_stat(root) {
         Ok(diff_stat) => (diff_stat, None),
@@ -73,6 +94,9 @@ fn collect_git_receipt_metadata_with_options(
 
     GitReceiptMetadata {
         changed_paths,
+        changed_path_count,
+        changed_paths_truncated,
+        changed_paths_digest,
         diff_stat,
         git_status_error,
         git_diff_stat_error,
@@ -84,7 +108,15 @@ fn collect_git_receipt_metadata_with_options(
 fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
     let output = git_output(
         root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
         "git status --porcelain -z",
     )?;
     parse_porcelain_status_z(&output.stdout).map(|entries| {
@@ -102,9 +134,49 @@ fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
 }
 
 fn repo_diff_stat(root: &Path) -> Result<DiffStat> {
-    let output = git_output(root, &["diff", "--numstat"], "git diff --numstat")?;
+    let output = git_output(
+        root,
+        &["diff", "--numstat", "--", ".", ":(exclude).agent/**"],
+        "git diff --numstat",
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_diff_stat_output(&stdout)
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct BoundedChangedPaths {
+    preview: Vec<String>,
+    total: usize,
+    truncated: bool,
+    digest: String,
+}
+
+fn bounded_changed_paths(mut paths: Vec<String>) -> BoundedChangedPaths {
+    paths.sort();
+    paths.dedup();
+
+    let total = paths.len();
+    let digest = changed_paths_digest(&paths);
+    paths.truncate(MAX_RECEIPT_CHANGED_PATHS);
+
+    BoundedChangedPaths {
+        truncated: total > paths.len(),
+        preview: paths,
+        total,
+        digest,
+    }
+}
+
+fn changed_paths_digest(paths: &[String]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(CHANGED_PATHS_DIGEST_DOMAIN);
+    digest.update((paths.len() as u64).to_be_bytes());
+    for path in paths {
+        let bytes = path.as_bytes();
+        digest.update((bytes.len() as u64).to_be_bytes());
+        digest.update(bytes);
+    }
+    format!("sha256:{:x}", digest.finalize())
 }
 
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
@@ -817,6 +889,9 @@ mod tests {
         let metadata = collect_git_receipt_metadata(temp.path());
 
         assert!(metadata.changed_paths.is_empty());
+        assert_eq!(metadata.changed_path_count, None);
+        assert!(!metadata.changed_paths_truncated);
+        assert_eq!(metadata.changed_paths_digest, None);
         assert_eq!(metadata.diff_stat.files, 0);
         assert!(metadata.git_status_error.is_some());
         assert!(metadata.git_diff_stat_error.is_some());
@@ -845,6 +920,68 @@ mod tests {
         assert!(paths.contains(&"new name.txt".to_string()));
         assert!(paths.contains(&"old name.txt".to_string()));
         assert!(paths.contains(&"loose note.txt".to_string()));
+    }
+
+    #[test]
+    fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
+        std::fs::write(temp.path().join("src.rs"), "one\n").unwrap();
+        std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "old\n").unwrap();
+        run_git(temp.path(), &["add", "."]);
+        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
+
+        std::fs::write(temp.path().join("src.rs"), "one\ntwo\n").unwrap();
+        std::fs::write(
+            temp.path().join(".agent/state/receipts.jsonl"),
+            "old\nnew\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("note.txt"), "untracked\n").unwrap();
+        std::fs::write(
+            temp.path().join(".agent/state/untracked.jsonl"),
+            "ignored by receipt metadata\n",
+        )
+        .unwrap();
+
+        let metadata = collect_git_receipt_metadata_without_worktree_fingerprint(temp.path());
+
+        assert_eq!(metadata.changed_paths, ["note.txt", "src.rs"]);
+        assert_eq!(metadata.changed_path_count, Some(2));
+        assert!(!metadata.changed_paths_truncated);
+        assert!(metadata.changed_paths_digest.is_some());
+        assert_eq!(metadata.diff_stat.files, 1);
+        assert_eq!(metadata.diff_stat.insertions, 1);
+        assert_eq!(metadata.diff_stat.deletions, 0);
+    }
+
+    #[test]
+    fn changed_path_preview_is_bounded_sorted_and_digest_covers_the_full_set() {
+        let paths = (0..105)
+            .rev()
+            .map(|index| format!("src/path-{index:03}.rs"))
+            .chain(["src/path-042.rs".to_string()])
+            .collect::<Vec<_>>();
+        let bounded = bounded_changed_paths(paths.clone());
+        let reordered = bounded_changed_paths(paths.into_iter().rev().collect());
+
+        assert_eq!(bounded.preview.len(), MAX_RECEIPT_CHANGED_PATHS);
+        assert_eq!(bounded.total, 105);
+        assert!(bounded.truncated);
+        assert_eq!(bounded.preview[0], "src/path-000.rs");
+        assert_eq!(bounded.preview[99], "src/path-099.rs");
+        assert!(bounded.digest.starts_with("sha256:"));
+        assert_eq!(bounded.digest, reordered.digest);
+        assert_eq!(bounded.preview, reordered.preview);
+
+        let preview_only_digest = changed_paths_digest(&bounded.preview);
+        assert_ne!(bounded.digest, preview_only_digest);
     }
 
     #[cfg(unix)]

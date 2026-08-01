@@ -194,6 +194,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         | CommandKind::Presets
         | CommandKind::Adopt(_)
         | CommandKind::Update(_)
+        | CommandKind::Setup
         | CommandKind::Doctor
         | CommandKind::Info
         | CommandKind::Status(_)

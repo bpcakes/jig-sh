@@ -471,7 +471,8 @@ fn tcp_listener_pids(target_host: &str, port: u16) -> Result<Vec<u32>> {
             let output = Command::new(lsof_command())
                 .env_clear()
                 .env("LC_ALL", "C")
-                .args(["-nP", "-sTCP:LISTEN", "-Fp", selector.as_str()])
+                .args(MACOS_LSOF_SOCKET_ARGS)
+                .arg(selector)
                 .output()
                 .with_context(|| {
                     format!(
@@ -502,6 +503,18 @@ const fn lsof_command() -> &'static str {
 }
 
 #[cfg(target_os = "macos")]
+const MACOS_LSOF_SOCKET_ARGS: [&str; 5] = [
+    // These queries only need process and socket fields. Without `-b`, lsof
+    // may block on metadata calls for unrelated remote mounts before it
+    // reports a local listener. `-w` suppresses the resulting warnings.
+    "-b",
+    "-w",
+    "-nP",
+    "-sTCP:LISTEN",
+    "-Fp",
+];
+
+#[cfg(target_os = "macos")]
 fn macos_lsof_selectors(target_host: &str, port: u16) -> Result<Vec<String>> {
     let mut ips = Vec::new();
     for addr in listener_target_addrs(target_host, port)? {
@@ -530,15 +543,9 @@ fn macos_pid_listens_on_target(pid: u32, target_host: &str, port: u16) -> Result
         let output = Command::new(lsof_command())
             .env_clear()
             .env("LC_ALL", "C")
-            .args([
-                "-nP",
-                "-sTCP:LISTEN",
-                "-Fp",
-                "-a",
-                "-p",
-                &pid_text,
-                selector.as_str(),
-            ])
+            .args(MACOS_LSOF_SOCKET_ARGS)
+            .args(["-a", "-p", &pid_text])
+            .arg(selector)
             .output()
             .with_context(|| {
                 format!("Failed to run lsof to recheck TCP listener owner for {target_host}:{port}")

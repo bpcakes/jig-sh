@@ -1,0 +1,60 @@
+name: Agent Map Check
+
+on:
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
+[% for root in rust_crate_roots %]
+      - <<[ (root ~ "/**") | tojson ]>>
+[% endfor %]
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".github/workflows/agent-map-check.yml"
+  push:
+    branches:
+      - <<[ default_branch | tojson ]>>
+    paths:
+      - "AGENTS.md"
+      - "**/AGENTS.md"
+      - "agent-map.md"
+[% for root in rust_crate_roots %]
+      - <<[ (root ~ "/**") | tojson ]>>
+[% endfor %]
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
+      - ".github/workflows/agent-map-check.yml"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-map-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-map-check:
+    name: Verify AGENTS map drift
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+
+      - name: Validate agent-map links and coverage
+        shell: bash
+        run: |
+          scripts/jig check agent-map

@@ -5,6 +5,7 @@ use crate::context::RepoContext;
 use super::jsonl::{read_jsonl, read_receipt_window, receipts_for_plan};
 use super::receipts::receipt_diff_summary;
 use super::records::{DecisionRecord, PlanEvent, ReceiptRecord, SessionEvent};
+use super::sessions::read_session_events;
 
 pub(crate) struct SessionStreamEvent {
     pub event: String,
@@ -190,7 +191,7 @@ pub(crate) struct PlanDetailStreams {
 
 pub(crate) fn state_streams(ctx: &RepoContext, receipt_limit: usize) -> Result<StateStreams> {
     Ok(StateStreams {
-        session_events: read_jsonl::<SessionEvent>(&ctx.state_file("sessions.jsonl"))?
+        session_events: read_session_events(&ctx.state_file("sessions.jsonl"))?
             .into_iter()
             .map(Into::into)
             .collect(),

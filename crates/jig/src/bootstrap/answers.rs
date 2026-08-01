@@ -302,14 +302,6 @@ impl RenderAnswers {
         &self.web_package_manager
     }
 
-    pub(super) fn codex_skills_configured(&self) -> bool {
-        self.agent_tooling
-            .codex
-            .marketplaces
-            .iter()
-            .any(|marketplace| !marketplace.plugins.is_empty())
-    }
-
     pub(super) fn bootstrap_command_configured(&self) -> bool {
         !self.bootstrap_command.trim().is_empty()
     }

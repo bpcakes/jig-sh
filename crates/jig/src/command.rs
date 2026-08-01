@@ -37,7 +37,10 @@ pub(crate) use proxy::{
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
-pub(crate) use state::{StateArchiveRequest, StateCommand};
+pub(crate) use state::{
+    StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
+    StateExportReceiptsRequest, StateRestoreRequest,
+};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultInitRequest, VaultRepoScope,
     VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand,

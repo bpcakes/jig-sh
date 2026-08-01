@@ -4,13 +4,14 @@ use std::io::{self, Write};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::init_wizard::prepare_init_interaction;
+use super::init_wizard::{preflight_init_package_manager, prepare_init_interaction};
 use super::output::print_json;
 use crate::{bootstrap, context::RepoContext, runtime};
 
 pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool) -> Result<()> {
     bootstrap::preflight_init_destination(&opts)?;
     prepare_init_interaction(&mut opts)?;
+    preflight_init_package_manager(&opts)?;
     let vault_setup = prepare_bootstrap_vault(
         !opts.no_vault,
         opts.no_input,

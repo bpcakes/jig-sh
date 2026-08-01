@@ -1,0 +1,47 @@
+# BEGIN JIG MANAGED BLOCK
+# OS and editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Rust
+target/
+
+# Default local SQLite database and transient sidecars
+/<<[ repo_name | replace("-", "_") ]>>.db
+/<<[ repo_name | replace("-", "_") ]>>.db-*
+
+# JavaScript and TypeScript
+node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+coverage/
+dist/
+build/
+.vite/
+.turbo/
+.astro/
+
+# Jig local runtime cache. Keep durable agent state tracked.
+.agent/.cache/*
+!.agent/.cache/.gitignore
+.agent/tmp/
+
+# Local logs and scratch files
+*.log
+tmp/
+temp/
+# END JIG MANAGED BLOCK

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
@@ -7,8 +7,7 @@ use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_re
 use crate::tool_defs::tool;
 
 use super::super::tool_execution::{
-    execute_manifest_tool_result_without_worktree_fingerprint,
-    execute_manifest_tool_without_worktree_fingerprint,
+    execute_manifest_tool_result_without_worktree_fingerprint, manifest_tool_result_failure,
 };
 use super::tools::{selected_tools, validate_check_tool};
 
@@ -41,26 +40,35 @@ fn check_tools_with_failure_mode(
 ) -> Result<Value> {
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
-    let mut results = Vec::with_capacity(tools.len());
     for name in &tools {
         validate_check_tool(ctx, name, "Work check")?;
+    }
 
-        let result = if fail_on_tool_error {
-            execute_manifest_tool_without_worktree_fingerprint(
-                ctx,
-                name,
-                json!({}),
-                Some(plan_id.to_string()),
-            )?
-        } else {
-            execute_manifest_tool_result_without_worktree_fingerprint(
-                ctx,
-                name,
-                json!({}),
-                Some(plan_id.to_string()),
-            )?
+    let mut results = Vec::with_capacity(tools.len());
+    let mut check_failure = None;
+    for name in &tools {
+        let result = match execute_manifest_tool_result_without_worktree_fingerprint(
+            ctx,
+            name,
+            json!({}),
+            Some(plan_id.to_string()),
+        ) {
+            Ok(result) => result,
+            Err(error) if fail_on_tool_error => {
+                check_failure = Some((1, error));
+                break;
+            }
+            Err(error) => return Err(error),
         };
+        let result_failure = fail_on_tool_error
+            .then(|| manifest_tool_result_failure(&result))
+            .transpose()?
+            .flatten();
         results.push(result);
+        if let Some((exit_status, message)) = result_failure {
+            check_failure = Some((exit_status, anyhow!(message)));
+            break;
+        }
     }
     let receipt_ids = results
         .iter()
@@ -69,7 +77,7 @@ fn check_tools_with_failure_mode(
     let after_fingerprint = current_worktree_fingerprint(ctx);
     let worktree_fingerprint_override =
         work_check_fingerprint_evidence(&before_fingerprint, &after_fingerprint);
-    let receipt_id = record_receipt(
+    let receipt_result = record_receipt(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_CHECK,
@@ -82,7 +90,9 @@ fn check_tools_with_failure_mode(
             plan_id: Some(plan_id.to_string()),
             started_at_ms: started,
             ended_at_ms: now_ms(),
-            exit_status: 0,
+            exit_status: check_failure
+                .as_ref()
+                .map_or(0, |(exit_status, _)| *exit_status),
             stdout: "",
             stderr: "",
             evidence: None,
@@ -91,7 +101,19 @@ fn check_tools_with_failure_mode(
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: Some(worktree_fingerprint_override),
         },
-    )?;
+    );
+
+    if let Some((_, check_error)) = check_failure {
+        return match receipt_result {
+            Ok(_) => Err(check_error),
+            Err(receipt_error) => {
+                bail!(
+                    "{check_error:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}"
+                )
+            }
+        };
+    }
+    let receipt_id = receipt_result?;
 
     Ok(json!({
         "ok": true,

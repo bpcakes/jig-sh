@@ -1,0 +1,107 @@
+{
+  "contract_version": 3,
+  "tool_namespace": "jig",
+  "jig_version": "<<[ jig_version ]>>",
+  "required_commands": [
+    "bootstrap_command",
+    "rust_fmt_check_command",
+    "rust_clippy_command",
+    "rust_test_command",
+    "rust_test_locked_command"[% if frontend_harness_enabled %],
+    "typescript_lint_command",
+    "typescript_typecheck_command",
+    "typescript_build_command",
+    "typescript_coverage_command"[% endif %][% if sqlx_enabled %],
+    "sqlx_check_command"[% endif %][% if sqlx_enabled and schema_dump_enabled %],
+    "schema_dump_command"[% endif %]
+  ],
+  "tools": [
+    {
+      "name": "jig.bootstrap",
+      "kind": "command",
+      "description": "Run the configured project bootstrap command.",
+      "command": "bootstrap_command"
+    },
+    {
+      "name": "jig.fmt_check",
+      "kind": "command",
+      "description": "Run the configured format check command.",
+      "command": "rust_fmt_check_command"
+    },
+    {
+      "name": "jig.clippy",
+      "kind": "command",
+      "description": "Run the configured clippy command.",
+      "command": "rust_clippy_command"
+    },
+    {
+      "name": "jig.test",
+      "kind": "command",
+      "description": "Run the configured default test command.",
+      "command": "rust_test_command"
+    },
+    {
+      "name": "jig.test_locked",
+      "kind": "command",
+      "description": "Run the configured locked test command.",
+      "command": "rust_test_locked_command"
+    },
+[% if frontend_harness_enabled %]
+    {
+      "name": "jig.typescript_lint",
+      "kind": "command",
+      "description": "Run the configured TypeScript lint command.",
+      "command": "typescript_lint_command"
+    },
+    {
+      "name": "jig.typescript_typecheck",
+      "kind": "command",
+      "description": "Run the configured TypeScript typecheck command.",
+      "command": "typescript_typecheck_command"
+    },
+    {
+      "name": "jig.typescript_build",
+      "kind": "command",
+      "description": "Run the configured TypeScript build command.",
+      "command": "typescript_build_command"
+    },
+    {
+      "name": "jig.typescript_coverage",
+      "kind": "command",
+      "description": "Run the configured TypeScript coverage command.",
+      "command": "typescript_coverage_command"
+    },
+[% endif %]
+[% if sqlx_enabled %]
+[% if schema_dump_enabled %]
+    {
+      "name": "jig.schema_check",
+      "kind": "native",
+      "description": "Run the native schema drift check."
+    },
+    {
+      "name": "jig.schema_dump",
+      "kind": "command",
+      "description": "Run the configured schema dump command.",
+      "command": "schema_dump_command"
+    },
+[% endif %]
+    {
+      "name": "jig.sqlx_check",
+      "kind": "command",
+      "description": "Run the configured SQLx check command.",
+      "command": "sqlx_check_command"
+    },
+    {
+      "name": "jig.migration_add",
+      "kind": "native",
+      "description": "Add timestamped SQL migration stubs."
+    },
+[% endif %]
+    {
+      "name": "jig.contract_check",
+      "kind": "native",
+      "description": "Run the native Jig contract check."
+    }
+  ]
+}

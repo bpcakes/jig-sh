@@ -45,22 +45,7 @@ pub(in crate::runtime) fn execute_manifest_tool(
         tool_name,
         args,
         plan_id,
-        ManifestToolExecutionOptions::fail_fast(record_receipt, true),
-    )
-}
-
-pub(in crate::runtime) fn execute_manifest_tool_without_worktree_fingerprint(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    plan_id: Option<String>,
-) -> Result<Value> {
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::fail_fast(true, false),
+        ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
     )
 }
 
@@ -75,7 +60,38 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
         tool_name,
         args,
         plan_id,
-        ManifestToolExecutionOptions::collect_result(true, false),
+        ManifestToolExecutionOptions::collect_result(true, false, false),
+    )
+}
+
+pub(in crate::runtime) fn manifest_tool_result_failure(
+    response: &Value,
+) -> Result<Option<(i32, String)>> {
+    let tool_name = response
+        .get("tool")
+        .and_then(Value::as_str)
+        .context("Tool execution response is missing `tool`")?;
+    let result = response
+        .get("result")
+        .context("Tool execution response is missing `result`")?;
+    let exit_status = result
+        .get("exit_status")
+        .and_then(Value::as_i64)
+        .and_then(|status| i32::try_from(status).ok())
+        .context("Tool execution response has an invalid `result.exit_status`")?;
+    let stdout = result
+        .get("stdout")
+        .and_then(Value::as_str)
+        .context("Tool execution response is missing `result.stdout`")?;
+    let stderr = result
+        .get("stderr")
+        .and_then(Value::as_str)
+        .context("Tool execution response is missing `result.stderr`")?;
+    let command_key = response.get("command_key").and_then(Value::as_str);
+
+    Ok(
+        tool_failure_message(tool_name, command_key, exit_status, stdout, stderr)
+            .map(|message| (exit_status, message)),
     )
 }
 
@@ -96,22 +112,33 @@ enum ToolFailureMode {
 #[derive(Clone, Copy)]
 struct ManifestToolExecutionOptions {
     record_receipt: bool,
+    collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
     failure_mode: ToolFailureMode,
 }
 
 impl ManifestToolExecutionOptions {
-    const fn fail_fast(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
+    const fn fail_fast(
+        record_receipt: bool,
+        collect_git_metadata: bool,
+        collect_worktree_fingerprint: bool,
+    ) -> Self {
         Self {
             record_receipt,
+            collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::FailFast,
         }
     }
 
-    const fn collect_result(record_receipt: bool, collect_worktree_fingerprint: bool) -> Self {
+    const fn collect_result(
+        record_receipt: bool,
+        collect_git_metadata: bool,
+        collect_worktree_fingerprint: bool,
+    ) -> Self {
         Self {
             record_receipt,
+            collect_git_metadata,
             collect_worktree_fingerprint,
             failure_mode: ToolFailureMode::CollectResult,
         }
@@ -199,18 +226,19 @@ fn execute_native_tool(
             stderr: &output.stderr,
             evidence: None,
             session_override: None,
-            collect_git_metadata: true,
+            collect_git_metadata: options.collect_git_metadata,
             collect_worktree_fingerprint: options.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
     );
 
-    let tool_failure = (output.exit_status != 0).then(|| {
-        format!(
-            "{tool_name} failed with status {}\nstdout:\n{}\nstderr:\n{}",
-            output.exit_status, output.stdout, output.stderr
-        )
-    });
+    let tool_failure = tool_failure_message(
+        tool_name,
+        None,
+        output.exit_status,
+        &output.stdout,
+        &output.stderr,
+    );
     let receipt_id =
         receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
 
@@ -306,19 +334,19 @@ fn execute_command_tool(
             stderr: &stderr,
             evidence: None,
             session_override: None,
-            collect_git_metadata: true,
+            collect_git_metadata: options.collect_git_metadata,
             collect_worktree_fingerprint: options.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
     );
 
-    let tool_failure = (!output.status.success()).then(|| {
-        let tool_name = invocation.tool_name;
-        let command_key = invocation.command_key;
-        format!(
-            "{tool_name} failed with status {exit_status}\ncommand key: {command_key}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        )
-    });
+    let tool_failure = tool_failure_message(
+        invocation.tool_name,
+        Some(invocation.command_key),
+        exit_status,
+        &stdout,
+        &stderr,
+    );
     let receipt_id =
         receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
 
@@ -346,6 +374,26 @@ fn maybe_record_receipt(
     } else {
         Ok(None)
     }
+}
+
+fn tool_failure_message(
+    tool_name: &str,
+    command_key: Option<&str>,
+    exit_status: i32,
+    stdout: &str,
+    stderr: &str,
+) -> Option<String> {
+    if exit_status == 0 {
+        return None;
+    }
+    Some(match command_key {
+        Some(command_key) => format!(
+            "{tool_name} failed with status {exit_status}\ncommand key: {command_key}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        ),
+        None => format!(
+            "{tool_name} failed with status {exit_status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        ),
+    })
 }
 
 fn run_configured_command(

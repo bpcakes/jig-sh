@@ -1,0 +1,25 @@
+# <<[ package_name ]>>-http
+
+## Purpose
+
+Owns the Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, handlers, middleware, extractors, and HTTP DTOs.
+
+## Key entrypoints
+
+- `src/lib.rs`: builds the public router, request middleware, health endpoints, and API handlers.
+
+## Edit here for X
+
+- Add or change routes, handler functions, HTTP response codes, headers, request IDs, tracing middleware, and extractors here.
+- Call app-crate use cases through `AppState` instead of placing business logic in handlers.
+
+## Invariants
+
+- Keep handlers thin and delegate domain work to `<<[ package_name ]>>`.
+- Keep observability middleware at this HTTP boundary.
+- Preserve `/health/live` for process liveness and `/health/ready` for dependency readiness.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-http`
+- `cargo test -p <<[ package_name ]>>-test-support --test http`

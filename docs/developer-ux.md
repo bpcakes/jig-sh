@@ -18,15 +18,13 @@ The entry commands are intentionally separate. Start a new repo with `jig init`;
 The practical result is that a new contributor can start with a small command set:
 
 ```sh
-scripts/jig bootstrap
-scripts/jig doctor
-scripts/jig check contract
+scripts/jig setup
 scripts/jig check fmt
 scripts/jig check clippy
 scripts/jig check test
 ```
 
-`doctor` is the short onboarding readiness pass, including harness and contract status without recording gate evidence. `scripts/jig check contract` records the contract gate evidence expected by reviews and CI.
+`setup` begins with the read-only doctor pass, runs the configured project bootstrap, registers configured agent tooling when needed, records minimum contract evidence, and runs doctor again. `doctor` remains the standalone readiness diagnostic when no setup mutation is wanted. `scripts/jig bootstrap` and `scripts/jig check contract` remain available as the individual project-dependency and contract-evidence primitives.
 
 Those commands are boring on purpose. They are meant to be copyable by humans, agents, onboarding docs, and CI without each caller having to infer project layout.
 
@@ -96,7 +94,8 @@ Managed npm checks, browser E2E, and generated dev pin the exact app and require
 
 The daily developer loop is built around a few stable verbs:
 
-- `scripts/jig bootstrap` prepares local dependencies.
+- `scripts/jig setup` runs doctor, prepares local dependencies, registers configured agent tooling when needed, verifies the minimum contract, and runs doctor again.
+- `scripts/jig bootstrap` remains the project-dependency-only primitive used by setup.
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux/macOS retain the exact child process-group identity until descendants are proven gone, Windows uses a private Job Object, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
 - `scripts/jig work ...` opens work, runs configured check and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
@@ -106,6 +105,12 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 
 This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
+
+## State Health And Retention
+
+Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze legacy recursive session summaries and receipt payload growth. `state compact sessions --dry-run` validates and previews the repair. Apply mode creates an exact compressed backup under ignored `.agent/.cache/` before replacing the session stream, and `state restore --backup <path>` verifies that backup before restoring it.
+
+Receipt retention is also local. `state archive --before <date>` compresses eligible old records into ignored `.agent/.cache/state-archives/`, writes an exact manifested pre-archive backup under `.agent/.cache/state-backups/`, and shrinks the active stream. `state restore --backup <path>` can restore that exact receipt preimage. `state export receipts --before <date> --output <file.jsonl.gz>` makes a non-mutating copy at a caller-selected destination. Cache artifacts are ignored local recovery aids rather than durable backups, and neither operation rewrites Git history, so durable retention and committed historical blobs require separate, coordinated handling.
 
 ## Rewrite Status
 

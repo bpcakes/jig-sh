@@ -1,0 +1,26 @@
+use serde::{Deserialize, Serialize};
+
+#[allow(clippy::useless_concat)]
+pub const APP_NAME: &str = concat!(
+    // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+    "<<[ repo_name ]>>",
+);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AppVersion {
+    pub name: String,
+    pub version: String,
+}
+
+impl AppVersion {
+    pub fn current() -> Self {
+        Self::new(env!("CARGO_PKG_VERSION"))
+    }
+
+    pub fn new(version: impl Into<String>) -> Self {
+        Self {
+            name: APP_NAME.into(),
+            version: version.into(),
+        }
+    }
+}

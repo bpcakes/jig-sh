@@ -70,7 +70,7 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `schema_dump_enabled`: when `true` and `sqlx_enabled` is also `true`, the template renders schema dump and schema freshness commands; when SQLx is disabled, this is rendered as `false`. New init/adopt answers reject explicitly setting this to `true` while SQLx is disabled; `jig update --recopy` normalizes legacy SQLx-disabled configs back to `false`.
 - `schema_dump_command`: command behind `scripts/jig schema-dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
 - `sqlx_check_command`: command behind `scripts/jig check sqlx` when `sqlx_enabled` is `true`
-- `bootstrap_command`: implementation behind `scripts/jig bootstrap`; the generated harness-only default runs `cargo fetch` only when a root `Cargo.toml` exists, otherwise exits 0 with a stdout note. For database-backed `rust-react` shapes, export a nonempty `DATABASE_URL` or provide an actual `DATABASE_URL` assignment in `.env`; an empty or unrelated `.env` does not satisfy the preflight. Bootstrap creates the Postgres or SQLite database, applies migrations through the generated SQLx code, then performs one dependency install from its authoritative JavaScript scope. Generated SQLite code creates missing parent directories and serializes migrations with an adjacent lock file so concurrent bootstrap processes do not race non-idempotent DDL. Every in-memory SQLite pool permanently retains at least one connection with idle/lifetime reaping and the cancellable pre-acquire health check disabled; private-cache URLs additionally restrict the pool to one connection, while shared-cache forms retain concurrent pooling. Set this explicitly for other project-specific setup. If a root `Cargo.toml` exists, Cargo errors are surfaced instead of skipped.
+- `bootstrap_command`: implementation behind `scripts/jig bootstrap`; `scripts/jig setup` invokes it between an initial doctor pass and minimum agent/contract verification. The generated harness-only default runs `cargo fetch` only when a root `Cargo.toml` exists, otherwise exits 0 with a stdout note. For database-backed `rust-react` shapes, export a nonempty `DATABASE_URL` or provide an actual `DATABASE_URL` assignment in `.env`; an empty or unrelated `.env` does not satisfy the preflight. Bootstrap creates the Postgres or SQLite database, applies migrations through the generated SQLx code, then performs one dependency install from its authoritative JavaScript scope. Generated SQLite code creates missing parent directories and serializes migrations with an adjacent lock file so concurrent bootstrap processes do not race non-idempotent DDL. Every in-memory SQLite pool permanently retains at least one connection with idle/lifetime reaping and the cancellable pre-acquire health check disabled; private-cache URLs additionally restrict the pool to one connection, while shared-cache forms retain concurrent pooling. Set this explicitly for other project-specific setup. If a root `Cargo.toml` exists, Cargo errors are surfaced instead of skipped.
 - `dev_command`: legacy project-owned dev command preserved only for older renders; `scripts/jig dev` uses `[dev]` and `[[dev.apps]]`
 - `rust_fmt_check_command`: implementation behind `scripts/jig check fmt`; the generated default exits 0 with a stdout note when no root `Cargo.toml` exists, and otherwise surfaces Cargo errors
 - `rust_clippy_command`: implementation behind `scripts/jig check clippy`; the generated default exits 0 with a stdout note when no root `Cargo.toml` exists, and otherwise surfaces Cargo errors
@@ -182,7 +182,7 @@ tool = "jig.test"
 
 `kind: check` gates must reference execution tool names declared in `.agent/jig-contract.json`. `scripts/jig work check --plan-id ...` runs configured check gates in order unless one or more `--tool` values are passed explicitly. Human-readable output is the default. Pass `--json` for structured automation output.
 
-`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, whether the proving receipt matches the current worktree, changed paths covered by the receipt, and the exact stale or unknown freshness reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are repo-relative names from `git status --porcelain=v1 -z`; they can include `.agent/` state paths and untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Check gate freshness is based on the non-`.agent/` worktree fingerprint from the latest check or check-batch receipt that proves the gate.
+`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, whether the proving receipt matches the current worktree, changed paths covered by the receipt, and the exact stale or unknown freshness reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are bounded repo-relative previews from `git status --porcelain=v1 -z`; they exclude `.agent/**` but can include untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Check gate freshness is based on the non-`.agent/` worktree fingerprint from the latest check or check-batch receipt that proves the gate.
 
 Required check gates should not create or modify non-`.agent/` files during `work check`. Build outputs, generated metadata, and lockfiles should be committed when they are source-of-truth, ignored when they are disposable, or generated before running the fingerprinted check. If a check does intentionally settle generated files, rerun `scripts/jig work check --plan-id ...` after reviewing those changes so the gate evidence matches the final worktree.
 
@@ -563,6 +563,12 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig work status --json`
 - `scripts/jig work finish --plan-id ...`
 - `scripts/jig state summary`
+- `scripts/jig state diagnose`
+- `scripts/jig state diagnose --deep`
+- `scripts/jig state compact sessions --dry-run`
+- `scripts/jig state compact sessions`
+- `scripts/jig state restore --backup <backup-directory-or-manifest>`
+- `scripts/jig state export receipts --before YYYY-MM-DD --output <file.jsonl.gz>`
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
 - `scripts/jig state archive --before YYYY-MM-DD`
 
@@ -574,15 +580,65 @@ new receipts. For one-off contract command runs that should not record evidence,
 pass `--no-receipt`; `--no-receipt` conflicts with `--plan-id` because
 plan-linked checks must leave evidence for `work finish` gate enforcement. When
 receipt recording is skipped, command JSON still includes `"receipt_id": null`.
+
+Use `scripts/jig state diagnose` for a read-only size and integrity report.
+`--deep` additionally analyzes recursive session summaries, projected
+compaction savings, and receipt payload categories. The report also includes
+local disk usage from maintenance backups under
+`.agent/.cache/state-backups/` and compressed receipt archives under
+`.agent/.cache/state-archives/`. Repair legacy recursive summaries with
+`state compact sessions`: run `--dry-run` first, then apply the rewrite. Apply
+mode validates the replacement and first stores an exact gzip backup plus
+checksum manifest under ignored
+`.agent/.cache/state-backups/<id>/`. Pass either that directory or its
+`manifest.json` to `state restore --backup ...` to verify and restore the exact
+pre-compaction stream.
+
 Use `scripts/jig state archive --before ...` when `receipts.jsonl` grows too
 large; `--before YYYY-MM-DD` is interpreted as a UTC cutoff date. Archiving
-keeps latest gate evidence active and moves older unprotected receipt records
-into `.agent/state/archive/`. The retention model preserves the latest
-work-linked receipt for each plan/tool/gate plus the check receipts that support
-that latest evidence, so old closed or abandoned plans can keep their most recent
-gate evidence in the active file. Archiving limits historical receipt growth; it
-does not guarantee that every receipt for an old plan is moved out of
-`receipts.jsonl`.
+keeps evidence required by currently open plans active, writes eligible older
+records as gzip JSONL under ignored `.agent/.cache/state-archives/`, and only
+then rewrites the active stream. Before that rewrite, Jig also stores a complete
+pre-archive receipt backup with a checksum manifest under
+`.agent/.cache/state-backups/`; `state restore --backup ...` can therefore
+recover the exact original physical order, including interleaved protected
+records. Existing legacy files under
+`.agent/state/archive/` are left untouched and reported by diagnostics. For a
+non-mutating copy, use `state export receipts --before ... --output ...`; export
+preserves the selected raw JSONL records and refuses to overwrite its
+caller-selected destination.
+
+Maintenance backups and archives under `.agent/.cache/` are local, ignored
+recovery aids rather than durable or off-machine backups. Copy an artifact to
+durable storage before relying on it for long-term recovery. Human command
+output reports the relevant recovery path, compressed size, checksum, and
+whether active state changed.
+
+New receipt Git metadata excludes `.agent/**`. `changed_paths` is a sorted
+preview capped at 100 entries; `changed_path_count`,
+`changed_paths_truncated`, and `changed_paths_digest` describe the full set.
+Successful stdout and stderr previews use a 512-byte truncation threshold, while
+failed previews retain the existing 4,000-byte diagnostic threshold. These
+limits constrain future growth without weakening worktree fingerprints or gate
+relationships.
+
+These commands repair or reduce the current working-tree files only. They never
+rewrite Git history, so blobs already reachable from commits remain until a
+separate, deliberately coordinated Git-history cleanup.
+
+Before an applying compaction, archive rewrite, or restore, stop any Jig process
+that was launched with an older runtime which wrote through a pre-opened state
+file handle. Current runtimes coordinate through the repository state lock, but
+a writer already queued on the legacy file inode cannot follow an atomic rename.
+Dry-run diagnosis and compaction do not need this writer cutover.
+
+Treat `.agent/.cache/state-backups/` as short-lived rollback storage: keep the
+latest pre-rewrite backup until the repaired state has been verified, copy any
+artifact needed for long-term recovery outside the ignored cache, then remove
+obsolete cache artifacts. Keep selected receipt archives only for as long as
+their historical evidence is useful. `state diagnose` reports backup and archive
+bytes separately so this local cache does not become a second unbounded state
+store.
 
 For local runtime development, set `JIG_DEV_BIN` to an already-built `jig` binary. The installer resolves that explicit binary to an absolute path before returning it, and verifies that its reported version matches `.jig.toml`. A stale or mismatched `JIG_DEV_BIN` is a hard error rather than a fallback to the cached runtime. In the `jig-sh` source checkout, the installer also keeps the repo-local cache tied to the current checkout so same-version release caches do not hide local runtime changes. Avoid rebuilding that binary while a long-running `JIG_DEV_BIN` process, such as `jig proxy start --foreground`, is still active.
 

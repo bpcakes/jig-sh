@@ -1,0 +1,76 @@
+use axum::{
+    body::Bytes,
+    http::{HeaderMap, StatusCode},
+};
+use serde::de::DeserializeOwned;
+
+#[derive(Clone, Debug)]
+pub struct TestResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Bytes,
+}
+
+impl TestResponse {
+    pub fn new(status: StatusCode, headers: HeaderMap, body: Bytes) -> Self {
+        Self {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    pub fn json<T>(&self) -> T
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_slice(&self.body).unwrap_or_else(|error| {
+            panic!(
+                "failed to decode response JSON: {error}\nstatus: {}\nbody:\n{}",
+                self.status,
+                self.text()
+            )
+        })
+    }
+
+    pub fn assert_status(self, expected: StatusCode) -> Self {
+        assert_eq!(
+            self.status,
+            expected,
+            "unexpected response status\nbody:\n{}",
+            self.text()
+        );
+        self
+    }
+
+    pub fn assert_error(self, expected_status: StatusCode, expected_code: &str) -> Self {
+        self.assert_status(expected_status)
+            .assert_json_field("code", expected_code)
+    }
+
+    pub fn assert_json_field(self, field: &str, expected: &str) -> Self {
+        let value: serde_json::Value = self.json();
+        assert_eq!(
+            value.get(field).and_then(serde_json::Value::as_str),
+            Some(expected),
+            "unexpected JSON field '{field}' in response: {value}"
+        );
+        self
+    }
+}

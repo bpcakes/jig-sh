@@ -1,0 +1,137 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { defineConfig, devices } from "@playwright/test";
+
+const appDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(appDir, "<<[ repo_root_relative ]>>");
+const webPort = readPort("E2E_WEB_PORT", 4173);
+const apiPort = readPort("E2E_API_PORT", 4174);
+if (webPort === apiPort) {
+  throw new Error("E2E_WEB_PORT and E2E_API_PORT must use different ports");
+}
+const localBaseURL = `http://127.0.0.1:${webPort}`;
+const externalBaseURL = readOptionalEnvironmentVariable("E2E_BASE_URL");
+const apiOrigin = `http://127.0.0.1:${apiPort}`;
+const serverTimeout = readPositiveInteger(
+  "E2E_SERVER_TIMEOUT_MS",
+  process.env.CI ? 180_000 : 120_000,
+);
+const managedWebServerCount = externalBaseURL ? 0 : 2;
+const defaultCiGlobalTimeout = Math.max(
+  10 * 60_000,
+  managedWebServerCount * serverTimeout + 5 * 60_000,
+);
+const globalTimeout = readPositiveInteger(
+  "E2E_GLOBAL_TIMEOUT_MS",
+  defaultCiGlobalTimeout,
+);
+[% if db == "sqlite" %]
+const configuredDatabaseUrl = readOptionalEnvironmentVariable("E2E_DATABASE_URL");
+const defaultDatabasePath = ".agent/tmp/<<[ e2e_database_name ]>>.sqlite";
+const databaseUrl =
+  configuredDatabaseUrl ?? `sqlite:${defaultDatabasePath}`;
+const backendCommands = [
+  "cargo run --locked -p <<[ repo_name ]>>-api -- --bootstrap-database",
+  "cargo run --locked -p <<[ repo_name ]>>-api",
+];
+if (!configuredDatabaseUrl) {
+  backendCommands.unshift(
+    `node -e "const fs=require('node:fs');fs.mkdirSync('.agent/tmp',{recursive:true});for(const suffix of ['','-shm','-wal','-journal'])fs.rmSync('${defaultDatabasePath}'+suffix,{force:true})"`,
+  );
+}
+const backendCommand = backendCommands.join(" && ");
+[% elif db == "postgres" %]
+const configuredDatabaseUrl = readOptionalEnvironmentVariable("E2E_DATABASE_URL");
+const databaseUrl =
+  configuredDatabaseUrl ??
+  "postgres://postgres:postgres@127.0.0.1:5432/<<[ e2e_database_name ]>>";
+const backendCommand = [
+  "cargo run --locked -p <<[ repo_name ]>>-api -- --bootstrap-database",
+  "cargo run --locked -p <<[ repo_name ]>>-api",
+].join(" && ");
+[% else %]
+const backendCommand = "cargo run --locked -p <<[ repo_name ]>>-api";
+[% endif %]
+
+export default defineConfig({
+  testDir: "./e2e",
+  outputDir: "test-results",
+  forbidOnly: Boolean(process.env.CI),
+  failOnFlakyTests: Boolean(process.env.CI),
+  // Retry once to classify intermittent CI failures; failOnFlakyTests keeps a recovered retry red.
+  retries: process.env.CI ? 1 : 0,
+  workers: 1,
+  globalTimeout: process.env.CI ? globalTimeout : undefined,
+  reporter: process.env.CI
+    ? [["github"], ["html", { open: "never" }]]
+    : [["list"], ["html", { open: "never" }]],
+  use: {
+    baseURL: externalBaseURL ?? localBaseURL,
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+  },
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
+  webServer: externalBaseURL
+    ? undefined
+    : [
+        {
+          name: "Rust API",
+          command: backendCommand,
+          cwd: repoRoot,
+          env: {
+            HOST: "127.0.0.1",
+            PORT: String(apiPort),
+            BIND_ADDR: `127.0.0.1:${apiPort}`,
+[% if db != "none" %]
+            DATABASE_URL: databaseUrl,
+[% endif %]
+          },
+          url: `${apiOrigin}/health/ready`,
+          timeout: serverTimeout,
+          reuseExistingServer: false,
+          gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+        },
+        {
+          name: "Vite web",
+          command: "vite --host 127.0.0.1 --strictPort",
+          cwd: appDir,
+          env: {
+            API_ORIGIN: apiOrigin,
+            JIG_DEV_API_ORIGIN: apiOrigin,
+            PORT: String(webPort),
+          },
+          url: localBaseURL,
+          timeout: serverTimeout,
+          reuseExistingServer: false,
+          gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
+        },
+      ],
+});
+
+function readPort(name: string, fallback: number): number {
+  const value = readPositiveInteger(name, fallback);
+  if (value > 65_535) {
+    throw new Error(`${name} must be an integer between 1 and 65535`);
+  }
+  return value;
+}
+
+function readPositiveInteger(name: string, fallback: number): number {
+  const configured = process.env[name]?.trim();
+  const value = Number(configured || fallback);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+function readOptionalEnvironmentVariable(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}

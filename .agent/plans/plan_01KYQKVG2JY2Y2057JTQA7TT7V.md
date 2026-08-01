@@ -1,0 +1,1 @@
+Add a reusable jig setup command, validate the selected frontend package manager before init writes, expose typed package-manager CLI choices, and align init/README handoff with doctor ordering.

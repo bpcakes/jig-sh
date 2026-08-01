@@ -1,0 +1,625 @@
+[% if sqlx_driver == "sqlite" %]
+use std::fs::{self, File, OpenOptions};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+[% endif %]
+use std::time::Duration;
+
+use anyhow::Context;
+use sqlx::migrate::MigrateDatabase;
+
+pub type DbPool = sqlx::<<[ db_pool ]>>;
+
+pub const DEFAULT_DB_TIMEOUT: Duration = Duration::from_secs(30);
+[% if sqlx_driver == "sqlite" %]
+static SQLITE_MIGRATION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+[% endif %]
+
+#[derive(Clone, Debug)]
+pub struct Db {
+    pool: DbPool,
+[% if sqlx_driver == "sqlite" %]
+    migration_lock_path: Option<PathBuf>,
+[% endif %]
+}
+
+impl Db {
+    pub async fn create_if_missing(database_url: &str) -> anyhow::Result<bool> {
+        if Self::database_exists(database_url).await? {
+            return Ok(false);
+        }
+
+[% if sqlx_driver == "sqlite" %]
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str(database_url)
+            .context("Could not parse SQLite database URL")?;
+        if sqlite_database_url_is_in_memory(database_url) {
+            return Ok(false);
+        }
+        if let Some(parent) = options
+            .get_filename()
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Could not create SQLite database directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(options.get_filename())
+        {
+            Ok(database_file) => {
+                drop(database_file);
+                Ok(true)
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "Could not exclusively create SQLite database file {}",
+                    options.get_filename().display()
+                )
+            }),
+        }
+[% else %]
+        let create_result = tokio::time::timeout(
+            DEFAULT_DB_TIMEOUT,
+            sqlx::<<[ db_database ]>>::create_database(database_url),
+        )
+        .await
+        .with_context(|| format!("Timed out creating the database after {DEFAULT_DB_TIMEOUT:?}"))
+        .and_then(|result| result.map_err(Into::into));
+        match create_result {
+            Ok(()) => Ok(true),
+            Err(create_error) => match Self::database_exists(database_url).await {
+                Ok(true) => Ok(false),
+                Ok(false) => Err(create_error),
+                Err(recheck_error) => Err(create_error.context(format!(
+                    "Could not confirm database existence after creation failed: {recheck_error:#}"
+                ))),
+            },
+        }
+[% endif %]
+    }
+
+    async fn database_exists(database_url: &str) -> anyhow::Result<bool> {
+        tokio::time::timeout(
+            DEFAULT_DB_TIMEOUT,
+            sqlx::<<[ db_database ]>>::database_exists(database_url),
+        )
+        .await
+        .with_context(|| {
+            format!("Timed out checking whether the database exists after {DEFAULT_DB_TIMEOUT:?}")
+        })?
+        .map_err(Into::into)
+    }
+
+    pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
+        Self::connect_with_timeout(database_url, DEFAULT_DB_TIMEOUT).await
+    }
+
+    pub async fn connect_with_timeout(
+        database_url: &str,
+        timeout_after: Duration,
+    ) -> anyhow::Result<Self> {
+[% if sqlx_driver == "sqlite" %]
+        let options = sqlx::sqlite::SqliteConnectOptions::from_str(database_url)
+            .context("Could not parse SQLite database URL")?;
+        let url_semantics = sqlite_database_url_semantics(database_url);
+        let database_filename =
+            (!url_semantics.in_memory).then(|| options.get_filename().to_path_buf());
+        let pool_options = sqlx::sqlite::SqlitePoolOptions::new();
+        let pool_options = if url_semantics.in_memory {
+            // An in-memory database exists only while at least one connection
+            // remains open. Keep one connection resident, and avoid SQLx's
+            // cancellable pre-acquire ping dropping the connection that owns
+            // the database. Private cache additionally requires one checkout
+            // at a time because separate connections have separate schemas.
+            let pool_options = pool_options
+                .min_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .test_before_acquire(false);
+            if url_semantics.requires_single_connection_pool() {
+                pool_options.max_connections(1)
+            } else {
+                pool_options
+            }
+        } else {
+            pool_options
+        };
+[% endif %]
+[% if sqlx_driver == "sqlite" %]
+        let pool = tokio::time::timeout(timeout_after, pool_options.connect_with(options))
+[% else %]
+        let pool = tokio::time::timeout(timeout_after, DbPool::connect(database_url))
+[% endif %]
+            .await
+            .with_context(|| {
+                format!("Timed out connecting to database after {timeout_after:?}")
+            })??;
+[% if sqlx_driver == "sqlite" %]
+        let migration_lock_path = if let Some(database_filename) = database_filename {
+            let canonical_database_filename =
+                fs::canonicalize(&database_filename).with_context(|| {
+                    format!(
+                        "Could not resolve SQLite database file {} for migration locking",
+                        database_filename.display()
+                    )
+                })?;
+            Some(sqlite_migration_lock_path(&canonical_database_filename))
+        } else {
+            // SQLx gives in-memory databases a non-filesystem filename. Keep
+            // those connections serialized only by the in-process mutex.
+            None
+        };
+[% endif %]
+[% if sqlx_driver == "sqlite" %]
+        Ok(Self {
+            pool,
+            migration_lock_path,
+        })
+[% else %]
+        Ok(Self { pool })
+[% endif %]
+    }
+
+    pub fn pool(&self) -> &DbPool {
+        &self.pool
+    }
+
+    pub async fn migrate(&self) -> anyhow::Result<()> {
+        self.migrate_with_timeout(DEFAULT_DB_TIMEOUT).await
+    }
+
+    pub async fn migrate_with_timeout(&self, timeout_after: Duration) -> anyhow::Result<()> {
+        tokio::time::timeout(timeout_after, self.run_migrations_serialized())
+            .await
+            .with_context(|| {
+                format!("Timed out running database migrations after {timeout_after:?}")
+            })??;
+        Ok(())
+    }
+
+    async fn run_migrations_serialized(&self) -> anyhow::Result<()> {
+[% if sqlx_driver == "sqlite" %]
+        let _in_process_lock = SQLITE_MIGRATION_LOCK.lock().await;
+        let _file_lock = self.acquire_migration_file_lock().await?;
+[% endif %]
+        sqlx::migrate!(
+            // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+            "<<[ migration_path ]>>"
+        )
+        .run(&self.pool)
+        .await?;
+        Ok(())
+    }
+[% if sqlx_driver == "sqlite" %]
+
+    async fn acquire_migration_file_lock(&self) -> anyhow::Result<Option<File>> {
+        let Some(path) = &self.migration_lock_path else {
+            return Ok(None);
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("Could not open SQLite migration lock {}", path.display()))?;
+        loop {
+            match fs4::fs_std::FileExt::try_lock_exclusive(&file) {
+                Ok(true) => return Ok(Some(file)),
+                Ok(false) => {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("Could not acquire SQLite migration lock {}", path.display())
+                    });
+                }
+            }
+        }
+    }
+[% endif %]
+}
+[% if sqlx_driver == "sqlite" %]
+
+fn sqlite_migration_lock_path(database_filename: &Path) -> PathBuf {
+    let mut lock_path = database_filename.as_os_str().to_os_string();
+    lock_path.push("-jig-migrate.lock");
+    PathBuf::from(lock_path)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SqliteDatabaseUrlSemantics {
+    in_memory: bool,
+    shared_cache: bool,
+}
+
+impl SqliteDatabaseUrlSemantics {
+    fn requires_single_connection_pool(self) -> bool {
+        self.in_memory && !self.shared_cache
+    }
+}
+
+fn sqlite_database_url_is_in_memory(database_url: &str) -> bool {
+    sqlite_database_url_semantics(database_url).in_memory
+}
+
+fn sqlite_database_url_semantics(database_url: &str) -> SqliteDatabaseUrlSemantics {
+    let database_and_params = database_url
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:");
+    let (database, params) = database_and_params
+        .split_once('?')
+        .map_or((database_and_params, None), |(database, params)| {
+            (database, Some(params))
+        });
+    let in_memory = database == ":memory:";
+    let mut semantics = SqliteDatabaseUrlSemantics {
+        in_memory,
+        shared_cache: in_memory,
+    };
+
+    if let Some(params) = params {
+        // Keep this ordered update behavior aligned with SQLx 0.8.6. In
+        // particular, a later `mode=memory` re-enables shared cache while a
+        // later `cache=private` disables it again.
+        for (key, value) in url::form_urlencoded::parse(params.as_bytes()) {
+            match (key.as_ref(), value.as_ref()) {
+                ("mode", "memory") => {
+                    semantics.in_memory = true;
+                    semantics.shared_cache = true;
+                }
+                ("cache", "private") => semantics.shared_cache = false,
+                ("cache", "shared") => semantics.shared_cache = true,
+                _ => {}
+            }
+        }
+    }
+
+    semantics
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use super::{
+        Db, SQLITE_MIGRATION_LOCK, SqliteDatabaseUrlSemantics, sqlite_database_url_is_in_memory,
+        sqlite_database_url_semantics,
+    };
+
+    fn unique_database_path(label: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after the Unix epoch")
+            .as_nanos();
+        let process_id = std::process::id();
+        std::env::temp_dir()
+            .join(format!("jig_db_{label}_{process_id}_{unique}"))
+            .join("nested")
+            .join("database.db")
+    }
+
+    fn sqlite_url(path: &std::path::Path) -> String {
+        format!("sqlite://{}", path.display())
+    }
+
+    fn remove_database_artifacts(database_file: &std::path::Path) {
+        let database_file = database_file.display().to_string();
+        for suffix in ["", "-shm", "-wal", "-journal", "-jig-migrate.lock"] {
+            let _ = std::fs::remove_file(format!("{database_file}{suffix}"));
+        }
+        if let Some(root) = std::path::Path::new(&database_file)
+            .parent()
+            .and_then(|p| p.parent())
+        {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn recognizes_sqlx_in_memory_url_forms_semantically() {
+        for database_url in [
+            "sqlite::memory:",
+            "sqlite://:memory:",
+            "sqlite://named.db?mode=memory",
+            "sqlite://named.db?mode=mem%6Fry",
+        ] {
+            assert!(sqlite_database_url_is_in_memory(database_url));
+        }
+        for database_url in ["sqlite:named.db", "sqlite://named.db?mode=rw"] {
+            assert!(!sqlite_database_url_is_in_memory(database_url));
+        }
+    }
+
+    #[test]
+    fn mirrors_sqlx_ordered_in_memory_cache_semantics() {
+        let semantics = |database_url| sqlite_database_url_semantics(database_url);
+
+        assert_eq!(
+            semantics("sqlite://?mode=memory&cache=private"),
+            SqliteDatabaseUrlSemantics {
+                in_memory: true,
+                shared_cache: false,
+            }
+        );
+        assert_eq!(
+            semantics("sqlite://?cache=private&mode=memory"),
+            SqliteDatabaseUrlSemantics {
+                in_memory: true,
+                shared_cache: true,
+            }
+        );
+        assert_eq!(
+            semantics("sqlite://?mode=memory&cache=shared&cache=private"),
+            SqliteDatabaseUrlSemantics {
+                in_memory: true,
+                shared_cache: false,
+            }
+        );
+        assert_eq!(
+            semantics("sqlite::memory:?cache=private&cache=shared"),
+            SqliteDatabaseUrlSemantics {
+                in_memory: true,
+                shared_cache: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_database_connects_and_migrates_without_a_file_lock() {
+        assert!(!Db::create_if_missing("sqlite::memory:").await.unwrap());
+        let database = Db::connect("sqlite::memory:").await.unwrap();
+        assert!(database.migration_lock_path.is_none());
+        database.migrate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_cache_in_memory_pool_waits_for_the_active_checkout() {
+        let database = Db::connect("sqlite://?mode=memory&cache=private")
+            .await
+            .unwrap();
+        database.migrate().await.unwrap();
+
+        assert_eq!(database.pool().options().get_max_connections(), 1);
+        assert_eq!(database.pool().options().get_min_connections(), 1);
+        assert_eq!(database.pool().options().get_idle_timeout(), None);
+        assert_eq!(database.pool().options().get_max_lifetime(), None);
+        assert!(!database.pool().options().get_test_before_acquire());
+        assert_eq!(database.pool().size(), 1);
+
+        let first = tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+            .await
+            .expect("the first checkout completes within the bound")
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), database.pool().acquire())
+                .await
+                .is_err(),
+            "the private-cache pool must not open a second isolated connection"
+        );
+
+        drop(first);
+        let mut second = tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+            .await
+            .expect("a checkout completes after the first connection is released")
+            .expect("the released connection remains usable");
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&mut *second)
+            .await
+            .expect("the released connection retains the migrated schema");
+        drop(second);
+        tokio::time::timeout(Duration::from_secs(1), database.pool().close())
+            .await
+            .expect("the private-cache pool closes without a retained checkout");
+    }
+
+    #[tokio::test]
+    async fn shared_in_memory_urls_keep_multiple_schema_aware_connections() {
+        for database_url in [
+            "sqlite::memory:",
+            "sqlite://?mode=memory&cache=shared",
+            "sqlite://?cache=private&mode=memory",
+        ] {
+            let database = Db::connect(database_url).await.unwrap();
+            database.migrate().await.unwrap();
+
+            assert_eq!(database.pool().options().get_min_connections(), 1);
+            assert_eq!(database.pool().options().get_idle_timeout(), None);
+            assert_eq!(database.pool().options().get_max_lifetime(), None);
+            assert!(!database.pool().options().get_test_before_acquire());
+            let first = tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+                .await
+                .expect("the first shared-cache checkout completes within the bound")
+                .unwrap();
+            let mut second =
+                tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+                    .await
+                    .expect("the second shared-cache checkout completes within the bound")
+                    .unwrap();
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations")
+                .fetch_one(&mut *second)
+                .await
+                .expect("the second shared-cache connection sees the migrated schema");
+            drop(second);
+            drop(first);
+            database.pool().close().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_file_pool_keeps_multiple_schema_aware_connections() {
+        let database_file = unique_database_path("ordinary_pool");
+        let database_url = sqlite_url(&database_file);
+        assert!(Db::create_if_missing(&database_url).await.unwrap());
+        let database = Db::connect(&database_url).await.unwrap();
+        database.migrate().await.unwrap();
+
+        assert_eq!(database.pool().options().get_min_connections(), 0);
+        assert!(database.pool().options().get_idle_timeout().is_some());
+        assert!(database.pool().options().get_max_lifetime().is_some());
+        assert!(database.pool().options().get_test_before_acquire());
+        let first = tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+            .await
+            .expect("the first file-backed checkout completes within the bound")
+            .unwrap();
+        let mut second = tokio::time::timeout(Duration::from_secs(1), database.pool().acquire())
+            .await
+            .expect("the second file-backed checkout completes within the bound")
+            .unwrap();
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&mut *second)
+            .await
+            .expect("the second file-backed connection sees the migrated schema");
+        drop(second);
+        drop(first);
+        database.pool().close().await;
+        remove_database_artifacts(&database_file);
+    }
+
+    #[tokio::test]
+    async fn in_memory_mode_ignores_an_existing_filename_for_locking() {
+        let collision_file = unique_database_path("in_memory_filename_collision");
+        std::fs::create_dir_all(collision_file.parent().unwrap()).unwrap();
+        std::fs::write(&collision_file, "not a SQLite database\n").unwrap();
+        let database_url = format!("sqlite://{}?mode=memory", collision_file.display());
+
+        let database = Db::connect(&database_url).await.unwrap();
+        assert!(database.migration_lock_path.is_none());
+        database.migrate().await.unwrap();
+        database.pool().close().await;
+
+        remove_database_artifacts(&collision_file);
+    }
+
+    #[tokio::test]
+    async fn create_if_missing_does_not_materialize_an_in_memory_filename() {
+        let database_file = unique_database_path("in_memory_create");
+        let database_url = format!("sqlite://{}?mode=memory", database_file.display());
+
+        assert!(!Db::create_if_missing(&database_url).await.unwrap());
+        assert!(!database_file.exists());
+
+        remove_database_artifacts(&database_file);
+    }
+
+    #[tokio::test]
+    async fn migration_mutex_is_shared_by_separate_in_memory_connections() {
+        let first = Db::connect("sqlite::memory:").await.unwrap();
+        let second = Db::connect("sqlite::memory:").await.unwrap();
+        assert!(first.migration_lock_path.is_none());
+        assert!(second.migration_lock_path.is_none());
+
+        let blocker = SQLITE_MIGRATION_LOCK.lock().await;
+        for database in [&first, &second] {
+            let error = database
+                .migrate_with_timeout(Duration::from_millis(25))
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Timed out running database migrations")
+            );
+        }
+        drop(blocker);
+
+        first.migrate().await.unwrap();
+        second.migrate().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_waits_for_the_cross_process_file_lock_within_its_timeout() {
+        let database_file = unique_database_path("migration_lock");
+        let database_url = sqlite_url(&database_file);
+        assert!(Db::create_if_missing(&database_url).await.unwrap());
+        let database = Db::connect(&database_url).await.unwrap();
+        let lock_path = database.migration_lock_path.as_ref().unwrap();
+        let blocker = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .unwrap();
+        fs4::fs_std::FileExt::lock_exclusive(&blocker).unwrap();
+
+        let error = database
+            .migrate_with_timeout(Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Timed out running database migrations")
+        );
+
+        fs4::fs_std::FileExt::unlock(&blocker).unwrap();
+        database.migrate().await.unwrap();
+        database.pool().close().await;
+        remove_database_artifacts(&database_file);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_aliases_share_the_canonical_migration_lock() {
+        use std::os::unix::fs::symlink;
+
+        let database_file = unique_database_path("migration_lock_symlink");
+        let database_url = sqlite_url(&database_file);
+        assert!(Db::create_if_missing(&database_url).await.unwrap());
+        let canonical = Db::connect(&database_url).await.unwrap();
+        let alias_file = database_file.with_file_name("database-alias.db");
+        symlink(&database_file, &alias_file).unwrap();
+        let alias = Db::connect(&sqlite_url(&alias_file)).await.unwrap();
+
+        assert_eq!(alias.migration_lock_path, canonical.migration_lock_path);
+
+        alias.pool().close().await;
+        canonical.pool().close().await;
+        std::fs::remove_file(alias_file).unwrap();
+        remove_database_artifacts(&database_file);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn concurrent_create_if_missing_calls_are_idempotent() {
+        const CALLERS: usize = 8;
+        let database_file = unique_database_path("concurrent_create");
+        let database_url = Arc::new(sqlite_url(&database_file));
+        let barrier = Arc::new(Barrier::new(CALLERS));
+        let mut calls = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let barrier = Arc::clone(&barrier);
+            let database_url = Arc::clone(&database_url);
+            calls.push(tokio::spawn(async move {
+                barrier.wait();
+                Db::create_if_missing(&database_url).await
+            }));
+        }
+
+        let mut created = 0;
+        for call in calls {
+            if call.await.expect("database creation task joins").unwrap() {
+                created += 1;
+            }
+        }
+
+        assert_eq!(created, 1, "exactly one caller creates the database");
+        let database = Db::connect(&database_url)
+            .await
+            .expect("the exclusively created SQLite file is connectable");
+        database.pool().close().await;
+        remove_database_artifacts(&database_file);
+    }
+}
+[% endif %]

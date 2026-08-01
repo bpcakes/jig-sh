@@ -1,0 +1,25 @@
+import { expect, test } from "@playwright/test";
+
+test("renders application status from the live Rust API", async ({ page }) => {
+  const versionResponsePromise = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" && response.url().endsWith("/api/version"),
+  );
+
+  await page.goto("/");
+
+  const versionResponse = await versionResponsePromise;
+  expect(versionResponse.ok()).toBe(true);
+  expect(versionResponse.headers()["x-request-id"]).toBeTruthy();
+  await expect(versionResponse.json()).resolves.toMatchObject({
+    name: "<<[ repo_name ]>>",
+    version: expect.any(String),
+  });
+  await expect(page.getByRole("heading", { name: "<<[ title ]>>" })).toBeVisible();
+  const applicationCard = page.getByRole("group", { name: "Application", exact: true });
+  await expect(applicationCard.locator('[data-slot="card-title"]')).toHaveText(
+    "<<[ repo_name ]>>",
+  );
+  const serviceStatusCard = page.getByRole("group", { name: "Rust API", exact: true });
+  await expect(serviceStatusCard.getByText("Ready", { exact: true })).toBeVisible();
+});

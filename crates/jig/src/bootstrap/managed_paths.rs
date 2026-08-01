@@ -58,6 +58,7 @@ const WEB_MANAGED_PATHS: &[&str] = &[
     "scripts/check-webapp-scripts.mjs",
     "scripts/check-webapps.sh",
     "scripts/enforce-coverage.cjs",
+    "scripts/web-node.cjs",
 ];
 
 /// Paths rendered for `harness_footprint = "minimal"` (plus block-managed gitignore/gitattributes).

@@ -41,6 +41,7 @@ clap.workspace = true
 dirs.workspace = true
 dotenvy.workspace = true
 fs4.workspace = true
+flate2.workspace = true
 jig-contract.workspace = true
 jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
