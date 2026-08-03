@@ -3,8 +3,12 @@ set -Eeuo pipefail
 
 report_fixture_failure() {
   local status=$?
-  echo "Fixture validation failed at ${BASH_SOURCE[1]}:${BASH_LINENO[0]} while running: $BASH_COMMAND" >&2
-  exit "$status"
+  local source="${BASH_SOURCE[1]-${BASH_SOURCE[0]-$0}}"
+  local line="${BASH_LINENO[0]:-unknown}"
+  local command="$BASH_COMMAND"
+  printf 'Fixture validation failed at %s:%s while running: %s\n' \
+    "$source" "$line" "$command" >&2 || :
+  return "$status"
 }
 trap report_fixture_failure ERR
 
