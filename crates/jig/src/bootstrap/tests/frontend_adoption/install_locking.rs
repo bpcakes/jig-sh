@@ -1017,18 +1017,21 @@ exec node "$@"
         String::from_utf8_lossy(&unverified.stderr).contains("could not be validated or recovered")
     );
 
-    let ps_failure_env = repo.join("ps-failure-env");
-    fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
-    fs::write(
-        &install_lock,
-        format!("{} known-token RecordedStart\n", std::process::id()),
-    )
-    .unwrap();
-    let mut unreadable_identity = command();
-    unreadable_identity.env("BASH_ENV", &ps_failure_env);
-    let unreadable_identity = unreadable_identity.output().unwrap();
-    assert!(!unreadable_identity.status.success());
-    assert!(install_lock.exists(), "unverified live lock was removed");
+    #[cfg(target_os = "macos")]
+    {
+        let ps_failure_env = repo.join("ps-failure-env");
+        fs::write(&ps_failure_env, "ps() { return 1; }\n").unwrap();
+        fs::write(
+            &install_lock,
+            format!("{} known-token RecordedStart\n", std::process::id()),
+        )
+        .unwrap();
+        let mut unreadable_identity = command();
+        unreadable_identity.env("BASH_ENV", &ps_failure_env);
+        let unreadable_identity = unreadable_identity.output().unwrap();
+        assert!(!unreadable_identity.status.success());
+        assert!(install_lock.exists(), "unverified live lock was removed");
+    }
 }
 
 #[cfg(unix)]

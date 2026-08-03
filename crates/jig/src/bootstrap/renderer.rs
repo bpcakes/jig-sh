@@ -12,7 +12,9 @@ use super::ANSWERS_FILE;
 use super::answers::RenderAnswers;
 use super::embedded_templates::EMBEDDED_TEMPLATE_FILES;
 use super::managed_paths;
-use super::path::validate_no_reserved_git_metadata_components;
+use super::path::{
+    validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
+};
 use super::preview_seed::seed_preview_workspace;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
@@ -86,6 +88,9 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     }
 
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
+    request
+        .progress
+        .log_blocked_on_err(validate_portable_planned_file_collisions(&active_paths))?;
     request
         .progress
         .log_blocked_on_err(managed_paths::write_manifest(&destination, &active_paths))?;

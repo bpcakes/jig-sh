@@ -157,7 +157,7 @@ fn ensure_for_hosts_locked_interruptible(
 // The shared call boundary is fallible because the Windows implementation
 // rejects generation until private-key ACL hardening is available.
 #[allow(clippy::unnecessary_wraps)]
-const fn ensure_certificate_generation_supported() -> Result<()> {
+fn ensure_certificate_generation_supported() -> Result<()> {
     #[cfg(windows)]
     {
         bail!(

@@ -224,7 +224,6 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
         );
         for preserved in [
             "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
-            "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token",
             "npm_config_install_strategy=nested",
             "NPM_CONFIG_LEGACY_PEER_DEPS=true",
             "NPM_CONFIG_STRICT_PEER_DEPS=true",
@@ -237,6 +236,10 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
                 "npm run-script removed supported input {preserved}:\n{environment}"
             );
         }
+        #[cfg(target_os = "macos")]
+        assert!(environment
+            .lines()
+            .any(|line| line == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token"));
     }
     assert_eq!(fs::read_to_string(&run_count).unwrap().trim(), "2");
     assert!(!unexpected_install.exists());

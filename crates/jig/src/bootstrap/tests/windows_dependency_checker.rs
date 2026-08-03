@@ -136,11 +136,13 @@ fn generated_metadata_launchers_are_identical_and_cover_every_probe() {
     let (_yarn_temp, yarn_repo) = render_dependency_checker("yarn");
     let pnpm = fs::read_to_string(pnpm_repo.join("scripts/check-webapps.sh")).unwrap();
     let yarn = fs::read_to_string(yarn_repo.join("scripts/check-webapps.sh")).unwrap();
+    let pnpm_helper = fs::read_to_string(pnpm_repo.join("scripts/web-node.cjs")).unwrap();
+    let yarn_helper = fs::read_to_string(yarn_repo.join("scripts/web-node.cjs")).unwrap();
 
-    let pnpm_launchers = metadata_launcher_blocks(&pnpm);
-    let yarn_launchers = metadata_launcher_blocks(&yarn);
-    assert_eq!(pnpm_launchers.len(), 2, "pnpm must render both launchers");
-    assert_eq!(yarn_launchers.len(), 2, "Yarn must render both launchers");
+    let pnpm_launchers = metadata_launcher_blocks(&pnpm_helper);
+    let yarn_launchers = metadata_launcher_blocks(&yarn_helper);
+    assert_eq!(pnpm_launchers.len(), 4, "pnpm must render every launcher");
+    assert_eq!(yarn_launchers.len(), 3, "Yarn must render every launcher");
     for launcher in pnpm_launchers.iter().chain(&yarn_launchers) {
         assert_eq!(launcher, &pnpm_launchers[0]);
         assert!(launcher.contains(r#"["config", "list", "--json"]"#));
@@ -148,15 +150,15 @@ fn generated_metadata_launchers_are_identical_and_cover_every_probe() {
         assert!(!launcher.contains(r#"["config", "get""#));
     }
 
-    let validators = command_interpreter_validators(&pnpm)
+    let validators = command_interpreter_validators(&pnpm_helper)
         .into_iter()
-        .chain(command_interpreter_validators(&yarn))
+        .chain(command_interpreter_validators(&yarn_helper))
         .collect::<Vec<_>>();
-    assert_eq!(validators.len(), 6);
+    assert_eq!(validators.len(), 11);
     for validator in &validators {
         assert_eq!(validator, &validators[0]);
     }
-    for checker in [&pnpm, &yarn] {
+    for checker in [&pnpm_helper, &yarn_helper] {
         assert!(!checker.contains(r#""COMSPEC") || "cmd.exe""#));
         assert!(!checker.contains(r#""COMSPEC") || 'cmd.exe'"#));
     }
@@ -182,37 +184,39 @@ fn generated_metadata_launchers_are_identical_and_cover_every_probe() {
     );
     let yarn_runtime =
         shell_function_between(&yarn, "yarn_runtime_identity", "dependency_lockfile");
-    for context in [&pnpm_workspace, &pnpm_runtime, &yarn_classic, &yarn_berry] {
-        assert_eq!(metadata_launcher_blocks(context).len(), 1);
-    }
-    assert!(metadata_launcher_blocks(&pnpm_spec).is_empty());
+    assert!(pnpm_workspace.contains("run_web_node workspace_metadata"));
+    assert!(pnpm_runtime.contains("run_web_node pnpm_runtime_snapshot"));
+    assert!(pnpm_spec.contains("run_web_node pnpm_package_manager_spec_for_scope"));
+    assert!(yarn_classic.contains("run_web_node yarn_classic_config_payload"));
+    assert!(yarn_berry.contains("run_web_node yarn_berry_config_payload"));
+    assert!(yarn_runtime.contains("run_web_node yarn_runtime_identity"));
 
-    for checker in [&pnpm, &yarn] {
+    for checker in [&pnpm_helper, &yarn_helper] {
         assert!(!checker.contains("shell: true"));
         assert!(!checker.contains("shell: process.platform"));
         assert!(!checker.contains("spawnSync(\"pnpm\""));
         assert!(!checker.contains("spawnSync(\"yarn\""));
     }
-    assert!(pnpm.contains("const result = spawnPackageManagerMetadata(\n        \"pnpm\","));
-    assert!(pnpm.contains("spawnPackageManagerMetadata(executable.path, args, {"));
-    assert!(yarn.contains("spawnPackageManagerMetadata(\"yarn\", args, {"));
-    assert!(yarn.contains("spawnPackageManagerMetadata(\"yarn\", [\"config\", \"--json\"], {"));
-    assert!(yarn_runtime.contains("environmentValue(\"PATHEXT\")"));
-    assert!(yarn_runtime.contains("windowsPathEntries(pathValue)"));
-    assert!(yarn_runtime.contains("spawnSync(resolved, [\"--version\"], options)"));
+    assert!(pnpm_helper.contains("const result = spawnPackageManagerMetadata(\n        \"pnpm\","));
+    assert!(pnpm_helper.contains("spawnPackageManagerMetadata(executable.path, args, {"));
+    assert!(yarn_helper.contains("spawnPackageManagerMetadata(\"yarn\", args, {"));
+    assert!(yarn_helper.contains("spawnPackageManagerMetadata(\"yarn\", [\"config\", \"--json\"], {"));
+    assert!(yarn_helper.contains("environmentValue(\"PATHEXT\")"));
+    assert!(yarn_helper.contains("windowsPathEntries(pathValue)"));
+    assert!(yarn_helper.contains("spawnSync(resolved, [\"--version\"], options)"));
     assert!(
-        yarn_runtime.contains("validateWindowsCommandInterpreter(environmentValue(\"COMSPEC\"))")
+        yarn_helper.contains("validateWindowsCommandInterpreter(environmentValue(\"COMSPEC\"))")
     );
-    assert!(yarn_runtime.contains("fs.openSync(resolved, \"r\")"));
-    assert!(!yarn_runtime.contains("type -P yarn"));
-    assert!(!yarn_runtime.contains("yarn --version"));
+    assert!(yarn_helper.contains("fs.openSync(resolved, \"r\")"));
+    assert!(!yarn_helper.contains("type -P yarn"));
+    assert!(!yarn_helper.contains("yarn --version"));
 }
 
 #[test]
 fn metadata_launcher_quotes_windows_wrappers_and_rejects_untrusted_inputs() {
     let _guard = lock_env();
     let (_temp, repo) = render_dependency_checker("pnpm");
-    let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    let checker = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
     let launcher = metadata_launcher_blocks(&checker).remove(0);
     let fixture = tempdir().unwrap();
     let command_wrapper = fixture.path().join("package manager & shim.CMD");
@@ -442,7 +446,7 @@ assert.equal(calls.at(-1).args[4], `""${{resolvedWrapper}}" --version"`);
 fn pnpm_manifest_parser_launcher_quotes_corepack_cmd_and_allows_only_the_fixed_query() {
     let _guard = lock_env();
     let (_temp, repo) = render_dependency_checker("pnpm");
-    let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    let checker = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
     let launcher = marked_launcher(
         &checker,
         PNPM_MANIFEST_LAUNCHER_BEGIN,
@@ -813,6 +817,7 @@ fn generated_dependency_checker_only_recovers_exactly_stale_process_groups() {
     let _guard = lock_env();
     let (_temp, repo) = render_npm_dependency_checker();
     let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    let helper = fs::read_to_string(repo.join("scripts/web-node.cjs")).unwrap();
 
     let integer_parser = shell_function_between(
         &checker,
@@ -833,7 +838,7 @@ fn generated_dependency_checker_only_recovers_exactly_stale_process_groups() {
     );
 
     assert!(install_lock_state.contains("process_group_liveness_state \"$owner_group\""));
-    assert!(group_liveness.contains("error?.code === \"ESRCH\""));
+    assert!(helper.contains("error?.code === \"ESRCH\""));
     assert!(
         !acquire_lock.contains("dependencies_present"),
         "install-lock polling must not rerun the full dependency proof"
@@ -852,6 +857,7 @@ node_probe() {{
   return "$probe_status"
 }}
 node_bin=node_probe
+run_web_node() {{ shift; "$node_bin" "$@"; }}
 is_cygwin_msys_shell() {{ return 1; }}
 kill() {{ return 1; }}
 

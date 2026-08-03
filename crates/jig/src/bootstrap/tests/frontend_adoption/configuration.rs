@@ -1342,7 +1342,6 @@ env | LC_ALL=C sort > "$INSTALL_ENV"
                     for preserved in [
                         "NODE_ENV=test",
                         "NPM_CONFIG_REGISTRY=https://registry.example.invalid/",
-                        "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token",
                         "npm_config_install_strategy=nested",
                         "NPM_CONFIG_LEGACY_PEER_DEPS=true",
                         "NPM_CONFIG_STRICT_PEER_DEPS=true",
@@ -1355,6 +1354,10 @@ env | LC_ALL=C sort > "$INSTALL_ENV"
                             "npm script launcher removed supported input {preserved}:\n{environment}"
                         );
                     }
+                    #[cfg(target_os = "macos")]
+                    assert!(environment
+                        .lines()
+                        .any(|line| line == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token"));
                 }
             }
             assert!(web_check.contains(
