@@ -87,12 +87,14 @@ validate_fixture_rg_absence_assertion() {
 
 validate_backend_fixture() {
   local repo_dir="$1"
+  local expected_jig_version
 
   [[ ! -f "$repo_dir/Cargo.toml" ]]
   [[ ! -f "$repo_dir/package.json" ]]
   [[ ! -d "$repo_dir/apps" ]]
   [[ ! -d "$repo_dir/crates" ]]
   write_backend_stub_repo "$repo_dir"
+  expected_jig_version="$(answers_get "$repo_dir/.jig.toml" jig_version)"
   (
     cd "$repo_dir"
     configure_fixture_sqlx_boundary "$repo_dir"
@@ -117,7 +119,7 @@ validate_backend_fixture() {
     scripts/jig update --recopy --force >/dev/null
     [[ ! -f Makefile ]]
     grep -q '^default_branch = "dev"$' .jig.toml
-    grep -q '^jig_version = "0.2.0-beta.1"$' .jig.toml
+    grep -Fqx "jig_version = \"$expected_jig_version\"" .jig.toml
     if [[ -f .github/workflows/webapp-checks.yml ]]; then
       rg -q "No web apps configured" .github/workflows/webapp-checks.yml
     fi
