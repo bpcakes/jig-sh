@@ -30,14 +30,17 @@ fn repository_launcher_preserves_the_invocation_directory_for_codex() {
     );
     let fake_bin = write_executable(
         temp.path().join("jig-stub.sh"),
-        r#"#!/bin/sh
-if [ "${1:-}" = "--version" ]; then
-  printf '%s\n' 'jig 0.2.0-beta.1'
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "--version" ]; then
+  printf '%s\n' 'jig {}'
   exit 0
 fi
 pwd -P
 printf '<%s>\n' "$@"
 "#,
+            env!("CARGO_PKG_VERSION")
+        ),
     );
 
     let output = Command::new(launcher)
