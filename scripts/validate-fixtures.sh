@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_fixture_failure() {
+  local status=$?
+  echo "Fixture validation failed at ${BASH_SOURCE[1]}:${BASH_LINENO[0]} while running: $BASH_COMMAND" >&2
+  exit "$status"
+}
+trap report_fixture_failure ERR
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TMP_DIR="$(mktemp -d)"
