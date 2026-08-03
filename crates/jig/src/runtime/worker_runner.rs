@@ -16,7 +16,6 @@ use crate::context::RepoContext;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
-const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
 const DEFAULT_CODEX_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
@@ -69,6 +68,7 @@ pub(crate) struct WorkerReceiptRequest<'a> {
 
 pub(crate) struct CodexExecRequest<'a> {
     pub(crate) root: &'a Path,
+    pub(crate) codex_home: Option<&'a Path>,
     pub(crate) mode: CodexExecMode,
     pub(crate) model: Option<&'a str>,
     pub(crate) approval_policy: Option<&'a str>,
@@ -159,7 +159,7 @@ fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput
     };
 
     let mut command = build_codex_command(
-        codex_bin(),
+        crate::codex::codex_bin(),
         request,
         schema_file.as_ref().map(NamedTempFile::path),
         output_file.as_ref().map(NamedTempFile::path),
@@ -195,6 +195,9 @@ fn build_codex_command(
 ) -> Command {
     let mut command = Command::new(bin);
     command.current_dir(request.root);
+    if let Some(codex_home) = request.codex_home {
+        command.env(crate::codex::CODEX_HOME_ENV, codex_home);
+    }
     if let Some(approval_policy) = request.approval_policy {
         command.arg("--ask-for-approval").arg(approval_policy);
     }
@@ -352,6 +355,9 @@ fn record_worker_receipt(
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
+        "codex_home_resolved": request
+            .codex_home
+            .map(|home| home.display().to_string()),
         "plan_id": request.receipt.plan_id,
         "workflow_id": request.receipt.workflow_id,
         "item_key": request.receipt.item_key,
@@ -400,10 +406,6 @@ fn codex_timeout() -> Result<Duration> {
     Ok(Duration::from_secs(seconds))
 }
 
-fn codex_bin() -> String {
-    env::var(CODEX_BIN_ENV).unwrap_or_else(|_| "codex".into())
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -424,8 +426,9 @@ mod tests {
 
     #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
-        let request = CodexExecRequest {
+        let mut request = CodexExecRequest {
             root: Path::new("/tmp/repo"),
+            codex_home: Some(Path::new("/tmp/codex-home")),
             mode: CodexExecMode::Exec,
             model: Some("gpt-x"),
             approval_policy: Some("never"),
@@ -462,6 +465,17 @@ mod tests {
                 "gpt-x",
                 "-",
             ]
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == crate::codex::CODEX_HOME_ENV && value == Some(OsStr::new("/tmp/codex-home"))
+        }));
+
+        request.codex_home = None;
+        let inherited_command = build_codex_command("codex", &request, None, None);
+        assert!(
+            inherited_command
+                .get_envs()
+                .all(|(key, _)| key != crate::codex::CODEX_HOME_ENV)
         );
     }
 

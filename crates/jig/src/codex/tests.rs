@@ -237,6 +237,58 @@ fn explicit_launch_paths_do_not_resolve_or_discover_named_homes() {
     assert_eq!(resolved, tilde.canonicalize().unwrap());
 }
 
+#[cfg(unix)]
+#[test]
+fn configured_bare_home_does_not_fall_back_to_ambient_codex_home() {
+    let _env = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path().join("user");
+    let repo = temp.path().join("repo");
+    let ambient = temp.path().join("ambient/.codex-work");
+    fs::create_dir_all(&user_home).unwrap();
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir_all(&ambient).unwrap();
+    let _home = crate::test_env::EnvVarGuard::set("HOME", &user_home);
+    let _codex_home = crate::test_env::EnvVarGuard::set(CODEX_HOME_ENV, ambient.as_os_str());
+
+    let error = resolve_configured_home_from_dir(Path::new("work"), &repo)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("Configured Codex home 'work' was not found"),
+        "{error}"
+    );
+    assert!(
+        error.contains(&user_home.join(".codex-work").display().to_string()),
+        "{error}"
+    );
+    assert!(
+        error.contains("use an explicit path for a non-conventional home"),
+        "{error}"
+    );
+
+    let conventional = user_home.join(".codex-work");
+    fs::create_dir(&conventional).unwrap();
+    assert_eq!(
+        resolve_configured_home_from_dir(Path::new("work"), &repo).unwrap(),
+        conventional.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn absolute_current_home_does_not_resolve_the_current_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let absolute = temp.path().join("codex-home");
+
+    let resolved = absolute_path_with_current_dir(absolute.clone(), || -> Result<PathBuf> {
+        panic!("absolute homes must not resolve the current directory")
+    })
+    .unwrap();
+
+    assert_eq!(resolved, absolute);
+}
+
 #[test]
 fn launch_home_resolution_reports_named_attempts() {
     let temp = tempfile::tempdir().unwrap();

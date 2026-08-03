@@ -701,7 +701,10 @@ fn loop_tick_pr_manager_runs_worker_pushes_and_records_attempt() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    append_pr_manager_workflow(temp.path());
+    let codex_home = temp.path().join(".codex-loop");
+    let codex_home_log = temp.path().join("codex-home.log");
+    fs::create_dir(&codex_home).unwrap();
+    append_pr_manager_workflow_with_home(temp.path(), Some("./.codex-loop"));
     let origin = setup_origin_with_pr_branch(temp.path());
     let head_sha = git_stdout(temp.path(), ["rev-parse", "codex/widgets"])
         .trim()
@@ -759,6 +762,7 @@ esac
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+printf '%s' "$CODEX_HOME" > "$JIG_TEST_CODEX_HOME_LOG"
 if [ "$*" = "--ask-for-approval never exec --sandbox workspace-write --ephemeral -" ]; then
   echo "old pr manager args should include output schema now" >&2
   exit 2
@@ -783,6 +787,7 @@ exit 2
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _codex_home_log = EnvVarGuard::set("JIG_TEST_CODEX_HOME_LOG", &codex_home_log);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = crate::runtime::dispatch(
@@ -798,8 +803,17 @@ exit 2
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["workflow"]["kind"], "pr_manager");
+    assert_eq!(output["workflow"]["codex_home_configured"], "./.codex-loop");
     assert_eq!(output["status"], "waiting");
     assert_eq!(output["actions"][0]["status"], "attempted", "{output:#}");
+    assert_eq!(
+        output["actions"][0]["codex_home_resolved"],
+        codex_home.canonicalize().unwrap().display().to_string()
+    );
+    assert_eq!(
+        fs::read_to_string(codex_home_log).unwrap(),
+        codex_home.canonicalize().unwrap().display().to_string()
+    );
     assert_eq!(output["actions"][0]["push"]["pushed"], true);
     assert_eq!(output["actions"][0]["push"]["force"], false);
     assert!(
@@ -868,6 +882,68 @@ exit 2
         worker_receipts["receipts"][0]["evidence"]["purpose"],
         "pr_manager"
     );
+    assert_eq!(
+        worker_receipts["receipts"][0]["evidence"]["codex_home_resolved"],
+        codex_home.canonicalize().unwrap().display().to_string()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_pr_manager_codex_home_does_not_consume_attempt_budget() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    append_pr_manager_workflow_with_home(temp.path(), Some("./missing-codex-home"));
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("pr-manager".into()),
+            lease_ttl_seconds: None,
+            max_attempts: Some(1),
+            backoff_seconds: Some(1),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Codex home does not exist"), "{error}");
+    let status = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Status(LoopStatusRequest {
+            workflow: Some("pr-manager".into()),
+        })),
+    )
+    .unwrap();
+    assert!(status["attempts"].as_array().unwrap().is_empty());
+
+    let receipts = crate::state::receipts_list(
+        &ctx,
+        crate::state::ReceiptListFilter {
+            session_id: None,
+            plan_id: None,
+            tool_name: Some(LOOP_TICK_TOOL.into()),
+            failed_only: true,
+            limit: 10,
+        },
+    )
+    .unwrap();
+    assert_eq!(receipts["receipts"].as_array().unwrap().len(), 1);
+    assert_eq!(receipts["receipts"][0]["evidence"]["observed"], Value::Null);
+    assert!(
+        receipts["receipts"][0]["evidence"]["actions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        receipts["receipts"][0]["evidence"]["attempts"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[cfg(unix)]
@@ -877,6 +953,9 @@ fn loop_tick_pr_manager_records_partial_review_post_failures() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     append_pr_manager_workflow(temp.path());
+    let ambient_codex_home = temp.path().join("ambient-codex-home");
+    let codex_home_log = temp.path().join("ambient-codex-home.log");
+    fs::create_dir(&ambient_codex_home).unwrap();
     let origin = setup_origin_with_pr_branch(temp.path());
     let _gh = fake_gh(
         temp.path(),
@@ -942,6 +1021,7 @@ esac
     write_codex_stub(
         &codex_path,
         r#"#!/bin/sh
+printf '%s' "$CODEX_HOME" > "$JIG_TEST_CODEX_HOME_LOG"
 if [ "$1 $2 $3 $4 $5 $6 $7" = "--ask-for-approval never exec --sandbox workspace-write --ephemeral --output-schema" ]; then
   out=""
   prev=""
@@ -961,6 +1041,8 @@ exit 2
 "#,
     );
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _codex_home = EnvVarGuard::set("CODEX_HOME", &ambient_codex_home);
+    let _codex_home_log = EnvVarGuard::set("JIG_TEST_CODEX_HOME_LOG", &codex_home_log);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let output = crate::runtime::dispatch(
@@ -975,7 +1057,13 @@ exit 2
     .unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["workflow"]["codex_home_configured"], Value::Null);
     assert_eq!(output["actions"][0]["status"], "failed", "{output:#}");
+    assert_eq!(output["actions"][0]["codex_home_resolved"], Value::Null);
+    assert_eq!(
+        fs::read_to_string(codex_home_log).unwrap(),
+        ambient_codex_home.display().to_string()
+    );
     assert_eq!(
         output["actions"][0]["error"],
         "one or more review thread update intents failed"
@@ -1505,7 +1593,9 @@ fn loop_tick_pr_manager_cleans_failed_merge_worktree_before_retry() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    append_pr_manager_workflow(temp.path());
+    let codex_home = temp.path().join(".codex-loop");
+    fs::create_dir(&codex_home).unwrap();
+    append_pr_manager_workflow_with_home(temp.path(), Some("./.codex-loop"));
     let origin = setup_origin_with_conflicting_pr_branch(temp.path());
     let _gh = fake_gh(
         temp.path(),
@@ -1590,6 +1680,10 @@ exit 2
     )
     .unwrap();
     assert_eq!(first["actions"][0]["status"], "failed", "{first:#}");
+    assert_eq!(
+        first["actions"][0]["codex_home_resolved"],
+        codex_home.canonicalize().unwrap().display().to_string()
+    );
     assert_eq!(first["attempts"][0]["attempts"], 1);
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
@@ -1617,7 +1711,9 @@ fn loop_tick_pr_manager_skips_stacked_prs_without_blocking_idle() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
-    append_pr_manager_workflow(temp.path());
+    let codex_home = temp.path().join(".codex-loop");
+    fs::create_dir(&codex_home).unwrap();
+    append_pr_manager_workflow_with_home(temp.path(), Some("./.codex-loop"));
     let _gh = fake_gh(
         temp.path(),
         r#"#!/bin/sh
@@ -1663,10 +1759,15 @@ esac
     .unwrap();
 
     assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["workflow"]["codex_home_configured"], "./.codex-loop");
     assert_eq!(output["status"], "idle");
     assert_eq!(output["idle"], true);
     assert_eq!(output["actions"][0]["status"], "skipped");
     assert_eq!(output["actions"][0]["reason"], "stacked_pr");
+    assert!(
+        output["actions"][0].get("codex_home_resolved").is_none(),
+        "non-repair actions must omit codex_home_resolved: {output:#}"
+    );
     assert!(output["attempts"].as_array().unwrap().is_empty());
 }
 
@@ -1688,7 +1789,15 @@ kind = "github_pr_status"
 
 #[cfg(unix)]
 fn append_pr_manager_workflow(root: &Path) {
+    append_pr_manager_workflow_with_home(root, None);
+}
+
+#[cfg(unix)]
+fn append_pr_manager_workflow_with_home(root: &Path, codex_home: Option<&str>) {
     let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
+    let codex_home = codex_home
+        .map(|home| format!("codex_home = {home:?}\n"))
+        .unwrap_or_default();
     fs::write(
         root.join(".jig.toml"),
         format!(
@@ -1696,6 +1805,7 @@ fn append_pr_manager_workflow(root: &Path) {
 [[loop.workflows]]
 id = "pr-manager"
 kind = "pr_manager"
+{codex_home}
 "#
         ),
     )

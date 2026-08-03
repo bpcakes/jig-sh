@@ -421,6 +421,7 @@ struct ResolvedWorkflow {
     lease_ttl_seconds: u64,
     max_attempts: u32,
     backoff_seconds: u64,
+    codex_home_configured: Option<PathBuf>,
 }
 
 impl ResolvedWorkflow {
@@ -437,6 +438,10 @@ impl ResolvedWorkflow {
             "lease_ttl_seconds": self.lease_ttl_seconds,
             "max_attempts": self.max_attempts,
             "backoff_seconds": self.backoff_seconds,
+            "codex_home_configured": self
+                .codex_home_configured
+                .as_ref()
+                .map(|home| home.display().to_string()),
         })
     }
 }
@@ -522,6 +527,7 @@ fn workflow_from_config(
         lease_ttl_seconds,
         max_attempts,
         backoff_seconds,
+        codex_home_configured: workflow.codex_home.clone(),
     })
 }
 
@@ -547,6 +553,7 @@ fn default_workflow(
         lease_ttl_seconds,
         max_attempts,
         backoff_seconds,
+        codex_home_configured: None,
     })
 }
 
@@ -936,6 +943,7 @@ mod tests {
             lease_ttl_seconds: 60,
             max_attempts: 2,
             backoff_seconds: 1,
+            codex_home_configured: None,
         };
 
         let first = store

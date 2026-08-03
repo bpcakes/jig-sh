@@ -26,6 +26,7 @@ pub(super) fn run_codex_review(
         ctx,
         CodexExecRequest {
             root: ctx.root(),
+            codex_home: None,
             mode: CodexExecMode::Review,
             model: gate.model.as_deref(),
             approval_policy: None,
@@ -61,6 +62,7 @@ pub(super) fn run_codex_refine(
         ctx,
         CodexExecRequest {
             root: ctx.root(),
+            codex_home: None,
             mode: CodexExecMode::Exec,
             model,
             approval_policy: Some("never"),

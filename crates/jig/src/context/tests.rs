@@ -171,11 +171,54 @@ kind = "github_pr_status"
 [[loop.workflows]]
 id = "pr-manager"
 kind = "pr_manager"
+codex_home = "work"
 "#,
     )
     .unwrap();
 
     validate_config(&config).unwrap();
+}
+
+#[test]
+fn loop_config_rejects_codex_home_for_non_codex_workflow() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-status"
+kind = "github_pr_status"
+codex_home = "work"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("can set codex_home only when kind = 'pr_manager'"));
+}
+
+#[test]
+fn loop_config_rejects_an_empty_codex_home() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "pr_manager"
+codex_home = ""
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert!(error.contains("codex_home must not be empty"));
 }
 
 #[test]

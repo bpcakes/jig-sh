@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -44,6 +44,8 @@ pub(crate) struct LoopWorkflowConfig {
     pub(crate) max_attempts: Option<u32>,
     #[serde(default)]
     pub(crate) backoff_seconds: Option<u64>,
+    #[serde(default)]
+    pub(crate) codex_home: Option<PathBuf>,
 }
 
 impl LoopConfig {
@@ -69,6 +71,20 @@ impl LoopConfig {
             }
             validate_loop_token("loop workflow id", &workflow.id)?;
             validate_workflow_kind(&workflow.kind)?;
+            if let Some(codex_home) = &workflow.codex_home {
+                if codex_home.as_os_str().is_empty() {
+                    bail!(
+                        "loop workflow '{}' codex_home must not be empty",
+                        workflow.id
+                    );
+                }
+                if workflow.kind != "pr_manager" {
+                    bail!(
+                        "loop workflow '{}' can set codex_home only when kind = 'pr_manager'",
+                        workflow.id
+                    );
+                }
+            }
             if workflow.lease_ttl_seconds == Some(0) {
                 bail!(
                     "loop workflow '{}' lease_ttl_seconds must be greater than zero",

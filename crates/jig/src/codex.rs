@@ -17,7 +17,7 @@ use self::app_server::{AppServerAccountResponse, app_server_account};
 mod app_server;
 
 const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
-const CODEX_HOME_ENV: &str = "CODEX_HOME";
+pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const MAX_PARALLEL_INSPECTIONS: usize = 4;
 
 #[derive(Clone)]
@@ -351,6 +351,34 @@ pub(crate) fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
         |user_home| {
             let current = current_codex_home()?;
             discover_homes_from(user_home, &current).map(|discovered| discovered.paths)
+        },
+    )
+}
+
+pub(crate) fn resolve_configured_home_from_dir(
+    input: &Path,
+    current_dir: &Path,
+) -> Result<PathBuf> {
+    if is_bare_home_name(input) && !has_tilde_prefix(input) {
+        let user_home = user_home()?;
+        let requested = input.as_os_str();
+        let conventional = conventional_home(&user_home, requested);
+        if conventional.is_dir() {
+            return canonical_or(conventional);
+        }
+        bail!(
+            "Configured Codex home '{}' was not found at {}; use an explicit path for a non-conventional home",
+            requested.to_string_lossy(),
+            conventional.display()
+        );
+    }
+
+    resolve_launch_home_with_sources(
+        input,
+        || Ok(current_dir.to_path_buf()),
+        user_home,
+        |_| -> Result<Vec<PathBuf>> {
+            unreachable!("configured bare homes are resolved before discovery")
         },
     )
 }
@@ -808,12 +836,19 @@ fn is_bare_home_name(input: &Path) -> bool {
 }
 
 fn absolute_path(path: PathBuf) -> Result<PathBuf> {
+    absolute_path_with_current_dir(path, || {
+        env::current_dir().context("Failed to resolve the current directory")
+    })
+}
+
+fn absolute_path_with_current_dir<C>(path: PathBuf, current_dir: C) -> Result<PathBuf>
+where
+    C: FnOnce() -> Result<PathBuf>,
+{
     if path.is_absolute() {
         Ok(path)
     } else {
-        Ok(env::current_dir()
-            .context("Failed to resolve the current directory")?
-            .join(path))
+        Ok(current_dir()?.join(path))
     }
 }
 

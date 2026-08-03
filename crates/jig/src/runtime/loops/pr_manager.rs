@@ -24,6 +24,11 @@ pub(super) fn pr_manager_tick(
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
 ) -> Result<WorkflowTick> {
+    let codex_home = workflow
+        .codex_home_configured
+        .as_deref()
+        .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
+        .transpose()?;
     let observed = github::github_pr_status_snapshot(ctx)?;
     let pull_requests = observed
         .get("pull_requests")
@@ -55,6 +60,7 @@ pub(super) fn pr_manager_tick(
                     attempt_store,
                     &item,
                     pull_request,
+                    codex_home.as_deref(),
                 )?;
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
@@ -300,6 +306,7 @@ fn handle_actionable_pr(
     attempt_store: &mut AttemptStore,
     item: &PrWorkItem,
     pull_request: &Value,
+    codex_home: Option<&Path>,
 ) -> Result<Value> {
     if let Some(action) = attempt_blocking_action(workflow, attempt_store, item)? {
         return Ok(action);
@@ -322,7 +329,7 @@ fn handle_actionable_pr(
         }
     };
 
-    let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease);
+    let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease, codex_home);
     let _ = lease_store.release(&branch_lease_key, &lease.owner);
     match action_result {
         Ok(action) => {
@@ -359,6 +366,7 @@ fn handle_actionable_pr(
                 "branch": item.head_ref,
                 "reasons": item.reasons,
                 "lease": lease,
+                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "attempt": attempt,
                 "error": format!("{error:#}"),
             }))
@@ -417,6 +425,7 @@ fn run_pr_repair(
     item: &PrWorkItem,
     pull_request: &Value,
     lease: &impl serde::Serialize,
+    codex_home: Option<&Path>,
 ) -> Result<Value> {
     let worktree = prepare_worktree(ctx, workflow, item)?;
     let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;
@@ -431,6 +440,7 @@ fn run_pr_repair(
         ctx,
         CodexExecRequest {
             root: &worktree,
+            codex_home,
             mode: CodexExecMode::Exec,
             model: None,
             approval_policy: Some("never"),
@@ -475,6 +485,7 @@ fn run_pr_repair(
         "reasons": item.reasons,
         "worktree": worktree,
         "lease": lease,
+        "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
         "merge": merge,
         "worker_output": worker_output,
         "worker_receipt_id": worker.worker_receipt_id,

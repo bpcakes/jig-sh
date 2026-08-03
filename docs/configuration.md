@@ -91,7 +91,7 @@ Contracts that declare `"kind": "native"` tools require the repo's pinned `scrip
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `jig_version`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `status`, and `agent_tooling`. `schema_check_command`, `migration_add_command`, and `contract_check_command` are legacy accepted keys for older rendered repos; new renders use native binary implementations. Older hand-edited v2 manifests that still list these legacy command keys must either keep the matching `.jig.toml` values until updated, or switch the corresponding tools to their native forms.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `jig_version`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `schema_check_command`, `migration_add_command`, and `contract_check_command` are legacy accepted keys for older rendered repos; new renders use native binary implementations. Older hand-edited v2 manifests that still list these legacy command keys must either keep the matching `.jig.toml` values until updated, or switch the corresponding tools to their native forms.
 
 Nested accepted keys are:
 
@@ -104,6 +104,8 @@ Nested accepted keys are:
 - `[work]`: `checks`, `gates`, `refinements`
 - `[[work.gates]]`: `id`, `kind`, `tool`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
+- `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
+- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
 
@@ -130,6 +132,28 @@ timeout_seconds = 30
 `scripts/jig status` executes configured providers from the repository root and combines their validated reports with local Git, work/gate, and loop lease/attempt state. Add `--tui` for the interactive Overview, Packages, and Blockers views; `--refresh-seconds` changes its 30-second refresh interval. The command records no receipt, writes no provider cache, and never fetches remotes. Provider stdout and stderr are bounded, and each invocation runs in an owned process tree. Treat every configured argv as trusted repository executable code.
 
 This section is part of the renderer answers round trip: `jig update --recopy` preserves configured provider entries. The status aggregate is described under [Jig runner and aggregate](status-provider.md#jig-runner-and-aggregate).
+
+## `loop` Shape
+
+The default `noop-status` workflow is read-only and does not invoke Codex. Configured `github_pr_status` workflows inspect GitHub without Codex, while `pr_manager` workflows may run an unattended `codex exec` worker to repair an eligible pull request:
+
+```toml
+[loop]
+lease_ttl_seconds = 900
+max_attempts = 3
+backoff_seconds = 300
+
+[[loop.workflows]]
+id = "pr-manager"
+kind = "pr_manager"
+codex_home = "work"
+```
+
+`codex_home` is optional and valid only for `pr_manager`. It accepts the same conventional home names and explicit path forms as `scripts/jig codex launch`: `work` resolves only as `~/.codex-work`, `codex` and `default` resolve only as `~/.codex`, and explicit relative paths such as `./.codex-automation` resolve from the repository root. Use an explicit path for a home outside those conventional locations. Configured bare names never fall back to ambient `CODEX_HOME`. A repository-relative home is repository-controlled and may load Codex configuration such as MCP servers and model providers from tracked content; use one only in a repository you trust. Jig validates and canonicalizes the configured directory once at the workflow boundary before inspecting pull requests, then sets `CODEX_HOME` explicitly for each `codex exec` worker. A missing or invalid home fails the tick without consuming a pull request's attempt budget. When `codex_home` is omitted, the worker preserves existing behavior by inheriting ambient `CODEX_HOME`.
+
+Loop workflow JSON reports the original setting as `codex_home_configured`. PR-manager repair-attempt actions include the canonical directory selected for the worker as `codex_home_resolved`; actions that do not attempt a repair omit the field. Worker receipts written by this version include `codex_home_resolved`; older `schema_version: 1` receipts may omit this additive field, so readers must tolerate its absence. In repair-attempt actions and current worker receipts, a `null` value means the process inherits ambient `CODEX_HOME`.
+
+The loop does not route automation through the interactive Codex picker. `JIG_CODEX_BIN` selects the executable for both interactive launches and unattended workers; worker timeouts, structured output, process cleanup, and receipts remain owned by the shared worker runner.
 
 ## `agent_tooling` Shape
 
