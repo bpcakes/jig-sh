@@ -1138,10 +1138,12 @@ fn linux_process_group_has_live_members(
         },
         &mut within_budget,
     )?;
-    linux_process_group_has_live_members_with(
+    linux_process_group_has_live_members_bytes_with(
         process_group,
         pids,
-        |pid| std::fs::read_to_string(format!("/proc/{pid}/stat")),
+        // The parenthesized command name in /proc/<pid>/stat may contain
+        // arbitrary bytes even though the process-state fields are ASCII.
+        |pid| std::fs::read(format!("/proc/{pid}/stat")),
         linux_process_group_for_pid,
         &mut within_budget,
     )
@@ -1187,7 +1189,7 @@ fn ensure_linux_process_scan_budget(
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(test)]
 fn linux_process_group_has_live_members_with(
     process_group: i32,
     pids: impl IntoIterator<Item = i32>,
@@ -1195,10 +1197,27 @@ fn linux_process_group_has_live_members_with(
     mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
     mut within_budget: impl FnMut() -> bool,
 ) -> std::io::Result<bool> {
+    linux_process_group_has_live_members_bytes_with(
+        process_group,
+        pids,
+        |pid| read_stat(pid).map(String::into_bytes),
+        &mut process_group_for_pid,
+        &mut within_budget,
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_process_group_has_live_members_bytes_with(
+    process_group: i32,
+    pids: impl IntoIterator<Item = i32>,
+    mut read_stat: impl FnMut(i32) -> std::io::Result<Vec<u8>>,
+    mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
+    mut within_budget: impl FnMut() -> bool,
+) -> std::io::Result<bool> {
     ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
     for pid in pids {
         ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let observation = read_stat(pid).and_then(|stat| parse_linux_process_stat(&stat));
+        let observation = read_stat(pid).and_then(|stat| parse_linux_process_stat(pid, &stat));
         ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
         let observation = match observation {
             Ok(observation) => observation,
@@ -1245,11 +1264,31 @@ struct LinuxProcessObservation {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn parse_linux_process_stat(stat: &str) -> std::io::Result<LinuxProcessObservation> {
-    let (_, fields) = stat.rsplit_once(") ").ok_or_else(|| {
+fn parse_linux_process_stat(
+    expected_pid: i32,
+    stat: &[u8],
+) -> std::io::Result<LinuxProcessObservation> {
+    let expected_prefix = format!("{expected_pid} (");
+    if expected_pid <= 0 || !stat.starts_with(expected_prefix.as_bytes()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Linux process stat did not begin with the expected process identifier",
+        ));
+    }
+    let command_end = stat
+        .windows(2)
+        .rposition(|window| window == b") ")
+        .filter(|command_end| *command_end >= expected_prefix.len())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing Linux process stat command field",
+            )
+        })?;
+    let fields = std::str::from_utf8(&stat[command_end + 2..]).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "missing Linux process stat command field",
+            "Linux process stat fields are not valid UTF-8",
         )
     })?;
     let mut fields = fields.split_whitespace();

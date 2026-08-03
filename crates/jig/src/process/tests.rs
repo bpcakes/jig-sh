@@ -507,6 +507,31 @@ fn linux_owned_process_scan_distinguishes_live_zombie_and_unverifiable_members()
 }
 
 #[test]
+fn linux_owned_process_scan_accepts_non_utf8_command_names() {
+    let mut zombie_stat = b"73 (codex-".to_vec();
+    zombie_stat.push(0xff);
+    zombie_stat.extend_from_slice(b") Z 1 73 0 0 0");
+
+    assert!(
+        !linux_process_group_has_live_members_bytes_with(
+            73,
+            [73],
+            |_| Ok(zombie_stat.clone()),
+            |_| unreachable!(),
+            || true,
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn linux_process_stat_parser_rejects_a_mismatched_or_missing_pid_prefix() {
+    assert!(parse_linux_process_stat(0, b"0 (worker) Z 1 0 0 0 0").is_err());
+    assert!(parse_linux_process_stat(73, b"74 (worker) Z 1 73 0 0 0").is_err());
+    assert!(parse_linux_process_stat(73, b") Z 1 73 0 0 0").is_err());
+}
+
+#[test]
 fn linux_owned_process_enumeration_fails_closed_when_advancing_exhausts_budget() {
     let within_budget = std::cell::Cell::new(true);
     let entries = std::iter::from_fn(|| {
