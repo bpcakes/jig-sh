@@ -1355,9 +1355,8 @@ env | LC_ALL=C sort > "$INSTALL_ENV"
                         );
                     }
                     #[cfg(target_os = "macos")]
-                    assert!(environment
-                        .lines()
-                        .any(|line| line == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token"));
+                    assert!(environment.lines().any(|line| line
+                        == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token"));
                 }
             }
             assert!(web_check.contains(

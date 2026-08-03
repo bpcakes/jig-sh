@@ -200,7 +200,9 @@ fn generated_metadata_launchers_are_identical_and_cover_every_probe() {
     assert!(pnpm_helper.contains("const result = spawnPackageManagerMetadata(\n        \"pnpm\","));
     assert!(pnpm_helper.contains("spawnPackageManagerMetadata(executable.path, args, {"));
     assert!(yarn_helper.contains("spawnPackageManagerMetadata(\"yarn\", args, {"));
-    assert!(yarn_helper.contains("spawnPackageManagerMetadata(\"yarn\", [\"config\", \"--json\"], {"));
+    assert!(
+        yarn_helper.contains("spawnPackageManagerMetadata(\"yarn\", [\"config\", \"--json\"], {")
+    );
     assert!(yarn_helper.contains("environmentValue(\"PATHEXT\")"));
     assert!(yarn_helper.contains("windowsPathEntries(pathValue)"));
     assert!(yarn_helper.contains("spawnSync(resolved, [\"--version\"], options)"));

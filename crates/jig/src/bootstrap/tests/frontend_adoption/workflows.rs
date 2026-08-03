@@ -237,9 +237,11 @@ printf '%s\n' "$((count + 1))" > "$RUN_COUNT"
             );
         }
         #[cfg(target_os = "macos")]
-        assert!(environment
-            .lines()
-            .any(|line| line == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token"));
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == "NPM_CONFIG_//registry.example.invalid/:_authToken=test-token")
+        );
     }
     assert_eq!(fs::read_to_string(&run_count).unwrap().trim(), "2");
     assert!(!unexpected_install.exists());
