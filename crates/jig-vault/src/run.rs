@@ -1137,7 +1137,7 @@ fn confirm_unix_process_group_quiescent(
 ) -> AnyResult<()> {
     #[cfg(target_os = "linux")]
     {
-        return confirm_unix_process_group_quiescent_with(
+        confirm_unix_process_group_quiescent_with(
             process,
             process_group,
             deadline,
@@ -1159,7 +1159,7 @@ fn confirm_unix_process_group_quiescent(
             },
             Instant::now,
             thread::sleep,
-        );
+        )
     }
     #[cfg(target_vendor = "apple")]
     {

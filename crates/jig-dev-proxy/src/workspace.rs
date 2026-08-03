@@ -215,15 +215,15 @@ fn strip_inline_yaml_comment(value: &str) -> &str {
         match ch {
             '\'' if !in_double => in_single = !in_single,
             '"' if !in_single && !escaped => in_double = !in_double,
-            '#' if !in_single && !in_double => {
-                if index == 0
+            '#' if !in_single
+                && !in_double
+                && (index == 0
                     || value[..index]
                         .chars()
                         .next_back()
-                        .is_some_and(char::is_whitespace)
-                {
-                    return value[..index].trim_end();
-                }
+                        .is_some_and(char::is_whitespace)) =>
+            {
+                return value[..index].trim_end();
             }
             _ => {}
         }

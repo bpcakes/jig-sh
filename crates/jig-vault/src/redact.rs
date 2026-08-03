@@ -158,8 +158,8 @@ impl Redactor {
                 }
             }
         }
-        text_needles.sort_by(|left, right| right.value.len().cmp(&left.value.len()));
-        raw_needles.sort_by(|left, right| right.value.len().cmp(&left.value.len()));
+        text_needles.sort_by_key(|needle| std::cmp::Reverse(needle.value.len()));
+        raw_needles.sort_by_key(|needle| std::cmp::Reverse(needle.value.len()));
         Self {
             text_needles,
             raw_needles,

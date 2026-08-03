@@ -440,10 +440,7 @@ pub(super) fn terminate_child(child: &mut Child) -> Result<()> {
             force_kill_child,
         );
     }
-    loop {
-        let Some(_) = remaining_phase_budget(term_deadline, Instant::now()) else {
-            break;
-        };
+    while remaining_phase_budget(term_deadline, Instant::now()).is_some() {
         if force_cleanup_requested() {
             return force_kill_child(child);
         }
@@ -597,10 +594,7 @@ fn wait_unscannable_exited_group_term_grace<T>(
     mut forced: impl FnMut() -> bool,
     force_cleanup: impl FnOnce(&mut T) -> Result<()>,
 ) -> Result<()> {
-    loop {
-        let Some(remaining) = remaining_phase_budget(deadline, now()) else {
-            break;
-        };
+    while let Some(remaining) = remaining_phase_budget(deadline, now()) {
         if forced() {
             return force_cleanup(state);
         }

@@ -217,10 +217,8 @@ pub(super) fn stop_session_ids_interruptible(
             if !mark_orphaned(store, &session, cancelled)? {
                 return Ok(LockOutcome::Cancelled);
             }
-        } else {
-            if !remove_exact_session(store, &session, cancelled)? {
-                return Ok(LockOutcome::Cancelled);
-            }
+        } else if !remove_exact_session(store, &session, cancelled)? {
+            return Ok(LockOutcome::Cancelled);
         }
     }
     let snapshot = match store.snapshot_dev_state_interruptible(cancelled)? {

@@ -1159,21 +1159,21 @@ fn required_tools_check_with_environment_and_process_control(
                                     "detail": probe_detail,
                                 });
                             }
-                            (Some(_), SqlxDriverResolution::Indeterminate(reason)) => {
-                                if !sqlx_resolution_recorded {
-                                    sqlx_resolution_recorded = true;
-                                    let detail = format!(
-                                        "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
-                                    );
-                                    indeterminate.push(detail.clone());
-                                    report["driver_probe"] = json!({
-                                        "driver": null,
-                                        "source": null,
-                                        "status": "unverified",
-                                        "compatible": null,
-                                        "detail": detail,
-                                    });
-                                }
+                            (Some(_), SqlxDriverResolution::Indeterminate(reason))
+                                if !sqlx_resolution_recorded =>
+                            {
+                                sqlx_resolution_recorded = true;
+                                let detail = format!(
+                                    "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
+                                );
+                                indeterminate.push(detail.clone());
+                                report["driver_probe"] = json!({
+                                    "driver": null,
+                                    "source": null,
+                                    "status": "unverified",
+                                    "compatible": null,
+                                    "detail": detail,
+                                });
                             }
                             _ => {}
                         }
@@ -1665,13 +1665,12 @@ fn dotenv_value_uses_substitution(value: &str) -> bool {
             '\'' | '"' if quote == Some(ch) => quote = None,
             '\'' | '"' if quote.is_none() => quote = Some(ch),
             '#' if quote.is_none() => return false,
-            '$' if quote != Some('\'') => {
-                if chars
-                    .peek()
-                    .is_some_and(|next| *next == '{' || *next == '_' || next.is_ascii_alphabetic())
-                {
-                    return true;
-                }
+            '$' if quote != Some('\'')
+                && chars.peek().is_some_and(|next| {
+                    *next == '{' || *next == '_' || next.is_ascii_alphabetic()
+                }) =>
+            {
+                return true;
             }
             _ => {}
         }
