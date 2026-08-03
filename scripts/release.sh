@@ -695,7 +695,9 @@ crate_version_status() {
   local package_name="$1"
   local version="$2"
   local status
-  status="$(curl --max-time 20 -sS -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$package_name/$version" || true)"
+  status="$(curl --max-time 20 -sS -o /dev/null -w '%{http_code}' \
+    --user-agent 'jig-sh-release-script (+https://github.com/bpcakes/jig-sh)' \
+    "https://crates.io/api/v1/crates/$package_name/$version" || true)"
   printf '%s\n' "${status:-000}"
 }
 
