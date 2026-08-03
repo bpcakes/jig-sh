@@ -289,7 +289,7 @@ PY
     scripts/jig work finish --plan-id "$plan_id" --resolution "fixture complete" --outcome success >/dev/null
 
     [[ -f ".agent/plans/${plan_id}.md" ]]
-    rg -q "Runtime validation" ".agent/plans/${plan_id}.md"
+    grep -q "Runtime validation" ".agent/plans/${plan_id}.md"
     [[ -f .agent/state/receipts.jsonl ]]
     [[ -f .agent/state/decisions.jsonl ]]
     [[ -f "$install_base/$jig_version-runtime/bin/jig" ]]

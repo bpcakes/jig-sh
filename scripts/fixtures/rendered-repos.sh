@@ -31,31 +31,31 @@ assert_fixture_sqlx_boundary() {
   [[ "$(cat "$marker")" == $'CARGO=cargo\nSQLX_OFFLINE=false\nSQLX_OFFLINE_DIR=.sqlx\nargv=prepare --check --workspace -- --workspace --all-targets' ]]
 }
 
-assert_fixture_rg_absent() {
+assert_fixture_text_absent() {
   local pattern="$1"
   local path="$2"
   local status
 
-  if rg -F -q -- "$pattern" "$path"; then
+  if grep -F -q -- "$pattern" "$path"; then
     echo "Unexpected fixture content matching '$pattern' in $path." >&2
     return 1
   else
     status=$?
   fi
-  # ripgrep uses 1 for a successful search with no matches. Any other failure
+  # grep uses 1 for a successful search with no matches. Any other failure
   # means the assertion could not inspect its input and must remain visible.
   [[ "$status" -eq 1 ]] && return 0
   return "$status"
 }
 
-validate_fixture_rg_absence_assertion() {
+validate_fixture_text_absence_assertion() {
   local repo_dir="$1"
-  local control="$repo_dir/.agent/tmp/rg-absence-control"
+  local control="$repo_dir/.agent/tmp/text-absence-control"
   local status
 
   mkdir -p "$(dirname "$control")"
   printf '%s\n' 'forbidden-control-marker' > "$control"
-  if assert_fixture_rg_absent 'forbidden-control-marker' "$control" 2>/dev/null; then
+  if assert_fixture_text_absent 'forbidden-control-marker' "$control" 2>/dev/null; then
     echo "Fixture absence assertion accepted a forbidden match." >&2
     return 1
   else
@@ -64,7 +64,7 @@ validate_fixture_rg_absence_assertion() {
   [[ "$status" -eq 1 ]] || return "$status"
 
   printf '%s\n' '"jig.sqlx_check"' > "$control"
-  if assert_fixture_rg_absent '"jig.sqlx_check"' "$control" 2>/dev/null; then
+  if assert_fixture_text_absent '"jig.sqlx_check"' "$control" 2>/dev/null; then
     echo "Fixture fixed-string absence assertion accepted a dotted forbidden match." >&2
     return 1
   else
@@ -72,14 +72,14 @@ validate_fixture_rg_absence_assertion() {
   fi
   [[ "$status" -eq 1 ]] || return "$status"
 
-  if assert_fixture_rg_absent 'forbidden-control-marker' "${control}.missing" 2>/dev/null; then
+  if assert_fixture_text_absent 'forbidden-control-marker' "${control}.missing" 2>/dev/null; then
     echo "Fixture absence assertion accepted an unreadable input." >&2
     return 1
   else
     status=$?
   fi
   [[ "$status" -eq 2 ]] || {
-    echo "Fixture absence assertion did not preserve ripgrep's input error status." >&2
+    echo "Fixture absence assertion did not preserve grep's input error status." >&2
     return 1
   }
   rm -f "$control"
@@ -121,7 +121,7 @@ validate_backend_fixture() {
     grep -q '^default_branch = "dev"$' .jig.toml
     grep -Fqx "jig_version = \"$expected_jig_version\"" .jig.toml
     if [[ -f .github/workflows/webapp-checks.yml ]]; then
-      rg -q "No web apps configured" .github/workflows/webapp-checks.yml
+      grep -q "No web apps configured" .github/workflows/webapp-checks.yml
     fi
     validate_jig_runtime "$repo_dir" 0 1 "fixture_backend_runtime"
     assert_fixture_sqlx_boundary "$repo_dir"
@@ -157,9 +157,9 @@ validate_full_stack_fixture() {
     scripts/jig check sqlx-unchecked-non-test >/dev/null
     scripts/jig check schema >/dev/null
     scripts/jig update --recopy --force >/dev/null
-    rg -q "frontend" .github/workflows/webapp-checks.yml
-    rg -q "admin-panel" .github/workflows/webapp-checks.yml
-    rg -q "40" .github/workflows/webapp-checks.yml
+    grep -q "frontend" .github/workflows/webapp-checks.yml
+    grep -q "admin-panel" .github/workflows/webapp-checks.yml
+    grep -q "40" .github/workflows/webapp-checks.yml
     validate_jig_runtime "$repo_dir" 1 1 "fixture_full_stack_runtime" 1
     assert_fixture_sqlx_boundary "$repo_dir"
   )
@@ -175,7 +175,7 @@ validate_tooling_only_fixture() {
   write_tooling_only_stub_repo "$repo_dir"
   (
     cd "$repo_dir"
-    validate_fixture_rg_absence_assertion "$repo_dir"
+    validate_fixture_text_absence_assertion "$repo_dir"
     [[ -f .jig.toml ]]
     git init -b main >/dev/null
     git config user.name "Fixture"
@@ -195,12 +195,12 @@ validate_tooling_only_fixture() {
     [[ ! -f scripts/check-sqlx-unchecked-non-test.sh ]]
     [[ ! -f scripts/generate-sqlx-unchecked-queries-todo.sh ]]
     [[ ! -f Makefile ]]
-    assert_fixture_rg_absent '"jig.sqlx_check"' .agent/jig-contract.json
-    assert_fixture_rg_absent '"jig.schema_check"' .agent/jig-contract.json
-    assert_fixture_rg_absent '"jig.schema_dump"' .agent/jig-contract.json
-    assert_fixture_rg_absent '"jig.migration_add"' .agent/jig-contract.json
-    assert_fixture_rg_absent 'sqlx-unchecked-queries:' .github/workflows/repo-policy.yml
-    assert_fixture_rg_absent 'migration-immutability:' .github/workflows/repo-policy.yml
+    assert_fixture_text_absent '"jig.sqlx_check"' .agent/jig-contract.json
+    assert_fixture_text_absent '"jig.schema_check"' .agent/jig-contract.json
+    assert_fixture_text_absent '"jig.schema_dump"' .agent/jig-contract.json
+    assert_fixture_text_absent '"jig.migration_add"' .agent/jig-contract.json
+    assert_fixture_text_absent 'sqlx-unchecked-queries:' .github/workflows/repo-policy.yml
+    assert_fixture_text_absent 'migration-immutability:' .github/workflows/repo-policy.yml
     perl -0pi -e 's/default_branch = "main"/default_branch = "dev"/' .jig.toml
     git add .jig.toml
     git commit -m "change answers" >/dev/null
