@@ -146,11 +146,11 @@ fi
 case "$INSTALL_PROFILE" in
   default)
     DEFAULT_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$JIG_VERSION"
-    CARGO_INSTALL_FEATURE_ARGS=()
+    CARGO_INSTALL_FEATURE_ARG=""
     ;;
   runtime | mcp)
     DEFAULT_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$JIG_VERSION-runtime"
-    CARGO_INSTALL_FEATURE_ARGS=(--no-default-features)
+    CARGO_INSTALL_FEATURE_ARG="--no-default-features"
     ;;
 esac
 
@@ -349,7 +349,7 @@ install_from_local_source() {
     --root "$INSTALL_ROOT" \
     --locked \
     --force \
-    "${CARGO_INSTALL_FEATURE_ARGS[@]}"
+    ${CARGO_INSTALL_FEATURE_ARG:+"$CARGO_INSTALL_FEATURE_ARG"}
 
   assert_exact_version "$BIN_PATH"
   write_local_source_stamp "$source_root"
@@ -383,7 +383,7 @@ install_from_git_source() {
     --root "$INSTALL_ROOT" \
     --locked \
     --force \
-    "${CARGO_INSTALL_FEATURE_ARGS[@]}" \
+    ${CARGO_INSTALL_FEATURE_ARG:+"$CARGO_INSTALL_FEATURE_ARG"} \
     jig-sh
 
   assert_exact_version "$BIN_PATH"
