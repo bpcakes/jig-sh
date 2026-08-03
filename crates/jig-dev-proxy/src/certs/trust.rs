@@ -386,7 +386,7 @@ fn untrust_locked(store: &StateStore) -> Result<Value> {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(super) const fn macos_untrust_warning(removed: usize) -> Option<&'static str> {
     if removed == 0 {
         Some("No trusted Jig Dev Proxy Local CA certificate was removed.")
@@ -430,7 +430,7 @@ fn macos_trusted_jig_ca_fingerprints() -> Result<Vec<CertificateFingerprints>> {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(super) fn security_find_certificate_fingerprints(
     output: &[u8],
 ) -> Vec<CertificateFingerprints> {
@@ -468,7 +468,7 @@ pub(super) fn security_find_certificate_fingerprints(
     fingerprints
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(super) fn pem_sha256_hex(pem: &str) -> Option<String> {
     let mut reader = std::io::BufReader::new(pem.as_bytes());
     let cert = rustls_pemfile::certs(&mut reader).next()?.ok()?;
@@ -500,7 +500,7 @@ fn macos_delete_trusted_certificate(fingerprint: &CertificateFingerprints) -> Re
     bail!("security delete-certificate failed: {}", stderr.trim())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn sha1_fingerprint_is_valid(fingerprint: &str) -> bool {
     fingerprint.len() == 40
         && fingerprint

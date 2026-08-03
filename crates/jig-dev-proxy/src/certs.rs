@@ -51,7 +51,7 @@ const MAX_TRUST_BUNDLE_PEM_BYTES: u64 = 16 * 1024 * 1024;
 const CA_SERIAL_NUMBER_BYTES: usize = 16;
 const JIG_CA_COMMON_NAME: &str = "Jig Dev Proxy Local CA";
 const GLOBAL_CA_TRUST_WARNING: &str = "Trusting the Jig Dev Proxy local CA installs a locally trusted root constrained to configured Jig development DNS names and loopback/IPv4 LAN IP addresses; keep ca-key.pem private because any locally trusted CA key is sensitive machine-local TLS material.";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MACOS_UNTRUST_REMOVAL_LIMIT: usize = 64;
 
 pub(crate) fn generate(settings: &ProxySettings, force: bool) -> Result<Value> {
@@ -1103,7 +1103,7 @@ fn trusted_ca_marker_sha256_fingerprint_for_current_platform(
     Ok(None)
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CertificateFingerprints {
     sha1: String,
@@ -1202,7 +1202,7 @@ fn open_optional_read_no_follow(path: &Path, max_bytes: u64) -> Result<Option<fs
     Ok(Some(file))
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn hex_upper(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len() * 2);
