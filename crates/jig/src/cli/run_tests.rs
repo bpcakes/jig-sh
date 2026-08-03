@@ -288,3 +288,11 @@ fn dev_interruption_exit_status_comes_from_the_runtime_result() {
         assert_eq!(structured_error_exit_code(&error), None);
     }
 }
+
+#[test]
+fn codex_child_exit_status_is_preserved_by_the_cli() {
+    let error: anyhow::Error = crate::codex::CodexChildExitStatus(37).into();
+
+    assert!(is_structured_json_failure(&error));
+    assert_eq!(structured_error_exit_code(&error), Some(37));
+}

@@ -1,0 +1,23 @@
+[package]
+name = "jig-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared terminal lifecycle and cooperative worker foundations for Jig TUIs."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords = ["terminal", "tui", "development-tools"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "jig_tui"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+
+[lints]
+workspace = true

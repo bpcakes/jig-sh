@@ -17,6 +17,7 @@ name = "jig_status_tui"
 [dependencies]
 anyhow.workspace = true
 crossterm.workspace = true
+jig-tui.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true

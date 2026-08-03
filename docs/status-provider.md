@@ -81,7 +81,7 @@ Keys are `q` or Ctrl-C to quit; `r` to refresh; Tab or Shift-Tab and `1`/`2`/`3`
 
 Both stdin and stdout must be terminals. Use the human summary or `--json` in a pipeline. `--tui` and `--json` are mutually exclusive. Quitting while a provider runs sends cancellation through Jig's owned process-tree supervisor, joins the refresh worker, and restores raw mode, the original screen, and cursor visibility before returning.
 
-The terminal dashboard is implemented in the CLI-owned `jig-status-tui` crate behind a snapshot-source interface. It is distinct from `scripts/jig ui`, which serves browser pages over plans, gates, receipts, and loop history. Neither UI adds launch policy. A future Codex launcher requires a separate authority and policy contract rather than making status observation executable by implication.
+The terminal dashboard is implemented in the CLI-owned `jig-status-tui` crate behind a snapshot-source interface. It is distinct from `scripts/jig ui`, which serves browser pages over plans, gates, receipts, and loop history. Neither status UI adds launch policy. The implemented Codex-home launcher remains deliberately separate in `jig-codex-tui`, with its own exact-path discovery and app-server inspection adapter; it does not make status observations executable by implication.
 
 ## Report envelope
 

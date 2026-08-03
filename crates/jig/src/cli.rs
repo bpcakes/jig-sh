@@ -9,6 +9,8 @@ use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, status,
 mod agent;
 mod bootstrap_run;
 mod check;
+mod codex;
+mod codex_run;
 mod init_wizard;
 mod loops;
 mod prompt;
@@ -21,6 +23,7 @@ mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
+pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{
     LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
@@ -292,6 +295,14 @@ pub(crate) enum CommandKind {
         after_help = agent::AGENT_AFTER_HELP
     )]
     Agent(AgentCommand),
+    /// Inspect Codex homes or launch Codex with an isolated account and state root.
+    #[command(
+        name = tool_defs::cli_command::CODEX,
+        display_order = 515,
+        subcommand,
+        after_help = codex::CODEX_AFTER_HELP
+    )]
+    Codex(CodexCommand),
     /// Generate the repository agent guide map.
     #[command(
         name = tool_defs::cli_command::AGENT_MAP,

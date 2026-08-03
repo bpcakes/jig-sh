@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use wait_timeout::ChildExt;
 
+pub(crate) mod interaction;
+
 const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const OWNED_PROCESS_TREE_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -172,14 +174,12 @@ impl ProcessPipe {
             Self::Stdout(reader) => reader.as_raw_fd(),
             Self::Stderr(reader) => reader.as_raw_fd(),
         };
-        // SAFETY: the descriptor is owned by the live pipe reader. F_GETFL
-        // only inspects its current status flags.
+        // SAFETY: the live pipe reader owns the descriptor; F_GETFL only inspects its flags.
         let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
         if flags == -1 {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: the descriptor remains live and F_SETFL preserves every
-        // existing flag while adding nonblocking reads.
+        // SAFETY: the live descriptor keeps every flag when F_SETFL adds nonblocking reads.
         if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
             return Err(std::io::Error::last_os_error());
         }

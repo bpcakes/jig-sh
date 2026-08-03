@@ -2,6 +2,7 @@ mod agent_guides;
 mod bootstrap;
 mod cancellation;
 mod cli;
+mod codex;
 mod command;
 mod context;
 #[cfg(feature = "dev-proxy")]

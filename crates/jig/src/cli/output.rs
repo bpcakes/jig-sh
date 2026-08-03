@@ -5,6 +5,11 @@ use anyhow::{Result, anyhow};
 
 use crate::{doctor, info};
 
+use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
+use self::codex::{format_codex_homes_summary, format_codex_launch_summary};
+
+mod agent;
+mod codex;
 mod dev;
 mod status;
 
@@ -17,6 +22,8 @@ pub(super) enum HumanOutput {
     VaultGeneric,
     AgentDoctor,
     AgentBootstrap,
+    CodexHomes,
+    CodexLaunch,
     WorkCheck,
     WorkGates,
     WorkEvidence,
@@ -70,6 +77,8 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
         HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
         HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
+        HumanOutput::CodexHomes => format_codex_homes_summary(value),
+        HumanOutput::CodexLaunch => format_codex_launch_summary(value),
         HumanOutput::WorkCheck => format_work_check_summary(value),
         HumanOutput::WorkGates => format_work_gates_summary(value),
         HumanOutput::WorkEvidence => format_work_evidence_summary(value),
@@ -225,76 +234,6 @@ pub(super) fn format_work_start_plan_id(value: &serde_json::Value) -> Result<Str
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| anyhow!("work start output did not include plan.plan_id"))
-}
-
-pub(super) fn format_agent_doctor_summary(value: &serde_json::Value) -> String {
-    let ready = value_bool(value, "ok").unwrap_or(false);
-    let codex = &value["codex"];
-    let codex_required = value_bool(codex, "required").unwrap_or(false);
-    let codex_line = if codex_required {
-        let codex_available = codex
-            .get("available")
-            .and_then(serde_json::Value::as_bool)
-            .map(|available| {
-                if available {
-                    "available"
-                } else {
-                    "unavailable"
-                }
-            })
-            .unwrap_or("unknown");
-        format!("Codex: required ({codex_available})")
-    } else {
-        "Codex: not required (probe skipped)".into()
-    };
-    let mut lines = vec![
-        format!(
-            "Agent tooling: {}",
-            if ready { "ready" } else { "needs setup" }
-        ),
-        codex_line,
-    ];
-
-    let marketplaces = value["marketplaces"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if marketplaces.is_empty() {
-        lines.push("Marketplaces: none configured".into());
-    } else {
-        lines.push("Marketplaces:".into());
-        for marketplace in marketplaces {
-            let id = value_str(marketplace, "id").unwrap_or("<unknown>");
-            let source = value_str(marketplace, "source").unwrap_or("<unknown>");
-            let registered = value_bool(marketplace, "registered").unwrap_or(false);
-            let configured = value_str(marketplace, "configured_source");
-            let detail = match (registered, configured) {
-                (true, _) => format!("registered ({source})"),
-                (false, Some(configured)) => {
-                    format!("not registered; repo config expects {source}, Codex has {configured}")
-                }
-                (false, None) => format!("missing registration for {source}"),
-            };
-            lines.push(format!("  - {id}: {detail}"));
-        }
-    }
-
-    let next_steps = value["next_steps"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    if next_steps.is_empty() {
-        lines.push("Next steps: none".into());
-    } else {
-        lines.push("Next steps:".into());
-        for step in next_steps {
-            if let Some(step) = step.as_str() {
-                lines.push(format!("  - {step}"));
-            }
-        }
-    }
-
-    lines.join("\n")
 }
 
 pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
@@ -836,31 +775,6 @@ pub(super) fn format_work_finish_summary(value: &serde_json::Value) -> String {
     .join("\n")
 }
 
-pub(super) fn format_agent_bootstrap_summary(value: &serde_json::Value) -> String {
-    let ok = value_bool(value, "ok").unwrap_or(false);
-    let marketplace = value_str(value, "marketplace_source").unwrap_or("<unknown>");
-    let mut lines = vec![
-        format!("Agent bootstrap: {}", if ok { "ok" } else { "failed" }),
-        format!("  Marketplace: {marketplace}"),
-    ];
-    if let Some(stdout) = value_str(value, "stdout").filter(|text| !text.trim().is_empty()) {
-        lines.push(format!("  stdout: {}", concise_preview(stdout, 160)));
-    }
-    if let Some(stderr) = value_str(value, "stderr").filter(|text| !text.trim().is_empty()) {
-        lines.push(format!("  stderr: {}", concise_preview(stderr, 160)));
-    }
-    if ok {
-        lines.push("Next step: scripts/jig agent doctor".into());
-    } else {
-        lines.push(
-            "Next step: inspect the marketplace source, then rerun scripts/jig agent bootstrap"
-                .into(),
-        );
-    }
-    lines.push("  full report: rerun with --json".into());
-    lines.join("\n")
-}
-
 pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String {
     let command = value_str(value, "command").unwrap_or("vault");
     let ok = value_bool(value, "ok").unwrap_or(false);
@@ -1163,18 +1077,18 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         lines.push("  Session recursion: not analyzed (rerun with --deep)".into());
         lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
     }
-    if let Some(recommendations) = value["recommendations"].as_array()
-        && !recommendations.is_empty()
-    {
-        lines.push("Recommendations:".into());
-        for recommendation in recommendations {
-            let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
-            lines.push(format!("  - {reason}"));
-            if let Some(command) = value_str(recommendation, "command") {
-                lines.push(format!("    Command: {command}"));
-            }
-            if let Some(command) = value_str(recommendation, "alternative_command") {
-                lines.push(format!("    Alternative: {command}"));
+    if let Some(recommendations) = value["recommendations"].as_array() {
+        if !recommendations.is_empty() {
+            lines.push("Recommendations:".into());
+            for recommendation in recommendations {
+                let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
+                lines.push(format!("  - {reason}"));
+                if let Some(command) = value_str(recommendation, "command") {
+                    lines.push(format!("    Command: {command}"));
+                }
+                if let Some(command) = value_str(recommendation, "alternative_command") {
+                    lines.push(format!("    Alternative: {command}"));
+                }
             }
         }
     }

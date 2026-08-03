@@ -3289,7 +3289,7 @@ fn standalone_codex_sigint_sequence_helper() {
         return;
     };
     let result = standalone_codex_support_probe_with_signal_session(
-        codex.to_str().unwrap(),
+        codex.as_os_str(),
         Duration::from_secs(30),
     );
     panic!("SIGINT was not re-delivered after standalone Codex cleanup: {result:?}");

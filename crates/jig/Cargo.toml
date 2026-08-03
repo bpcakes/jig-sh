@@ -43,10 +43,12 @@ dotenvy.workspace = true
 fs4.workspace = true
 flate2.workspace = true
 jig-contract.workspace = true
+jig-codex-tui.workspace = true
 jig-core.workspace = true
 jig-dev-proxy = { workspace = true, optional = true }
 jig-features.workspace = true
 jig-status-tui.workspace = true
+jig-tui.workspace = true
 jig-ui.workspace = true
 jig-vault.workspace = true
 libc.workspace = true

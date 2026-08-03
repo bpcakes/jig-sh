@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
+use std::ffi::OsStr;
 use std::time::Duration;
 
 use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
@@ -22,13 +23,13 @@ pub(crate) type CodexSupportProbeResult = std::result::Result<bool, String>;
 
 pub(crate) fn agent_doctor_with_codex_support_probe(
     ctx: &RepoContext,
-    probe: impl FnMut(&str) -> CodexSupportProbeResult,
+    probe: impl FnMut(&OsStr) -> CodexSupportProbeResult,
 ) -> Value {
     agent::doctor_with_codex_support_probe(ctx, probe)
 }
 
 pub(crate) fn probe_codex_marketplace_support(
-    codex_bin: &str,
+    codex_bin: &OsStr,
     timeout: Duration,
     cancelled: impl FnMut() -> bool,
 ) -> CodexSupportProbeResult {

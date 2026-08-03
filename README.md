@@ -250,8 +250,10 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 ## Repository layout
 
 - `crates/jig/` — publishable `jig` runtime and MCP server
+- `crates/jig-codex-tui/` — searchable Codex-home picker with live account and usage details
 - `crates/jig-dev-proxy/` — local HTTP/HTTPS proxy with TLS certificate management
 - `crates/jig-status-tui/` — read-only terminal dashboard over versioned status aggregates
+- `crates/jig-tui/` — shared terminal lifecycle and cooperative-worker foundations
 - `crates/jig-ui/` — read-only loopback dashboard server and presentation
 - `crates/jig-vault/` — local encrypted vault, redaction, audit, and brokered-run primitives
 - `crates/jig-contract/contracts/status-provider/` — public status-provider JSON Schema and conformance example

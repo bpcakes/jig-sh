@@ -1,6 +1,6 @@
 use std::env;
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
@@ -15,8 +15,6 @@ use crate::process::{
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
-const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
-const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const JIG_SKILLS_MARKETPLACE_ENV: &str = "JIG_SKILLS_MARKETPLACE";
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -35,13 +33,14 @@ pub(super) fn doctor(ctx: &RepoContext) -> JsonValue {
 
 pub(super) fn doctor_with_codex_support_probe(
     ctx: &RepoContext,
-    mut probe: impl FnMut(&str) -> CodexSupportProbeResult,
+    mut probe: impl FnMut(&OsStr) -> CodexSupportProbeResult,
 ) -> JsonValue {
     let progress = CliProgress::new("agent doctor");
     progress.header("inspect local Codex tooling");
     progress.info("repo", ctx.root().display());
-    let codex_bin = codex_bin();
-    progress.step("resolve codex", &codex_bin);
+    let codex_bin = crate::codex::codex_bin();
+    let codex_bin_display = codex_bin.to_string_lossy().into_owned();
+    progress.step("resolve codex", &codex_bin_display);
     let configured_marketplaces = ctx.codex_marketplaces();
     progress.step(
         "read requirements",
@@ -67,7 +66,7 @@ pub(super) fn doctor_with_codex_support_probe(
         }
         None => (None, None, true),
     };
-    let config_path = codex_config_path();
+    let config_path = crate::codex::codex_config_path();
     progress.step(
         "read codex config",
         config_path
@@ -115,7 +114,7 @@ pub(super) fn doctor_with_codex_support_probe(
         vec!["Run `scripts/jig agent doctor` after process supervision is available.".into()]
     } else {
         doctor_next_steps(
-            &codex_bin,
+            &codex_bin_display,
             codex_required,
             codex_ready,
             configured_marketplaces.len(),
@@ -132,7 +131,7 @@ pub(super) fn doctor_with_codex_support_probe(
         "ok": codex_ready && all_marketplaces_ready,
         "command": "agent doctor",
         "codex": {
-            "bin": codex_bin,
+            "bin": codex_bin_display,
             "required": codex_required,
             "available": codex_available,
             "probe_skipped": !codex_required,
@@ -153,20 +152,21 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
     let progress = CliProgress::new("agent bootstrap");
     progress.header("install Codex marketplace");
     progress.info("repo", ctx.root().display());
-    let codex_bin = codex_bin();
-    progress.step("resolve codex", &codex_bin);
+    let codex_bin = crate::codex::codex_bin();
+    let codex_bin_display = codex_bin.to_string_lossy().into_owned();
+    progress.step("resolve codex", &codex_bin_display);
     let marketplace_source =
         progress.log_blocked_on_err(requested_marketplace_source(ctx, opts.marketplace))?;
     progress.step("resolve marketplace", &marketplace_source);
     progress.step(
         "install marketplace",
-        format!("{codex_bin} plugin marketplace add"),
+        format!("{codex_bin_display} plugin marketplace add"),
     );
     let command_output = Command::new(&codex_bin)
         .args(["plugin", "marketplace", "add", &marketplace_source])
         .output()
         .with_context(|| {
-            format!("Failed to run {codex_bin} plugin marketplace add {marketplace_source}")
+            format!("Failed to run {codex_bin_display} plugin marketplace add {marketplace_source}")
         });
     let output = progress.log_blocked_on_err(command_output)?;
     if !output.status.success() {
@@ -176,14 +176,14 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
         ));
     }
     require_success(&output, |output| {
-        codex_marketplace_add_failed_message(&codex_bin, &marketplace_source, output)
+        codex_marketplace_add_failed_message(&codex_bin_display, &marketplace_source, output)
     })?;
     progress.done("agent bootstrap complete");
 
     Ok(json!({
         "ok": true,
         "command": "agent bootstrap",
-        "codex_bin": codex_bin,
+        "codex_bin": codex_bin_display,
         "marketplace_source": marketplace_source,
         "stdout": String::from_utf8_lossy(&output.stdout),
         "stderr": String::from_utf8_lossy(&output.stderr)
@@ -490,14 +490,14 @@ fn normalized_github_marketplace(source: &str) -> Option<String> {
     Some(format!("github:{owner}/{repo}"))
 }
 
-fn codex_supports_plugin_marketplaces(codex_bin: &str) -> CodexSupportProbeResult {
+fn codex_supports_plugin_marketplaces(codex_bin: &OsStr) -> CodexSupportProbeResult {
     // Codex does not expose a machine-readable feature probe for plugin
     // marketplaces, so doctor checks the concrete subcommand it later needs.
     crate::doctor::standalone_codex_support_probe(codex_bin, CODEX_SUPPORT_PROBE_TIMEOUT)
 }
 
 pub(super) fn codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
-    codex_bin: &str,
+    codex_bin: &OsStr,
     timeout: Duration,
     cancelled: impl FnMut() -> bool,
 ) -> CodexSupportProbeResult {
@@ -510,7 +510,7 @@ pub(super) fn codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
 }
 
 fn codex_supports_plugin_marketplaces_with_environment_and_cancellation(
-    codex_bin: &str,
+    codex_bin: &OsStr,
     timeout: Duration,
     environment: &[(OsString, OsString)],
     cancelled: impl FnMut() -> bool,
@@ -543,17 +543,6 @@ fn codex_supports_plugin_marketplaces_with_environment_and_cancellation(
         );
     }
     Ok(output.status.success())
-}
-
-fn codex_bin() -> String {
-    env::var(CODEX_BIN_ENV).unwrap_or_else(|_| "codex".into())
-}
-
-fn codex_config_path() -> Option<PathBuf> {
-    let codex_home = env::var_os(CODEX_HOME_ENV)
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
-    Some(codex_home.join("config.toml"))
 }
 
 #[cfg(test)]
@@ -592,7 +581,7 @@ mod tests {
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
 
         let error = codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
-            codex.to_str().unwrap(),
+            codex.as_os_str(),
             Duration::from_millis(20),
             || false,
         )
@@ -661,7 +650,7 @@ case "$PS4" in *JIG_CODEX_PROBE_PS4_POISON*) exit 74 ;; esac
         ];
 
         let available = codex_supports_plugin_marketplaces_with_environment_and_cancellation(
-            codex.to_str().unwrap(),
+            codex.as_os_str(),
             Duration::from_secs(2),
             &environment,
             || false,
@@ -671,5 +660,30 @@ case "$PS4" in *JIG_CODEX_PROBE_PS4_POISON*) exit 74 ;; esac
         assert!(available);
         assert!(!startup_marker.exists(), "Bash startup poison executed");
         assert!(!trace_marker.exists(), "Bash trace poison executed");
+    }
+
+    // macOS rejects invalid UTF-8 pathnames at the filesystem boundary, so the
+    // executable-path integration case is exercised on Unix hosts that permit
+    // such names. The byte-preserving path helpers have platform-neutral tests.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn codex_support_probe_accepts_a_non_utf8_executable_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let codex = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"codex-\xff".to_vec()));
+        fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let available = codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+            codex.as_os_str(),
+            Duration::from_secs(1),
+            || false,
+        )
+        .unwrap();
+
+        assert!(available);
     }
 }

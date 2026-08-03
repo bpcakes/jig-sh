@@ -15,7 +15,9 @@ PUBLISH_PACKAGE_NAMES=(
   "jig-features"
   "jig-vault"
   "jig-dev-proxy"
+  "jig-tui"
   "jig-status-tui"
+  "jig-codex-tui"
   "jig-ui"
   "$PACKAGE_NAME"
 )
@@ -91,7 +93,9 @@ crate_dir_for_package() {
     jig-features) printf '%s\n' "crates/jig-features" ;;
     jig-vault) printf '%s\n' "crates/jig-vault" ;;
     jig-dev-proxy) printf '%s\n' "crates/jig-dev-proxy" ;;
+    jig-tui) printf '%s\n' "crates/jig-tui" ;;
     jig-status-tui) printf '%s\n' "crates/jig-status-tui" ;;
+    jig-codex-tui) printf '%s\n' "crates/jig-codex-tui" ;;
     jig-ui) printf '%s\n' "crates/jig-ui" ;;
     jig-sh) printf '%s\n' "crates/jig" ;;
     *)
@@ -99,6 +103,59 @@ crate_dir_for_package() {
       exit 1
       ;;
   esac
+}
+
+require_publish_manifest_consistency() {
+  python3 - "$ROOT_DIR" "${PUBLISH_PACKAGE_NAMES[@]}" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+publish_order = sys.argv[2:]
+metadata = json.loads(
+    subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
+        cwd=root,
+        text=True,
+    )
+)
+workspace_members = set(metadata["workspace_members"])
+packages = {
+    package["name"]: package
+    for package in metadata["packages"]
+    if package["id"] in workspace_members and package.get("publish") != []
+}
+
+if len(publish_order) != len(set(publish_order)):
+    raise SystemExit("PUBLISH_PACKAGE_NAMES contains duplicate package names.")
+
+missing = sorted(set(packages) - set(publish_order))
+extra = sorted(set(publish_order) - set(packages))
+if missing or extra:
+    details = []
+    if missing:
+        details.append(f"missing publishable workspace packages: {', '.join(missing)}")
+    if extra:
+        details.append(f"unknown or non-publishable packages: {', '.join(extra)}")
+    raise SystemExit("PUBLISH_PACKAGE_NAMES is inconsistent with Cargo metadata: " + "; ".join(details))
+
+positions = {name: index for index, name in enumerate(publish_order)}
+for package_name, package in packages.items():
+    for dependency in package["dependencies"]:
+        dependency_name = dependency["name"]
+        if (
+            dependency.get("source") is None
+            and dependency.get("kind") != "dev"
+            and dependency_name in packages
+            and positions[dependency_name] >= positions[package_name]
+        ):
+            raise SystemExit(
+                "PUBLISH_PACKAGE_NAMES must publish "
+                f"{dependency_name} before dependent package {package_name}."
+            )
+PY
 }
 
 manifest_version() {
@@ -193,6 +250,8 @@ require_version_consistency() {
   local launcher_version
   local dependency_version
 
+  require_publish_manifest_consistency
+
   local package_name
   for package_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
     cargo_version="$(manifest_version "$package_name")"
@@ -203,7 +262,10 @@ require_version_consistency() {
   done
 
   local dependency_name
-  for dependency_name in jig-dev-proxy jig-status-tui jig-ui; do
+  for dependency_name in "${PUBLISH_PACKAGE_NAMES[@]}"; do
+    if [[ "$dependency_name" == "$PACKAGE_NAME" ]]; then
+      continue
+    fi
     dependency_version="$(python3 - "$ROOT_DIR/Cargo.toml" "$dependency_name" <<'PY'
 import pathlib
 import re
@@ -414,7 +476,13 @@ require_changelog_entry() {
 update_version_files() {
   local version="$1"
 
-  python3 - "$ROOT_DIR" "$version" "${RELEASE_FIXTURE_FILES[@]}" <<'PY'
+  python3 - \
+    "$ROOT_DIR" \
+    "$version" \
+    "$PACKAGE_NAME" \
+    "${#PUBLISH_PACKAGE_NAMES[@]}" \
+    "${PUBLISH_PACKAGE_NAMES[@]}" \
+    "${RELEASE_FIXTURE_FILES[@]}" <<'PY'
 import json
 import pathlib
 import re
@@ -423,7 +491,10 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 version = sys.argv[2]
-release_fixture_files = sys.argv[3:]
+package_name = sys.argv[3]
+publish_package_count = int(sys.argv[4])
+publish_package_names = sys.argv[5:5 + publish_package_count]
+release_fixture_files = sys.argv[5 + publish_package_count:]
 semver_release = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 if not re.fullmatch(semver_release, version):
     raise SystemExit(f"Version must be MAJOR.MINOR.PATCH[-PRERELEASE], got {version!r}.")
@@ -441,10 +512,6 @@ def replace_exactly_once(path, pattern, replacement, label=None, flags=0):
     if count != 1:
         raise SystemExit(f"Expected to update {label or pattern!r} exactly once in {path}; updated {count}.")
     path.write_text(next_text)
-
-def replace_optional(path, pattern, replacement, flags=0):
-    if path.exists():
-        replace_required(path, pattern, replacement, flags=flags)
 
 def update_jig_toml(path):
     replace_required(
@@ -469,25 +536,17 @@ replace_exactly_once(
     rf'\g<1>"{version}"',
     "workspace package version",
 )
-replace_exactly_once(
-    root / "Cargo.toml",
-    r'(jig-status-tui\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
-    rf'\g<1>"={version}"',
-    "workspace jig-status-tui exact dependency version",
-)
-replace_exactly_once(
-    root / "Cargo.toml",
-    r'(jig-ui\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
-    rf'\g<1>"={version}"',
-    "workspace jig-ui exact dependency version",
-)
-replace_exactly_once(
-    root / "Cargo.toml",
-    r'(jig-dev-proxy\s*=\s*\{[^}\n]*version\s*=\s*)"=[^"]*"',
-    rf'\g<1>"={version}"',
-    "workspace jig-dev-proxy exact dependency version",
-)
-for package in ("jig-dev-proxy", "jig-status-tui", "jig-ui", "jig-sh"):
+for dependency in publish_package_names:
+    if dependency == package_name:
+        continue
+    escaped_dependency = re.escape(dependency)
+    replace_exactly_once(
+        root / "Cargo.toml",
+        rf'(?m)^({escaped_dependency}\s*=\s*\{{[^}}\n]*version\s*=\s*)"=[^"]*"',
+        rf'\g<1>"={version}"',
+        f"workspace {dependency} exact dependency version",
+    )
+for package in publish_package_names:
     replace_exactly_once(
         root / "Cargo.lock",
         rf'(?ms)(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = )"[^"]*"',
@@ -521,12 +580,6 @@ if not jig_toml_paths:
     raise SystemExit("No .jig.toml or fixture TOML files found to update.")
 for path in sorted(jig_toml_paths):
     update_jig_toml(path)
-
-replace_optional(
-    root / "scripts" / "fixtures" / "runtime-smoke.sh",
-    r"\.git/jig-tools/[^/]+/bin/jig",
-    f".git/jig-tools/{version}/bin/jig",
-)
 PY
 }
 

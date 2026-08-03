@@ -54,6 +54,8 @@
 ## Common commands
 
 - `cargo test -p jig-sh`
+- `cargo test -p jig-sh --test codex_launcher -- --nocapture` (requires a Unix PTY; set
+  `JIG_ALLOW_PTY_TEST_SKIP=1` only when the environment is intentionally exempt)
 - `cargo test --workspace`
 - `cargo build -p jig-sh --bin jig`
 - `JIG_DEV_BIN=target/debug/jig scripts/jig work status`

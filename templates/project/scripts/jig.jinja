@@ -27,6 +27,23 @@ jig_help_requested_before_separator() {
   return 1
 }
 
+jig_subcommand() {
+  for arg in "$@"; do
+    case "$arg" in
+      --json)
+        ;;
+      -- | -*)
+        return 1
+        ;;
+      *)
+        printf '%s\n' "$arg"
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 binary_version() {
   "$1" --version 2>/dev/null | awk '{print $2}'
 }
@@ -126,7 +143,8 @@ resolve_mcp_binary() {
 # Keep repo-contract, work, and agent commands on stripped builds. MCP startup
 # resolves a prebuilt binary without invoking the installer.
 version_checked=false
-case "${1:-}" in
+subcommand="$(jig_subcommand "$@" || true)"
+case "$subcommand" in
   mcp)
     bin_path="$(resolve_mcp_binary)" || exit $?
     # resolve_mcp_binary either uses the installer for JIG_DEV_BIN or returns
@@ -161,10 +179,8 @@ fi
 # Repo-local commands run with the binary's working directory set to the owning
 # repository, even when this launcher is invoked by absolute path from another
 # cwd. Commands that accept caller-relative paths must explicitly opt into
-# JIG_INVOKE_CWD before the cd below. This switch assumes the subcommand is
-# the first positional argument; update it if global flags before subcommands
-# are added.
-case "${1:-}" in
+# JIG_INVOKE_CWD before the cd below.
+case "$subcommand" in
   init | adopt | update)
     export JIG_INVOKE_CWD="$PWD"
     ;;
@@ -172,5 +188,12 @@ case "${1:-}" in
     unset JIG_INVOKE_CWD
     ;;
 esac
+
+# Codex homes are user-global, and the launched Codex process must inherit the
+# directory where the user invoked the launcher rather than this Jig repo.
+if [ "$subcommand" = "codex" ]; then
+  exec "$bin_path" "$@"
+fi
+
 cd "$ROOT_DIR"
 exec "$bin_path" "$@"

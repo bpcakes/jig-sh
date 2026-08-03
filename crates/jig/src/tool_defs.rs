@@ -63,6 +63,9 @@ pub(crate) mod cli_command {
     pub(crate) const CHECK_TYPESCRIPT_COVERAGE: &str = "typescript-coverage";
     pub(crate) const CHECK_TYPESCRIPT_LINT: &str = "typescript-lint";
     pub(crate) const CHECK_TYPESCRIPT_TYPECHECK: &str = "typescript-typecheck";
+    pub(crate) const CODEX: &str = "codex";
+    pub(crate) const CODEX_HOMES: &str = "homes";
+    pub(crate) const CODEX_LAUNCH: &str = "launch";
     pub(crate) const DEV: &str = "dev";
     pub(crate) const DEV_STATUS: &str = "status";
     pub(crate) const DEV_STOP: &str = "stop";

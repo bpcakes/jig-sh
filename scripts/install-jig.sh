@@ -191,11 +191,18 @@ hash_stdin() {
 
 local_source_stamp() {
   local source_root="$1"
-  # Keep this path list aligned with the crates and manifests that feed the jig
-  # binary; omitted build inputs can make the source-cache stamp stale.
+  local untracked_path
+  # Every workspace crate can feed the jig binary transitively. Git diffs cover
+  # tracked edits and deletions; untracked inputs need their paths and contents
+  # hashed separately because `git diff` intentionally omits them.
   {
     git -C "$source_root" rev-parse HEAD 2>/dev/null || printf 'unknown-head\n'
-    git -C "$source_root" diff HEAD -- Cargo.toml Cargo.lock crates/jig crates/jig-dev-proxy crates/jig-status-tui 2>/dev/null || true
+    git -C "$source_root" diff HEAD -- Cargo.toml Cargo.lock crates 2>/dev/null || true
+    git -C "$source_root" ls-files --others --exclude-standard -z -- Cargo.toml Cargo.lock crates 2>/dev/null |
+      while IFS= read -r -d '' untracked_path; do
+        printf 'untracked:%s\0' "$untracked_path"
+        git -C "$source_root" hash-object --no-filters -- "$untracked_path" 2>/dev/null
+      done
   } | hash_stdin
 }
 

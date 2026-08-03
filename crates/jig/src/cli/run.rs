@@ -11,6 +11,7 @@ use clap::{
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
+use super::codex_run::run_codex_command;
 use super::output::{HumanOutput, emit, print_json};
 use super::prompt_run::run_prompt_command;
 use super::setup_run::run_setup_command;
@@ -172,6 +173,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 human_output,
             )
         }
+        CommandKind::Codex(command) => run_codex_command(command, json_output),
         CommandKind::Work(command) => {
             let human_output = work_human_output(&command);
             dispatch_runtime_command(

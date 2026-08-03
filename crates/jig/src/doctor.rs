@@ -1843,11 +1843,25 @@ extern "C" fn record_doctor_signal(signal: libc::c_int) {
 }
 
 #[cfg(unix)]
-struct DoctorSignalSession {
+pub(crate) struct DoctorSignalSession {
     _guard: MutexGuard<'static, ()>,
     generation: usize,
     previous_actions: Vec<(libc::c_int, libc::sigaction)>,
     retired: bool,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+pub(crate) struct DoctorSignalCancellation {
+    generation: usize,
+}
+
+#[cfg(unix)]
+impl DoctorSignalCancellation {
+    pub(crate) fn cancelled(self) -> bool {
+        DOCTOR_SIGNAL_GENERATION.load(Ordering::SeqCst) == self.generation
+            && DOCTOR_SIGNAL.load(Ordering::SeqCst) != 0
+    }
 }
 
 #[cfg(unix)]
@@ -1859,7 +1873,7 @@ struct DoctorSignalRestoration {
 
 #[cfg(unix)]
 impl DoctorSignalSession {
-    fn start() -> std::io::Result<Self> {
+    pub(crate) fn start() -> std::io::Result<Self> {
         let guard = DOCTOR_SIGNAL_SESSION
             .lock()
             .map_err(|_| std::io::Error::other("the signal-session mutex is poisoned"))?;
@@ -1912,12 +1926,17 @@ impl DoctorSignalSession {
         Ok(session)
     }
 
-    fn cancelled(&self) -> bool {
-        DOCTOR_SIGNAL_GENERATION.load(Ordering::SeqCst) == self.generation
-            && DOCTOR_SIGNAL.load(Ordering::SeqCst) != 0
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancellation().cancelled()
     }
 
-    fn finish(mut self) -> std::io::Result<()> {
+    pub(crate) fn cancellation(&self) -> DoctorSignalCancellation {
+        DoctorSignalCancellation {
+            generation: self.generation,
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> std::io::Result<()> {
         let (signals, restored) = self.retire();
         complete_doctor_signal_retirement(signals, restored)
     }
@@ -2119,7 +2138,7 @@ fn finish_doctor_signal_session(signal_session: DoctorSignalSession) -> std::io:
 }
 
 pub(crate) fn standalone_codex_support_probe(
-    codex_bin: &str,
+    codex_bin: &std::ffi::OsStr,
     timeout: Duration,
 ) -> crate::runtime::CodexSupportProbeResult {
     #[cfg(all(unix, not(test)))]
@@ -2134,7 +2153,7 @@ pub(crate) fn standalone_codex_support_probe(
 
 #[cfg(unix)]
 fn standalone_codex_support_probe_with_signal_session(
-    codex_bin: &str,
+    codex_bin: &std::ffi::OsStr,
     timeout: Duration,
 ) -> crate::runtime::CodexSupportProbeResult {
     let signal_session = DoctorSignalSession::start().map_err(|_| {

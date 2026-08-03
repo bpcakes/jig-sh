@@ -137,6 +137,7 @@ pub(crate) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
         || error.is::<VaultChildExitStatus>()
         || error.is::<ForegroundInterrupted>()
         || error.is::<JsonReportedError>()
+        || error.is::<crate::codex::CodexChildExitStatus>()
 }
 
 pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
@@ -151,6 +152,11 @@ pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
         .or_else(|| {
             error
                 .downcast_ref::<JsonReportedError>()
+                .map(|error| error.0)
+        })
+        .or_else(|| {
+            error
+                .downcast_ref::<crate::codex::CodexChildExitStatus>()
                 .map(|error| error.0)
         })
 }

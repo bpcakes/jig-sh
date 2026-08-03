@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/jig",
+    "crates/jig-codex-tui",
     "crates/jig-contract",
     "crates/jig-core",
     "crates/jig-dev-proxy",
@@ -8,6 +9,7 @@ members = [
     "crates/jig-rust",
     "crates/jig-sqlx",
     "crates/jig-status-tui",
+    "crates/jig-tui",
     "crates/jig-typescript",
     "crates/jig-ui",
     "crates/jig-vault",
@@ -54,11 +56,13 @@ hyper-util = { version = "0.1.17", features = ["full"] }
 instability = "=0.3.10"
 jig-dev-proxy = { path = "crates/jig-dev-proxy", version = "=0.2.0-beta.1" }
 jig-contract = { path = "crates/jig-contract", version = "=0.2.0-beta.1" }
+jig-codex-tui = { path = "crates/jig-codex-tui", version = "=0.2.0-beta.1" }
 jig-core = { path = "crates/jig-core", version = "=0.2.0-beta.1" }
 jig-features = { path = "crates/jig-features", version = "=0.2.0-beta.1" }
 jig-rust = { path = "crates/jig-rust", version = "=0.2.0-beta.1" }
 jig-sqlx = { path = "crates/jig-sqlx", version = "=0.2.0-beta.1" }
 jig-status-tui = { path = "crates/jig-status-tui", version = "=0.2.0-beta.1" }
+jig-tui = { path = "crates/jig-tui", version = "=0.2.0-beta.1" }
 jig-typescript = { path = "crates/jig-typescript", version = "=0.2.0-beta.1" }
 jig-ui = { path = "crates/jig-ui", version = "=0.2.0-beta.1" }
 jig-vault = { path = "crates/jig-vault", version = "=0.2.0-beta.1" }

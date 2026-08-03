@@ -1,0 +1,25 @@
+[package]
+name = "jig-codex-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Internal interactive Codex home picker used by the matching jig-sh CLI release."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords = ["codex", "terminal", "tui", "development-tools"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "jig_codex_tui"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+jig-tui.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

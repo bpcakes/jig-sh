@@ -175,6 +175,161 @@ fn run_adopt_uses_embedded_template_for_unreleased_build_policy() {
     assert!(installer.contains(r#"[[ "$source" == "embedded:jig-sh" ]]"#));
     assert!(installer.contains("no same-version jig binary was found on PATH"));
     assert!(installer.contains("JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1"));
+    assert!(installer.contains("diff HEAD -- Cargo.toml Cargo.lock crates"));
+    assert!(installer.contains("ls-files --others --exclude-standard -z"));
+    assert!(installer.contains("hash-object --no-filters"));
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_stamp_tracks_transitive_and_untracked_crate_content() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("source");
+    fs::create_dir_all(repo.join("crates/jig/src")).unwrap();
+    fs::create_dir_all(repo.join("crates/jig-rust/src")).unwrap();
+    fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    fs::write(repo.join("Cargo.lock"), "version = 3\n").unwrap();
+    fs::write(repo.join("crates/jig/src/main.rs"), "fn main() {}\n").unwrap();
+    let transitive = repo.join("crates/jig-rust/src/lib.rs");
+    fs::write(&transitive, "pub fn value() -> u8 { 1 }\n").unwrap();
+    init_git_repo_for_test(&repo);
+    git(&repo, ["add", "."]).unwrap();
+    git(&repo, ["commit", "-m", "source fixture"]).unwrap();
+
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    let clean = evaluate_local_source_stamp(installer, &repo);
+
+    fs::write(&transitive, "pub fn value() -> u8 { 2 }\n").unwrap();
+    let transitive_changed = evaluate_local_source_stamp(installer, &repo);
+    assert_ne!(clean, transitive_changed);
+
+    fs::write(&transitive, "pub fn value() -> u8 { 1 }\n").unwrap();
+    assert_eq!(clean, evaluate_local_source_stamp(installer, &repo));
+    let untracked = repo.join("crates/jig/src/untracked.rs");
+    fs::write(&untracked, "pub const VALUE: u8 = 1;\n").unwrap();
+    let first_untracked = evaluate_local_source_stamp(installer, &repo);
+    fs::write(&untracked, "pub const VALUE: u8 = 2;\n").unwrap();
+    let second_untracked = evaluate_local_source_stamp(installer, &repo);
+    assert_ne!(first_untracked, second_untracked);
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_stamp_fails_quietly_outside_a_git_worktree() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir_all(source.join("crates/jig")).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let output = run_local_source_stamp(installer, &source);
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "source stamp leaked Git diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_stamp_fails_quietly_when_untracked_content_cannot_be_hashed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("source");
+    fs::create_dir_all(repo.join("crates/jig/src")).unwrap();
+    fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    fs::write(repo.join("Cargo.lock"), "version = 3\n").unwrap();
+    fs::write(repo.join("crates/jig/src/main.rs"), "fn main() {}\n").unwrap();
+    init_git_repo_for_test(&repo);
+    git(&repo, ["add", "."]).unwrap();
+    git(&repo, ["commit", "-m", "source fixture"]).unwrap();
+    fs::write(
+        repo.join("crates/jig/src/untracked.rs"),
+        "pub const VALUE: u8 = 1;\n",
+    )
+    .unwrap();
+
+    let real_git = std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )
+    .map(|directory| directory.join("git"))
+    .find(|candidate| candidate.is_file())
+    .expect("git should be available on PATH");
+    let shim_dir = temp.path().join("bin");
+    fs::create_dir(&shim_dir).unwrap();
+    let shim = shim_dir.join("git");
+    fs::write(
+        &shim,
+        r#"#!/bin/sh
+case " $* " in
+  *" hash-object "*)
+    printf '%s\n' 'simulated hash-object diagnostic' >&2
+    exit 65
+    ;;
+esac
+exec "$JIG_TEST_REAL_GIT" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(shim_dir).chain(std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )))
+    .unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let output = local_source_stamp_command(installer, &repo)
+        .env("PATH", path)
+        .env("JIG_TEST_REAL_GIT", real_git)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "source stamp leaked hash diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn evaluate_local_source_stamp(installer: &str, repo: &Path) -> String {
+    let output = run_local_source_stamp(installer, repo);
+    assert!(
+        output.status.success(),
+        "source stamp failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[cfg(unix)]
+fn run_local_source_stamp(installer: &str, repo: &Path) -> std::process::Output {
+    local_source_stamp_command(installer, repo)
+        .output()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn local_source_stamp_command(installer: &str, repo: &Path) -> Command {
+    let start = installer
+        .find("hash_stdin() {")
+        .expect("installer should define hash_stdin");
+    let end = installer[start..]
+        .find("\nlocal_source_install_is_current() {")
+        .map(|offset| start + offset)
+        .expect("installer should define the source-cache check after its stamp helpers");
+    let script = format!(
+        "set -euo pipefail\n{}\nlocal_source_stamp \"$1\"\n",
+        &installer[start..end]
+    );
+    let mut command = Command::new("bash");
+    command
+        .args(["-c", &script, "installer-source-stamp"])
+        .arg(repo);
+    command
 }
 
 #[test]

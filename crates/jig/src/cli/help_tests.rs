@@ -243,6 +243,25 @@ fn agent_help_includes_examples() {
 }
 
 #[test]
+fn codex_help_distinguishes_homes_from_configuration_profiles() {
+    let codex_help = rendered_help(&["codex"]);
+    assert_help_contains(&codex_help, "jig codex homes --usage");
+    assert_help_contains(&codex_help, "Codex configuration profiles");
+
+    let launch_help = rendered_help(&["codex", "launch"]);
+    assert_help_contains(&launch_help, "forwarded to Codex without shell parsing");
+    assert_help_contains(&launch_help, "searchable terminal picker immediately");
+    assert_help_contains(&launch_help, "details load in the background");
+    assert_help_contains(&launch_help, "work resolves as ~/.codex-work");
+    assert_help_contains(&launch_help, "use ./work to select a relative directory");
+    assert_help_contains(&launch_help, "codex and default both select ~/.codex");
+    assert_help_contains(
+        &launch_help,
+        "jig codex launch codex-1 --dry-run -- --search",
+    );
+}
+
+#[test]
 fn prompt_help_includes_registry_examples() {
     let prompt_help = rendered_help(&["prompt"]);
     assert_help_contains(&prompt_help, "get");
