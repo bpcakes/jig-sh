@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use super::output::{HumanOutput, emit};
+use super::run::finish_after_json_output;
 use super::structured_error::{require_json_ok, require_vault_child_status_ok};
 use super::vault::VaultCommand;
 use crate::{context::RepoContext, runtime};
@@ -25,9 +26,9 @@ pub(super) fn run_vault_command(command: VaultCommand, json_output: bool) -> Res
         // `vault run` mirrors the child process status. Its JSON `ok` field is
         // derived from that same status, so avoid reporting a second generic
         // ok=false error for the same child failure.
-        return require_vault_child_status_ok(&output);
+        return finish_after_json_output(require_vault_child_status_ok(&output), json_output);
     }
-    require_json_ok(true, &output)
+    finish_after_json_output(require_json_ok(true, &output), json_output)
 }
 
 const fn vault_human_output(command: &VaultCommand) -> HumanOutput {

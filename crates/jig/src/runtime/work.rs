@@ -10,8 +10,9 @@ use crate::command::{
 use crate::context::RepoContext;
 use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
-    SessionEndRequest, current_session, decisions_add, plans_append, plans_close, plans_open,
-    receipts_list, session_end, session_start, state_summary,
+    SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
+    plans_open_prepared, prepare_plan_open, receipts_list, session_end, session_start,
+    state_summary,
 };
 
 mod checks;
@@ -85,7 +86,10 @@ pub(super) fn dispatch(ctx: &RepoContext, command: WorkCommand) -> Result<Value>
         WorkCommand::Refine(opts) => review::refine(ctx, opts),
         WorkCommand::Decide(opts) => decisions_add(ctx, opts.into()),
         WorkCommand::Receipts(opts) => receipts_list(ctx, opts.into()),
-        WorkCommand::Status => state_summary(ctx),
+        WorkCommand::Status => state_summary(ctx).map(|mut value| {
+            value["command"] = json!("work status");
+            value
+        }),
         WorkCommand::Finish(opts) => finish(ctx, opts),
     }
 }
@@ -104,8 +108,12 @@ pub(super) fn gates_snapshot_with_cancellation(
 }
 
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
+    // Resolve and validate all caller-controlled plan input before starting a
+    // durable session. CLI parsing catches common conflicts, while this keeps
+    // MCP and other runtime callers from leaving an orphan session on failure.
+    let plan = prepare_plan_open(plan)?;
     let session = session_start(ctx)?;
-    let plan = plans_open(ctx, plan)?;
+    let plan = plans_open_prepared(ctx, plan)?;
 
     Ok(json!({
         "ok": true,

@@ -243,7 +243,7 @@ fn prompt_raw_conflicts_with_template_vars() {
 }
 
 #[test]
-fn parses_prompt_get_with_global_json_for_exact_output_contract() {
+fn parses_prompt_get_with_global_json_for_structured_output() {
     let cli = Cli::try_parse_from(["jig", "--json", "prompt", "get", "review"]).unwrap();
     assert!(cli.json);
     match cli.command {
@@ -1111,6 +1111,48 @@ fn parses_work_start_print_plan_id() {
         }
         other => panic!("expected work start command, got {other:?}"),
     }
+}
+
+#[test]
+fn work_start_rejects_multiple_body_sources() {
+    let error = Cli::try_parse_from([
+        "jig",
+        "work",
+        "start",
+        "--title",
+        "DX polish",
+        "--body",
+        "inline",
+        "--body-file",
+        "plan.md",
+    ])
+    .unwrap_err();
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn work_append_requires_exactly_one_body_source() {
+    let missing =
+        Cli::try_parse_from(["jig", "work", "append", "--plan-id", "plan_1"]).unwrap_err();
+    assert_eq!(
+        missing.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+
+    let conflicting = Cli::try_parse_from([
+        "jig",
+        "work",
+        "append",
+        "--plan-id",
+        "plan_1",
+        "--body",
+        "inline",
+        "--body-file",
+        "plan.md",
+    ])
+    .unwrap_err();
+    assert_eq!(conflicting.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

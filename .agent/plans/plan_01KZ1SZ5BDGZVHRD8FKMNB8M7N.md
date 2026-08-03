@@ -1,0 +1,3 @@
+Fix failed work-start mutation, JSON-mode consistency, work-append validation, aggregate status wording, and the duplicate work/state status surface. Verify focused behavior and repository gates, then outline a compatibility-preserving root-menu information architecture.
+
+Resolved comprehensive-review findings: preserve JSON stream boundaries, reject blank append progress, update public contract docs, and add deterministic regressions.

@@ -9,6 +9,12 @@ struct VaultChildExitStatus(i32);
 #[derive(Debug)]
 struct ForegroundInterrupted(i32);
 
+#[derive(Debug)]
+struct JsonReportedError(i32);
+
+#[derive(Debug)]
+struct JsonOutputAlreadyEmitted(anyhow::Error);
+
 impl std::fmt::Display for JsonOkFalse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Command reported ok=false")
@@ -32,6 +38,53 @@ impl std::fmt::Display for ForegroundInterrupted {
 }
 
 impl std::error::Error for ForegroundInterrupted {}
+
+impl std::fmt::Display for JsonReportedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "JSON error response reported with exit status {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for JsonReportedError {}
+
+impl std::fmt::Display for JsonOutputAlreadyEmitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for JsonOutputAlreadyEmitted {}
+
+pub(super) fn json_error_payload(
+    kind: &'static str,
+    message: &str,
+    exit_status: i32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "ok": false,
+        "error": {
+            "kind": kind,
+            "message": message,
+        },
+        "exit_status": exit_status,
+    })
+}
+
+pub(super) fn json_reported_error(exit_status: i32) -> anyhow::Error {
+    JsonReportedError(exit_status).into()
+}
+
+pub(crate) fn json_output_already_emitted(error: anyhow::Error) -> anyhow::Error {
+    JsonOutputAlreadyEmitted(error).into()
+}
+
+pub(super) fn is_json_output_already_emitted(error: &anyhow::Error) -> bool {
+    error.is::<JsonOutputAlreadyEmitted>()
+}
 
 pub(super) fn require_json_ok(required: bool, output: &serde_json::Value) -> Result<()> {
     if required && output.get("ok").and_then(serde_json::Value::as_bool) == Some(false) {
@@ -83,6 +136,7 @@ pub(crate) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
     error.is::<JsonOkFalse>()
         || error.is::<VaultChildExitStatus>()
         || error.is::<ForegroundInterrupted>()
+        || error.is::<JsonReportedError>()
 }
 
 pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
@@ -92,6 +146,11 @@ pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
         .or_else(|| {
             error
                 .downcast_ref::<ForegroundInterrupted>()
+                .map(|error| error.0)
+        })
+        .or_else(|| {
+            error
+                .downcast_ref::<JsonReportedError>()
                 .map(|error| error.0)
         })
 }

@@ -89,7 +89,10 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
 
 fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
     match command {
-        StateCommand::Summary => crate::state::state_summary(ctx),
+        StateCommand::Summary => crate::state::state_summary(ctx).map(|mut value| {
+            value["command"] = json!("state summary");
+            value
+        }),
         StateCommand::Archive(request) => crate::state::receipts_archive(
             ctx,
             crate::state::StateArchiveRequest {

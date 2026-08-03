@@ -188,7 +188,7 @@ scripts/jig prompt list
 scripts/jig prompt search review
 ```
 
-`prompt get` is the exact-output primitive: it prints only the rendered prompt body, with no envelope or added newline. Bodies render as MiniJinja templates (`--var KEY=VALUE`, or `--raw` to skip rendering). Names may be namespaced with `user:`, `repo:`, or `pack:<pack>/`; unqualified writes default to `user:` and `pack:` prompts are read-only. Common subcommands have shell-style aliases (`cat`, `cp`, `new`, `rm`, `ls`, `find`).
+Without `--json`, `prompt get` is the exact-output primitive: it prints only the rendered prompt body, with no envelope or added newline. Pass global `--json` for the standard command envelope instead. Bodies render as MiniJinja templates (`--var KEY=VALUE`, or `--raw` to skip rendering). Names may be namespaced with `user:`, `repo:`, or `pack:<pack>/`; unqualified writes default to `user:` and `pack:` prompts are read-only. Common subcommands have shell-style aliases (`cat`, `cp`, `new`, `rm`, `ls`, `find`).
 
 ### Local dev proxy
 

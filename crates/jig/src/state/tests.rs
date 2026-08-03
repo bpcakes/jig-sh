@@ -842,6 +842,56 @@ fn plans_append_rejects_closed_plan() {
 }
 
 #[test]
+fn plans_append_requires_progress_text_without_mutating_plan() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan = plans_open(
+        &ctx,
+        PlanOpenRequest {
+            title: "Append input".into(),
+            body: Some("Initial body".into()),
+            body_file: None,
+        },
+    )
+    .unwrap();
+    let plan_id = plan["plan_id"].as_str().unwrap();
+    let plan_path = ctx.plan_body_path(plan_id);
+    let body_before = fs::read_to_string(&plan_path).unwrap();
+    let state_before = state_summary(&ctx).unwrap();
+    let empty_body_file = temp.path().join("empty-progress.md");
+    fs::write(&empty_body_file, "\n  \n").unwrap();
+
+    for request in [
+        PlanAppendRequest {
+            plan_id: plan_id.into(),
+            body: None,
+            body_file: None,
+        },
+        PlanAppendRequest {
+            plan_id: plan_id.into(),
+            body: Some(String::new()),
+            body_file: None,
+        },
+        PlanAppendRequest {
+            plan_id: plan_id.into(),
+            body: Some(" \n\t ".into()),
+            body_file: None,
+        },
+        PlanAppendRequest {
+            plan_id: plan_id.into(),
+            body: None,
+            body_file: Some(empty_body_file),
+        },
+    ] {
+        let error = plans_append(&ctx, request).unwrap_err().to_string();
+        assert!(error.contains("Progress text"));
+    }
+    assert_eq!(fs::read_to_string(plan_path).unwrap(), body_before);
+    assert_eq!(state_summary(&ctx).unwrap(), state_before);
+}
+
+#[test]
 fn structured_work_keeps_legacy_state_receipt_tool_names() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

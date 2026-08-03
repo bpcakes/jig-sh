@@ -8,14 +8,14 @@ use crate::tool_defs::tool;
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
-#[cfg(test)]
-pub(crate) use plans::seed_open_plan_for_test;
 pub(crate) use plans::{
     PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, PlanStatus, ensure_plan_exists,
     ensure_plan_exists_with_cancellation, ensure_plan_is_open, open_plan_summaries,
     open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
-    plans_append, plans_close, plans_open,
+    plans_append, plans_close, plans_open_prepared, prepare_plan_open,
 };
+#[cfg(test)]
+pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ToolReceiptStatus, WorkReviewReceiptStatus,
     current_worktree_fingerprint, current_worktree_fingerprint_with_cancellation,

@@ -9,7 +9,7 @@
 
     <div class="section-intro">
       <p class="lede">
-        <span class="hot">jig prompt get comprehensive-review-loop --var base=main</span> resolves a named prompt across three namespaces, renders the body through MiniJinja, and prints the result to stdout — nothing else, even with global <span class="mono">--json</span>.
+        <span class="hot">jig prompt get comprehensive-review-loop --var base=main</span> resolves a named prompt across three namespaces, renders the body through MiniJinja, and prints only that body to stdout. Add global <span class="mono">--json</span> when automation needs the standard command envelope.
       </p>
       <p class="sub">
         Prompts are <b>Markdown with YAML frontmatter</b> on disk. <span class="mono hot">user:</span> prompts live in your Jig config dir, <span class="mono hot">repo:</span> prompts live in <span class="mono">.jig/prompts/</span> beside the contract, and read-only <span class="mono hot">pack:</span> prompts ship as installable prompt-packs. Override the storage root with <span class="mono">JIG_PROMPT_HOME</span>.

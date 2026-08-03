@@ -206,8 +206,12 @@ impl MemoryTool {
             Self::Goal => {
                 "Create a goal-mode work harness with a durable plan and validation contract."
             }
-            Self::Start => "Start structured work by opening a session and plan.",
-            Self::Append => "Append to a structured work plan.",
+            Self::Start => {
+                "Start structured work by opening a session and plan; body and body_file are optional but mutually exclusive."
+            }
+            Self::Append => {
+                "Append nonblank progress to a structured work plan using exactly one of body or body_file."
+            }
             Self::Check => "Run configured or selected work checks.",
             Self::Gates => "Report configured work gate status for a plan.",
             Self::Evidence => {
@@ -289,22 +293,8 @@ impl MemoryTool {
                 ],
                 &[args::PLAN_ID],
             ),
-            Self::Start => object_schema(
-                &[
-                    (args::TITLE, string_schema()),
-                    (args::BODY, string_schema()),
-                    (args::BODY_FILE, string_schema()),
-                ],
-                &[args::TITLE],
-            ),
-            Self::Append => object_schema(
-                &[
-                    (args::PLAN_ID, string_schema()),
-                    (args::BODY, string_schema()),
-                    (args::BODY_FILE, string_schema()),
-                ],
-                &[args::PLAN_ID],
-            ),
+            Self::Start => work_start_input_schema(),
+            Self::Append => work_append_input_schema(),
             Self::Check => object_schema(
                 &[
                     (args::PLAN_ID, string_schema()),
@@ -428,6 +418,35 @@ fn empty_input_schema() -> Value {
     object_schema(&[], &[])
 }
 
+fn work_start_input_schema() -> Value {
+    let mut schema = object_schema(
+        &[
+            (args::TITLE, string_schema()),
+            (args::BODY, string_schema()),
+            (args::BODY_FILE, string_schema()),
+        ],
+        &[args::TITLE],
+    );
+    schema["not"] = json!({ "required": [args::BODY, args::BODY_FILE] });
+    schema
+}
+
+fn work_append_input_schema() -> Value {
+    let mut schema = object_schema(
+        &[
+            (args::PLAN_ID, string_schema()),
+            (args::BODY, nonblank_string_schema()),
+            (args::BODY_FILE, nonblank_string_schema()),
+        ],
+        &[args::PLAN_ID],
+    );
+    schema["oneOf"] = json!([
+        { "required": [args::BODY] },
+        { "required": [args::BODY_FILE] }
+    ]);
+    schema
+}
+
 fn object_schema(properties: &[(&str, Value)], required: &[&str]) -> Value {
     let mut schema = JsonObject::new();
     schema.insert("type".into(), Value::String("object".into()));
@@ -463,6 +482,13 @@ fn string_schema() -> Value {
     json!({ "type": "string" })
 }
 
+fn nonblank_string_schema() -> Value {
+    json!({
+        "type": "string",
+        "pattern": "\\S"
+    })
+}
+
 pub(crate) fn required_string_arg(map: &JsonObject, key: &str) -> Result<String> {
     string_arg(map, key).ok_or_else(|| anyhow!("Missing required argument: {key}"))
 }
@@ -492,6 +518,33 @@ mod tests {
         assert!(unique.contains(tool::WORK_EVIDENCE));
         assert!(unique.contains(tool::WORK_REVIEW));
         assert!(unique.contains(tool::WORK_REFINE));
+    }
+
+    #[test]
+    fn work_append_schema_requires_exactly_one_nonblank_body_source() {
+        let schema = MemoryTool::Append.input_schema();
+
+        assert_eq!(schema["required"], json!([args::PLAN_ID]));
+        assert_eq!(
+            schema["oneOf"],
+            json!([
+                { "required": [args::BODY] },
+                { "required": [args::BODY_FILE] }
+            ])
+        );
+        assert_eq!(schema["properties"][args::BODY]["pattern"], "\\S");
+        assert_eq!(schema["properties"][args::BODY_FILE]["pattern"], "\\S");
+    }
+
+    #[test]
+    fn work_start_schema_rejects_conflicting_optional_body_sources() {
+        let schema = MemoryTool::Start.input_schema();
+
+        assert_eq!(schema["required"], json!([args::TITLE]));
+        assert_eq!(
+            schema["not"],
+            json!({ "required": [args::BODY, args::BODY_FILE] })
+        );
     }
 
     #[test]

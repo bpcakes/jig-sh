@@ -94,7 +94,7 @@ pub(super) fn format_summary(value: &serde_json::Value) -> String {
         .unwrap_or(0);
 
     let mut lines = vec![
-        format!("Status: {outcome}"),
+        format!("Collection: {outcome}"),
         format!("Repo: {repo_name} {branch}@{revision} ({worktree})"),
     ];
     if let Some(upstream) = repository.get("upstream").filter(|value| !value.is_null()) {
@@ -236,7 +236,7 @@ mod tests {
             "errors": []
         }));
 
-        assert!(summary.contains("Status: partial"));
+        assert!(summary.contains("Collection: partial"));
         assert!(summary.contains("rewrite main@1234567890ab (dirty)"));
         assert!(summary.contains("origin/main (ahead 2, behind 1; local ref)"));
         assert!(summary.contains("3 open plan(s), session session_1"));

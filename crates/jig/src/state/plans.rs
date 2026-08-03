@@ -22,6 +22,11 @@ pub(crate) struct PlanOpenRequest {
     pub(crate) body_file: Option<PathBuf>,
 }
 
+pub(crate) struct PreparedPlanOpen {
+    title: String,
+    body: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct PlanAppendRequest {
     pub(crate) plan_id: String,
@@ -41,15 +46,26 @@ pub(crate) enum PlanStatus {
     Closed,
 }
 
+#[cfg(test)]
 pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<Value> {
+    plans_open_prepared(ctx, prepare_plan_open(request)?)
+}
+
+pub(crate) fn prepare_plan_open(request: PlanOpenRequest) -> Result<PreparedPlanOpen> {
+    Ok(PreparedPlanOpen {
+        title: request.title,
+        body: plan_open_body(request.body, request.body_file)?,
+    })
+}
+
+pub(crate) fn plans_open_prepared(ctx: &RepoContext, request: PreparedPlanOpen) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let plan_id = new_id("plan");
-    let body = plan_body(request.body, request.body_file)?;
     let plan_path = ctx.plan_body_path(&plan_id);
     if let Some(parent) = plan_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&plan_path, body)?;
+    fs::write(&plan_path, request.body)?;
 
     let event = PlanEvent::open(
         new_id("plan-event"),
@@ -85,7 +101,7 @@ pub(crate) fn plans_open(ctx: &RepoContext, request: PlanOpenRequest) -> Result<
 pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
     ensure_plan_is_open(ctx, &request.plan_id)?;
-    let body = plan_body(request.body, request.body_file)?;
+    let body = plan_append_body(request.body, request.body_file)?;
     let plan_path = ctx.plan_body_path(&request.plan_id);
     append_text(&plan_path, format!("\n\n{body}").as_bytes())?;
 
@@ -346,11 +362,24 @@ fn plan_status_from_events(events: &[PlanEvent], plan_id: &str) -> Option<PlanSt
     }
 }
 
-fn plan_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
+fn plan_open_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
     match (body, body_file) {
         (Some(text), None) => Ok(text),
         (None, Some(path)) => fs::read_to_string(path).context("Failed to read plan body file"),
         (None, None) => Ok(String::from("# Plan\n")),
-        (Some(_), Some(_)) => bail!("Provide either --body or --body-file, not both."),
+        (Some(_), Some(_)) => bail!("Provide either `body` or `body_file`, not both."),
     }
+}
+
+fn plan_append_body(body: Option<String>, body_file: Option<PathBuf>) -> Result<String> {
+    let body = match (body, body_file) {
+        (Some(text), None) => Ok(text),
+        (None, Some(path)) => fs::read_to_string(path).context("Failed to read plan body file"),
+        (None, None) => bail!("Progress text is required; provide `body` or `body_file`."),
+        (Some(_), Some(_)) => bail!("Provide either `body` or `body_file`, not both."),
+    }?;
+    if body.trim().is_empty() {
+        bail!("Progress text must not be empty.");
+    }
+    Ok(body)
 }

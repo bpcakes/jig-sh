@@ -57,6 +57,58 @@ fn top_level_help_describes_common_commands() {
 }
 
 #[test]
+fn top_level_help_orders_commands_by_user_intent() {
+    let help = Cli::command().render_help().to_string();
+    let ordered_commands = [
+        "  init ",
+        "  presets ",
+        "  adopt ",
+        "  update ",
+        "  bootstrap ",
+        "  doctor ",
+        "  info ",
+        "  dev ",
+        "  check ",
+        "  status ",
+        "  ui ",
+        "  work ",
+        "  loop ",
+        "  migration-add ",
+        "  schema-dump ",
+        "  vault ",
+        "  proxy ",
+        "  prompt ",
+        "  agent ",
+        "  agent-map ",
+        "  state ",
+        "  mcp ",
+    ];
+
+    let mut previous = 0;
+    for command in ordered_commands {
+        let position = help
+            .find(command)
+            .unwrap_or_else(|| panic!("missing command marker {command:?}\n\n{help}"));
+        assert!(
+            position >= previous,
+            "expected {command:?} after the preceding command\n\n{help}"
+        );
+        previous = position;
+    }
+}
+
+#[test]
+fn top_level_help_includes_common_workflows() {
+    let help = Cli::command().render_help().to_string();
+
+    assert_help_contains(&help, "Common workflows:");
+    assert_help_contains(&help, "jig doctor");
+    assert_help_contains(&help, "jig dev");
+    assert_help_contains(&help, "jig check test");
+    assert_help_contains(&help, "jig work status");
+}
+
+#[test]
 fn doctor_help_includes_examples() {
     let doctor_help = rendered_help(&["doctor"]);
     assert_help_contains(&doctor_help, "jig doctor");
@@ -196,12 +248,13 @@ fn prompt_help_includes_registry_examples() {
     assert_help_contains(&prompt_help, "get");
     assert_help_contains(
         &prompt_help,
-        "Print a rendered prompt body and nothing else",
+        "Print a rendered prompt, using a command envelope with --json",
     );
 
     let prompt_get_help = rendered_help(&["prompt", "get"]);
     assert_help_contains(&prompt_get_help, "jig prompt get comprehensive-review-loop");
     assert_help_contains(&prompt_get_help, "--var");
+    assert_help_contains(&prompt_get_help, "--json requests a command envelope");
 
     let prompt_export_help = rendered_help(&["prompt", "export"]);
     assert_help_contains(&prompt_export_help, "--output");
@@ -284,7 +337,7 @@ fn json_output_flag_is_discoverable() {
     assert_help_contains(&root_help, "--json");
     assert_help_contains(
         &root_help,
-        "Print structured JSON output; does not disable interactive prompts",
+        "Print structured JSON results and errors; does not disable interactive prompts",
     );
 
     let work_receipts_help = rendered_help(&["work", "receipts"]);

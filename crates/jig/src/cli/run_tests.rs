@@ -172,6 +172,66 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
 }
 
 #[test]
+fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {
+    let payload = json_error_payload("command_failed", "configuration is invalid", 7);
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["error"]["kind"], "command_failed");
+    assert_eq!(payload["error"]["message"], "configuration is invalid");
+    assert_eq!(payload["exit_status"], 7);
+
+    let error = json_reported_error(7);
+    assert!(is_structured_json_failure(&error));
+    assert_eq!(structured_error_exit_code(&error), Some(7));
+}
+
+#[test]
+fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
+    assert!(should_report_json_command_errors(true, &CommandKind::Info));
+    assert!(!should_report_json_command_errors(true, &CommandKind::Mcp));
+    assert!(!should_report_json_command_errors(
+        false,
+        &CommandKind::Info
+    ));
+
+    let post_output =
+        finish_after_json_output(Err(anyhow::anyhow!("server failed after startup")), true)
+            .unwrap_err();
+    assert!(is_json_output_already_emitted(&post_output));
+    let propagated = report_json_command_error(Err(post_output)).unwrap_err();
+    assert!(is_json_output_already_emitted(&propagated));
+    assert_eq!(format!("{propagated:#}"), "server failed after startup");
+
+    let structured = require_json_ok(true, &serde_json::json!({ "ok": false })).unwrap_err();
+    let structured = finish_after_json_output(Err(structured), true).unwrap_err();
+    assert!(is_structured_json_failure(&structured));
+    assert!(!is_json_output_already_emitted(&structured));
+}
+
+#[test]
+fn json_request_detection_ignores_child_arguments_after_separator() {
+    assert!(args_request_json(
+        ["work", "status", "--json"].map(OsString::from)
+    ));
+    assert!(args_request_json(
+        ["--json", "work", "status"].map(OsString::from)
+    ));
+    assert!(!args_request_json(
+        ["vault", "run", "--", "tool", "--json"].map(OsString::from)
+    ));
+
+    assert!(args_target_mcp(
+        ["--json", "mcp", "--bogus"].map(OsString::from)
+    ));
+    assert!(args_target_mcp(["mcp", "--json"].map(OsString::from)));
+    assert!(!args_target_mcp(
+        ["prompt", "get", "mcp", "--json"].map(OsString::from)
+    ));
+    assert!(!args_target_mcp(
+        ["vault", "run", "--", "mcp", "--json"].map(OsString::from)
+    ));
+}
+
+#[test]
 fn dev_management_actions_do_not_request_launch_process_identity() {
     let launch = DevOpts {
         command: None,

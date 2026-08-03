@@ -27,8 +27,8 @@ pub(super) fn dispatch(ctx: Option<&RepoContext>, command: PromptCommand) -> Res
 fn get_prompt(registry: &PromptRegistry, request: PromptRenderRequest) -> Result<Value> {
     let raw = request.raw;
     let body = registry.render_prompt(render_request(request))?;
-    // The CLI is currently the only consumer and prints only `body`; the
-    // envelope keeps prompt get shaped like other prompt runtime operations.
+    // Human CLI output selects `body`; JSON mode emits the complete envelope,
+    // keeping prompt get shaped like other prompt runtime operations.
     let mut output = json!({
         "ok": true,
         "command": "prompt get",

@@ -217,6 +217,31 @@ fn mcp_work_tools_deserialize_typed_arguments() {
 }
 
 #[test]
+fn mcp_work_append_rejects_blank_progress_without_mutating_plan() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan_path = ctx.plan_body_path("plan_1");
+    let body_before = fs::read_to_string(&plan_path).unwrap();
+    let state_before = crate::state::state_summary(&ctx).unwrap();
+
+    let error = call_tool(
+        &ctx,
+        tool::WORK_APPEND,
+        json!({
+            "plan_id": "plan_1",
+            "body": " \n\t "
+        }),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("Progress text must not be empty"));
+    assert_eq!(fs::read_to_string(plan_path).unwrap(), body_before);
+    assert_eq!(crate::state::state_summary(&ctx).unwrap(), state_before);
+}
+
+#[test]
 fn mcp_work_tools_tolerate_null_optional_defaults() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

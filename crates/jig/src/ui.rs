@@ -50,7 +50,11 @@ pub(crate) fn serve(ctx: &RepoContext, opts: UiOpts, json_output: bool) -> Resul
         println!("Snapshot API after sign-in: {origin}{snapshot_path}");
     }
     std::io::stdout().flush()?;
-    server.serve(ctx)
+    let result = server.serve(ctx);
+    if json_output {
+        return result.map_err(crate::cli::json_output_already_emitted);
+    }
+    result
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args, Subcommand};
 
 use crate::tool_defs::{self, DEFAULT_RECEIPTS_LIMIT};
 
@@ -167,7 +167,7 @@ pub(crate) struct WorkGoalOpts {
 pub(crate) struct WorkStartOpts {
     #[arg(long, help = "Short human-readable plan title")]
     pub(crate) title: String,
-    #[arg(long, help = "Initial plan body text")]
+    #[arg(long, conflicts_with = "body_file", help = "Initial plan body text")]
     pub(crate) body: Option<String>,
     #[arg(long, help = "Path to read the initial plan body from")]
     pub(crate) body_file: Option<PathBuf>,
@@ -179,6 +179,12 @@ pub(crate) struct WorkStartOpts {
 }
 
 #[derive(Args, Debug)]
+#[command(group(
+    ArgGroup::new("body_source")
+        .required(true)
+        .multiple(false)
+        .args(["body", "body_file"])
+))]
 pub(crate) struct WorkAppendOpts {
     #[arg(long, help = "Open plan id to append to")]
     pub(crate) plan_id: String,

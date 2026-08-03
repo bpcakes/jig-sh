@@ -1020,8 +1020,31 @@ pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> St
 }
 
 pub(super) fn format_state_summary(value: &serde_json::Value) -> String {
-    // Same payload shape as work status.
-    format_work_status_summary(value).replacen("Work status:", "State summary:", 1)
+    let counts = &value["counts"];
+    let repo = &value["repo"];
+    let repo_name = value_str(repo, "name").unwrap_or("<unknown>");
+    let sessions = value_u64(counts, "sessions").unwrap_or(0);
+    let session_events = value_u64(counts, "session_events").unwrap_or(0);
+    let plans = value_u64(counts, "plans").unwrap_or(0);
+    let plan_events = value_u64(counts, "plan_events").unwrap_or(0);
+    let open_plans = value_u64(counts, "open_plans").unwrap_or(0);
+    let receipts = value_u64(counts, "receipts").unwrap_or(0);
+    let failed_receipts = value_u64(counts, "failed_receipts").unwrap_or(0);
+    let decisions = value_u64(counts, "decisions").unwrap_or(0);
+
+    [
+        "State summary:".into(),
+        format!("  Sessions: {sessions} ({session_events} events)"),
+        format!("  Plans: {plans} ({open_plans} open, {plan_events} events)"),
+        format!("  Receipts: {receipts} ({failed_receipts} failed)"),
+        format!("  Decisions: {decisions}"),
+        format!("Repo: {repo_name}"),
+        format!(
+            "Current session: {}",
+            value_str(value, "current_session_id").unwrap_or("none")
+        ),
+    ]
+    .join("\n")
 }
 
 pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String {

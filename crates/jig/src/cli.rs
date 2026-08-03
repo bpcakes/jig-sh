@@ -48,18 +48,26 @@ pub(crate) use work::{
 #[command(
     name = "jig",
     version,
-    about = "Repo-local agent runtime and bootstrapper for jig.sh"
+    about = "Repo-local agent runtime and bootstrapper for jig.sh",
+    after_help = ROOT_AFTER_HELP
 )]
 struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Print structured JSON output; does not disable interactive prompts"
+        help = "Print structured JSON results and errors; does not disable interactive prompts"
     )]
     json: bool,
     #[command(subcommand)]
     command: CommandKind,
 }
+
+const ROOT_AFTER_HELP: &str = "\
+Common workflows:
+  jig doctor       Check repository setup and get the next remediation step
+  jig dev          Start configured development apps
+  jig check test   Run the configured test suite
+  jig work status  Inspect structured work and required gates";
 
 const TEMPLATE_ERROR_HINT: &str = "\
 Templates:
@@ -160,96 +168,139 @@ Quick start:
 #[derive(Debug, Subcommand)]
 pub(crate) enum CommandKind {
     /// Create a new repository and render Jig harness files into it.
-    #[command(name = tool_defs::cli_command::INIT)]
+    #[command(name = tool_defs::cli_command::INIT, display_order = 10)]
     Init(bootstrap::InitOpts),
     /// Show available project scaffolds for `jig init`.
-    #[command(name = tool_defs::cli_command::PRESETS, after_help = PRESETS_AFTER_HELP)]
+    #[command(
+        name = tool_defs::cli_command::PRESETS,
+        display_order = 20,
+        after_help = PRESETS_AFTER_HELP
+    )]
     Presets,
     /// Adopt Jig harness files into an existing repository.
-    #[command(name = tool_defs::cli_command::ADOPT)]
+    #[command(name = tool_defs::cli_command::ADOPT, display_order = 30)]
     Adopt(bootstrap::AdoptOpts),
     /// Refresh managed Jig harness files from the configured template source.
-    #[command(name = tool_defs::cli_command::UPDATE)]
+    #[command(name = tool_defs::cli_command::UPDATE, display_order = 40)]
     Update(bootstrap::UpdateOpts),
     /// Run the configured project bootstrap command.
-    #[command(name = tool_defs::cli_command::BOOTSTRAP)]
+    #[command(name = tool_defs::cli_command::BOOTSTRAP, display_order = 50)]
     Bootstrap(ToolOpts),
-    /// Run configured project checks and Jig-owned repository policy checks.
-    #[command(
-        name = tool_defs::cli_command::CHECK,
-        subcommand,
-        after_help = check::CHECK_AFTER_HELP
-    )]
-    Check(CheckCommand),
     /// Report repo harness readiness and the next command to fix setup.
-    #[command(name = tool_defs::cli_command::DOCTOR, after_help = DOCTOR_AFTER_HELP)]
+    #[command(
+        name = tool_defs::cli_command::DOCTOR,
+        display_order = 60,
+        after_help = DOCTOR_AFTER_HELP
+    )]
     Doctor,
     /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
     #[command(
         name = tool_defs::cli_command::INFO,
+        display_order = 70,
         visible_alias = "explain",
         after_help = INFO_AFTER_HELP
     )]
     Info,
-    /// Aggregate local repo, work, loop, and configured rewrite-provider status.
-    #[command(name = tool_defs::cli_command::STATUS, after_help = STATUS_AFTER_HELP)]
+    /// Run and manage configured development app sessions.
+    #[command(name = tool_defs::cli_command::DEV, display_order = 100)]
+    Dev(DevOpts),
+    /// Run configured project checks and Jig-owned repository policy checks.
+    #[command(
+        name = tool_defs::cli_command::CHECK,
+        display_order = 110,
+        subcommand,
+        after_help = check::CHECK_AFTER_HELP
+    )]
+    Check(CheckCommand),
+    /// Aggregate local repo, work, loop, and configured status-provider observations.
+    #[command(
+        name = tool_defs::cli_command::STATUS,
+        display_order = 120,
+        after_help = STATUS_AFTER_HELP
+    )]
     Status(StatusOpts),
-    /// Regenerate schema documentation when schema dumps are enabled.
-    #[command(name = tool_defs::cli_command::SCHEMA_DUMP)]
-    SchemaDump(ToolOpts),
+    /// Serve the local flight-recorder dashboard for plans, gates, receipts, and loops.
+    #[command(
+        name = tool_defs::cli_command::UI,
+        display_order = 130,
+        after_help = UI_AFTER_HELP
+    )]
+    Ui(UiOpts),
+    /// Manage structured work plans, receipts, gates, and decisions.
+    #[command(
+        name = tool_defs::cli_command::WORK,
+        display_order = 200,
+        subcommand
+    )]
+    Work(WorkCommand),
+    /// Run and inspect automated orchestration workflows.
+    #[command(
+        name = tool_defs::cli_command::LOOP,
+        display_order = 210,
+        subcommand,
+        after_help = loops::LOOP_AFTER_HELP
+    )]
+    Loop(LoopCommand),
     /// Add a forward-only SQLx migration file when SQLx is enabled.
-    #[command(name = tool_defs::cli_command::MIGRATION_ADD)]
+    #[command(
+        name = tool_defs::cli_command::MIGRATION_ADD,
+        display_order = 300
+    )]
     MigrationAdd(MigrationAddOpts),
-    /// Generate the repository agent guide map.
-    #[command(name = tool_defs::cli_command::AGENT_MAP, subcommand)]
-    AgentMap(AgentMapCommand),
+    /// Regenerate schema documentation when schema dumps are enabled.
+    #[command(
+        name = tool_defs::cli_command::SCHEMA_DUMP,
+        display_order = 310
+    )]
+    SchemaDump(ToolOpts),
+    /// Manage the local encrypted Jig vault.
+    #[command(
+        name = tool_defs::cli_command::VAULT,
+        display_order = 320,
+        subcommand,
+        after_help = VAULT_AFTER_HELP
+    )]
+    Vault(VaultCommand),
     /// Generate a TODO report for unchecked SQLx queries.
     #[command(
         name = tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
         hide = true
     )]
     GenerateSqlxUncheckedQueriesTodo(GenerateSqlxUncheckedQueriesTodoOpts),
-    /// Run and manage configured development app sessions.
-    #[command(name = tool_defs::cli_command::DEV)]
-    Dev(DevOpts),
     /// Manage the local development proxy.
-    #[command(name = tool_defs::cli_command::PROXY, subcommand)]
-    Proxy(ProxyCommand),
-    /// Manage the local encrypted Jig vault.
     #[command(
-        name = tool_defs::cli_command::VAULT,
-        subcommand,
-        after_help = VAULT_AFTER_HELP
+        name = tool_defs::cli_command::PROXY,
+        display_order = 400,
+        subcommand
     )]
-    Vault(VaultCommand),
+    Proxy(ProxyCommand),
     /// Manage user, repo, and prompt-pack prompt libraries.
-    #[command(name = "prompt", subcommand)]
+    #[command(name = "prompt", display_order = 500, subcommand)]
     Prompt(PromptCommand),
     /// Inspect or bootstrap local agent tooling.
     #[command(
         name = tool_defs::cli_command::AGENT,
+        display_order = 510,
         subcommand,
         after_help = agent::AGENT_AFTER_HELP
     )]
     Agent(AgentCommand),
-    /// Manage structured work plans, receipts, gates, and decisions.
-    #[command(name = tool_defs::cli_command::WORK, subcommand)]
-    Work(WorkCommand),
-    /// Run runtime-owned orchestration workflows as idempotent ticks.
+    /// Generate the repository agent guide map.
     #[command(
-        name = tool_defs::cli_command::LOOP,
-        subcommand,
-        after_help = loops::LOOP_AFTER_HELP
+        name = tool_defs::cli_command::AGENT_MAP,
+        display_order = 520,
+        subcommand
     )]
-    Loop(LoopCommand),
+    AgentMap(AgentMapCommand),
     /// Inspect and archive runtime-owned Jig state.
-    #[command(name = tool_defs::cli_command::STATE, subcommand)]
+    #[command(
+        name = tool_defs::cli_command::STATE,
+        display_order = 530,
+        subcommand
+    )]
     State(StateCommand),
-    /// Serve the local flight-recorder dashboard for plans, gates, receipts, and loops.
-    #[command(name = tool_defs::cli_command::UI, after_help = UI_AFTER_HELP)]
-    Ui(UiOpts),
     /// Serve the Jig MCP server over stdio.
-    #[command(name = tool_defs::cli_command::MCP)]
+    #[command(name = tool_defs::cli_command::MCP, display_order = 540)]
     Mcp,
 }
 
@@ -316,6 +367,7 @@ mod structured_error;
 mod vault_run;
 
 pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
+pub(crate) use structured_error::json_output_already_emitted;
 
 #[cfg(test)]
 mod dev_tests;

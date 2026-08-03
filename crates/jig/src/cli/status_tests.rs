@@ -30,13 +30,6 @@ fn parses_top_level_status_command() {
     }
 
     assert!(Cli::try_parse_from(["jig", "status", "--summary"]).is_err());
-    let conflict = Cli::try_parse_from(["jig", "status", "--tui", "--json"]).unwrap();
-    match conflict.command {
-        CommandKind::Status(opts) => {
-            assert!(opts.validate_output_mode(conflict.json).is_err());
-        }
-        other => panic!("expected status command, got {other:?}"),
-    }
     assert!(Cli::try_parse_from(["jig", "status", "--refresh-seconds", "10"]).is_err());
     assert!(Cli::try_parse_from(["jig", "status", "--tui", "--refresh-seconds", "0"]).is_err());
 }

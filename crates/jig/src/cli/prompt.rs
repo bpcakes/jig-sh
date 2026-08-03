@@ -11,7 +11,7 @@ Use `jig prompt add --no-editor` to use the terminal prompt flow instead.
 Finish the interactive body with Ctrl-D or a line containing only `.`.
 Storage defaults to the user Jig config directory. JIG_PROMPT_HOME overrides
 the storage root that contains prompts/user and prompt-packs.
-`jig prompt get` always prints the rendered prompt body, even with global --json.
+`jig prompt get` prints only the rendered body unless --json requests a command envelope.
 `jig prompt export` without --output prints the bare archive JSON artifact.
 `jig --json prompt export` wraps that archive in a JSON command envelope.
 `jig prompt export --output FILE` writes the archive and prints only a summary.
@@ -33,7 +33,7 @@ On Unix, EDITOR and VISUAL may include arguments such as `code -w`.";
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum PromptCommand {
-    /// Print a rendered prompt body and nothing else.
+    /// Print a rendered prompt, using a command envelope with --json.
     #[command(alias = "cat")]
     Get(PromptGetOpts),
     /// Render a prompt body and copy it to the system clipboard.

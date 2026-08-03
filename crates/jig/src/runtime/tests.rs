@@ -215,7 +215,20 @@ fn dispatch_routes_state_summary() {
     let output = dispatch(&ctx, CommandKind::State(crate::cli::StateCommand::Summary)).unwrap();
 
     assert_eq!(output["ok"], true);
+    assert_eq!(output["command"], "state summary");
     assert_eq!(output["counts"]["receipts"], 0);
+}
+
+#[test]
+fn dispatch_distinguishes_work_status_from_state_summary() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch(&ctx, CommandKind::Work(crate::cli::WorkCommand::Status)).unwrap();
+
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["command"], "work status");
 }
 
 #[cfg(feature = "dev-proxy")]

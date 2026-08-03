@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io::Write;
 use std::process;
 
@@ -10,15 +11,34 @@ use clap::{
 use super::bootstrap_run::{
     run_adopt_command, run_init_command, run_presets_command, run_update_command,
 };
-use super::output::{HumanOutput, emit};
+use super::output::{HumanOutput, emit, print_json};
 use super::prompt_run::run_prompt_command;
+use super::structured_error::{
+    is_json_output_already_emitted, json_error_payload, json_output_already_emitted,
+    json_reported_error, require_foreground_status, require_json_ok,
+};
 pub(crate) use super::structured_error::{is_structured_json_failure, structured_error_exit_code};
-use super::structured_error::{require_foreground_status, require_json_ok};
 use super::vault_run::run_vault_command;
 use super::*;
 
 pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
+    let json_output = cli.json;
+    let report_json_errors = should_report_json_command_errors(json_output, &cli.command);
+    let result = run_command(cli);
+    if report_json_errors {
+        return report_json_command_error(result);
+    }
+    result
+}
+
+const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
+    // MCP owns stdout as a framed protocol stream. A CLI error envelope is not
+    // a valid MCP message, so its failures continue to use stderr.
+    json_output && !matches!(command, CommandKind::Mcp)
+}
+
+fn run_command(cli: Cli) -> Result<()> {
     let json_output = cli.json;
     match cli.command {
         CommandKind::Init(opts) => run_init_command(opts, json_output),
@@ -36,15 +56,14 @@ pub(crate) fn run() -> Result<()> {
         CommandKind::Doctor => {
             let output = doctor::run()?;
             emit(json_output, HumanOutput::Doctor, &output)?;
-            require_json_ok(true, &output)
+            finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info => {
             let output = info::run()?;
             emit(json_output, HumanOutput::Info, &output)?;
-            require_json_ok(true, &output)
+            finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Status(opts) => {
-            opts.validate_output_mode(json_output)?;
             let ctx = RepoContext::load()?;
             if opts.tui {
                 return status::tui::run(
@@ -60,7 +79,7 @@ pub(crate) fn run() -> Result<()> {
             let human_output = dev_human_output(&opts);
             let output = crate::dev_proxy::commands::dev_without_context(opts.into())?;
             emit(json_output, human_output, &output)?;
-            require_foreground_status(&output)
+            finish_after_json_output(require_foreground_status(&output), json_output)
         }
         #[cfg(feature = "dev-proxy")]
         CommandKind::Dev(opts) => {
@@ -75,13 +94,13 @@ pub(crate) fn run() -> Result<()> {
             }
             let output = runtime::dispatch(&ctx, crate::command::RuntimeCommand::Dev(opts.into()))?;
             emit(json_output, human_output, &output)?;
-            require_foreground_status(&output)
+            finish_after_json_output(require_foreground_status(&output), json_output)
         }
         #[cfg(not(feature = "dev-proxy"))]
         CommandKind::Proxy(command) => {
             let output = crate::dev_proxy::commands::proxy_without_context(command.into())?;
             emit(json_output, HumanOutput::Proxy, &output)?;
-            require_foreground_status(&output)
+            finish_after_json_output(require_foreground_status(&output), json_output)
         }
         #[cfg(feature = "dev-proxy")]
         CommandKind::Proxy(command) => {
@@ -97,7 +116,7 @@ pub(crate) fn run() -> Result<()> {
                 runtime::dispatch(&ctx, crate::command::RuntimeCommand::Proxy(runtime_command))?
             };
             emit(json_output, HumanOutput::Proxy, &output)?;
-            require_foreground_status(&output)
+            finish_after_json_output(require_foreground_status(&output), json_output)
         }
         CommandKind::Bootstrap(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Bootstrap(opts.into()),
@@ -152,7 +171,7 @@ pub(crate) fn run() -> Result<()> {
             )
         }
         CommandKind::Work(command) => {
-            let human_output = work_human_output(&command, json_output)?;
+            let human_output = work_human_output(&command);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Work(command.into()),
                 false,
@@ -178,6 +197,31 @@ pub(crate) fn run() -> Result<()> {
                 human_output,
             )
         }
+    }
+}
+
+fn report_json_command_error(result: Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if is_structured_json_failure(&error) => Err(error),
+        Err(error) if is_json_output_already_emitted(&error) => Err(error),
+        Err(error) => {
+            print_json(&json_error_payload(
+                "command_failed",
+                &format!("{error:#}"),
+                1,
+            ))?;
+            Err(json_reported_error(1))
+        }
+    }
+}
+
+pub(super) fn finish_after_json_output(result: Result<()>, json_output: bool) -> Result<()> {
+    match result {
+        Err(error) if json_output && !is_structured_json_failure(&error) => {
+            Err(json_output_already_emitted(error))
+        }
+        result => result,
     }
 }
 
@@ -285,26 +329,21 @@ const fn agent_human_output(command: &AgentCommand) -> HumanOutput {
     }
 }
 
-fn work_human_output(command: &WorkCommand, json_output: bool) -> Result<HumanOutput> {
+const fn work_human_output(command: &WorkCommand) -> HumanOutput {
     match command {
-        WorkCommand::Start(opts) if opts.print_plan_id => {
-            if json_output {
-                anyhow::bail!("--print-plan-id cannot be combined with --json");
-            }
-            Ok(HumanOutput::WorkStartPlanId)
-        }
-        WorkCommand::Start(_) => Ok(HumanOutput::WorkStart),
-        WorkCommand::Goal(_) => Ok(HumanOutput::WorkGoal),
-        WorkCommand::Append(_) => Ok(HumanOutput::WorkAppend),
-        WorkCommand::Check(_) => Ok(HumanOutput::WorkCheck),
-        WorkCommand::Gates(_) => Ok(HumanOutput::WorkGates),
-        WorkCommand::Evidence(_) => Ok(HumanOutput::WorkEvidence),
-        WorkCommand::Review(_) => Ok(HumanOutput::WorkReview),
-        WorkCommand::Refine(_) => Ok(HumanOutput::WorkRefine),
-        WorkCommand::Decide(_) => Ok(HumanOutput::WorkDecide),
-        WorkCommand::Receipts(_) => Ok(HumanOutput::WorkReceipts),
-        WorkCommand::Status => Ok(HumanOutput::WorkStatus),
-        WorkCommand::Finish(_) => Ok(HumanOutput::WorkFinish),
+        WorkCommand::Start(opts) if opts.print_plan_id => HumanOutput::WorkStartPlanId,
+        WorkCommand::Start(_) => HumanOutput::WorkStart,
+        WorkCommand::Goal(_) => HumanOutput::WorkGoal,
+        WorkCommand::Append(_) => HumanOutput::WorkAppend,
+        WorkCommand::Check(_) => HumanOutput::WorkCheck,
+        WorkCommand::Gates(_) => HumanOutput::WorkGates,
+        WorkCommand::Evidence(_) => HumanOutput::WorkEvidence,
+        WorkCommand::Review(_) => HumanOutput::WorkReview,
+        WorkCommand::Refine(_) => HumanOutput::WorkRefine,
+        WorkCommand::Decide(_) => HumanOutput::WorkDecide,
+        WorkCommand::Receipts(_) => HumanOutput::WorkReceipts,
+        WorkCommand::Status => HumanOutput::WorkStatus,
+        WorkCommand::Finish(_) => HumanOutput::WorkFinish,
     }
 }
 
@@ -333,17 +372,51 @@ fn dispatch_runtime_command(
     let ctx = RepoContext::load()?;
     let output = runtime::dispatch(&ctx, command)?;
     emit(json_output, human_output, &output)?;
-    require_json_ok(require_ok, &output)
+    finish_after_json_output(require_json_ok(require_ok, &output), json_output)
 }
 
 fn parse_cli() -> Cli {
-    match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(error) => exit_with_cli_error(error),
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let command_args = || args.iter().skip(1).cloned();
+    let report_json_errors = args_request_json(command_args()) && !args_target_mcp(command_args());
+
+    match Cli::try_parse_from(args) {
+        Ok(cli) => {
+            if let Some(error) = post_parse_usage_error(&cli) {
+                exit_with_cli_error(error, report_json_errors);
+            }
+            cli
+        }
+        Err(error) => exit_with_cli_error(error, report_json_errors),
     }
 }
 
-fn exit_with_cli_error(error: clap::Error) -> ! {
+fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
+    let message = match &cli.command {
+        CommandKind::Status(opts) if cli.json && opts.tui => {
+            "`--tui` cannot be combined with `--json`"
+        }
+        CommandKind::Work(WorkCommand::Start(opts)) if cli.json && opts.print_plan_id => {
+            "`--print-plan-id` cannot be combined with `--json`"
+        }
+        _ => return None,
+    };
+    Some(clap::Error::raw(ErrorKind::ArgumentConflict, message))
+}
+
+fn exit_with_cli_error(error: clap::Error, json_output: bool) -> ! {
+    if json_output
+        && !matches!(
+            error.kind(),
+            ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+        )
+    {
+        let exit_status = error.exit_code();
+        let message = augmented_cli_error_message(&error);
+        let _ = print_json(&json_error_payload("usage", &message, exit_status));
+        process::exit(exit_status);
+    }
+
     if should_add_template_hint(&error) {
         let message = error.to_string();
         // If stderr is closed, there is nowhere useful to report the parse hint.
@@ -366,6 +439,36 @@ fn exit_with_cli_error(error: clap::Error) -> ! {
     }
 
     error.exit();
+}
+
+fn args_request_json(args: impl IntoIterator<Item = OsString>) -> bool {
+    args.into_iter()
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json")
+}
+
+fn args_target_mcp(args: impl IntoIterator<Item = OsString>) -> bool {
+    args.into_iter()
+        .take_while(|arg| arg != "--")
+        .filter(|arg| arg != "--json")
+        .find(|arg| !arg.to_string_lossy().starts_with('-'))
+        .is_some_and(|arg| arg == tool_defs::cli_command::MCP)
+}
+
+fn augmented_cli_error_message(error: &clap::Error) -> String {
+    let mut message = error.to_string();
+    let hint = if should_add_template_hint(error) {
+        Some(TEMPLATE_ERROR_HINT.to_string())
+    } else if let Some(hint) = moved_check_command_hint(error) {
+        Some(hint)
+    } else {
+        missing_init_path_hint(error).map(str::to_string)
+    };
+    if let Some(hint) = hint {
+        message.push('\n');
+        message.push_str(&hint);
+    }
+    message
 }
 
 fn missing_init_path_hint(error: &clap::Error) -> Option<&'static str> {

@@ -220,6 +220,35 @@ fn work_status_summary_stays_compact() {
 }
 
 #[test]
+fn state_summary_focuses_on_persisted_record_counts() {
+    let summary = format_state_summary(&json!({
+        "repo": { "name": "demo", "default_branch": "main" },
+        "current_session_id": "session_1",
+        "counts": {
+            "sessions": 4,
+            "session_events": 7,
+            "plans": 5,
+            "plan_events": 12,
+            "open_plans": 2,
+            "receipts": 20,
+            "failed_receipts": 3,
+            "decisions": 6
+        },
+        "open_plans": [{ "plan_id": "plan_1", "title": "Not repeated here" }],
+        "recent_receipts": [{ "id": "receipt_1", "tool_name": "jig.test" }]
+    }));
+
+    assert!(summary.contains("State summary:"));
+    assert!(summary.contains("Sessions: 4 (7 events)"));
+    assert!(summary.contains("Plans: 5 (2 open, 12 events)"));
+    assert!(summary.contains("Receipts: 20 (3 failed)"));
+    assert!(summary.contains("Decisions: 6"));
+    assert!(summary.contains("Current session: session_1"));
+    assert!(!summary.contains("Not repeated here"));
+    assert!(!summary.contains("jig.test"));
+}
+
+#[test]
 fn work_start_plan_id_output_is_shell_friendly() {
     let plan_id = format_work_start_plan_id(&json!({
         "ok": true,

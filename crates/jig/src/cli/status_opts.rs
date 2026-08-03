@@ -23,11 +23,4 @@ impl StatusOpts {
         self.refresh_seconds
             .unwrap_or(DEFAULT_STATUS_REFRESH_SECONDS)
     }
-
-    pub(crate) fn validate_output_mode(&self, json_output: bool) -> anyhow::Result<()> {
-        if self.tui && json_output {
-            anyhow::bail!("`--tui` cannot be combined with `--json`");
-        }
-        Ok(())
-    }
 }

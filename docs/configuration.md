@@ -545,7 +545,7 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig agent bootstrap`
 - `scripts/jig work start --title ...`
 - `scripts/jig work start --title ... --print-plan-id`
-- `scripts/jig work append --plan-id ...`
+- `scripts/jig work append --plan-id ... --body "Progress update"`
 - `scripts/jig work check --plan-id ...`
 - `scripts/jig work check --plan-id ... --json`
 - `scripts/jig work gates --plan-id ...`

@@ -119,6 +119,48 @@ fn work_goal_opens_durable_plan_and_prompt() {
 }
 
 #[test]
+fn work_start_validates_plan_body_before_starting_session() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let sessions_path = ctx.state_file("sessions.jsonl");
+    let receipts_path = ctx.state_file("receipts.jsonl");
+    let sessions_before = fs::read_to_string(&sessions_path).unwrap_or_default();
+    let receipts_before = fs::read_to_string(&receipts_path).unwrap_or_default();
+
+    for opts in [
+        crate::cli::WorkStartOpts {
+            title: "Conflicting body".into(),
+            body: Some("inline".into()),
+            body_file: Some(temp.path().join("plan.md")),
+            print_plan_id: false,
+        },
+        crate::cli::WorkStartOpts {
+            title: "Missing body file".into(),
+            body: None,
+            body_file: Some(temp.path().join("missing-plan.md")),
+            print_plan_id: false,
+        },
+    ] {
+        dispatch(
+            &ctx,
+            CommandKind::Work(crate::cli::WorkCommand::Start(opts)),
+        )
+        .unwrap_err();
+    }
+
+    assert_eq!(
+        fs::read_to_string(&sessions_path).unwrap_or_default(),
+        sessions_before
+    );
+    assert_eq!(
+        fs::read_to_string(&receipts_path).unwrap_or_default(),
+        receipts_before
+    );
+    assert_eq!(crate::state::current_session(&ctx).unwrap(), None);
+}
+
+#[test]
 fn work_goal_rejects_blank_required_fields() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

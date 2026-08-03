@@ -21,12 +21,15 @@ pub(super) fn run_prompt_command(command: PromptCommand, json_output: bool) -> R
                     raw: opts.raw,
                 }),
             )?;
+            if json_output {
+                return print_json(&output);
+            }
             let body = output
                 .get(crate::command::PROMPT_BODY_KEY)
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| anyhow!("prompt get output did not include body"))?;
-            // `prompt get` is the raw prompt primitive: stdout is exactly the
-            // rendered body even when the global --json flag is present.
+            // Without structured output, `prompt get` is the raw prompt
+            // primitive and stdout is exactly the rendered body.
             let mut stdout = io::stdout().lock();
             stdout.write_all(body.as_bytes())?;
             stdout.flush()?;
