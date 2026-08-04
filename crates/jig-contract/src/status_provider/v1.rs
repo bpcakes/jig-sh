@@ -64,229 +64,22 @@ impl Report {
     /// inputs, work packages, diagnostics, extensions, and referenced paths.
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
-        validate_required(
-            &mut errors,
-            "/provider/id",
-            &self.provider.id,
-            "provider id",
-        );
-        validate_required(
-            &mut errors,
-            "/provider/adapter_version",
-            &self.provider.adapter_version,
-            "adapter version",
-        );
-        validate_optional(
-            &mut errors,
-            "/provider/display_name",
-            self.provider.display_name.as_deref(),
-            "provider display name",
-        );
+        validate_provider(&mut errors, &self.provider);
 
         for (index, input) in self.inputs.iter().enumerate() {
             let base = format!("/inputs/{index}");
-            validate_required(
-                &mut errors,
-                &format!("{base}/name"),
-                &input.name,
-                "input name",
-            );
-            validate_required(
-                &mut errors,
-                &format!("{base}/kind"),
-                &input.kind,
-                "input kind",
-            );
-            validate_optional(
-                &mut errors,
-                &format!("{base}/revision"),
-                input.revision.as_deref(),
-                "input revision",
-            );
-            validate_optional(
-                &mut errors,
-                &format!("{base}/digest"),
-                input.digest.as_deref(),
-                "input digest",
-            );
-            if let Some(path) = &input.path {
-                validate_source_path(&mut errors, &format!("{base}/path"), path);
-            }
+            validate_input(&mut errors, &base, input);
         }
 
         let mut package_ids = BTreeSet::new();
         for (index, package) in self.work_packages.iter().enumerate() {
             let base = format!("/work_packages/{index}");
-            validate_required(
-                &mut errors,
-                &format!("{base}/id"),
-                &package.id,
-                "work-package id",
-            );
-            if !package.id.trim().is_empty() && !package_ids.insert(package.id.as_str()) {
-                push_error(
-                    &mut errors,
-                    format!("{base}/id"),
-                    format!("duplicate work-package id {:?}", package.id),
-                );
-            }
-            validate_optional(
-                &mut errors,
-                &format!("{base}/title"),
-                package.title.as_deref(),
-                "work-package title",
-            );
-            validate_facet(
-                &mut errors,
-                &format!("{base}/specification"),
-                &package.specification,
-            );
-            validate_facet(
-                &mut errors,
-                &format!("{base}/implementation"),
-                &package.implementation,
-            );
-            validate_facet(
-                &mut errors,
-                &format!("{base}/verification"),
-                &package.verification,
-            );
-
-            let mut dependencies = BTreeSet::new();
-            for (dependency_index, dependency) in package.dependencies.iter().enumerate() {
-                let path = format!("{base}/dependencies/{dependency_index}");
-                validate_required(&mut errors, &path, dependency, "dependency id");
-                if !dependency.trim().is_empty() && !dependencies.insert(dependency.as_str()) {
-                    push_error(
-                        &mut errors,
-                        path,
-                        format!("duplicate dependency id {dependency:?}"),
-                    );
-                }
-            }
-
-            let mut ordinals = BTreeSet::new();
-            for (check_index, check) in package.acceptance_checks.iter().enumerate() {
-                let check_base = format!("{base}/acceptance_checks/{check_index}");
-                if check.ordinal == 0 {
-                    push_error(
-                        &mut errors,
-                        format!("{check_base}/ordinal"),
-                        "acceptance-check ordinal must be one-based",
-                    );
-                }
-                if !ordinals.insert(check.ordinal) {
-                    push_error(
-                        &mut errors,
-                        format!("{check_base}/ordinal"),
-                        format!("duplicate acceptance-check ordinal {}", check.ordinal),
-                    );
-                }
-                validate_optional(
-                    &mut errors,
-                    &format!("{check_base}/id"),
-                    check.id.as_deref(),
-                    "acceptance-check id",
-                );
-                validate_required(
-                    &mut errors,
-                    &format!("{check_base}/state"),
-                    &check.state,
-                    "acceptance-check state",
-                );
-                validate_optional(
-                    &mut errors,
-                    &format!("{check_base}/target"),
-                    check.target.as_deref(),
-                    "acceptance-check target",
-                );
-                validate_source(
-                    &mut errors,
-                    &format!("{check_base}/source"),
-                    check.source.as_ref(),
-                );
-            }
-
-            for (blocker_index, blocker) in package.blockers.iter().enumerate() {
-                let blocker_base = format!("{base}/blockers/{blocker_index}");
-                validate_required(
-                    &mut errors,
-                    &format!("{blocker_base}/code"),
-                    &blocker.code,
-                    "blocker code",
-                );
-                validate_required(
-                    &mut errors,
-                    &format!("{blocker_base}/message"),
-                    &blocker.message,
-                    "blocker message",
-                );
-                validate_optional(
-                    &mut errors,
-                    &format!("{blocker_base}/related_work_package"),
-                    blocker.related_work_package.as_deref(),
-                    "related work-package id",
-                );
-                validate_source(
-                    &mut errors,
-                    &format!("{blocker_base}/source"),
-                    blocker.source.as_ref(),
-                );
-            }
-
-            for (evidence_index, evidence) in package.evidence.iter().enumerate() {
-                let evidence_base = format!("{base}/evidence/{evidence_index}");
-                validate_required(
-                    &mut errors,
-                    &format!("{evidence_base}/kind"),
-                    &evidence.kind,
-                    "evidence kind",
-                );
-                validate_required(
-                    &mut errors,
-                    &format!("{evidence_base}/reference"),
-                    &evidence.reference,
-                    "evidence reference",
-                );
-                validate_optional(
-                    &mut errors,
-                    &format!("{evidence_base}/digest"),
-                    evidence.digest.as_deref(),
-                    "evidence digest",
-                );
-                validate_source(
-                    &mut errors,
-                    &format!("{evidence_base}/source"),
-                    evidence.source.as_ref(),
-                );
-            }
+            validate_work_package(&mut errors, &base, package, &mut package_ids);
         }
 
         for (index, diagnostic) in self.diagnostics.iter().enumerate() {
             let base = format!("/diagnostics/{index}");
-            validate_required(
-                &mut errors,
-                &format!("{base}/code"),
-                &diagnostic.code,
-                "diagnostic code",
-            );
-            validate_required(
-                &mut errors,
-                &format!("{base}/message"),
-                &diagnostic.message,
-                "diagnostic message",
-            );
-            validate_optional(
-                &mut errors,
-                &format!("{base}/work_package"),
-                diagnostic.work_package.as_deref(),
-                "diagnostic work-package id",
-            );
-            validate_source(
-                &mut errors,
-                &format!("{base}/source"),
-                diagnostic.source.as_ref(),
-            );
+            validate_diagnostic(&mut errors, &base, diagnostic);
         }
 
         if errors.is_empty() {
@@ -712,6 +505,224 @@ pub fn schema() -> Schema {
         Value::String("Jig status-provider report v1".to_string()),
     );
     schema
+}
+
+fn validate_provider(errors: &mut Vec<ValidationError>, provider: &Provider) {
+    validate_required(errors, "/provider/id", &provider.id, "provider id");
+    validate_required(
+        errors,
+        "/provider/adapter_version",
+        &provider.adapter_version,
+        "adapter version",
+    );
+    validate_optional(
+        errors,
+        "/provider/display_name",
+        provider.display_name.as_deref(),
+        "provider display name",
+    );
+}
+
+fn validate_input(errors: &mut Vec<ValidationError>, base: &str, input: &Input) {
+    validate_required(errors, &format!("{base}/name"), &input.name, "input name");
+    validate_required(errors, &format!("{base}/kind"), &input.kind, "input kind");
+    validate_optional(
+        errors,
+        &format!("{base}/revision"),
+        input.revision.as_deref(),
+        "input revision",
+    );
+    validate_optional(
+        errors,
+        &format!("{base}/digest"),
+        input.digest.as_deref(),
+        "input digest",
+    );
+    if let Some(path) = &input.path {
+        validate_source_path(errors, &format!("{base}/path"), path);
+    }
+}
+
+fn validate_work_package<'a>(
+    errors: &mut Vec<ValidationError>,
+    base: &str,
+    package: &'a WorkPackage,
+    package_ids: &mut BTreeSet<&'a str>,
+) {
+    validate_required(
+        errors,
+        &format!("{base}/id"),
+        &package.id,
+        "work-package id",
+    );
+    if !package.id.trim().is_empty() && !package_ids.insert(package.id.as_str()) {
+        push_error(
+            errors,
+            format!("{base}/id"),
+            format!("duplicate work-package id {:?}", package.id),
+        );
+    }
+    validate_optional(
+        errors,
+        &format!("{base}/title"),
+        package.title.as_deref(),
+        "work-package title",
+    );
+    validate_facet(
+        errors,
+        &format!("{base}/specification"),
+        &package.specification,
+    );
+    validate_facet(
+        errors,
+        &format!("{base}/implementation"),
+        &package.implementation,
+    );
+    validate_facet(
+        errors,
+        &format!("{base}/verification"),
+        &package.verification,
+    );
+
+    let mut dependencies = BTreeSet::new();
+    for (index, dependency) in package.dependencies.iter().enumerate() {
+        let path = format!("{base}/dependencies/{index}");
+        validate_required(errors, &path, dependency, "dependency id");
+        if !dependency.trim().is_empty() && !dependencies.insert(dependency.as_str()) {
+            push_error(
+                errors,
+                path,
+                format!("duplicate dependency id {dependency:?}"),
+            );
+        }
+    }
+
+    let mut ordinals = BTreeSet::new();
+    for (index, check) in package.acceptance_checks.iter().enumerate() {
+        let check_base = format!("{base}/acceptance_checks/{index}");
+        validate_acceptance_check(errors, &check_base, check, &mut ordinals);
+    }
+
+    for (index, blocker) in package.blockers.iter().enumerate() {
+        let blocker_base = format!("{base}/blockers/{index}");
+        validate_blocker(errors, &blocker_base, blocker);
+    }
+
+    for (index, evidence) in package.evidence.iter().enumerate() {
+        let evidence_base = format!("{base}/evidence/{index}");
+        validate_evidence(errors, &evidence_base, evidence);
+    }
+}
+
+fn validate_acceptance_check(
+    errors: &mut Vec<ValidationError>,
+    base: &str,
+    check: &AcceptanceCheck,
+    ordinals: &mut BTreeSet<u32>,
+) {
+    if check.ordinal == 0 {
+        push_error(
+            errors,
+            format!("{base}/ordinal"),
+            "acceptance-check ordinal must be one-based",
+        );
+    }
+    if !ordinals.insert(check.ordinal) {
+        push_error(
+            errors,
+            format!("{base}/ordinal"),
+            format!("duplicate acceptance-check ordinal {}", check.ordinal),
+        );
+    }
+    validate_optional(
+        errors,
+        &format!("{base}/id"),
+        check.id.as_deref(),
+        "acceptance-check id",
+    );
+    validate_required(
+        errors,
+        &format!("{base}/state"),
+        &check.state,
+        "acceptance-check state",
+    );
+    validate_optional(
+        errors,
+        &format!("{base}/target"),
+        check.target.as_deref(),
+        "acceptance-check target",
+    );
+    validate_source(errors, &format!("{base}/source"), check.source.as_ref());
+}
+
+fn validate_blocker(errors: &mut Vec<ValidationError>, base: &str, blocker: &Blocker) {
+    validate_required(
+        errors,
+        &format!("{base}/code"),
+        &blocker.code,
+        "blocker code",
+    );
+    validate_required(
+        errors,
+        &format!("{base}/message"),
+        &blocker.message,
+        "blocker message",
+    );
+    validate_optional(
+        errors,
+        &format!("{base}/related_work_package"),
+        blocker.related_work_package.as_deref(),
+        "related work-package id",
+    );
+    validate_source(errors, &format!("{base}/source"), blocker.source.as_ref());
+}
+
+fn validate_evidence(errors: &mut Vec<ValidationError>, base: &str, evidence: &Evidence) {
+    validate_required(
+        errors,
+        &format!("{base}/kind"),
+        &evidence.kind,
+        "evidence kind",
+    );
+    validate_required(
+        errors,
+        &format!("{base}/reference"),
+        &evidence.reference,
+        "evidence reference",
+    );
+    validate_optional(
+        errors,
+        &format!("{base}/digest"),
+        evidence.digest.as_deref(),
+        "evidence digest",
+    );
+    validate_source(errors, &format!("{base}/source"), evidence.source.as_ref());
+}
+
+fn validate_diagnostic(errors: &mut Vec<ValidationError>, base: &str, diagnostic: &Diagnostic) {
+    validate_required(
+        errors,
+        &format!("{base}/code"),
+        &diagnostic.code,
+        "diagnostic code",
+    );
+    validate_required(
+        errors,
+        &format!("{base}/message"),
+        &diagnostic.message,
+        "diagnostic message",
+    );
+    validate_optional(
+        errors,
+        &format!("{base}/work_package"),
+        diagnostic.work_package.as_deref(),
+        "diagnostic work-package id",
+    );
+    validate_source(
+        errors,
+        &format!("{base}/source"),
+        diagnostic.source.as_ref(),
+    );
 }
 
 fn validate_facet(errors: &mut Vec<ValidationError>, base: &str, facet: &Facet) {
