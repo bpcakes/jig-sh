@@ -1,0 +1,1 @@
+Move doctor/info presentation into CLI output, extract the init mutation transaction, isolate receipt archive/export machinery, and replace the invalid-review argument list with a context struct. Commit each cleanup separately after cargo test --workspace passes.

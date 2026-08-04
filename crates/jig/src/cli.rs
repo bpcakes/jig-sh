@@ -384,6 +384,16 @@ mod run;
 mod structured_error;
 mod vault_run;
 
+#[cfg(test)]
+pub(crate) fn format_doctor_summary_for_test(value: &serde_json::Value) -> String {
+    output::format_doctor_summary(value)
+}
+
+#[cfg(test)]
+pub(crate) fn format_info_summary_for_test(value: &serde_json::Value) -> String {
+    output::format_info_summary(value)
+}
+
 pub(crate) use run::{is_structured_json_failure, run, structured_error_exit_code};
 pub(crate) use structured_error::json_output_already_emitted;
 

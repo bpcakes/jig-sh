@@ -2,10 +2,10 @@ use std::io::Write;
 
 use anyhow::Result;
 
-use crate::{doctor, info};
-
 use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
 use self::codex::{format_codex_homes_summary, format_codex_launch_summary};
+pub(super) use self::doctor::format_doctor_summary;
+pub(super) use self::info::format_info_summary;
 use self::loops::{
     format_loop_clear_attempt_summary, format_loop_run_summary, format_loop_status_summary,
     format_loop_tick_summary,
@@ -27,6 +27,8 @@ use self::work::{
 mod agent;
 mod codex;
 mod dev;
+mod doctor;
+mod info;
 mod loops;
 mod prompt;
 mod state;
@@ -90,9 +92,9 @@ pub(super) fn emit(
 
 fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<String> {
     Ok(match human_output {
-        HumanOutput::Doctor => doctor::format_summary(value),
+        HumanOutput::Doctor => format_doctor_summary(value),
         HumanOutput::Setup => format_setup_summary(value),
-        HumanOutput::Info => info::format_summary(value),
+        HumanOutput::Info => format_info_summary(value),
         HumanOutput::Status => status::format_summary(value),
         HumanOutput::VaultRun => format_vault_run_summary(value),
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
