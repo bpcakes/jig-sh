@@ -256,13 +256,13 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         let direct_tool_name = index
             .checks
             .contains_key(&receipt.tool_name)
-            .then(|| receipt.tool_name.clone());
-        if let Some(tool_name) = direct_tool_name.as_deref() {
+            .then_some(receipt.tool_name.as_str());
+        if let Some(tool_name) = direct_tool_name {
             let receipts = index
                 .checks
                 .get_mut(tool_name)
                 .expect("configured check tool should be indexed");
-            receipts.direct = Some(tool_receipt_status(receipt.clone()));
+            receipts.direct = Some(tool_receipt_status(&receipt));
             // A batch can only provide freshness for the latest direct
             // receipt when it appears physically after that receipt.
             receipts.exact_work_check = None;
@@ -270,12 +270,12 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         }
 
         if receipt.tool_name == tool::WORK_CHECK && receipt.exit_status == 0 {
-            let batch_status = tool_receipt_status(receipt.clone());
+            let batch_status = tool_receipt_status(&receipt);
             let has_receipt_ids = receipt_args_has_receipt_ids(&receipt);
             for tool_name in receipt_arg_strings(&receipt, "tools") {
                 // If jig.work_check itself is configured as a check gate, the
                 // receipt that becomes the direct anchor is not its own batch.
-                if direct_tool_name.as_deref() == Some(tool_name) {
+                if direct_tool_name == Some(tool_name) {
                     continue;
                 }
                 let Some(receipts) = index.checks.get_mut(tool_name) else {
@@ -301,7 +301,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
             {
                 index
                     .reviews
-                    .insert(gate_id.to_string(), work_review_receipt_status(receipt));
+                    .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
             }
         }
         Ok(())
@@ -310,7 +310,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     Ok(index)
 }
 
-fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> Vec<&'a str> {
+fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterator<Item = &'a str> {
     receipt
         .args
         .get(key)
@@ -318,7 +318,6 @@ fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> Vec<&'a str
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .collect()
 }
 
 fn ensure_receipt_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
@@ -480,46 +479,46 @@ pub(super) fn receipt_list_value(receipt: ReceiptRecord) -> Result<Value> {
     Ok(value)
 }
 
-fn tool_receipt_status(receipt: ReceiptRecord) -> ToolReceiptStatus {
-    let diff_summary = receipt_diff_summary(&receipt);
+fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
+    let diff_summary = receipt_diff_summary(receipt);
     let changed_path_count = receipt
         .changed_path_count
         .unwrap_or(receipt.changed_paths.len());
     let changed_paths_truncated =
         receipt.changed_paths_truncated || changed_path_count > receipt.changed_paths.len();
     ToolReceiptStatus {
-        receipt_id: receipt.id,
+        receipt_id: receipt.id.clone(),
         exit_status: receipt.exit_status,
         ended_at_ms: receipt.ended_at_ms,
-        changed_paths: receipt.changed_paths,
+        changed_paths: receipt.changed_paths.clone(),
         changed_path_count,
         changed_paths_truncated,
-        changed_paths_digest: receipt.changed_paths_digest,
+        changed_paths_digest: receipt.changed_paths_digest.clone(),
         diff_summary,
-        worktree_fingerprint: receipt.worktree_fingerprint,
-        worktree_fingerprint_error: receipt.worktree_fingerprint_error,
+        worktree_fingerprint: receipt.worktree_fingerprint.clone(),
+        worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
     }
 }
 
-fn work_review_receipt_status(receipt: ReceiptRecord) -> WorkReviewReceiptStatus {
-    let diff_summary = receipt_diff_summary(&receipt);
+fn work_review_receipt_status(receipt: &ReceiptRecord) -> WorkReviewReceiptStatus {
+    let diff_summary = receipt_diff_summary(receipt);
     let changed_path_count = receipt
         .changed_path_count
         .unwrap_or(receipt.changed_paths.len());
     let changed_paths_truncated =
         receipt.changed_paths_truncated || changed_path_count > receipt.changed_paths.len();
     WorkReviewReceiptStatus {
-        receipt_id: receipt.id,
+        receipt_id: receipt.id.clone(),
         exit_status: receipt.exit_status,
         ended_at_ms: receipt.ended_at_ms,
         evidence: receipt.evidence.as_ref().map(work_review_receipt_evidence),
-        changed_paths: receipt.changed_paths,
+        changed_paths: receipt.changed_paths.clone(),
         changed_path_count,
         changed_paths_truncated,
-        changed_paths_digest: receipt.changed_paths_digest,
+        changed_paths_digest: receipt.changed_paths_digest.clone(),
         diff_summary,
-        worktree_fingerprint: receipt.worktree_fingerprint,
-        worktree_fingerprint_error: receipt.worktree_fingerprint_error,
+        worktree_fingerprint: receipt.worktree_fingerprint.clone(),
+        worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
     }
 }
 

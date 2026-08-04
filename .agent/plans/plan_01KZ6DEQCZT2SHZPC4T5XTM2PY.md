@@ -1,0 +1,1 @@
+Implement four behavior-preserving Rust cleanups in separate commits: borrow receipt status projections and remove temporary receipt argument vectors; aggregate required gate failures; make workspace-member root inference infallible; extract initial-template resolution policy. Run the complete workspace test suite after each cleanup, then run final contract and gate evidence.

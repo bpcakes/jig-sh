@@ -415,7 +415,7 @@ impl<'de> Deserialize<'de> for PlanEvent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+#[derive(Debug, Serialize, serde::Deserialize)]
 pub(super) struct ReceiptRecord {
     pub(super) id: String,
     pub(super) session_id: Option<String>,

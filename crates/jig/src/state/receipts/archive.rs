@@ -551,7 +551,6 @@ impl ReceiptProtectionIndex {
         }
         if receipt.tool_name == tool::WORK_CHECK && receipt.exit_status == 0 {
             let receipt_ids = receipt_arg_strings(receipt, "receipt_ids")
-                .into_iter()
                 .map(str::to_string)
                 .collect::<Vec<_>>();
             let has_receipt_ids = receipt_args_has_receipt_ids(receipt);
