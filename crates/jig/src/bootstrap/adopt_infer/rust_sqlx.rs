@@ -95,9 +95,7 @@ pub(super) fn infer_rust_crate_roots_with_metadata(
             if member.starts_with('!') {
                 continue;
             }
-            if let Some(root) = crate_root_from_workspace_member(member) {
-                roots.insert(root);
-            }
+            roots.insert(crate_root_from_workspace_member(member));
         }
     }
     let used_workspace_fallback = roots.is_empty();
@@ -189,25 +187,22 @@ pub(super) fn infer_rust_crate_roots_from_scan(
 }
 
 // Jig crate roots are parent directories whose direct children are crates.
-// Keep the optional inference boundary so callers can treat this like the
-// neighboring best-effort detectors without manufacturing a sentinel root.
-#[allow(clippy::unnecessary_wraps)]
-pub(super) fn crate_root_from_workspace_member(member: &str) -> Option<String> {
+pub(super) fn crate_root_from_workspace_member(member: &str) -> String {
     let path = member.trim().trim_end_matches('/');
     if path.is_empty() || path == "." {
-        return Some(".".into());
+        return ".".into();
     }
     let first_glob = path.find(['*', '[', '?']);
     if let Some(index) = first_glob {
         let prefix = path[..index].trim_end_matches('/');
         if prefix.is_empty() {
-            return Some(".".into());
+            return ".".into();
         }
-        return Some(relative_path_string(Path::new(prefix)));
+        return relative_path_string(Path::new(prefix));
     }
     let parent = Path::new(path).parent().unwrap_or_else(|| Path::new("."));
     let root = relative_path_string(parent);
-    Some(if root.is_empty() { ".".into() } else { root })
+    if root.is_empty() { ".".into() } else { root }
 }
 
 pub(super) fn infer_sqlx(

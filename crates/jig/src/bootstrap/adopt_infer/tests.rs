@@ -223,15 +223,9 @@ fn scan_depth_warnings_are_reported_once() {
 
 #[test]
 fn crate_roots_follow_workspace_member_parents() {
-    assert_eq!(
-        crate_root_from_workspace_member("crates/*").as_deref(),
-        Some("crates")
-    );
-    assert_eq!(
-        crate_root_from_workspace_member("apps/api").as_deref(),
-        Some("apps")
-    );
-    assert_eq!(crate_root_from_workspace_member(".").as_deref(), Some("."));
+    assert_eq!(crate_root_from_workspace_member("crates/*"), "crates");
+    assert_eq!(crate_root_from_workspace_member("apps/api"), "apps");
+    assert_eq!(crate_root_from_workspace_member("."), ".");
 }
 
 #[test]
