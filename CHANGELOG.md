@@ -1,5 +1,87 @@
 # Changelog
 
+## v0.2.0 - 2026-08-04
+
+### Added
+- Add status-provider v1 protocol
+- Manage repo-scoped dev sessions
+- Run and aggregate status providers
+- Add interactive status TUI
+- Add cancellable status collection
+- Standardize JSON errors and work validation
+- Add interactive Codex home launcher
+- Configure Codex home for loop workers
+
+### Fixed
+- Keep dev session cleanup signal-responsive
+
+### Changed
+- Plan dev session management
+- Split dev lifecycle modules
+- Close dev session management work
+- Close status provider aggregation work
+- Centralize test repository fixtures
+- Share session id validation
+- Deny redundant clones and stack arrays
+- Inherit package metadata
+- Extract owned process runner
+- Consolidate duplicated helpers
+- Consolidate shared utility helpers
+- Apply tier 1 mechanical cleanups
+- Apply tier 2 rust cleanups
+- Split embedded templates and reorganize test modules
+
+### Tests
+- Move doctor tests beside module
+- Move adopt inference tests beside module
+- Move git bootstrap tests beside module
+- Move path bootstrap tests beside module
+- Move prompt registry tests beside module
+- Move child lifecycle tests beside module
+- Move windows launch tests beside module
+- Move cleanup tests beside module
+- Move dev session tests beside module
+
+### Other
+- Add generated gitignore template
+- Implement V2 repo-scoped vault model for init, adopt, and vault commands
+- Refactor bootstrap answers into modular structure with dev and vault submodules
+- Make jig launcher POSIX sh compatible
+- Make jig update output human by default
+- Refactor doctor output to distinguish required and optional setup steps
+- Add prompt registry and management CLI commands
+- Add test execution and prompt registry improvements
+- Add landing page and improve bootstrap/scaffold structure
+- Update bootstrap scaffolding and Rust-React template configuration
+- Refactor CLI and command modules into focused submodules
+- Refactor dev-proxy service module into focused submodules
+- Add loop orchestration runtime
+- Update loop orchestration, CLI output, and documentation
+- Add runtime config module and refactor bootstrap orchestration
+- Extract loopback UI into dedicated jig-ui library crate
+- Add full-stack scaffold E2E and harden Jig workflows
+- Add error page template and improve proxy server configuration
+- Add TanStack Router integration and refactor frontend scaffolds
+- Refactor jig dev command for foreground process control and signal handling
+- Remove leading blank lines from moved tests
+- Normalize moved test files
+- Refactor state record storage boundaries
+- [verified] Fix Rust 1.97 release lints
+- [verified] Fix Linux release test build
+- [verified] Repair release gate regressions
+- [verified] Apply release formatter output
+- [verified] Serialize release test gate
+- [verified] Handle non-UTF-8 Linux process names
+- [verified] Make launcher test release-version aware
+- [verified] Remove legacy service module filename
+- [verified] Fix optional installer feature argument
+- [verified] Report fixture validation failures
+- [verified] Make fixture version assertion release aware
+- [verified] Remove fixture ripgrep dependency
+- [verified] Preserve fixture failure status
+- [verified] Identify crates.io release probes
+- [verified] Allow complete release validation
+
 ## v0.2.0-beta.1 - 2026-05-23
 
 ### Changed

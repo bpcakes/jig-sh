@@ -1,7 +1,7 @@
 repo_name = "acme-web"
 default_branch = "main"
 ci_github_runner = "ubuntu-latest"
-jig_version = "0.2.0-beta.1"
+jig_version = "0.2.0"
 template_source_url = ""
 sqlx_enabled = false
 rust_crate_roots = ["crates"]

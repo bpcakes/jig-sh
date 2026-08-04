@@ -6,7 +6,7 @@ set -eu
 SCRIPT_DIR="$(dirname "$0")"
 ROOT_DIR="$(CDPATH= cd "$SCRIPT_DIR/.." && pwd -P)"
 INSTALLER="$ROOT_DIR/scripts/install-jig.sh"
-JIG_VERSION="0.2.0-beta.1"
+JIG_VERSION="0.2.0"
 
 if [ ! -x "$INSTALLER" ]; then
   printf '%s\n' "Missing $INSTALLER." >&2

@@ -1,7 +1,7 @@
 {
   "contract_version": 3,
   "tool_namespace": "jig",
-  "jig_version": "0.2.0-beta.1",
+  "jig_version": "0.2.0",
   "required_commands": [
     "bootstrap_command",
     "rust_fmt_check_command",

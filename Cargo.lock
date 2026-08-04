@@ -1235,7 +1235,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jig-codex-tui"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "jig-contract"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jsonschema",
  "schemars",
@@ -1256,14 +1256,14 @@ dependencies = [
 
 [[package]]
 name = "jig-core"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-dev-proxy"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "jig-features"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jig-contract",
  "jig-core",
@@ -1310,14 +1310,14 @@ dependencies = [
 
 [[package]]
 name = "jig-rust"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-sh"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1354,14 +1354,14 @@ dependencies = [
 
 [[package]]
 name = "jig-sqlx"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-status-tui"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "jig-tui"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -1382,14 +1382,14 @@ dependencies = [
 
 [[package]]
 name = "jig-typescript"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "jig-contract",
 ]
 
 [[package]]
 name = "jig-ui"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "jig-vault"
-version = "0.2.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "argon2",
