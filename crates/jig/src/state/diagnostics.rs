@@ -31,7 +31,7 @@ const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DIAGNOSTIC_SAMPLES: usize = 20;
 
-pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -> Result<Value> {
+pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -> Value {
     let mut streams = BTreeMap::new();
     let mut session_compaction = SessionCompactionDiagnostics::default();
     let mut receipt_payload = ReceiptPayloadDiagnostics::default();
@@ -65,7 +65,7 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         &maintenance_cache,
     );
 
-    Ok(json!({
+    json!({
         "ok": true,
         "command": "state diagnose",
         "deep": request.deep,
@@ -79,7 +79,7 @@ pub(crate) fn state_diagnose(ctx: &RepoContext, request: StateDiagnoseRequest) -
         "maintenance_cache": maintenance_cache,
         "git": git,
         "recommendations": recommendations,
-    }))
+    })
 }
 
 fn inspect_stream(
@@ -912,7 +912,7 @@ mod tests {
         let ctx = fixture_context(temp.path());
         let before = fixture_paths(temp.path());
 
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true }).unwrap();
+        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
 
         assert_eq!(output["state_dir_exists"], false);
         assert_eq!(output["totals"]["stream_bytes"], 0);
@@ -972,7 +972,7 @@ mod tests {
         fs::write(ctx.state_dir().join("archive/old.jsonl"), b"abc").unwrap();
         fs::write(ctx.state_dir().join("archive/nested/older.jsonl"), b"12345").unwrap();
 
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true }).unwrap();
+        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: true });
 
         assert_eq!(
             output["streams"]["sessions"]["bytes"],
@@ -1063,7 +1063,7 @@ mod tests {
             &["add", ".gitattributes", ".agent/state/sessions.jsonl"],
         );
 
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false }).unwrap();
+        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
 
         assert_eq!(output["git"]["repository"], true);
         assert_eq!(output["git"]["paths"]["sessions"]["tracked"], true);
@@ -1092,7 +1092,7 @@ mod tests {
         fs::write(backups.join("manifest.json"), b"manifest").unwrap();
         fs::write(archives.join("receipts.jsonl.gz"), b"archive").unwrap();
 
-        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false }).unwrap();
+        let output = state_diagnose(&ctx, StateDiagnoseRequest { deep: false });
 
         assert_eq!(output["maintenance_cache"]["exists"], true);
         assert_eq!(output["maintenance_cache"]["files"], 3);

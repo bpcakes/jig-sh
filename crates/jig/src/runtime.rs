@@ -94,7 +94,7 @@ fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
             value["command"] = json!("state summary");
             value
         }),
-        StateCommand::Diagnose(request) => crate::state::state_diagnose(ctx, request),
+        StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
         StateCommand::CompactSessions(request) => crate::state::compact_sessions(ctx, request),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
         StateCommand::ExportReceipts(request) => {

@@ -350,7 +350,7 @@ pub(crate) fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
         user_home,
         |user_home| {
             let current = current_codex_home()?;
-            discover_homes_from(user_home, &current).map(|discovered| discovered.paths)
+            Ok(discover_homes_from(user_home, &current).paths)
         },
     )
 }
@@ -684,10 +684,10 @@ fn normalized_window(window: Option<&JsonValue>) -> JsonValue {
 fn discover_homes() -> Result<DiscoveredHomes> {
     let user_home = user_home()?;
     let current = current_codex_home()?;
-    discover_homes_from(&user_home, &current)
+    Ok(discover_homes_from(&user_home, &current))
 }
 
-fn discover_homes_from(user_home: &Path, current: &Path) -> Result<DiscoveredHomes> {
+fn discover_homes_from(user_home: &Path, current: &Path) -> DiscoveredHomes {
     discover_homes_from_with_metadata(user_home, current, |path| fs::metadata(path))
 }
 
@@ -695,7 +695,7 @@ fn discover_homes_from_with_metadata<F>(
     user_home: &Path,
     current: &Path,
     metadata: F,
-) -> Result<DiscoveredHomes>
+) -> DiscoveredHomes
 where
     F: Fn(&Path) -> io::Result<fs::Metadata>,
 {
@@ -712,7 +712,7 @@ fn discover_homes_from_with_sources<F, R>(
     current: &Path,
     metadata: F,
     read_entries: R,
-) -> Result<DiscoveredHomes>
+) -> DiscoveredHomes
 where
     F: Fn(&Path) -> io::Result<fs::Metadata>,
     R: FnOnce(&Path, &mut dyn FnMut(io::Result<(OsString, PathBuf)>)) -> io::Result<()>,
@@ -778,11 +778,11 @@ where
         let right_name = home_name(right);
         (left_name != "codex", left_name).cmp(&(right_name != "codex", right_name))
     });
-    Ok(DiscoveredHomes {
+    DiscoveredHomes {
         paths: candidates,
         errors,
         representation_lossy,
-    })
+    }
 }
 
 fn add_directory_candidate<F>(

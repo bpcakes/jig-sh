@@ -560,8 +560,7 @@ fn discovery_retains_candidate_metadata_errors() {
         } else {
             fs::metadata(path)
         }
-    })
-    .unwrap();
+    });
 
     assert_eq!(discovered.paths, vec![default]);
     assert_eq!(discovered.errors.len(), 1);
@@ -587,8 +586,7 @@ fn discovery_retains_current_home_when_user_home_scan_fails() {
                 "directory scan denied",
             ))
         },
-    )
-    .unwrap();
+    );
     assert_eq!(discovered.paths, vec![current]);
     assert!(
         discovered.errors.iter().any(|error| {
@@ -627,8 +625,7 @@ fn discovery_processes_directory_entries_as_the_source_yields_them() {
             );
             Ok(())
         },
-    )
-    .unwrap();
+    );
 
     assert_eq!(discovered.paths, vec![work, current]);
     assert!(discovered.errors.is_empty());
@@ -693,8 +690,7 @@ fn homes_report_marks_lossy_failed_discovery_candidates() {
             inspect_entry(Ok((name, candidate_entry)));
             Ok(())
         },
-    )
-    .unwrap();
+    );
 
     assert!(discovered.paths.is_empty());
     assert!(discovered.representation_lossy);
@@ -839,7 +835,7 @@ fn discovery_finds_conventional_and_current_homes_and_ignores_other_directories(
         fs::create_dir_all(directory).unwrap();
     }
 
-    let discovered = discover_homes_from(&user_home, &current).unwrap();
+    let discovered = discover_homes_from(&user_home, &current);
 
     assert_eq!(discovered.paths, vec![default, work, current]);
     assert!(discovered.errors.is_empty());
@@ -852,7 +848,7 @@ fn discovery_deduplicates_the_current_default_home() {
     let default = user_home.join(".codex");
     fs::create_dir_all(&default).unwrap();
 
-    let discovered = discover_homes_from(&user_home, &default).unwrap();
+    let discovered = discover_homes_from(&user_home, &default);
 
     assert_eq!(discovered.paths, vec![default]);
 }
