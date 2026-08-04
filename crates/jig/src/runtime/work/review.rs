@@ -155,21 +155,22 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
     let parsed = match parse_review_output(&output, &stdout) {
         Ok(parsed) => parsed,
         Err(error) => {
+            let parse_error = format!("{error:#}");
             return record_invalid_review_output(
-                ctx,
-                plan_id,
-                gate,
-                skill,
-                threshold,
-                started,
-                ended,
-                &stdout,
-                &stderr,
-                &prompt_hash,
-                &schema_hash,
-                &format!("{error:#}"),
-                output.status.code().unwrap_or(1),
-                &command_output.worker_receipt_id,
+                InvalidReviewOutputContext {
+                    ctx,
+                    plan_id,
+                    gate,
+                    started_at_ms: started,
+                    ended_at_ms: ended,
+                    stdout: &stdout,
+                    stderr: &stderr,
+                    prompt_hash: &prompt_hash,
+                    schema_hash: &schema_hash,
+                    codex_exit_status: output.status.code().unwrap_or(1),
+                    worker_receipt_id: &command_output.worker_receipt_id,
+                },
+                &parse_error,
             );
         }
     };
@@ -268,23 +269,39 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn record_invalid_review_output(
-    ctx: &RepoContext,
-    plan_id: &str,
-    gate: &WorkReviewGate,
-    skill: &str,
-    threshold: &str,
-    started: u64,
-    ended: u64,
-    stdout: &str,
-    stderr: &str,
-    prompt_hash: &str,
-    schema_hash: &str,
-    parse_error: &str,
+struct InvalidReviewOutputContext<'a> {
+    ctx: &'a RepoContext,
+    plan_id: &'a str,
+    gate: &'a WorkReviewGate,
+    started_at_ms: u64,
+    ended_at_ms: u64,
+    stdout: &'a str,
+    stderr: &'a str,
+    prompt_hash: &'a str,
+    schema_hash: &'a str,
     codex_exit_status: i32,
-    worker_receipt_id: &str,
+    worker_receipt_id: &'a str,
+}
+
+fn record_invalid_review_output(
+    context: InvalidReviewOutputContext<'_>,
+    parse_error: &str,
 ) -> Result<Value> {
+    let InvalidReviewOutputContext {
+        ctx,
+        plan_id,
+        gate,
+        started_at_ms,
+        ended_at_ms,
+        stdout,
+        stderr,
+        prompt_hash,
+        schema_hash,
+        codex_exit_status,
+        worker_receipt_id,
+    } = context;
+    let skill = gate.skill.as_str();
+    let threshold = gate.threshold;
     let receipt_stderr = if stderr.is_empty() {
         parse_error.to_string()
     } else {
@@ -323,8 +340,8 @@ fn record_invalid_review_output(
             }),
             invoked_command_key: None,
             plan_id: Some(plan_id.to_string()),
-            started_at_ms: started,
-            ended_at_ms: ended,
+            started_at_ms,
+            ended_at_ms,
             exit_status: 2,
             stdout,
             stderr: &receipt_stderr,
