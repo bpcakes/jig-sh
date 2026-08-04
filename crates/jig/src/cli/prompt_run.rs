@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal, Write};
 use anyhow::{Context, Result, anyhow};
 use rustyline::{DefaultEditor, error::ReadlineError};
 
-use super::output::print_json;
+use super::output::{format_prompt_human_output, print_json, print_prompt_warnings};
 use super::prompt::{PromptAddOpts, PromptCommand};
 use crate::{context::RepoContext, runtime};
 
@@ -341,8 +341,8 @@ fn print_prompt_output(output: serde_json::Value, json_output: bool) -> Result<(
     if json_output {
         print_json(&output)
     } else {
-        crate::prompt_registry::print_prompt_warnings(&output);
-        print_human_summary(crate::prompt_registry::format_prompt_human_output(&output))
+        print_prompt_warnings(&output);
+        print_human_summary(format_prompt_human_output(&output))
     }
 }
 

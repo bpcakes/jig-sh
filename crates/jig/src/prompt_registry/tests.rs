@@ -900,10 +900,6 @@ fn prompt_edit_target_reports_path_without_creating_new_prompt() {
     let path = target["path"].as_str().unwrap();
     assert!(path.ends_with("store/prompts/user/new-prompt.md"));
     assert!(!Path::new(path).exists());
-    let human = format_prompt_human_output(&target);
-    assert!(human.contains("prompt edit: new-prompt"));
-    assert!(human.contains(path));
-
     registry
         .add_prompt(PromptAddRequest {
             name: "new-prompt".into(),
