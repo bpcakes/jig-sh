@@ -33,6 +33,44 @@ impl GateCollection<'_> {
     }
 }
 
+#[derive(Default)]
+struct RequiredGateFailures {
+    missing: Vec<String>,
+    failed: Vec<String>,
+    stale: Vec<String>,
+    unknown: Vec<String>,
+    unsupported: Vec<String>,
+}
+
+impl RequiredGateFailures {
+    fn is_empty(&self) -> bool {
+        self.missing.is_empty()
+            && self.failed.is_empty()
+            && self.stale.is_empty()
+            && self.unknown.is_empty()
+            && self.unsupported.is_empty()
+    }
+
+    // A declared unsupported gate and an unrecognized future status both block as
+    // unsupported, but retaining the named arm documents the stable wire value.
+    #[allow(clippy::match_same_arms)]
+    fn observe(&mut self, gate: &WorkGate, status: &Value) {
+        if !gate.required() {
+            return;
+        }
+
+        match status["status"].as_str() {
+            Some("passed") => {}
+            Some("missing") => self.missing.push(gate.id().to_string()),
+            Some("failed" | "invalid_output") => self.failed.push(gate.id().to_string()),
+            Some("stale") => self.stale.push(gate.id().to_string()),
+            Some("unknown") => self.unknown.push(gate.id().to_string()),
+            Some("unsupported") => self.unsupported.push(unsupported_gate_label(gate, status)),
+            _ => self.unsupported.push(unsupported_gate_label(gate, status)),
+        }
+    }
+}
+
 pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
     gate_status(ctx, &plan_id)
@@ -160,34 +198,18 @@ fn gate_status_with_current_fingerprint(
     collection.ensure_active()?;
 
     let mut gates = Vec::new();
-    let mut missing_required = Vec::new();
-    let mut failed_required = Vec::new();
-    let mut stale_required = Vec::new();
-    let mut unknown_required = Vec::new();
-    let mut unsupported_required = Vec::new();
+    let mut required_failures = RequiredGateFailures::default();
 
     for gate in work_gates {
         collection.ensure_active()?;
         let status = gate_status_value(&gate, &current_fingerprint, &receipt_index, collection)?;
         collection.ensure_active()?;
-        collect_required_gate_failure(
-            &gate,
-            &status,
-            &mut missing_required,
-            &mut failed_required,
-            &mut stale_required,
-            &mut unknown_required,
-            &mut unsupported_required,
-        );
+        required_failures.observe(&gate, &status);
         gates.push(status);
     }
     collection.ensure_active()?;
 
-    let gates_ok = missing_required.is_empty()
-        && failed_required.is_empty()
-        && stale_required.is_empty()
-        && unknown_required.is_empty()
-        && unsupported_required.is_empty();
+    let gates_ok = required_failures.is_empty();
 
     Ok(json!({
         "ok": true,
@@ -198,11 +220,11 @@ fn gate_status_with_current_fingerprint(
         "current_worktree_fingerprint": current_fingerprint.fingerprint.as_deref(),
         "current_worktree_fingerprint_error": current_fingerprint.error.as_deref(),
         "gates": gates,
-        "missing_required": missing_required,
-        "failed_required": failed_required,
-        "stale_required": stale_required,
-        "unknown_required": unknown_required,
-        "unsupported_required": unsupported_required,
+        "missing_required": required_failures.missing,
+        "failed_required": required_failures.failed,
+        "stale_required": required_failures.stale,
+        "unknown_required": required_failures.unknown,
+        "unsupported_required": required_failures.unsupported,
     }))
 }
 
@@ -525,33 +547,6 @@ fn gate_changed_paths<T: GateReceiptView>(
         receipt.changed_paths_truncated() || total > MAX_GATE_CHANGED_PATHS,
         receipt.changed_paths_digest(),
     )
-}
-
-// A declared unsupported gate and an unrecognized future status both block as
-// unsupported, but retaining the named arm documents the stable wire value.
-#[allow(clippy::match_same_arms)]
-fn collect_required_gate_failure(
-    gate: &WorkGate,
-    status: &Value,
-    missing_required: &mut Vec<String>,
-    failed_required: &mut Vec<String>,
-    stale_required: &mut Vec<String>,
-    unknown_required: &mut Vec<String>,
-    unsupported_required: &mut Vec<String>,
-) {
-    if !gate.required() {
-        return;
-    }
-
-    match status["status"].as_str() {
-        Some("passed") => {}
-        Some("missing") => missing_required.push(gate.id().to_string()),
-        Some("failed" | "invalid_output") => failed_required.push(gate.id().to_string()),
-        Some("stale") => stale_required.push(gate.id().to_string()),
-        Some("unknown") => unknown_required.push(gate.id().to_string()),
-        Some("unsupported") => unsupported_required.push(unsupported_gate_label(gate, status)),
-        _ => unsupported_required.push(unsupported_gate_label(gate, status)),
-    }
 }
 
 fn unsupported_gate_label(gate: &WorkGate, status: &Value) -> String {
