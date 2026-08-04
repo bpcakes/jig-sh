@@ -38,7 +38,7 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     if: ${{ github.event.inputs.backfill_v0_1_0 != 'true' }}
     # This environment must stay protected with required reviewers because it
     # grants the OIDC token used for crates.io Trusted Publishing.
@@ -211,7 +211,9 @@ jobs:
             for crate in jig-dev-proxy jig-sh; do
               status=""
               for attempt in 1 2; do
-                status="$(curl --max-time 20 -sS -o "/tmp/${crate}-crate-version.json" -w '%{http_code}' "https://crates.io/api/v1/crates/$crate/$VERSION" || true)"
+                status="$(curl --max-time 20 -sS -o "/tmp/${crate}-crate-version.json" -w '%{http_code}' \
+                  --user-agent 'jig-sh-release-workflow (+https://github.com/bpcakes/jig-sh)' \
+                  "https://crates.io/api/v1/crates/$crate/$VERSION" || true)"
                 if [[ "$status" == "200" || "$status" == "404" || "$attempt" == "2" ]]; then
                   break
                 fi
