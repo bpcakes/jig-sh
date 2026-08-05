@@ -4,7 +4,10 @@ use clap::{Args, Parser, Subcommand};
 
 #[cfg(test)]
 use crate::tool_defs::tool;
-use crate::{bootstrap, context::RepoContext, doctor, info, mcp, runtime, status, tool_defs, ui};
+use crate::{
+    bootstrap, context::RepoContext, doctor, info, mcp, root_commands, runtime, status, tool_defs,
+    ui,
+};
 
 mod agent;
 mod bootstrap_run;
@@ -56,7 +59,7 @@ pub(crate) use work::{
     name = "jig",
     version,
     about = "Repo-local agent runtime and bootstrapper for jig.sh",
-    after_help = ROOT_AFTER_HELP
+    after_help = root_after_help()
 )]
 struct Cli {
     #[arg(
@@ -69,13 +72,20 @@ struct Cli {
     command: CommandKind,
 }
 
-const ROOT_AFTER_HELP: &str = "\
+const ROOT_COMMON_WORKFLOWS: &str = "\
 Common workflows:
   jig doctor           Check repository setup and get the next remediation step
   jig info --commands  Show which commands are usable in this repository
   jig dev              Start configured development apps
   jig check test       Run the configured test suite
   jig work status      Inspect structured work and required gates";
+
+fn root_after_help() -> String {
+    format!(
+        "{}\n{ROOT_COMMON_WORKFLOWS}",
+        root_commands::categorized_help()
+    )
+}
 
 const TEMPLATE_ERROR_HINT: &str = "\
 Templates:
@@ -186,98 +196,116 @@ Quick start:
 #[derive(Debug, Subcommand)]
 pub(crate) enum CommandKind {
     /// Create a new repository and render Jig harness files into it.
-    #[command(name = tool_defs::cli_command::INIT, display_order = 10)]
+    #[command(
+        name = root_commands::INIT.name,
+        display_order = root_commands::INIT.display_order
+    )]
     Init(bootstrap::InitOpts),
     /// Show available project scaffolds for `jig init`.
     #[command(
-        name = tool_defs::cli_command::PRESETS,
-        display_order = 20,
+        name = root_commands::PRESETS.name,
+        display_order = root_commands::PRESETS.display_order,
         after_help = PRESETS_AFTER_HELP
     )]
     Presets,
     /// Adopt Jig harness files into an existing repository.
-    #[command(name = tool_defs::cli_command::ADOPT, display_order = 30)]
+    #[command(
+        name = root_commands::ADOPT.name,
+        display_order = root_commands::ADOPT.display_order
+    )]
     Adopt(bootstrap::AdoptOpts),
     /// Refresh managed Jig harness files from the configured template source.
-    #[command(name = tool_defs::cli_command::UPDATE, display_order = 40)]
+    #[command(
+        name = root_commands::UPDATE.name,
+        display_order = root_commands::UPDATE.display_order
+    )]
     Update(bootstrap::UpdateOpts),
     /// Run the configured project bootstrap command.
-    #[command(name = tool_defs::cli_command::BOOTSTRAP, display_order = 50)]
+    #[command(
+        name = root_commands::BOOTSTRAP.name,
+        display_order = root_commands::BOOTSTRAP.display_order
+    )]
     Bootstrap(ToolOpts),
     /// Prepare a generated repo for first use and verify its minimum contract.
-    #[command(name = tool_defs::cli_command::SETUP, display_order = 55)]
+    #[command(
+        name = root_commands::SETUP.name,
+        display_order = root_commands::SETUP.display_order
+    )]
     Setup,
     /// Report repo harness readiness and the next command to fix setup.
     #[command(
-        name = tool_defs::cli_command::DOCTOR,
-        display_order = 60,
+        name = root_commands::DOCTOR.name,
+        display_order = root_commands::DOCTOR.display_order,
         after_help = DOCTOR_AFTER_HELP
     )]
     Doctor,
     /// Summarize repo Jig configuration, capabilities, gates, and dev apps.
     #[command(
-        name = tool_defs::cli_command::INFO,
-        display_order = 70,
+        name = root_commands::INFO.name,
+        display_order = root_commands::INFO.display_order,
         visible_alias = "explain",
         after_help = INFO_AFTER_HELP
     )]
     Info(InfoOpts),
     /// Run and manage configured development app sessions.
-    #[command(name = tool_defs::cli_command::DEV, display_order = 100)]
+    #[command(
+        name = root_commands::DEV.name,
+        display_order = root_commands::DEV.display_order
+    )]
     Dev(DevOpts),
     /// Run configured project checks and Jig-owned repository policy checks.
     #[command(
-        name = tool_defs::cli_command::CHECK,
-        display_order = 110,
+        name = root_commands::CHECK.name,
+        display_order = root_commands::CHECK.display_order,
         subcommand,
         after_help = check::CHECK_AFTER_HELP
     )]
     Check(CheckCommand),
     /// Aggregate local repo, work, loop, and configured status-provider observations.
     #[command(
-        name = tool_defs::cli_command::STATUS,
-        display_order = 120,
+        name = root_commands::STATUS.name,
+        display_order = root_commands::STATUS.display_order,
         after_help = STATUS_AFTER_HELP
     )]
     Status(StatusOpts),
     /// Serve the local flight-recorder dashboard for plans, gates, receipts, and loops.
     #[command(
-        name = tool_defs::cli_command::UI,
-        display_order = 130,
+        name = root_commands::UI.name,
+        display_order = root_commands::UI.display_order,
         after_help = UI_AFTER_HELP
     )]
     Ui(UiOpts),
     /// Manage structured work plans, receipts, gates, and decisions.
     #[command(
-        name = tool_defs::cli_command::WORK,
-        display_order = 200,
+        name = root_commands::WORK.name,
+        display_order = root_commands::WORK.display_order,
         subcommand
     )]
     Work(WorkCommand),
     /// Run and inspect automated orchestration workflows.
     #[command(
-        name = tool_defs::cli_command::LOOP,
-        display_order = 210,
+        name = root_commands::LOOP.name,
+        display_order = root_commands::LOOP.display_order,
         subcommand,
         after_help = loops::LOOP_AFTER_HELP
     )]
     Loop(LoopCommand),
     /// Add a forward-only SQLx migration file when SQLx is enabled.
     #[command(
-        name = tool_defs::cli_command::MIGRATION_ADD,
-        display_order = 300
+        name = root_commands::MIGRATION_ADD.name,
+        display_order = root_commands::MIGRATION_ADD.display_order
     )]
     MigrationAdd(MigrationAddOpts),
     /// Regenerate schema documentation when schema dumps are enabled.
     #[command(
-        name = tool_defs::cli_command::SCHEMA_DUMP,
-        display_order = 310
+        name = root_commands::SCHEMA_DUMP.name,
+        display_order = root_commands::SCHEMA_DUMP.display_order
     )]
     SchemaDump(ToolOpts),
     /// Manage the local encrypted Jig vault.
     #[command(
-        name = tool_defs::cli_command::VAULT,
-        display_order = 320,
+        name = root_commands::VAULT.name,
+        display_order = root_commands::VAULT.display_order,
         subcommand,
         after_help = VAULT_AFTER_HELP
     )]
@@ -290,46 +318,53 @@ pub(crate) enum CommandKind {
     GenerateSqlxUncheckedQueriesTodo(GenerateSqlxUncheckedQueriesTodoOpts),
     /// Manage the local development proxy.
     #[command(
-        name = tool_defs::cli_command::PROXY,
-        display_order = 400,
+        name = root_commands::PROXY.name,
+        display_order = root_commands::PROXY.display_order,
         subcommand
     )]
     Proxy(ProxyCommand),
     /// Manage user, repo, and prompt-pack prompt libraries.
-    #[command(name = "prompt", display_order = 500, subcommand)]
+    #[command(
+        name = root_commands::PROMPT.name,
+        display_order = root_commands::PROMPT.display_order,
+        subcommand
+    )]
     Prompt(PromptCommand),
     /// Inspect or bootstrap local agent tooling.
     #[command(
-        name = tool_defs::cli_command::AGENT,
-        display_order = 510,
+        name = root_commands::AGENT.name,
+        display_order = root_commands::AGENT.display_order,
         subcommand,
         after_help = agent::AGENT_AFTER_HELP
     )]
     Agent(AgentCommand),
     /// Inspect Codex homes or launch Codex with an isolated account and state root.
     #[command(
-        name = tool_defs::cli_command::CODEX,
-        display_order = 515,
+        name = root_commands::CODEX.name,
+        display_order = root_commands::CODEX.display_order,
         subcommand,
         after_help = codex::CODEX_AFTER_HELP
     )]
     Codex(CodexCommand),
     /// Generate the repository agent guide map.
     #[command(
-        name = tool_defs::cli_command::AGENT_MAP,
-        display_order = 520,
+        name = root_commands::AGENT_MAP.name,
+        display_order = root_commands::AGENT_MAP.display_order,
         subcommand
     )]
     AgentMap(AgentMapCommand),
     /// Inspect and archive runtime-owned Jig state.
     #[command(
-        name = tool_defs::cli_command::STATE,
-        display_order = 530,
+        name = root_commands::STATE.name,
+        display_order = root_commands::STATE.display_order,
         subcommand
     )]
     State(StateCommand),
     /// Serve the Jig MCP server over stdio.
-    #[command(name = tool_defs::cli_command::MCP, display_order = 540)]
+    #[command(
+        name = root_commands::MCP.name,
+        display_order = root_commands::MCP.display_order
+    )]
     Mcp,
 }
 

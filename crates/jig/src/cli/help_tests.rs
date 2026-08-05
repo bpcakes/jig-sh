@@ -110,7 +110,12 @@ fn command_inventory_names_track_the_visible_root_surface() {
         .map(|command| command.get_name())
         .collect::<Vec<_>>();
 
-    assert_eq!(visible_commands, crate::info::DISCOVERABLE_COMMAND_NAMES);
+    let described_commands = crate::root_commands::ALL
+        .iter()
+        .map(|command| command.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(visible_commands, described_commands);
 }
 
 #[test]
@@ -123,6 +128,22 @@ fn top_level_help_includes_common_workflows() {
     assert_help_contains(&help, "jig dev");
     assert_help_contains(&help, "jig check test");
     assert_help_contains(&help, "jig work status");
+}
+
+#[test]
+fn top_level_help_groups_every_visible_command_by_user_intent() {
+    let help = Cli::command().render_help().to_string();
+
+    for category in crate::root_commands::RootCommandCategory::ALL {
+        assert_help_contains(&help, category.label());
+    }
+    for command in crate::root_commands::ALL {
+        let group_line = help
+            .lines()
+            .find(|line| line.trim_start().starts_with(command.category.label()))
+            .unwrap_or_else(|| panic!("missing category for {}\n\n{help}", command.name));
+        assert_help_contains(group_line, command.name);
+    }
 }
 
 #[test]

@@ -52,6 +52,7 @@ mod policy;
 mod process;
 mod progress;
 mod prompt_registry;
+mod root_commands;
 mod runtime;
 mod serde_helpers;
 mod shell;

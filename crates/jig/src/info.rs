@@ -15,9 +15,6 @@ const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
 mod commands;
 
-#[cfg(test)]
-pub(crate) use commands::DISCOVERABLE_COMMAND_NAMES;
-
 pub(crate) fn run(commands: bool, json_output: bool) -> Result<Value> {
     if commands {
         let ctx = match RepoContext::load_optional_strict() {

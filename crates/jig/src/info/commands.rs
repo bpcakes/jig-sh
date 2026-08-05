@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
+use crate::root_commands::{self, RootCommand};
 use crate::tool_defs::tool;
 
 use super::VaultCapability;
@@ -45,34 +46,6 @@ impl RepoContextStatus {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) const DISCOVERABLE_COMMAND_NAMES: &[&str] = &[
-    "init",
-    "presets",
-    "adopt",
-    "update",
-    "bootstrap",
-    "setup",
-    "doctor",
-    "info",
-    "dev",
-    "check",
-    "status",
-    "ui",
-    "work",
-    "loop",
-    "migration-add",
-    "schema-dump",
-    "vault",
-    "proxy",
-    "prompt",
-    "agent",
-    "codex",
-    "agent-map",
-    "state",
-    "mcp",
-];
 
 pub(super) fn format_summary(value: &Value) -> String {
     let context_status = value["repo"]["context_status"]
@@ -147,14 +120,13 @@ pub(super) fn info_with_capabilities(
 ) -> Value {
     let jig = command_prefix(ctx);
     let mut commands = vec![
-        ready_command("init", "get_started"),
-        ready_command("presets", "get_started"),
-        ready_command("adopt", "get_started"),
-        ready_command("update", "get_started"),
+        ready_command(root_commands::INIT),
+        ready_command(root_commands::PRESETS),
+        ready_command(root_commands::ADOPT),
+        ready_command(root_commands::UPDATE),
         manifest_command(
             ctx,
-            "bootstrap",
-            "get_started",
+            root_commands::BOOTSTRAP,
             tool::BOOTSTRAP,
             (
                 ReasonCode::BootstrapToolMissing,
@@ -167,8 +139,7 @@ pub(super) fn info_with_capabilities(
         ),
         manifest_command(
             ctx,
-            "setup",
-            "get_started",
+            root_commands::SETUP,
             tool::BOOTSTRAP,
             (
                 ReasonCode::BootstrapToolMissing,
@@ -179,34 +150,34 @@ pub(super) fn info_with_capabilities(
                 "Setup cannot prepare project dependencies because the bootstrap tool declaration or configured command is invalid.",
             ),
         ),
-        ready_command("doctor", "get_started"),
-        ready_command("info", "get_started"),
+        ready_command(root_commands::DOCTOR),
+        ready_command(root_commands::INFO),
     ];
 
     commands.push(dev_command(ctx));
     commands.extend([
-        ready_command("check", "develop"),
-        ready_command("status", "develop"),
-        ready_command("ui", "develop"),
-        ready_command("work", "structured_work"),
+        ready_command(root_commands::CHECK),
+        ready_command(root_commands::STATUS),
+        ready_command(root_commands::UI),
+        ready_command(root_commands::WORK),
     ]);
     // `noop-status` is built in and remains available when no custom workflow
     // is configured or every configured custom workflow is disabled.
-    commands.push(ready_command("loop", "structured_work"));
+    commands.push(ready_command(root_commands::LOOP));
 
     commands.push(migration_add_command(ctx));
     commands.push(schema_dump_command(ctx));
     commands.push(vault_command(vault, &jig));
     commands.push(proxy_command(Some(ctx)));
-    commands.push(ready_command("prompt", "agent_automation"));
+    commands.push(ready_command(root_commands::PROMPT));
     commands.push(agent_command(agent, &jig));
     commands.extend([
-        ready_command("codex", "agent_automation"),
-        ready_command("agent-map", "agent_automation"),
-        ready_command("state", "agent_automation"),
+        ready_command(root_commands::CODEX),
+        ready_command(root_commands::AGENT_MAP),
+        ready_command(root_commands::STATE),
     ]);
     // `.mcp.json` registers clients; the root stdio server does not read it.
-    commands.push(ready_command("mcp", "agent_automation"));
+    commands.push(ready_command(root_commands::MCP));
 
     json!({
         "ok": true,
@@ -235,7 +206,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
                 context_status,
                 dev,
                 vault_command(vault, &jig),
-                ready_command("prompt", "agent_automation"),
+                ready_command(root_commands::PROMPT),
                 match context_status {
                     RepoContextStatus::Invalid | RepoContextStatus::Recovered => {
                         INVALID_OVERRIDE_NEXT_STEP
@@ -253,46 +224,38 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
                 (
                     RepoContextStatus::Invalid,
                     dev_without_context_command_with_next_step(next_step),
-                    repo_context_command_with_next_step("vault", "project_data", next_step),
-                    repo_context_command_with_next_step("prompt", "agent_automation", next_step),
+                    repo_context_command_with_next_step(root_commands::VAULT, next_step),
+                    repo_context_command_with_next_step(root_commands::PROMPT, next_step),
                     next_step,
                     dev_proxy_available(None),
                 )
             }
         };
     let commands = vec![
-        ready_command("init", "get_started"),
-        ready_command("presets", "get_started"),
-        ready_command("adopt", "get_started"),
-        repo_context_command_with_next_step("update", "get_started", repo_context_next_step),
-        repo_context_command_with_next_step("bootstrap", "get_started", repo_context_next_step),
-        repo_context_command_with_next_step("setup", "get_started", repo_context_next_step),
-        ready_command("doctor", "get_started"),
+        ready_command(root_commands::INIT),
+        ready_command(root_commands::PRESETS),
+        ready_command(root_commands::ADOPT),
+        repo_context_command_with_next_step(root_commands::UPDATE, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::BOOTSTRAP, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::SETUP, repo_context_next_step),
+        ready_command(root_commands::DOCTOR),
         info_without_context_command(repo_context_next_step),
         dev,
-        repo_context_command_with_next_step("check", "develop", repo_context_next_step),
-        repo_context_command_with_next_step("status", "develop", repo_context_next_step),
-        repo_context_command_with_next_step("ui", "develop", repo_context_next_step),
-        repo_context_command_with_next_step("work", "structured_work", repo_context_next_step),
-        repo_context_command_with_next_step("loop", "structured_work", repo_context_next_step),
-        repo_context_command_with_next_step(
-            "migration-add",
-            "project_data",
-            repo_context_next_step,
-        ),
-        repo_context_command_with_next_step("schema-dump", "project_data", repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::CHECK, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::STATUS, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::LOOP, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::MIGRATION_ADD, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::SCHEMA_DUMP, repo_context_next_step),
         vault,
         proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available),
         prompt,
-        repo_context_command_with_next_step("agent", "agent_automation", repo_context_next_step),
-        ready_command("codex", "agent_automation"),
-        repo_context_command_with_next_step(
-            "agent-map",
-            "agent_automation",
-            repo_context_next_step,
-        ),
-        repo_context_command_with_next_step("state", "agent_automation", repo_context_next_step),
-        repo_context_command_with_next_step("mcp", "agent_automation", repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::AGENT, repo_context_next_step),
+        ready_command(root_commands::CODEX),
+        repo_context_command_with_next_step(root_commands::AGENT_MAP, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::STATE, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::MCP, repo_context_next_step),
     ];
 
     json!({
@@ -311,8 +274,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
 
 fn info_without_context_command(next_step: &'static str) -> Value {
     command_value(
-        "info",
-        "get_started",
+        root_commands::INFO,
         "needs_setup",
         Some(ReasonCode::RepoContextUnavailable),
         Some(
@@ -322,14 +284,9 @@ fn info_without_context_command(next_step: &'static str) -> Value {
     )
 }
 
-fn repo_context_command_with_next_step(
-    name: &'static str,
-    category: &'static str,
-    next_step: &'static str,
-) -> Value {
+fn repo_context_command_with_next_step(command: RootCommand, next_step: &'static str) -> Value {
     command_value(
-        name,
-        category,
+        command,
         "needs_setup",
         Some(ReasonCode::RepoContextUnavailable),
         Some("This command's primary workflow requires a valid adopted Jig repository."),
@@ -347,14 +304,13 @@ fn dev_command(ctx: &RepoContext) -> Value {
             "Configure [[dev.apps]] in .jig.toml, or preview re-adoption with `{adopt}` and, after reviewing the preview, apply it with `{adopt} --force --write`."
         );
         return not_configured_command(
-            "dev",
-            "develop",
+            root_commands::DEV,
             ReasonCode::DevAppsNotConfigured,
             "No development apps or workspace discovery are configured for the default dev launch.",
             Some(&next_step),
         );
     }
-    ready_command("dev", "develop")
+    ready_command(root_commands::DEV)
 }
 
 pub(super) fn dev_capability(ctx: Option<&RepoContext>) -> Value {
@@ -373,14 +329,13 @@ pub(super) fn dev_capability_with_next_step(
 
 fn dev_without_context_command_with_next_step(next_step: &'static str) -> Value {
     dev_feature_unavailable_command(dev_proxy_available(None))
-        .unwrap_or_else(|| repo_context_command_with_next_step("dev", "develop", next_step))
+        .unwrap_or_else(|| repo_context_command_with_next_step(root_commands::DEV, next_step))
 }
 
 fn dev_feature_unavailable_command(available: bool) -> Option<Value> {
     (!available).then(|| {
         command_value(
-            "dev",
-            "develop",
+            root_commands::DEV,
             "unavailable",
             Some(ReasonCode::DevProxyFeatureNotBuilt),
             Some("This Jig binary was built without development app support."),
@@ -396,8 +351,7 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --sqlx-enabled true --rust-migration-dir migrations`, then, after reviewing the preview, apply with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --force --write`."
         );
         return not_configured_command(
-            "migration-add",
-            "project_data",
+            root_commands::MIGRATION_ADD,
             ReasonCode::SqlxDisabled,
             "SQLx is disabled for this repository.",
             Some(&next_step),
@@ -408,8 +362,7 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --rust-migration-dir migrations`, then, after reviewing the preview, apply with `{adopt} --rust-migration-dir migrations --force --write`."
         );
         return command_value(
-            "migration-add",
-            "project_data",
+            root_commands::MIGRATION_ADD,
             "needs_setup",
             Some(ReasonCode::MigrationDirectoryNotConfigured),
             Some("Migration workflows require a non-empty rust_migration_dir."),
@@ -418,8 +371,7 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
     }
     manifest_command(
         ctx,
-        "migration-add",
-        "project_data",
+        root_commands::MIGRATION_ADD,
         tool::MIGRATION_ADD,
         (
             ReasonCode::MigrationAddToolMissing,
@@ -439,8 +391,7 @@ fn schema_dump_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --schema-dump-enabled true`, then, after reviewing the preview, apply with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --schema-dump-enabled true --force --write`."
         );
         return not_configured_command(
-            "schema-dump",
-            "project_data",
+            root_commands::SCHEMA_DUMP,
             ReasonCode::SqlxDisabled,
             "SQLx is disabled for this repository.",
             Some(&next_step),
@@ -456,8 +407,7 @@ fn schema_dump_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --rust-migration-dir migrations{schema_dump_flag}`, then, after reviewing the preview, apply with `{adopt} --rust-migration-dir migrations{schema_dump_flag} --force --write`."
         );
         return command_value(
-            "schema-dump",
-            "project_data",
+            root_commands::SCHEMA_DUMP,
             "needs_setup",
             Some(ReasonCode::MigrationDirectoryNotConfigured),
             Some("SQLx workflows require a non-empty rust_migration_dir."),
@@ -469,8 +419,7 @@ fn schema_dump_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --schema-dump-enabled true`, then, after reviewing the preview, apply with `{adopt} --schema-dump-enabled true --force --write`."
         );
         return not_configured_command(
-            "schema-dump",
-            "project_data",
+            root_commands::SCHEMA_DUMP,
             ReasonCode::SchemaDumpsDisabled,
             "Schema dumps are disabled for this repository.",
             Some(&next_step),
@@ -478,8 +427,7 @@ fn schema_dump_command(ctx: &RepoContext) -> Value {
     }
     manifest_command(
         ctx,
-        "schema-dump",
-        "project_data",
+        root_commands::SCHEMA_DUMP,
         tool::SCHEMA_DUMP,
         (
             ReasonCode::SchemaDumpToolMissing,
@@ -494,8 +442,7 @@ fn schema_dump_command(ctx: &RepoContext) -> Value {
 
 fn manifest_command(
     ctx: &RepoContext,
-    name: &'static str,
-    category: &'static str,
+    command: RootCommand,
     tool_name: &str,
     missing: (ReasonCode, &'static str),
     invalid: (ReasonCode, &'static str),
@@ -506,8 +453,7 @@ fn manifest_command(
     );
     let Some(tool) = ctx.tool_spec(tool_name) else {
         return command_value(
-            name,
-            category,
+            command,
             "needs_setup",
             Some(missing.0),
             Some(missing.1),
@@ -524,23 +470,21 @@ fn manifest_command(
     };
     if !valid {
         return command_value(
-            name,
-            category,
+            command,
             "needs_setup",
             Some(invalid.0),
             Some(invalid.1),
             Some(&next_step),
         );
     }
-    ready_command(name, category)
+    ready_command(command)
 }
 
 fn vault_command(vault: VaultCapability, jig: &str) -> Value {
     if !vault.available {
         let next_step = format!("Run `{jig} vault status` for details.");
         return command_value(
-            "vault",
-            "project_data",
+            root_commands::VAULT,
             "unavailable",
             Some(ReasonCode::VaultStatusUnavailable),
             Some("Vault availability could not be determined."),
@@ -550,15 +494,14 @@ fn vault_command(vault: VaultCapability, jig: &str) -> Value {
     if !vault.initialized {
         let next_step = format!("Run `{jig} vault init`.");
         return command_value(
-            "vault",
-            "project_data",
+            root_commands::VAULT,
             "needs_setup",
             Some(ReasonCode::VaultNotInitialized),
             Some("The configured vault has not been initialized."),
             Some(&next_step),
         );
     }
-    ready_command("vault", "project_data")
+    ready_command(root_commands::VAULT)
 }
 
 fn proxy_command(ctx: Option<&RepoContext>) -> Value {
@@ -566,11 +509,10 @@ fn proxy_command(ctx: Option<&RepoContext>) -> Value {
         // The proxy family includes configuration-free commands such as
         // `proxy run`, `proxy alias`, certificate management, and diagnostics.
         // Doctor separately reports whether this repo has configured dev apps.
-        ready_command("proxy", "local_services")
+        ready_command(root_commands::PROXY)
     } else {
         command_value(
-            "proxy",
-            "local_services",
+            root_commands::PROXY,
             "unavailable",
             Some(ReasonCode::DevProxyFeatureNotBuilt),
             Some("This Jig binary was built without local proxy support."),
@@ -581,7 +523,7 @@ fn proxy_command(ctx: Option<&RepoContext>) -> Value {
 
 fn proxy_without_valid_context_command(next_step: &'static str, available: bool) -> Value {
     if available {
-        repo_context_command_with_next_step("proxy", "local_services", next_step)
+        repo_context_command_with_next_step(root_commands::PROXY, next_step)
     } else {
         proxy_command(None)
     }
@@ -589,7 +531,7 @@ fn proxy_without_valid_context_command(next_step: &'static str, available: bool)
 
 fn agent_command(agent: &Value, jig: &str) -> Value {
     if agent["ok"].as_bool().unwrap_or(false) {
-        return ready_command("agent", "agent_automation");
+        return ready_command(root_commands::AGENT);
     }
 
     let (status, reason_code, reason) = if !agent["codex"]["probe_error"].is_null() {
@@ -618,8 +560,7 @@ fn agent_command(agent: &Value, jig: &str) -> Value {
         .unwrap_or("Run `jig agent doctor` for details.")
         .replace("`scripts/jig", &format!("`{jig}"));
     command_value(
-        "agent",
-        "agent_automation",
+        root_commands::AGENT,
         status,
         Some(reason_code),
         Some(reason),
@@ -627,20 +568,18 @@ fn agent_command(agent: &Value, jig: &str) -> Value {
     )
 }
 
-fn ready_command(name: &'static str, category: &'static str) -> Value {
-    command_value(name, category, "ready", None, None, None)
+fn ready_command(command: RootCommand) -> Value {
+    command_value(command, "ready", None, None, None)
 }
 
 fn not_configured_command(
-    name: &'static str,
-    category: &'static str,
+    command: RootCommand,
     reason_code: ReasonCode,
     reason: &'static str,
     next_step: Option<&str>,
 ) -> Value {
     command_value(
-        name,
-        category,
+        command,
         "not_configured",
         Some(reason_code),
         Some(reason),
@@ -649,8 +588,7 @@ fn not_configured_command(
 }
 
 fn command_value(
-    name: &str,
-    category: &str,
+    command: RootCommand,
     status: &str,
     reason_code: Option<ReasonCode>,
     reason: Option<&str>,
@@ -658,8 +596,8 @@ fn command_value(
 ) -> Value {
     let reason_code = reason_code.map(ReasonCode::as_str);
     json!({
-        "name": name,
-        "category": category,
+        "name": command.name,
+        "category": command.category.id(),
         "status": status,
         "reason_code": reason_code,
         "reason": reason,
@@ -668,15 +606,8 @@ fn command_value(
 }
 
 fn command_category_label(category: &str) -> &'static str {
-    match category {
-        "get_started" => "Get started",
-        "develop" => "Develop",
-        "structured_work" => "Structured work",
-        "project_data" => "Project data",
-        "local_services" => "Local services",
-        "agent_automation" => "Agent and automation",
-        _ => "Other",
-    }
+    root_commands::RootCommandCategory::from_id(category)
+        .map_or("Other", root_commands::RootCommandCategory::label)
 }
 
 fn command_status_label(status: &str) -> &'static str {

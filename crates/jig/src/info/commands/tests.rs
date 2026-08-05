@@ -6,6 +6,13 @@ use serde_json::json;
 use std::fs;
 use tempfile::tempdir;
 
+fn discoverable_command_names() -> Vec<&'static str> {
+    crate::root_commands::ALL
+        .iter()
+        .map(|command| command.name)
+        .collect()
+}
+
 #[cfg(feature = "dev-proxy")]
 #[test]
 fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
@@ -35,7 +42,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
         .iter()
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names, DISCOVERABLE_COMMAND_NAMES);
+    assert_eq!(names, discoverable_command_names());
     assert!(commands.iter().all(|command| command["status"] == "ready"));
     assert!(
         commands
@@ -296,7 +303,7 @@ fn command_inventory_without_repo_context_keeps_onboarding_commands_available() 
         .iter()
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names, DISCOVERABLE_COMMAND_NAMES);
+    assert_eq!(names, discoverable_command_names());
     for name in ["init", "presets", "adopt", "doctor", "prompt", "codex"] {
         assert_eq!(command_by_name(&output, name)["status"], "ready", "{name}");
     }
@@ -667,7 +674,7 @@ fn command_inventory_marks_dev_and_proxy_unavailable_without_feature() {
         .iter()
         .map(|command| command["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names, DISCOVERABLE_COMMAND_NAMES);
+    assert_eq!(names, discoverable_command_names());
 
     assert_command_status(&output, "dev", "unavailable", "dev_proxy_feature_not_built");
     assert_command_status(
