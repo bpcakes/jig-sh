@@ -19,6 +19,7 @@ mod loops;
 mod prompt;
 mod proxy;
 mod setup_run;
+mod sqlx;
 mod state;
 mod status_opts;
 mod vault;
@@ -38,6 +39,7 @@ pub(crate) use proxy::{
     ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
     ProxyStartOpts, ProxyStopOpts,
 };
+pub(crate) use sqlx::{MigrationAddOpts, SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{
     StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
@@ -104,24 +106,6 @@ Use one of:
   jig adopt . --write --template /path/to/jig-sh
 
 Pass --template only for a local checkout, fork, or private template.";
-
-const MIGRATION_ADD_AFTER_HELP: &str = "\
-Use --plan-id to associate the migration with an open structured work plan.
-
-Examples:
-  jig sqlx migration add create_users
-  jig sqlx migration add add_login_tokens --plan-id plan_abc123
-
-The legacy `jig migration-add NAME` path remains accepted for compatibility.";
-
-const SQLX_AFTER_HELP: &str = "\
-SQLx checks remain grouped with the other project checks under `jig check`.
-
-Examples:
-  jig sqlx migration add create_users
-  jig sqlx schema dump
-  jig check sqlx
-  jig check schema";
 
 const DOCTOR_AFTER_HELP: &str = "\
 Runs the read-only readiness checks that are otherwise split across bootstrap,
@@ -306,7 +290,7 @@ pub(crate) enum CommandKind {
         name = root_commands::SQLX.name,
         display_order = root_commands::SQLX.display_order,
         subcommand,
-        after_help = SQLX_AFTER_HELP
+        after_help = sqlx::SQLX_AFTER_HELP
     )]
     Sqlx(SqlxCommand),
     /// Add a forward-only SQLx migration file when SQLx is enabled.
@@ -382,30 +366,6 @@ pub(crate) enum CommandKind {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum SqlxCommand {
-    /// Create and manage forward-only SQLx migrations.
-    #[command(name = tool_defs::cli_command::SQLX_MIGRATION, subcommand)]
-    Migration(SqlxMigrationCommand),
-    /// Generate and manage schema documentation.
-    #[command(name = tool_defs::cli_command::SQLX_SCHEMA, subcommand)]
-    Schema(SqlxSchemaCommand),
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum SqlxMigrationCommand {
-    /// Add a forward-only SQLx migration file.
-    #[command(name = tool_defs::cli_command::SQLX_MIGRATION_ADD)]
-    Add(MigrationAddOpts),
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum SqlxSchemaCommand {
-    /// Regenerate schema documentation when schema dumps are enabled.
-    #[command(name = tool_defs::cli_command::SQLX_SCHEMA_DUMP)]
-    Dump(ToolOpts),
-}
-
-#[derive(Debug, Subcommand)]
 pub(crate) enum AgentMapCommand {
     /// Rewrite agent-map.md from tracked AGENTS.md files.
     #[command(name = tool_defs::cli_command::AGENT_MAP_GENERATE)]
@@ -441,15 +401,6 @@ pub(crate) struct InfoOpts {
         help = "Show root commands with repository-specific availability and remediation"
     )]
     pub(crate) commands: bool,
-}
-
-#[derive(Args, Debug)]
-#[command(after_help = MIGRATION_ADD_AFTER_HELP)]
-pub(crate) struct MigrationAddOpts {
-    /// Migration name, for example create_users.
-    pub(crate) name: String,
-    #[command(flatten)]
-    pub(crate) tool: ToolOpts,
 }
 
 #[derive(Args, Debug)]

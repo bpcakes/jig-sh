@@ -9,11 +9,12 @@ use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     RustFileLocInput, SqlxTodoInput,
 };
-use crate::tool_defs::{self, MemoryTool, args, tool};
+use crate::tool_defs::{self, MemoryTool, tool};
 
 mod agent;
 mod loops;
 mod prompt;
+mod sqlx;
 mod tool_execution;
 mod vault;
 mod work;
@@ -48,29 +49,7 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
             tool_execution::execute_manifest_tool_request(ctx, tool::BOOTSTRAP, json!({}), opts)
         }
         RuntimeCommand::Check(command) => dispatch_check(ctx, command),
-        RuntimeCommand::SchemaDump(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SCHEMA_DUMP, json!({}), opts)
-        }
-        RuntimeCommand::MigrationAdd(opts) => {
-            let (plan_id, record_receipt) = opts.tool.into_parts();
-            tool_execution::execute_manifest_tool(
-                ctx,
-                tool::MIGRATION_ADD,
-                json!({ args::NAME: opts.name }),
-                plan_id,
-                record_receipt,
-            )
-            .map(|value| {
-                let name = value["args"][args::NAME].clone();
-                json!({
-                    "ok": true,
-                    "tool": tool::MIGRATION_ADD,
-                    args::NAME: name,
-                    "result": value["result"],
-                    "receipt_id": value["receipt_id"],
-                })
-            })
-        }
+        RuntimeCommand::Sqlx(command) => sqlx::dispatch(ctx, command),
         RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
             ctx,
             PolicyDirectCommand::AgentMapGenerate(AgentMapInput {

@@ -139,13 +139,17 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
         CommandKind::SchemaDump(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::SchemaDump(opts.into()),
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
+                opts.into(),
+            )),
             false,
             json_output,
             HumanOutput::ToolExecution,
         ),
         CommandKind::MigrationAdd(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::MigrationAdd(opts.into()),
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
+                opts.into(),
+            )),
             false,
             json_output,
             HumanOutput::MigrationAdd,
@@ -206,20 +210,16 @@ fn run_command(cli: Cli) -> Result<()> {
 }
 
 fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
-    match command {
-        SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::MigrationAdd(opts.into()),
-            false,
-            json_output,
-            HumanOutput::MigrationAdd,
-        ),
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts)) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::SchemaDump(opts.into()),
-            false,
-            json_output,
-            HumanOutput::ToolExecution,
-        ),
-    }
+    let human_output = match &command {
+        SqlxCommand::Migration(SqlxMigrationCommand::Add(_)) => HumanOutput::MigrationAdd,
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)) => HumanOutput::ToolExecution,
+    };
+    dispatch_runtime_command(
+        crate::command::RuntimeCommand::Sqlx(command.into()),
+        false,
+        json_output,
+        human_output,
+    )
 }
 
 fn report_json_command_error(result: Result<()>) -> Result<()> {

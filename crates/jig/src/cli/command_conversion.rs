@@ -4,17 +4,17 @@ use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
     CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts, DevStatusOpts,
     DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts,
-    LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, MigrationAddOpts, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
-    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts, ToolOpts, VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand,
-    VaultInitOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts,
-    VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts,
-    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
-    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand,
+    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
+    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
+    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
+    ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
+    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
+    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
+    VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
+    VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand,
+    WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts,
+    WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -85,15 +85,6 @@ impl From<GenerateSqlxUncheckedQueriesTodoOpts> for command::SqlxTodoRequest {
     fn from(opts: GenerateSqlxUncheckedQueriesTodoOpts) -> Self {
         Self {
             output: opts.output,
-        }
-    }
-}
-
-impl From<MigrationAddOpts> for command::MigrationAddRequest {
-    fn from(opts: MigrationAddOpts) -> Self {
-        Self {
-            name: opts.name,
-            tool: opts.tool.into(),
         }
     }
 }
@@ -737,36 +728,6 @@ mod tests {
             }
             other => panic!("expected dev stop request, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn migration_add_conversion_preserves_tool_receipt_controls() {
-        let request: command::MigrationAddRequest = MigrationAddOpts {
-            name: "create_users".to_string(),
-            tool: ToolOpts {
-                plan_id: Some("plan_1".to_string()),
-                no_receipt: false,
-            },
-        }
-        .into();
-
-        assert_eq!(request.name, "create_users");
-        let (plan_id, record_receipt) = request.tool.into_parts();
-        assert_eq!(plan_id.as_deref(), Some("plan_1"));
-        assert!(record_receipt);
-
-        let no_receipt_request: command::MigrationAddRequest = MigrationAddOpts {
-            name: "drop_old_table".to_string(),
-            tool: ToolOpts {
-                plan_id: None,
-                no_receipt: true,
-            },
-        }
-        .into();
-
-        let (plan_id, record_receipt) = no_receipt_request.tool.into_parts();
-        assert_eq!(plan_id, None);
-        assert!(!record_receipt);
     }
 
     #[test]

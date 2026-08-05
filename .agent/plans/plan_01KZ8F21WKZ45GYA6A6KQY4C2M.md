@@ -2,8 +2,8 @@
 
 - [x] Centralize root command metadata and render categorized root help.
 - [x] Add canonical SQLx namespace with compatibility shims.
-- [ ] Consolidate SQLx CLI, DTO, and runtime modules.
-- [ ] Run the full test suite before each of the three requested commits. The first two pre-commit runs passed as receipts receipt_01KZ8G23Q29WJ731JXF9SS3NB1 and receipt_01KZ8H41VG6TH0D9TN53RDMKEF.
+- [x] Consolidate SQLx CLI, DTO, and runtime modules.
+- [x] Run the full test suite before each of the three requested commits. The three pre-commit runs passed as receipts receipt_01KZ8G23Q29WJ731JXF9SS3NB1, receipt_01KZ8H41VG6TH0D9TN53RDMKEF, and receipt_01KZ8J265TQZG7VN1RXZM0AQ0Z.
 
 ## Surprises & Discoveries
 
@@ -17,7 +17,10 @@
 
 ## Outcomes & Retrospective
 
-- Pending.
+- Root command names, categories, and display order now come from one typed metadata table, and root help renders the same six categories as the availability inventory.
+- The visible project-data surface is `jig sqlx migration add` and `jig sqlx schema dump`; legacy `migration-add` and `schema-dump` roots remain hidden compatibility shims. Command inventory schema version 2 reflects the new visible root family without changing stable MCP or manifest tool names.
+- SQLx parser/help and conversions live in `cli/sqlx.rs`, request DTOs live in `command/sqlx.rs`, and runtime dispatch/result shaping lives in `runtime/sqlx.rs`. Filesystem and process policy remains in `jig-sh`.
+- Each implementation commit was preceded by a passing `cargo test --workspace` receipt. Final configured contract and test gates also passed with fresh no-change receipts.
 
 ## Context and orientation
 
