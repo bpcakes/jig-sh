@@ -79,7 +79,7 @@ pub struct AnswerOpts {
     #[arg(
         long,
         help_heading = "Advanced Command Overrides",
-        help = "Command used by scripts/jig schema-dump"
+        help = "Command used by scripts/jig sqlx schema dump"
     )]
     pub schema_dump_command: Option<String>,
     #[arg(

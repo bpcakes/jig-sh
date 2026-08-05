@@ -253,7 +253,7 @@ pub(crate) fn validate_contract(
 
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
     if !ctx.sqlx_enabled() {
-        bail!("migration-add requires sqlx_enabled = true");
+        bail!("sqlx migration add requires sqlx_enabled = true");
     }
     let migration_dir = ctx.rust_migration_dir();
     if migration_dir.trim().is_empty() {

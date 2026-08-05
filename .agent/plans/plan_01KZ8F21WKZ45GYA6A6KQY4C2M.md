@@ -1,9 +1,9 @@
 ## Progress
 
 - [x] Centralize root command metadata and render categorized root help.
-- [ ] Add canonical SQLx namespace with compatibility shims.
+- [x] Add canonical SQLx namespace with compatibility shims.
 - [ ] Consolidate SQLx CLI, DTO, and runtime modules.
-- [ ] Run the full test suite before each of the three requested commits. First pre-commit run passed as receipt receipt_01KZ8G23Q29WJ731JXF9SS3NB1.
+- [ ] Run the full test suite before each of the three requested commits. The first two pre-commit runs passed as receipts receipt_01KZ8G23Q29WJ731JXF9SS3NB1 and receipt_01KZ8H41VG6TH0D9TN53RDMKEF.
 
 ## Surprises & Discoveries
 
@@ -13,6 +13,7 @@
 
 - Preserve existing migration-add and schema-dump invocations while adding the canonical namespace.
 - Keep SQLx filesystem mutation and process execution in jig-sh per the jig-sqlx crate invariant.
+- Hide, rather than remove, the flattened migration-add and schema-dump roots. The visible command inventory is schema version 2 because it now reports one sqlx family instead of those two roots; stable MCP tools and generated manifest names are unchanged.
 
 ## Outcomes & Retrospective
 

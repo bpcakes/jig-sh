@@ -27,7 +27,7 @@ pub(super) fn generated_gates(answers: &RenderAnswers) -> Vec<String> {
     }
     if answers.schema_dump_enabled() {
         gates.push(format!("{launcher} check schema"));
-        gates.push(format!("{launcher} schema-dump"));
+        gates.push(format!("{launcher} sqlx schema dump"));
     }
     if answers.frontend_harness_enabled() {
         gates.extend([

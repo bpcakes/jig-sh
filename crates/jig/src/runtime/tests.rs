@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 use common::*;
 
-use crate::cli::CommandKind;
+use crate::cli::{CommandKind, SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 use crate::command::RuntimeCommand;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
@@ -178,6 +178,12 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
         CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
         CommandKind::Check(command) => RuntimeCommand::Check(command.into()),
+        CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
+            RuntimeCommand::MigrationAdd(opts.into())
+        }
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
+            RuntimeCommand::SchemaDump(opts.into())
+        }
         CommandKind::SchemaDump(opts) => RuntimeCommand::SchemaDump(opts.into()),
         CommandKind::MigrationAdd(opts) => RuntimeCommand::MigrationAdd(opts.into()),
         CommandKind::AgentMap(command) => RuntimeCommand::AgentMap(command.into()),

@@ -68,7 +68,7 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 ## Optional Keys
 
 - `schema_dump_enabled`: when `true` and `sqlx_enabled` is also `true`, the template renders schema dump and schema freshness commands; when SQLx is disabled, this is rendered as `false`. New init/adopt answers reject explicitly setting this to `true` while SQLx is disabled; `jig update --recopy` normalizes legacy SQLx-disabled configs back to `false`.
-- `schema_dump_command`: command behind `scripts/jig schema-dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
+- `schema_dump_command`: command behind `scripts/jig sqlx schema dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
 - `sqlx_check_command`: command behind `scripts/jig check sqlx` when `sqlx_enabled` is `true`
 - `bootstrap_command`: implementation behind `scripts/jig bootstrap`; `scripts/jig setup` invokes it between an initial doctor pass and minimum agent/contract verification. The generated harness-only default runs `cargo fetch` only when a root `Cargo.toml` exists, otherwise exits 0 with a stdout note. For database-backed `rust-react` shapes, export a nonempty `DATABASE_URL` or provide an actual `DATABASE_URL` assignment in `.env`; an empty or unrelated `.env` does not satisfy the preflight. Bootstrap creates the Postgres or SQLite database, applies migrations through the generated SQLx code, then performs one dependency install from its authoritative JavaScript scope. Generated SQLite code creates missing parent directories and serializes migrations with an adjacent lock file so concurrent bootstrap processes do not race non-idempotent DDL. Every in-memory SQLite pool permanently retains at least one connection with idle/lifetime reaping and the cancellable pre-acquire health check disabled; private-cache URLs additionally restrict the pool to one connection, while shared-cache forms retain concurrent pooling. Set this explicitly for other project-specific setup. If a root `Cargo.toml` exists, Cargo errors are surfaced instead of skipped.
 - `dev_command`: legacy project-owned dev command preserved only for older renders; `scripts/jig dev` uses `[dev]` and `[[dev.apps]]`
@@ -83,7 +83,7 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig migration-add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig sqlx migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
 
 Contracts that declare `"kind": "native"` tools require the repo's pinned `scripts/jig` runtime version. Do not run an older cached `jig` binary against a repo after updating its `.agent/jig-contract.json`; use the launcher so the `jig_version` pin is enforced.
 
@@ -553,14 +553,16 @@ The compatibility policy for generated CLI commands, MCP tools, and `.agent/jig-
 When `sqlx_enabled` is `true`, it also exposes:
 
 - `scripts/jig check sqlx`
-- `scripts/jig migration-add NAME`
+- `scripts/jig sqlx migration add NAME`
 
 When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 
 - `scripts/jig check schema`
-- `scripts/jig schema-dump`
+- `scripts/jig sqlx schema dump`
 
 `scripts/jig check schema` reruns `schema_dump_command`, then checks `SCHEMA_DOCS_DIR` for drift. `SCHEMA_DOCS_DIR` defaults to `docs/schema` when the environment variable is unset.
+
+The legacy `scripts/jig migration-add NAME` and `scripts/jig schema-dump` paths remain accepted as compatibility shims, but new documentation and automation should use the `scripts/jig sqlx ...` namespace.
 
 Generated repos also get these runtime-owned files:
 

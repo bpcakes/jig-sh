@@ -3,6 +3,46 @@ use super::*;
 mod info;
 
 #[test]
+fn parses_canonical_and_legacy_sqlx_commands() {
+    let migration = Cli::try_parse_from([
+        "jig",
+        "sqlx",
+        "migration",
+        "add",
+        "create_users",
+        "--plan-id",
+        "plan_1",
+    ])
+    .unwrap();
+    match migration.command {
+        CommandKind::Sqlx(SqlxCommand::Migration(SqlxMigrationCommand::Add(opts))) => {
+            assert_eq!(opts.name, "create_users");
+            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
+        }
+        other => panic!("expected sqlx migration add command, got {other:?}"),
+    }
+
+    let schema = Cli::try_parse_from(["jig", "sqlx", "schema", "dump", "--no-receipt"]).unwrap();
+    match schema.command {
+        CommandKind::Sqlx(SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts))) => {
+            assert!(opts.no_receipt);
+        }
+        other => panic!("expected sqlx schema dump command, got {other:?}"),
+    }
+
+    assert!(matches!(
+        Cli::try_parse_from(["jig", "migration-add", "create_users"])
+            .unwrap()
+            .command,
+        CommandKind::MigrationAdd(_)
+    ));
+    assert!(matches!(
+        Cli::try_parse_from(["jig", "schema-dump"]).unwrap().command,
+        CommandKind::SchemaDump(_)
+    ));
+}
+
+#[test]
 fn parses_check_namespace_commands() {
     let fmt = Cli::try_parse_from(["jig", "check", "fmt", "--plan-id", "plan_1"]).unwrap();
     match fmt.command {

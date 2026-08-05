@@ -949,7 +949,7 @@ fn initial_next_steps(
         );
     }
     if result.schema_dump_enabled {
-        steps.push("Provide scripts/dump-schema.sh, then run scripts/jig schema-dump.".into());
+        steps.push("Provide scripts/dump-schema.sh, then run scripts/jig sqlx schema dump.".into());
     }
     if command == InitialCommand::Adopt {
         steps.push("Commit the adoption diff after generated checks pass.".into());

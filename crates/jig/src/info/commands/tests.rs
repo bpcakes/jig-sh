@@ -35,7 +35,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     );
 
     assert_eq!(output["command"], "info commands");
-    assert_eq!(output["schema_version"], 1);
+    assert_eq!(output["schema_version"], 2);
     assert_eq!(output["repo"]["context_status"], "valid");
     let commands = output["commands"].as_array().unwrap();
     let names = commands
@@ -65,11 +65,11 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
             "expected one {heading:?} heading\n\n{summary}"
         );
     }
-    assert!(summary.contains("migration-add  ready"));
+    assert!(summary.contains("sqlx       ready"));
 }
 
 #[test]
-fn schema_v1_reason_codes_are_stable() {
+fn schema_v2_reason_codes_are_stable() {
     let reason_codes = reason::ALL
         .iter()
         .copied()
@@ -89,9 +89,6 @@ fn schema_v1_reason_codes_are_stable() {
             "migration_add_tool_missing",
             "migration_directory_not_configured",
             "repo_context_unavailable",
-            "schema_dump_tool_invalid",
-            "schema_dump_tool_missing",
-            "schema_dumps_disabled",
             "sqlx_disabled",
             "vault_not_initialized",
             "vault_status_unavailable",
@@ -205,21 +202,12 @@ marketplaces = []
     );
     assert_eq!(command_by_name(&output, "loop")["status"], "ready");
     assert_eq!(command_by_name(&output, "loop")["reason_code"], Value::Null);
-    assert_command_status(&output, "migration-add", "not_configured", "sqlx_disabled");
-    assert_command_status(&output, "schema-dump", "not_configured", "sqlx_disabled");
+    assert_command_status(&output, "sqlx", "not_configured", "sqlx_disabled");
     assert!(
-        command_by_name(&output, "migration-add")["next_step"]
+        command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains("--sqlx-enabled true --rust-migration-dir migrations --force --write")
-    );
-    assert!(
-        command_by_name(&output, "schema-dump")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains(
-                "--sqlx-enabled true --rust-migration-dir migrations --schema-dump-enabled true"
-            )
     );
     assert_command_status(&output, "vault", "needs_setup", "vault_not_initialized");
     assert_command_status(
@@ -507,15 +495,9 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &missing_output,
-        "migration-add",
+        "sqlx",
         "needs_setup",
         "migration_add_tool_missing",
-    );
-    assert_command_status(
-        &missing_output,
-        "schema-dump",
-        "needs_setup",
-        "schema_dump_tool_missing",
     );
 
     let invalid = tempdir().unwrap();
@@ -560,35 +542,9 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &invalid_output,
-        "migration-add",
+        "sqlx",
         "needs_setup",
         "migration_add_tool_invalid",
-    );
-    assert_command_status(
-        &invalid_output,
-        "schema-dump",
-        "needs_setup",
-        "schema_dump_tool_invalid",
-    );
-
-    let disabled = tempdir().unwrap();
-    TestRepoBuilder::new(disabled.path())
-        .config(sqlx_command_inventory_config(false))
-        .required_commands(["bootstrap_command"])
-        .write();
-    let disabled_ctx = RepoContext::load_from_root(disabled.path().to_path_buf()).unwrap();
-    let disabled_output = ready_local_inventory(&disabled_ctx);
-    assert_command_status(
-        &disabled_output,
-        "schema-dump",
-        "not_configured",
-        "schema_dumps_disabled",
-    );
-    assert!(
-        command_by_name(&disabled_output, "schema-dump")["next_step"]
-            .as_str()
-            .unwrap()
-            .contains("--schema-dump-enabled true --force --write")
     );
 }
 
@@ -627,24 +583,16 @@ marketplaces = []
 
         assert_command_status(
             &output,
-            "migration-add",
+            "sqlx",
             "needs_setup",
             "migration_directory_not_configured",
         );
-        assert_command_status(
-            &output,
-            "schema-dump",
-            "needs_setup",
-            "migration_directory_not_configured",
+        assert!(
+            command_by_name(&output, "sqlx")["next_step"]
+                .as_str()
+                .unwrap()
+                .contains("--rust-migration-dir migrations")
         );
-        for name in ["migration-add", "schema-dump"] {
-            assert!(
-                command_by_name(&output, name)["next_step"]
-                    .as_str()
-                    .unwrap()
-                    .contains("--rust-migration-dir migrations")
-            );
-        }
     }
 }
 
@@ -781,31 +729,31 @@ marketplaces = []
     let output = ready_local_inventory(&ctx);
 
     assert!(
-        command_by_name(&output, "migration-add")["next_step"]
+        command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains("`jig adopt ")
     );
     assert!(
-        command_by_name(&output, "migration-add")["next_step"]
+        command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains("--minimal")
     );
     assert!(
-        command_by_name(&output, "migration-add")["next_step"]
+        command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains("--template /tmp/template")
     );
     assert!(
-        command_by_name(&output, "migration-add")["next_step"]
+        command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains(&temp.path().display().to_string())
     );
     assert!(
-        !command_by_name(&output, "migration-add")["next_step"]
+        !command_by_name(&output, "sqlx")["next_step"]
             .as_str()
             .unwrap()
             .contains("scripts/jig")

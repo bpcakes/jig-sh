@@ -111,6 +111,11 @@ pub(crate) mod cli_command {
     pub(crate) const STATE_SESSIONS: &str = "sessions";
     pub(crate) const STATE_SUMMARY: &str = "summary";
     pub(crate) const STATUS: &str = "status";
+    pub(crate) const SQLX: &str = "sqlx";
+    pub(crate) const SQLX_MIGRATION: &str = "migration";
+    pub(crate) const SQLX_MIGRATION_ADD: &str = "add";
+    pub(crate) const SQLX_SCHEMA: &str = "schema";
+    pub(crate) const SQLX_SCHEMA_DUMP: &str = "dump";
     pub(crate) const UI: &str = "ui";
     pub(crate) const UPDATE: &str = "update";
     pub(crate) const VAULT: &str = "vault";

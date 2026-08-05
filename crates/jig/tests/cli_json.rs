@@ -166,7 +166,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     assert!(structured.stderr.is_empty());
     let structured: Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(structured["command"], "info commands");
-    assert_eq!(structured["schema_version"], 1);
+    assert_eq!(structured["schema_version"], 2);
     assert_eq!(structured["repo"]["context_status"], "valid");
     let command_names = structured["commands"]
         .as_array()
@@ -191,8 +191,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "ui",
             "work",
             "loop",
-            "migration-add",
-            "schema-dump",
+            "sqlx",
             "vault",
             "proxy",
             "prompt",
@@ -203,14 +202,14 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "mcp",
         ]
     );
-    let migration = structured["commands"]
+    let sqlx = structured["commands"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|command| command["name"] == "migration-add")
+        .find(|command| command["name"] == "sqlx")
         .unwrap();
-    assert_eq!(migration["status"], "not_configured");
-    assert_eq!(migration["reason_code"], "sqlx_disabled");
+    assert_eq!(sqlx["status"], "not_configured");
+    assert_eq!(sqlx["reason_code"], "sqlx_disabled");
 
     let human = jig()
         .current_dir(repo.path())
@@ -224,7 +223,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     assert!(human.contains("Jig command availability: phase-two"));
     assert!(human.contains("Get started:"));
     assert!(human.contains("Agent and automation:"));
-    assert!(human.contains("migration-add  not configured"));
+    assert!(human.contains("sqlx       not configured"));
     assert!(human.contains("Next:"));
     assert!(!state_dir.exists());
 }
@@ -326,7 +325,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(command_status(&output, "proxy"), "ready");
     assert_eq!(command_status(&output, "dev"), "not_configured");
-    let next_step = command_by_name(&output, "migration-add")["next_step"]
+    let next_step = command_by_name(&output, "sqlx")["next_step"]
         .as_str()
         .unwrap();
     assert!(next_step.contains(&full.path().join("scripts/jig").display().to_string()));
@@ -354,7 +353,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
         .unwrap();
     assert!(output.status.success());
     let output: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let next_step = command_by_name(&output, "migration-add")["next_step"]
+    let next_step = command_by_name(&output, "sqlx")["next_step"]
         .as_str()
         .unwrap();
     assert!(next_step.contains(&format!("`jig adopt {}", minimal.path().display())));
@@ -419,7 +418,7 @@ marketplaces = []
         .unwrap();
     assert!(inventory.status.success());
     let inventory: Value = serde_json::from_slice(&inventory.stdout).unwrap();
-    let next_step = command_by_name(&inventory, "migration-add")["next_step"]
+    let next_step = command_by_name(&inventory, "sqlx")["next_step"]
         .as_str()
         .unwrap();
     let mut commands = next_step.split('`');

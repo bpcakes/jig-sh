@@ -10,7 +10,7 @@ mod reason;
 use reason::ReasonCode;
 
 pub(super) const COMMAND: &str = "info commands";
-const SCHEMA_VERSION: u64 = 1;
+const SCHEMA_VERSION: u64 = 2;
 const REPO_CONTEXT_NEXT_STEP: &str = "Run `jig doctor`; for an unadopted repository, preview with `jig adopt .` and apply with `jig adopt . --write`.";
 pub(super) const INVALID_OVERRIDE_NEXT_STEP: &str =
     "Unset `JIG_REPO_ROOT` or point it to a valid adopted Jig repository, then rerun the command.";
@@ -165,8 +165,7 @@ pub(super) fn info_with_capabilities(
     // is configured or every configured custom workflow is disabled.
     commands.push(ready_command(root_commands::LOOP));
 
-    commands.push(migration_add_command(ctx));
-    commands.push(schema_dump_command(ctx));
+    commands.push(sqlx_command(ctx));
     commands.push(vault_command(vault, &jig));
     commands.push(proxy_command(Some(ctx)));
     commands.push(ready_command(root_commands::PROMPT));
@@ -246,8 +245,7 @@ pub(super) fn info_without_context(context_error: &str, fallback: ContextFallbac
         repo_context_command_with_next_step(root_commands::UI, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::WORK, repo_context_next_step),
         repo_context_command_with_next_step(root_commands::LOOP, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::MIGRATION_ADD, repo_context_next_step),
-        repo_context_command_with_next_step(root_commands::SCHEMA_DUMP, repo_context_next_step),
+        repo_context_command_with_next_step(root_commands::SQLX, repo_context_next_step),
         vault,
         proxy_without_valid_context_command(repo_context_next_step, dev_proxy_available),
         prompt,
@@ -344,14 +342,14 @@ fn dev_feature_unavailable_command(available: bool) -> Option<Value> {
     })
 }
 
-fn migration_add_command(ctx: &RepoContext) -> Value {
+fn sqlx_command(ctx: &RepoContext) -> Value {
     let adopt = adopt_command(ctx);
     if !ctx.sqlx_enabled() {
         let next_step = format!(
             "Preview with `{adopt} --sqlx-enabled true --rust-migration-dir migrations`, then, after reviewing the preview, apply with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --force --write`."
         );
         return not_configured_command(
-            root_commands::MIGRATION_ADD,
+            root_commands::SQLX,
             ReasonCode::SqlxDisabled,
             "SQLx is disabled for this repository.",
             Some(&next_step),
@@ -362,7 +360,7 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
             "Preview with `{adopt} --rust-migration-dir migrations`, then, after reviewing the preview, apply with `{adopt} --rust-migration-dir migrations --force --write`."
         );
         return command_value(
-            root_commands::MIGRATION_ADD,
+            root_commands::SQLX,
             "needs_setup",
             Some(ReasonCode::MigrationDirectoryNotConfigured),
             Some("Migration workflows require a non-empty rust_migration_dir."),
@@ -371,7 +369,7 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
     }
     manifest_command(
         ctx,
-        root_commands::MIGRATION_ADD,
+        root_commands::SQLX,
         tool::MIGRATION_ADD,
         (
             ReasonCode::MigrationAddToolMissing,
@@ -380,62 +378,6 @@ fn migration_add_command(ctx: &RepoContext) -> Value {
         (
             ReasonCode::MigrationAddToolInvalid,
             "The migration tool declaration is invalid.",
-        ),
-    )
-}
-
-fn schema_dump_command(ctx: &RepoContext) -> Value {
-    let adopt = adopt_command(ctx);
-    if !ctx.sqlx_enabled() {
-        let next_step = format!(
-            "Preview with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --schema-dump-enabled true`, then, after reviewing the preview, apply with `{adopt} --sqlx-enabled true --rust-migration-dir migrations --schema-dump-enabled true --force --write`."
-        );
-        return not_configured_command(
-            root_commands::SCHEMA_DUMP,
-            ReasonCode::SqlxDisabled,
-            "SQLx is disabled for this repository.",
-            Some(&next_step),
-        );
-    }
-    if ctx.rust_migration_dir().trim().is_empty() {
-        let schema_dump_flag = if ctx.schema_dump_enabled() {
-            ""
-        } else {
-            " --schema-dump-enabled true"
-        };
-        let next_step = format!(
-            "Preview with `{adopt} --rust-migration-dir migrations{schema_dump_flag}`, then, after reviewing the preview, apply with `{adopt} --rust-migration-dir migrations{schema_dump_flag} --force --write`."
-        );
-        return command_value(
-            root_commands::SCHEMA_DUMP,
-            "needs_setup",
-            Some(ReasonCode::MigrationDirectoryNotConfigured),
-            Some("SQLx workflows require a non-empty rust_migration_dir."),
-            Some(&next_step),
-        );
-    }
-    if !ctx.schema_dump_enabled() {
-        let next_step = format!(
-            "Preview with `{adopt} --schema-dump-enabled true`, then, after reviewing the preview, apply with `{adopt} --schema-dump-enabled true --force --write`."
-        );
-        return not_configured_command(
-            root_commands::SCHEMA_DUMP,
-            ReasonCode::SchemaDumpsDisabled,
-            "Schema dumps are disabled for this repository.",
-            Some(&next_step),
-        );
-    }
-    manifest_command(
-        ctx,
-        root_commands::SCHEMA_DUMP,
-        tool::SCHEMA_DUMP,
-        (
-            ReasonCode::SchemaDumpToolMissing,
-            "The schema dump tool is missing from the generated contract.",
-        ),
-        (
-            ReasonCode::SchemaDumpToolInvalid,
-            "The schema dump tool declaration or configured command is invalid.",
         ),
     )
 }

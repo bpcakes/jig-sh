@@ -249,7 +249,7 @@ PY
     plan_id="$(printf '%s' "$work_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["plan"]["plan_id"])')"
 
     if [[ "$expect_sqlx" == "1" ]]; then
-      scripts/jig migration-add "$migration_name" --plan-id "$plan_id" >/dev/null
+      scripts/jig sqlx migration add "$migration_name" --plan-id "$plan_id" >/dev/null
     fi
 
     scripts/jig work check --plan-id "$plan_id" >/dev/null

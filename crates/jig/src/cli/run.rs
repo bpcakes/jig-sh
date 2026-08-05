@@ -137,6 +137,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 human_output,
             )
         }
+        CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
         CommandKind::SchemaDump(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::SchemaDump(opts.into()),
             false,
@@ -201,6 +202,23 @@ fn run_command(cli: Cli) -> Result<()> {
                 human_output,
             )
         }
+    }
+}
+
+fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
+    match command {
+        SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::MigrationAdd(opts.into()),
+            false,
+            json_output,
+            HumanOutput::MigrationAdd,
+        ),
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts)) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::SchemaDump(opts.into()),
+            false,
+            json_output,
+            HumanOutput::ToolExecution,
+        ),
     }
 }
 

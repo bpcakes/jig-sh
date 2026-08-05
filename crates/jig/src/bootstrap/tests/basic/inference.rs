@@ -253,7 +253,7 @@ sqlx = { workspace = true }
             "jig.typescript_coverage" => "scripts/jig check typescript-coverage",
             "jig.sqlx_check" => "scripts/jig check sqlx",
             "jig.schema_check" => "scripts/jig check schema",
-            "jig.schema_dump" => "scripts/jig schema-dump",
+            "jig.schema_dump" => "scripts/jig sqlx schema dump",
             other => panic!("unmapped rendered work gate tool {other}"),
         };
         assert!(
