@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use wait_timeout::ChildExt;
 
-pub(crate) mod interaction;
+pub mod interaction;
 
 const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -13,7 +13,7 @@ const OWNED_PROCESS_TREE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const OWNED_PROCESS_OUTPUT_LIMIT: usize = 16 * 1024;
 
-pub(crate) fn run_checked_output(
+pub fn run_checked_output(
     command: &mut Command,
     failure_message: impl FnOnce(&Output) -> String,
 ) -> Result<Output> {
@@ -22,7 +22,7 @@ pub(crate) fn run_checked_output(
     Ok(output)
 }
 
-pub(crate) fn run_checked_output_with_context(
+pub fn run_checked_output_with_context(
     command: &mut Command,
     start_context: impl FnOnce() -> String,
     failure_message: impl FnOnce(&Output) -> String,
@@ -32,7 +32,7 @@ pub(crate) fn run_checked_output_with_context(
     Ok(output)
 }
 
-pub(crate) fn run_checked_stdout_trimmed(
+pub fn run_checked_stdout_trimmed(
     command: &mut Command,
     failure_message: impl FnOnce(&Output) -> String,
 ) -> Result<String> {
@@ -40,7 +40,7 @@ pub(crate) fn run_checked_stdout_trimmed(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub(crate) fn require_success(
+pub fn require_success(
     output: &Output,
     failure_message: impl FnOnce(&Output) -> String,
 ) -> Result<()> {
@@ -51,33 +51,33 @@ pub(crate) fn require_success(
     }
 }
 
-pub(crate) fn format_exit_status(status: &ExitStatus) -> String {
+pub fn format_exit_status(status: &ExitStatus) -> String {
     match status.code() {
         Some(code) => format!("exit status {code}"),
         None => "termination by signal".to_string(),
     }
 }
 
-pub(crate) struct OwnedProcessTreeOutput {
-    pub(crate) status: ExitStatus,
-    pub(crate) stdout: Option<BoundedProcessOutput>,
-    pub(crate) stderr: Option<BoundedProcessOutput>,
+pub struct OwnedProcessTreeOutput {
+    pub status: ExitStatus,
+    pub stdout: Option<BoundedProcessOutput>,
+    pub stderr: Option<BoundedProcessOutput>,
 }
 
-pub(crate) struct BoundedProcessOutput {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) truncated: bool,
-    pub(crate) complete: bool,
+pub struct BoundedProcessOutput {
+    pub bytes: Vec<u8>,
+    pub truncated: bool,
+    pub complete: bool,
 }
 
 impl BoundedProcessOutput {
-    pub(crate) fn to_string_lossy(&self) -> String {
+    pub fn to_string_lossy(&self) -> String {
         String::from_utf8_lossy(&self.bytes).into_owned()
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum OwnedProcessTreeError {
+pub enum OwnedProcessTreeError {
     Start(std::io::Error),
     TimedOut,
     Cancelled,
@@ -106,7 +106,7 @@ impl std::error::Error for OwnedProcessTreeError {
     }
 }
 
-pub(crate) fn run_owned_process_tree_with_output(
+pub fn run_owned_process_tree_with_output(
     command: &mut Command,
     timeout: Duration,
     cancelled: impl FnMut() -> bool,
@@ -120,9 +120,9 @@ pub(crate) fn run_owned_process_tree_with_output(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ProcessOutputLimits {
-    pub(crate) stdout: usize,
-    pub(crate) stderr: usize,
+pub struct ProcessOutputLimits {
+    pub stdout: usize,
+    pub stderr: usize,
 }
 
 impl Default for ProcessOutputLimits {
@@ -134,7 +134,7 @@ impl Default for ProcessOutputLimits {
     }
 }
 
-pub(crate) fn run_owned_process_tree_with_output_limits(
+pub fn run_owned_process_tree_with_output_limits(
     command: &mut Command,
     timeout: Duration,
     limits: ProcessOutputLimits,

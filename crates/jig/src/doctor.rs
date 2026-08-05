@@ -15,6 +15,10 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use anyhow::{Context, Result};
+use jig_owned_process::{
+    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output,
+    run_owned_process_tree_with_output_limits,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -22,10 +26,6 @@ use serde_json::{Value, json};
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
 use crate::context::{RepoContext, find_repo_root_from_or_env};
-use crate::process::{
-    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output,
-    run_owned_process_tree_with_output_limits,
-};
 #[cfg(test)]
 use crate::tool_defs::tool;
 

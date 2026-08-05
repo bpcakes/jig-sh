@@ -494,13 +494,13 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
         command.env(key, value);
     }
     crate::shell::sanitize_bash_environment(&mut command);
-    let output = match crate::process::run_owned_process_tree_with_output(
+    let output = match jig_owned_process::run_owned_process_tree_with_output(
         &mut command,
         timeout,
         cancelled,
     ) {
         Ok(output) => output,
-        Err(crate::process::OwnedProcessTreeError::Start(error)) => {
+        Err(jig_owned_process::OwnedProcessTreeError::Start(error)) => {
             if error.kind() == std::io::ErrorKind::NotFound {
                 return Err(anyhow::anyhow!(
                     "Failed to run dependency readiness check {} with Bash: {error}. {}",
@@ -513,20 +513,20 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
                 checker.display(),
             ));
         }
-        Err(crate::process::OwnedProcessTreeError::TimedOut) => bail!(
+        Err(jig_owned_process::OwnedProcessTreeError::TimedOut) => bail!(
             "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
             timeout.as_secs_f64()
         ),
-        Err(crate::process::OwnedProcessTreeError::Cancelled) => {
+        Err(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
             return Err(FrontendDependencyPreflightCancelled {
                 app_dir: app_dir.to_string(),
             }
             .into());
         }
-        Err(crate::process::OwnedProcessTreeError::Await) => {
+        Err(jig_owned_process::OwnedProcessTreeError::Await) => {
             bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
         }
-        Err(crate::process::OwnedProcessTreeError::Cleanup) => {
+        Err(jig_owned_process::OwnedProcessTreeError::Cleanup) => {
             return Err(FrontendDependencyPreflightCleanupUnconfirmed {
                 app_dir: app_dir.to_string(),
             }

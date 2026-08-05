@@ -1309,6 +1309,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jig-owned-process"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "tempfile",
+ "wait-timeout",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "jig-rust"
 version = "0.2.0"
 dependencies = [
@@ -1330,6 +1341,7 @@ dependencies = [
  "jig-core",
  "jig-dev-proxy",
  "jig-features",
+ "jig-owned-process",
  "jig-status-tui",
  "jig-tui",
  "jig-ui",

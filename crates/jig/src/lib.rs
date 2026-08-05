@@ -49,7 +49,6 @@ mod git_receipts;
 mod info;
 mod mcp;
 mod policy;
-mod process;
 mod progress;
 mod prompt_registry;
 mod root_commands;

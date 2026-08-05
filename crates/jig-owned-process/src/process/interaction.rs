@@ -8,7 +8,7 @@ use super::{
 };
 
 #[derive(Debug)]
-pub(crate) enum OwnedProcessTreeInteractionError {
+pub enum OwnedProcessTreeInteractionError {
     Process(OwnedProcessTreeError),
     Interaction(String),
     InteractionAndCleanup(String),
@@ -38,7 +38,7 @@ impl std::error::Error for OwnedProcessTreeInteractionError {
     }
 }
 
-pub(crate) struct ProcessInteractionStdout {
+pub struct ProcessInteractionStdout {
     pipe: ProcessPipe,
     stderr: Option<OutputDrain>,
 }
@@ -59,7 +59,7 @@ impl ProcessInteractionStdout {
     }
 
     /// Finishes the bounded stderr preview captured while stdout was polled.
-    pub(crate) fn take_stderr_output(&mut self) -> Option<BoundedProcessOutput> {
+    pub fn take_stderr_output(&mut self) -> Option<BoundedProcessOutput> {
         if let Some(stderr) = &mut self.stderr {
             stderr.poll();
         }
@@ -83,7 +83,7 @@ impl Read for ProcessInteractionStdout {
 /// closure that ignores it. Callers should keep writes small because stdin
 /// remains a blocking pipe. Returning ends the exchange; the process tree is
 /// then terminated and reaped so long-lived protocol servers cannot leak descendants.
-pub(crate) fn run_owned_process_tree_with_cooperative_interaction<T, F>(
+pub fn run_owned_process_tree_with_cooperative_interaction<T, F>(
     command: &mut Command,
     timeout: Duration,
     interaction: F,

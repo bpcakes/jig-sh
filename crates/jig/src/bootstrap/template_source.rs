@@ -4,6 +4,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use jig_owned_process::{require_success, run_checked_output};
 use tempfile::TempDir;
 use toml::{Table, Value as TomlValue};
 
@@ -16,8 +17,6 @@ use super::{
     ANSWERS_FILE, GIT_BIN_ENV, REMOTE_TEMPLATE_MODE_ERROR, TEMPLATE_LOCAL_PATH_KEY,
     TEMPLATE_MODE_KEY, TemplateMode, UpdateOpts, external_program, read_answers_toml,
 };
-use crate::process::{require_success, run_checked_output};
-
 const COMMIT_KEY: &str = "_commit";
 const SRC_PATH_KEY: &str = "_src_path";
 // Keep this sentinel in sync with templates/project/scripts/install-jig.sh.jinja.

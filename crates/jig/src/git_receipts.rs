@@ -15,7 +15,7 @@ use tempfile::NamedTempFile;
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
-use crate::process::{
+use jig_owned_process::{
     OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
     run_checked_output_with_context, run_owned_process_tree_with_output_limits,
 };

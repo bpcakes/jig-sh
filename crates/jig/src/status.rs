@@ -5,6 +5,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use jig_contract::status_provider::v1::{Category, DiagnosticLevel, Outcome, Report};
+use jig_owned_process::{
+    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status,
+    run_owned_process_tree_with_output_limits,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -13,10 +17,6 @@ use crate::cancellation::{
     status_collection_cancellation,
 };
 use crate::context::{RepoContext, StatusProviderConfig};
-use crate::process::format_exit_status;
-use crate::process::{
-    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
-};
 use crate::runtime::{
     loop_status_snapshot_with_cancellation, work_gates_snapshot_with_cancellation,
 };

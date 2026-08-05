@@ -5,14 +5,14 @@ use std::process::{ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value as JsonValue, json};
-
-use super::CODEX_HOME_ENV;
-use crate::process::interaction::{
+use jig_owned_process::interaction::{
     OwnedProcessTreeInteractionError, ProcessInteractionStdout,
     run_owned_process_tree_with_cooperative_interaction,
 };
-use crate::process::{BoundedProcessOutput, OwnedProcessTreeError};
+use jig_owned_process::{BoundedProcessOutput, OwnedProcessTreeError};
+use serde_json::{Value as JsonValue, json};
+
+use super::CODEX_HOME_ENV;
 
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const APP_SERVER_PROTOCOL_MESSAGE_LIMIT: usize = 64 * 1024;

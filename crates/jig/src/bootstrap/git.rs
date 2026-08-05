@@ -7,11 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
-use tempfile::Builder as TempDirBuilder;
-
 #[cfg(test)]
-use crate::process::run_checked_output;
-use crate::process::{require_success, run_checked_stdout_trimmed};
+use jig_owned_process::run_checked_output;
+use jig_owned_process::{require_success, run_checked_stdout_trimmed};
+use tempfile::Builder as TempDirBuilder;
 
 use super::{GIT_BIN_ENV, external_program};
 

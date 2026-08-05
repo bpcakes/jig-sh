@@ -8,10 +8,10 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use jig_owned_process::require_success;
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
-use crate::process::require_success;
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
