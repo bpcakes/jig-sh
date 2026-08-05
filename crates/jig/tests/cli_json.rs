@@ -536,11 +536,13 @@ fn info_commands_matches_contextless_commands_with_an_invalid_override() {
             write_info_commands_repo(repo.path());
         }
         let invalid_root = repo.path().join("missing-override");
+        let proxy_state = repo.path().join("proxy-state");
 
         let output = jig()
             .current_dir(repo.path())
             .env("JIG_REPO_ROOT", &invalid_root)
             .env("JIG_VAULT_HOME", vault.path())
+            .env("JIG_PROXY_STATE_DIR", &proxy_state)
             .args(["info", "--commands", "--json"])
             .output()
             .unwrap();
@@ -597,6 +599,7 @@ fn info_commands_matches_contextless_commands_with_an_invalid_override() {
                 .current_dir(repo.path())
                 .env("JIG_REPO_ROOT", &invalid_root)
                 .env("JIG_VAULT_HOME", vault.path())
+                .env("JIG_PROXY_STATE_DIR", &proxy_state)
                 .args(args)
                 .output()
                 .unwrap();
@@ -612,6 +615,7 @@ fn info_commands_matches_contextless_commands_with_an_invalid_override() {
             .current_dir(repo.path())
             .env("JIG_REPO_ROOT", &invalid_root)
             .env("JIG_VAULT_HOME", vault.path())
+            .env("JIG_PROXY_STATE_DIR", &proxy_state)
             .args(["proxy", "list", "--json"])
             .output()
             .unwrap();
@@ -626,6 +630,7 @@ fn info_commands_matches_contextless_commands_with_an_invalid_override() {
             let dev_status = jig()
                 .current_dir(repo.path())
                 .env("JIG_REPO_ROOT", &invalid_root)
+                .env("JIG_PROXY_STATE_DIR", &proxy_state)
                 .args(["dev", "status", "--json"])
                 .output()
                 .unwrap();
@@ -906,8 +911,8 @@ fn terminal_stderr() -> (Stdio, File) {
             &mut controller,
             &mut terminal,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     assert_eq!(
