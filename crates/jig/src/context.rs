@@ -10,8 +10,11 @@ use serde::Deserialize;
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
 mod loop_config;
+mod optional;
 mod status_config;
 mod work_config;
+
+pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
@@ -304,36 +307,6 @@ impl RepoContext {
         Self::load_from_root(root)
     }
 
-    #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-    pub(crate) fn load_optional() -> Result<Option<Self>> {
-        // Contextless cleanup/status commands should still work when a shell
-        // inherited a stale JIG_REPO_ROOT. Required repo commands use load()
-        // instead, where the env var remains an explicit override.
-        match repo_root_from_env() {
-            Ok(Some(root)) => {
-                let display_root = root.display().to_string();
-                match Self::load_from_root(root) {
-                    Ok(ctx) => return Ok(Some(ctx)),
-                    Err(error) => {
-                        eprintln!(
-                            "jig ignored invalid {JIG_REPO_ROOT_ENV}={display_root} for contextless command lookup: {error:#}"
-                        );
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                eprintln!(
-                    "jig ignored invalid {JIG_REPO_ROOT_ENV} for contextless command lookup: {error:#}"
-                );
-            }
-        }
-        let Some(root) = find_optional_repo_root()? else {
-            return Ok(None);
-        };
-        Self::load_from_root(root).map(Some)
-    }
-
     pub(crate) fn load_from_root(root: PathBuf) -> Result<Self> {
         let config_path = root.join(".jig.toml");
         let config = load_config(&config_path)?;
@@ -446,6 +419,14 @@ impl RepoContext {
 
     pub(crate) fn source_path(&self) -> &str {
         &self.config.src_path
+    }
+
+    pub(crate) fn template_mode(&self) -> &str {
+        &self.config.template_mode
+    }
+
+    pub(crate) fn template_local_path(&self) -> &str {
+        &self.config.template_local_path
     }
 
     pub(crate) fn command_for_key(&self, key: &str) -> Result<&str> {
@@ -899,10 +880,7 @@ fn find_optional_repo_root() -> Result<Option<PathBuf>> {
 }
 
 pub(crate) fn find_repo_root_from(start: &Path) -> Result<PathBuf> {
-    let Some(root) = find_optional_repo_root_from(start)? else {
-        bail!("Could not find repo root containing .jig.toml");
-    };
-    Ok(root)
+    find_optional_repo_root_from(start)?.context(REPO_CONTEXT_NOT_FOUND)
 }
 
 pub(crate) fn find_repo_root_from_or_env(start: &Path) -> Result<PathBuf> {

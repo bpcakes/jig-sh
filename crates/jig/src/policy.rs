@@ -159,7 +159,7 @@ pub(crate) fn validate_contract(
             errors.push("Missing scripts/install-jig.sh installer.".into());
         }
     }
-    if ctx.sqlx_enabled() && ctx.rust_migration_dir().is_empty() {
+    if ctx.sqlx_enabled() && ctx.rust_migration_dir().trim().is_empty() {
         errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
     }
     match ctx.contract_version() {

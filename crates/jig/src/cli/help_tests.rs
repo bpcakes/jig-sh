@@ -98,11 +98,28 @@ fn top_level_help_orders_commands_by_user_intent() {
 }
 
 #[test]
+fn command_inventory_names_track_the_visible_root_surface() {
+    let command = Cli::command();
+    let mut visible_commands = command
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set() && command.get_name() != "help")
+        .collect::<Vec<_>>();
+    visible_commands.sort_by_key(|command| command.get_display_order());
+    let visible_commands = visible_commands
+        .into_iter()
+        .map(|command| command.get_name())
+        .collect::<Vec<_>>();
+
+    assert_eq!(visible_commands, crate::info::DISCOVERABLE_COMMAND_NAMES);
+}
+
+#[test]
 fn top_level_help_includes_common_workflows() {
     let help = Cli::command().render_help().to_string();
 
     assert_help_contains(&help, "Common workflows:");
     assert_help_contains(&help, "jig doctor");
+    assert_help_contains(&help, "jig info --commands");
     assert_help_contains(&help, "jig dev");
     assert_help_contains(&help, "jig check test");
     assert_help_contains(&help, "jig work status");
@@ -121,6 +138,8 @@ fn info_help_includes_examples_and_alias() {
     let info_help = rendered_help(&["info"]);
     assert_help_contains(&info_help, "jig info");
     assert_help_contains(&info_help, "jig info --json");
+    assert_help_contains(&info_help, "jig info --commands --json");
+    assert_help_contains(&info_help, "--commands");
     assert_help_contains(&info_help, "jig explain --json");
     assert_help_contains(&info_help, "Human-readable output is the default");
 }

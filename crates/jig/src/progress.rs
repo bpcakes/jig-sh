@@ -26,6 +26,15 @@ impl CliProgress {
         }
     }
 
+    pub(crate) fn disabled(command: &'static str) -> Self {
+        Self {
+            command,
+            enabled: false,
+            color: false,
+            started_at: Instant::now(),
+        }
+    }
+
     pub(crate) fn header(&self, action: impl fmt::Display) {
         if !self.enabled {
             return;
@@ -166,7 +175,15 @@ fn color_enabled() -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::{format_duration, leader};
+    use super::{CliProgress, format_duration, leader};
+
+    #[test]
+    fn disabled_progress_never_enables_output_or_color() {
+        let progress = CliProgress::disabled("test");
+
+        assert!(!progress.enabled);
+        assert!(!progress.color);
+    }
 
     #[test]
     fn leader_keeps_minimum_spacing_for_long_labels() {

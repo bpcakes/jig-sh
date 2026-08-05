@@ -71,10 +71,11 @@ struct Cli {
 
 const ROOT_AFTER_HELP: &str = "\
 Common workflows:
-  jig doctor       Check repository setup and get the next remediation step
-  jig dev          Start configured development apps
-  jig check test   Run the configured test suite
-  jig work status  Inspect structured work and required gates";
+  jig doctor           Check repository setup and get the next remediation step
+  jig info --commands  Show which commands are usable in this repository
+  jig dev              Start configured development apps
+  jig check test       Run the configured test suite
+  jig work status      Inspect structured work and required gates";
 
 const TEMPLATE_ERROR_HINT: &str = "\
 Templates:
@@ -115,11 +116,21 @@ const INFO_AFTER_HELP: &str = "\
 Summarizes what Jig believes about the current repo from .jig.toml and the
 generated contract manifest.
 
+Use --commands for repository-specific command availability. Status describes
+each root command's primary workflow; setup and diagnostic subcommands or flags
+may still work when that status is not ready. Invocation still runs
+command-specific preflight.
+Stable JSON status codes are ready, not_configured, needs_setup, and unavailable.
+When Codex marketplaces are configured, this view checks machine-local Codex
+readiness and may wait up to five seconds for that probe.
+
 Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
   jig info
   jig info --json
+  jig info --commands
+  jig info --commands --json  # also works before adoption
   jig explain --json";
 
 const STATUS_AFTER_HELP: &str = "\
@@ -210,7 +221,7 @@ pub(crate) enum CommandKind {
         visible_alias = "explain",
         after_help = INFO_AFTER_HELP
     )]
-    Info,
+    Info(InfoOpts),
     /// Run and manage configured development app sessions.
     #[command(name = tool_defs::cli_command::DEV, display_order = 100)]
     Dev(DevOpts),
@@ -349,6 +360,15 @@ pub(crate) struct ToolOpts {
         help = "Run without appending a receipt to .agent/state"
     )]
     pub(crate) no_receipt: bool,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct InfoOpts {
+    #[arg(
+        long,
+        help = "Show root commands with repository-specific availability and remediation"
+    )]
+    pub(crate) commands: bool,
 }
 
 #[derive(Args, Debug)]

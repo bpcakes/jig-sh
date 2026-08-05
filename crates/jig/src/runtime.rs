@@ -28,6 +28,10 @@ pub(crate) fn agent_doctor_with_codex_support_probe(
     agent::doctor_with_codex_support_probe(ctx, probe)
 }
 
+pub(crate) fn agent_doctor_for_inventory(ctx: &RepoContext, human_progress: bool) -> Value {
+    agent::doctor_for_inventory(ctx, human_progress)
+}
+
 pub(crate) fn probe_codex_marketplace_support(
     codex_bin: &OsStr,
     timeout: Duration,

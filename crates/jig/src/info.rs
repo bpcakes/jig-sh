@@ -8,18 +8,78 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use crate::cli::format_info_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-use crate::context::{DevAppConfig, RepoContext, WorkGate};
+use crate::context::{DevAppConfig, REPO_CONTEXT_NOT_FOUND, RepoContext, WorkGate};
 
 const COMMAND: &str = "info";
 const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
-pub(crate) fn run() -> Result<Value> {
+mod commands;
+
+#[cfg(test)]
+pub(crate) use commands::DISCOVERABLE_COMMAND_NAMES;
+
+pub(crate) fn run(commands: bool, json_output: bool) -> Result<Value> {
+    if commands {
+        let ctx = match RepoContext::load_optional_strict() {
+            Ok(Some(ctx)) => ctx,
+            Ok(None) => {
+                let vault = vault_capability(None);
+                return Ok(commands::info_without_context(
+                    REPO_CONTEXT_NOT_FOUND,
+                    commands::ContextFallback::Tolerant {
+                        context_status: commands::RepoContextStatus::Absent,
+                        dev: commands::dev_capability(None),
+                        vault,
+                        jig: "jig".into(),
+                        dev_proxy_available: commands::dev_proxy_available(None),
+                    },
+                ));
+            }
+            Err(error) => {
+                let fallback = match RepoContext::load_optional_quiet() {
+                    Ok(context) => {
+                        let context_status = if context.is_some() {
+                            commands::RepoContextStatus::Recovered
+                        } else {
+                            commands::RepoContextStatus::Invalid
+                        };
+                        commands::ContextFallback::Tolerant {
+                            context_status,
+                            dev: commands::dev_capability_with_next_step(
+                                context.as_ref(),
+                                commands::INVALID_OVERRIDE_NEXT_STEP,
+                            ),
+                            vault: vault_capability(context.as_ref()),
+                            jig: context
+                                .as_ref()
+                                .map_or_else(|| "jig".into(), commands::command_prefix),
+                            dev_proxy_available: commands::dev_proxy_available(context.as_ref()),
+                        }
+                    }
+                    Err(_) => commands::ContextFallback::Invalid {
+                        invalid_override: RepoContext::repo_root_override_is_set(),
+                    },
+                };
+                return Ok(commands::info_without_context(
+                    &format!("{error:#}"),
+                    fallback,
+                ));
+            }
+        };
+        let vault = vault_capability(Some(&ctx));
+        let agent = crate::runtime::agent_doctor_for_inventory(&ctx, !json_output);
+        return Ok(commands::info_with_capabilities(&ctx, vault, &agent));
+    }
     let ctx = RepoContext::load()?;
     Ok(repo_info(&ctx))
 }
 
+pub(crate) fn format_commands_summary(value: &Value) -> String {
+    commands::format_summary(value)
+}
+
 fn repo_info(ctx: &RepoContext) -> Value {
-    repo_info_with_vault(ctx, vault_capability(ctx))
+    repo_info_with_vault(ctx, vault_capability(Some(ctx)))
 }
 
 fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
@@ -43,9 +103,6 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let dev_proxy_enabled =
-        !dev_apps.is_empty() || !frontend_apps.is_empty() || ctx.dev_config().workspace_discovery;
-
     json!({
         "ok": true,
         "command": COMMAND,
@@ -61,7 +118,7 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "sqlx": ctx.sqlx_enabled(),
             "schema_dumps": ctx.sqlx_enabled() && ctx.schema_dump_enabled(),
             "frontend_apps": !frontend_apps.is_empty(),
-            "dev_proxy": dev_proxy_enabled,
+            "dev_proxy": crate::doctor::proxy_configured(ctx),
             "vault": vault.available,
             "vault_available": vault.available,
             "vault_initialized": vault.initialized,
@@ -106,9 +163,9 @@ struct VaultCapability {
     error: Option<String>,
 }
 
-fn vault_capability(ctx: &RepoContext) -> VaultCapability {
+fn vault_capability(ctx: Option<&RepoContext>) -> VaultCapability {
     let command = VaultCommand::Status(VaultStatusRequest {
-        vault: crate::runtime::vault_options_for_context(Some(ctx)),
+        vault: crate::runtime::vault_options_for_context(ctx),
     });
     match crate::runtime::dispatch_vault(command) {
         Ok(output) => VaultCapability {
@@ -269,6 +326,7 @@ fn work_gate_value(gate: &WorkGate) -> Value {
 mod tests {
     use super::*;
     use crate::test_env::TestRepoBuilder;
+    use crate::tool_defs::tool;
     use serde_json::json;
     use std::fs;
     use std::path::Path;
@@ -504,7 +562,7 @@ mod tests {
         );
     }
 
-    fn write_info_fixture(root: &Path) {
+    pub(super) fn write_info_fixture(root: &Path) {
         TestRepoBuilder::new(root)
             .config(
                 r#"
@@ -512,6 +570,7 @@ sqlx_enabled = true
 rust_migration_dir = "migrations"
 rust_sqlx_metadata_dir = ".sqlx"
 schema_dump_enabled = true
+schema_dump_command = "printf schema"
 bootstrap_command = "printf bootstrap"
 rust_test_command = "cargo test"
 
@@ -538,12 +597,33 @@ tool = "jig.test"
 marketplaces = []
 "#,
             )
-            .required_commands(["bootstrap_command", "rust_test_command"])
+            .required_commands([
+                "bootstrap_command",
+                "schema_dump_command",
+                "rust_test_command",
+            ])
             .tool(json!({
                 "name": "jig.test",
                 "kind": "command",
                 "description": "Run tests.",
                 "command": "rust_test_command"
+            }))
+            .tool(json!({
+                "name": tool::BOOTSTRAP,
+                "kind": "command",
+                "description": "Bootstrap the repository.",
+                "command": "bootstrap_command"
+            }))
+            .tool(json!({
+                "name": tool::MIGRATION_ADD,
+                "kind": "native",
+                "description": "Add a migration."
+            }))
+            .tool(json!({
+                "name": tool::SCHEMA_DUMP,
+                "kind": "command",
+                "description": "Dump the schema.",
+                "command": "schema_dump_command"
             }))
             .write();
     }

@@ -132,7 +132,7 @@ pub(crate) fn run() -> Result<Value> {
             checks.push(
                 check(
                     "proxy",
-                    "Proxy",
+                    "Dev proxy",
                     false,
                     false,
                     "blocked",
@@ -2330,7 +2330,7 @@ fn agent_next_step(steps: &[Value]) -> Option<&str> {
         .or_else(|| steps.iter().filter_map(Value::as_str).next())
 }
 
-fn proxy_configured(ctx: &RepoContext) -> bool {
+pub(crate) fn proxy_configured(ctx: &RepoContext) -> bool {
     !ctx.frontend_apps().is_empty()
         || !ctx.dev_config().apps.is_empty()
         || ctx.dev_config().workspace_discovery
@@ -2340,11 +2340,12 @@ fn proxy_check_with_process_control(
     ctx: &RepoContext,
     process_control: DoctorProcessControl<'_>,
 ) -> DoctorCheck {
+    let label = "Dev proxy";
     let configured = proxy_configured(ctx);
     if !configured {
         return check(
             "proxy",
-            "Proxy",
+            label,
             false,
             true,
             "not configured",
@@ -2352,10 +2353,9 @@ fn proxy_check_with_process_control(
         )
         .with_data(json!({ "configured": false }));
     }
-
     match proxy_list_output(ctx, process_control) {
         Ok(output) => proxy_check_from_output(configured, output),
-        Err(error) => check("proxy", "Proxy", false, false, "error", error.to_string())
+        Err(error) => check("proxy", label, false, false, "error", error.to_string())
             .with_fix("Run `scripts/jig proxy list` for proxy diagnostics.")
             .with_data(json!({ "configured": configured })),
     }
@@ -2511,7 +2511,7 @@ fn proxy_check_from_output(configured: bool, output: Value) -> DoctorCheck {
     };
     check(
         "proxy",
-        "Proxy",
+        "Dev proxy",
         false,
         running,
         status,

@@ -60,8 +60,8 @@ fn run_command(cli: Cli) -> Result<()> {
             emit(json_output, HumanOutput::Doctor, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
-        CommandKind::Info => {
-            let output = info::run()?;
+        CommandKind::Info(opts) => {
+            let output = info::run(opts.commands, json_output)?;
             emit(json_output, HumanOutput::Info, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
@@ -88,7 +88,7 @@ fn run_command(cli: Cli) -> Result<()> {
             let human_output = dev_human_output(&opts);
             let Some(ctx) = RepoContext::load_optional()? else {
                 anyhow::bail!(
-                    "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml`. Run it from a Jig repo, or use `scripts/jig proxy run <name> -- <command>` for an ad-hoc command."
+                    "`scripts/jig dev` requires an adopted Jig repo with `.jig.toml`. Run it from a Jig repo, or preview adoption with `scripts/jig adopt .` and apply it with `scripts/jig adopt . --write`."
                 );
             };
             if let Some(identity_present) = dev_launch_identity_present(&opts) {

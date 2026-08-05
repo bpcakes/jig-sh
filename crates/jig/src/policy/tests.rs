@@ -114,6 +114,29 @@ fn contract_check_allows_minimal_footprint_to_omit_launcher_files() {
 }
 
 #[test]
+fn contract_validation_rejects_a_whitespace_only_migration_directory() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+harness_footprint = "minimal"
+sqlx_enabled = true
+rust_migration_dir = "   "
+"#,
+        )
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = validate_contract(&ctx).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("sqlx_enabled is true, but rust_migration_dir is empty")
+    );
+}
+
+#[test]
 fn contract_check_still_validates_minimal_commands_and_tools() {
     let temp = tempdir().unwrap();
     write_footprint_contract_repo(temp.path(), "minimal");

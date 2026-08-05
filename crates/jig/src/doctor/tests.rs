@@ -4683,7 +4683,7 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "installed",
             "installed",
         ),
-        proxy: check("proxy", "Proxy", false, true, "running", "running"),
+        proxy: check("proxy", "Dev proxy", false, true, "running", "running"),
     };
 
     mark_doctor_signal_retirement_failure(&ctx, &mut checks);

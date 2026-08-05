@@ -155,6 +155,7 @@
 ## Unreleased
 
 ### Added
+- Add `jig info --commands` for repository-specific command availability before and after adoption, stable machine-readable status and reason codes, and actionable setup guidance.
 - Add `jig adopt --minimal` to render `.jig.toml` and `.agent/` scaffolding without scripts, workflows, or agent context files; stores `harness_footprint = "minimal"` so `jig update` keeps the thin footprint until a full re-adopt.
 - Add `.agent/jig-managed-paths.json` as the strict exact-path authority for managed-file retirement; older adopted repositories establish it with an explicit same-footprint re-adopt before updating or contracting.
 - Add `scripts/jig doctor` and `scripts/jig info` / `scripts/jig explain` for repo readiness and configuration snapshots.
@@ -167,6 +168,8 @@
 - Enable the `dev-proxy` Cargo feature by default while preserving `--no-default-features` builds for contract/MCP-only consumers.
 
 ### Changed
+- Breaking: Treat whitespace-only `rust_migration_dir` values as invalid during contract checks and report affected migration workflows as needing setup with direct re-adoption guidance instead of claiming they are ready.
+- Label the proxy readiness check as `Dev proxy` in human and JSON doctor output so it is distinct from generic network proxies; its stable JSON `id` remains `proxy`.
 - Breaking: Make global `--json` cover CLI usage errors and pre-output command failures with a stable error envelope on stdout while retaining nonzero exit statuses; scripts that consumed failures from stderr must read the JSON envelope instead. `prompt get --json` now returns the standard command envelope instead of the bare rendered body. Commands that already emitted JSON do not append a second document, and MCP continues to reserve stdout for protocol framing.
 - Breaking: Require exactly one nonblank `--body` or `--body-file` when appending structured-work progress; body-less `work append` invocations must provide progress text.
 - Validate structured-work start body sources before durable session mutation, label aggregate snapshot completeness as collection state, and make `state summary` report persisted record/event counts instead of duplicating `work status`. Reorder root help around setup, development, structured work, project data, local services, and agent automation, with a compact common-workflows footer.

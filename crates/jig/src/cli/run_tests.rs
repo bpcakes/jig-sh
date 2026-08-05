@@ -186,11 +186,14 @@ fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {
 
 #[test]
 fn json_error_reporting_preserves_protocol_and_post_output_boundaries() {
-    assert!(should_report_json_command_errors(true, &CommandKind::Info));
+    assert!(should_report_json_command_errors(
+        true,
+        &CommandKind::Info(InfoOpts::default())
+    ));
     assert!(!should_report_json_command_errors(true, &CommandKind::Mcp));
     assert!(!should_report_json_command_errors(
         false,
-        &CommandKind::Info
+        &CommandKind::Info(InfoOpts::default())
     ));
 
     let post_output =

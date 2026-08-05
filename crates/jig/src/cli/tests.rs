@@ -1,5 +1,7 @@
 use super::*;
 
+mod info;
+
 #[test]
 fn parses_check_namespace_commands() {
     let fmt = Cli::try_parse_from(["jig", "check", "fmt", "--plan-id", "plan_1"]).unwrap();
@@ -294,6 +296,42 @@ fn adopt_parses_minimal_flag() {
             assert!(opts.write);
         }
         other => panic!("expected adopt command, got {other:?}"),
+    }
+}
+
+#[test]
+fn adopt_parses_sqlx_inventory_remediation_flags() {
+    for (schema_dump, extra_args) in [
+        (false, Vec::<&str>::new()),
+        (true, vec!["--schema-dump-enabled", "true"]),
+    ] {
+        let mut args = vec![
+            "jig",
+            "adopt",
+            ".",
+            "--sqlx-enabled",
+            "true",
+            "--rust-migration-dir",
+            "migrations",
+        ];
+        args.extend(extra_args);
+
+        let adopt = Cli::try_parse_from(args).unwrap();
+
+        match adopt.command {
+            CommandKind::Adopt(opts) => {
+                assert_eq!(opts.answers.sqlx_enabled, Some(true));
+                assert_eq!(
+                    opts.answers.rust_migration_dir.as_deref(),
+                    Some("migrations")
+                );
+                assert_eq!(
+                    opts.answers.schema_dump_enabled,
+                    schema_dump.then_some(true)
+                );
+            }
+            other => panic!("expected adopt command, got {other:?}"),
+        }
     }
 }
 
@@ -738,33 +776,6 @@ fn web_package_manager_cli_rejects_unknown_values_during_parsing() {
     assert!(rejected.contains("possible values"));
     assert!(rejected.contains("bun"));
     assert!(rejected.contains("yarn"));
-}
-
-#[test]
-fn parses_top_level_info_command_and_explain_alias() {
-    let cli = Cli::try_parse_from(["jig", "info"]).unwrap();
-
-    match cli.command {
-        CommandKind::Info => {}
-        other => panic!("expected info command, got {other:?}"),
-    }
-
-    let with_json = Cli::try_parse_from(["jig", "info", "--json"]).unwrap();
-    assert!(with_json.json);
-    match with_json.command {
-        CommandKind::Info => {}
-        other => panic!("expected info command, got {other:?}"),
-    }
-
-    let alias = Cli::try_parse_from(["jig", "explain", "--json"]).unwrap();
-    assert!(alias.json);
-    match alias.command {
-        CommandKind::Info => {}
-        other => panic!("expected info alias command, got {other:?}"),
-    }
-
-    let rejected = Cli::try_parse_from(["jig", "info", "--summary"]);
-    assert!(rejected.is_err());
 }
 
 #[test]

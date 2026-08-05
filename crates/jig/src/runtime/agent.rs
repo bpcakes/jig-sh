@@ -31,11 +31,38 @@ pub(super) fn doctor(ctx: &RepoContext) -> JsonValue {
     doctor_with_codex_support_probe(ctx, codex_supports_plugin_marketplaces)
 }
 
+pub(super) fn doctor_for_inventory(ctx: &RepoContext, human_progress: bool) -> JsonValue {
+    let progress = if human_progress && !ctx.codex_marketplaces().is_empty() {
+        CliProgress::new("info --commands")
+    } else {
+        CliProgress::disabled("info --commands")
+    };
+    doctor_with_progress(
+        ctx,
+        codex_supports_plugin_marketplaces,
+        progress,
+        "command inventory probe complete",
+    )
+}
+
 pub(super) fn doctor_with_codex_support_probe(
     ctx: &RepoContext,
-    mut probe: impl FnMut(&OsStr) -> CodexSupportProbeResult,
+    probe: impl FnMut(&OsStr) -> CodexSupportProbeResult,
 ) -> JsonValue {
-    let progress = CliProgress::new("agent doctor");
+    doctor_with_progress(
+        ctx,
+        probe,
+        CliProgress::new("agent doctor"),
+        "agent doctor complete",
+    )
+}
+
+fn doctor_with_progress(
+    ctx: &RepoContext,
+    mut probe: impl FnMut(&OsStr) -> CodexSupportProbeResult,
+    progress: CliProgress,
+    completion_detail: &'static str,
+) -> JsonValue {
     progress.header("inspect local Codex tooling");
     progress.info("repo", ctx.root().display());
     let codex_bin = crate::codex::codex_bin();
@@ -122,7 +149,7 @@ pub(super) fn doctor_with_codex_support_probe(
         )
     };
     if codex_ready && all_marketplaces_ready {
-        progress.done("agent doctor complete");
+        progress.done(completion_detail);
     } else {
         progress.blocked("Codex marketplace setup is incomplete");
     }

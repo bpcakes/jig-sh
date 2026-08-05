@@ -1,6 +1,10 @@
 const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
 pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
+    if value["command"].as_str() == Some("info commands") {
+        return crate::info::format_commands_summary(value);
+    }
+
     let repo = &value["repo"];
     let mut lines = vec![
         format!("Jig info: {}", repo["name"].as_str().unwrap_or("<unknown>")),
