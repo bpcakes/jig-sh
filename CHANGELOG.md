@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0 - 2026-08-04
+## v0.2.0 - 2026-08-05
 
 ### Added
 - Add status-provider v1 protocol
@@ -11,6 +11,8 @@
 - Standardize JSON errors and work validation
 - Add interactive Codex home launcher
 - Configure Codex home for loop workers
+- Add command availability inventory
+- Namespace SQLx project commands
 
 ### Fixed
 - Keep dev session cleanup signal-responsive
@@ -30,6 +32,19 @@
 - Apply tier 1 mechanical cleanups
 - Apply tier 2 rust cleanups
 - Split embedded templates and reorganize test modules
+- Modularize CLI output formatting
+- Remove obsolete diagnostic results
+- Decompose status validation
+- Move diagnostic rendering into CLI
+- Extract init mutation transaction
+- Isolate receipt archival
+- Group invalid review context
+- Borrow receipt status projections
+- Aggregate required gate failures
+- Make crate root inference infallible
+- Isolate initial template policy
+- Centralize root command categories
+- Consolidate SQLx command modules
 
 ### Tests
 - Move doctor tests beside module
@@ -81,6 +96,7 @@
 - [verified] Preserve fixture failure status
 - [verified] Identify crates.io release probes
 - [verified] Allow complete release validation
+- [verified] Stabilize command inventory checks
 
 ## v0.2.0-beta.1 - 2026-05-23
 
