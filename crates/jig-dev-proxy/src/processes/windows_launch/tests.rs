@@ -1,7 +1,7 @@
 use super::*;
+use crate::test_tempdir as tempdir;
 #[cfg(windows)]
 use crate::types::{AppKind, AppRunSpec, CommandSpec, ProxySettings};
-use tempfile::tempdir;
 
 fn environment(path: &Path, path_extensions: &str) -> WindowsEnvironment {
     WindowsEnvironment {

@@ -214,6 +214,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn bash_environment_sanitizer_blocks_startup_options_tracing_and_exported_functions() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         let startup_marker = temp.path().join("startup-poison-ran");
         let trace_marker = temp.path().join("trace-poison-ran");

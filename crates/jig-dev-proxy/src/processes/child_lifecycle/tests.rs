@@ -704,7 +704,7 @@ fn registered_windows_app_gets_targeted_console_break_before_job_force() {
     let _guard = termination_test_guard();
     ensure_windows_test_console();
 
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let ready = temp.path().join("console-break.ready");
     let received = temp.path().join("console-break.received");
     let current_exe = std::env::current_exe().unwrap();
@@ -750,7 +750,7 @@ fn exited_windows_wrapper_with_live_job_descendant_gets_console_break() {
 
     let _guard = termination_test_guard();
     ensure_windows_test_console();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let ready = temp.path().join("exited-wrapper-descendant.ready");
     let received = temp.path().join("exited-wrapper-descendant.received");
     let current_exe = std::env::current_exe().unwrap();
@@ -1128,11 +1128,11 @@ fn child_cleanup_deadline_overflow_fails_closed() {
 #[test]
 fn terminate_child_kills_process_group_after_wrapper_exits() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     #[cfg(target_os = "linux")]
     use std::fs;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
-    use tempfile::tempdir;
     let temp = tempdir().unwrap();
     let pid_path = temp.path().join("grandchild.pid");
     let release_path = temp.path().join("grandchild.release");
@@ -1202,9 +1202,9 @@ fn terminate_child_kills_process_group_after_wrapper_exits() {
 #[test]
 fn lifecycle_fixture_guards_clean_an_exited_wrapper_during_unwind() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
-    use tempfile::tempdir;
 
     let temp = tempdir().unwrap();
     let release_path = temp.path().join("unwind.release");
@@ -1295,9 +1295,9 @@ fn exited_zombie_only_group_is_reaped_without_liveness_timeout() {
 #[test]
 fn running_term_resistant_tree_is_confirmed_dead_before_leader_reap() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     use std::os::unix::process::CommandExt;
     use std::process::Command;
-    use tempfile::tempdir;
 
     let temp = tempdir().unwrap();
     let release_path = temp.path().join("term-resistant.release");
@@ -1451,9 +1451,9 @@ fn macos_group_quiescence_requires_an_unreaped_exit_and_exact_snapshot() {
 #[test]
 fn macos_group_confirmation_resignals_an_exited_leader_with_a_live_member() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use tempfile::tempdir;
 
     let temp = tempdir().unwrap();
     let ready = temp.path().join("group-member.ready");
@@ -1521,9 +1521,9 @@ fn macos_group_confirmation_resignals_an_exited_leader_with_a_live_member() {
 #[test]
 fn macos_group_signal_eperm_keeps_a_retained_zombie_member_pending() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use tempfile::tempdir;
 
     let temp = tempdir().unwrap();
     let ready = temp.path().join("zombie-group.ready");
@@ -1610,9 +1610,9 @@ fn macos_group_signal_eperm_keeps_a_retained_zombie_member_pending() {
 #[test]
 fn macos_stopped_leader_remains_running_until_forced_cleanup() {
     let _guard = termination_test_guard();
+    use crate::test_tempdir as tempdir;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
-    use tempfile::tempdir;
 
     let temp = tempdir().unwrap();
     let ready = temp.path().join("stopped-leader.ready");

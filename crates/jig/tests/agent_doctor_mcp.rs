@@ -1,12 +1,14 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+mod support;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
-use tempfile::tempdir;
+use support::tempdir;
 
 #[test]
 fn one_mcp_process_can_run_agent_doctor_twice() {

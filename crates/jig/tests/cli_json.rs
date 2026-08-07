@@ -1,3 +1,5 @@
+mod support;
+
 use std::fs;
 #[cfg(unix)]
 use std::fs::File;
@@ -15,7 +17,7 @@ use std::process::Command;
 use std::process::Stdio;
 
 use serde_json::{Value, json};
-use tempfile::tempdir;
+use support::tempdir;
 
 fn jig() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));

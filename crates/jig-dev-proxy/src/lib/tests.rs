@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 use super::*;
 

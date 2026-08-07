@@ -1,8 +1,8 @@
 use std::thread;
 use std::time::Instant;
 
+use crate::test_tempdir as tempdir;
 use fs4::fs_std::FileExt;
-use tempfile::tempdir;
 
 use super::*;
 

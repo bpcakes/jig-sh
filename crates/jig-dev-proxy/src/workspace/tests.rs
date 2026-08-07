@@ -1,4 +1,4 @@
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 use super::*;
 

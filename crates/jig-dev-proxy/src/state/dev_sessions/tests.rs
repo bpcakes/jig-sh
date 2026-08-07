@@ -5,8 +5,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::test_tempdir as tempdir;
 use fs4::fs_std::FileExt;
-use tempfile::tempdir;
 
 use super::*;
 use crate::state::{StateStore, now_ms, open_lock_file};

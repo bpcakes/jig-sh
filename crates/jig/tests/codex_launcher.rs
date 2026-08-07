@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+mod support;
+
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -15,7 +17,7 @@ const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
 #[test]
 fn repository_launcher_preserves_the_invocation_directory_for_codex() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = support::tempdir().unwrap();
     let repo = temp.path().join("repo");
     let caller = temp.path().join("caller");
     fs::create_dir_all(repo.join("scripts")).unwrap();
@@ -92,7 +94,7 @@ printf '<%s>\n' "$@"
 
 #[test]
 fn interactive_picker_opens_before_inspection_and_launches_searched_exact_home() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
     let work = temp.path().join(".codex-work");
     let launched = temp.path().join("launched-home");
@@ -193,7 +195,7 @@ sleep 30
 
 #[test]
 fn homes_shows_terminal_progress_while_accounts_are_inspected() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
     let work = temp.path().join(".codex-work");
     fs::create_dir(&default).unwrap();
@@ -260,7 +262,7 @@ sleep 30
 
 #[test]
 fn sigint_restores_picker_and_cancels_all_active_home_inspections() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
     let work = temp.path().join(".codex-work");
     fs::create_dir(&default).unwrap();
@@ -341,7 +343,7 @@ sleep 30
 
 #[test]
 fn sigint_cancels_all_active_home_inspections_before_redelivery() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
     let work = temp.path().join(".codex-work");
     fs::create_dir(&default).unwrap();

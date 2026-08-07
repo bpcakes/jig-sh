@@ -8,7 +8,7 @@ use std::thread;
 
 use super::*;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 mod dev_session;
 
@@ -410,7 +410,7 @@ fn shell_commands_reject_nul_and_line_breaks() {
 #[cfg(unix)]
 #[test]
 fn prepare_certs_for_hosts_records_host_before_route_registration() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
         https: true,
@@ -622,7 +622,7 @@ fn dev_table_keeps_header_for_single_app() {
 
 #[test]
 fn dev_app_environment_exports_assigned_app_origins() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let api = AppRunSpec::new(
         "api",
@@ -928,7 +928,7 @@ fn runtime_owned_app_coordinate_key_matching_is_exact_and_case_insensitive() {
 
 #[test]
 fn dev_app_environment_rejects_duplicate_env_prefixes() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let first = AppRunSpec::new(
         "web-app",
@@ -958,7 +958,7 @@ fn dev_app_environment_rejects_duplicate_env_prefixes() {
 
 #[test]
 fn proxied_app_origin_prefers_https_port_without_http_fallback() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     store.write_https_port(1443).unwrap();
     fs::write(store.http_port_path(), "not-a-port").unwrap();
@@ -982,7 +982,7 @@ fn proxied_app_origin_prefers_https_port_without_http_fallback() {
 
 #[test]
 fn open_proxy_log_rotates_existing_large_log() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     fs::write(
         store.log_path(),
@@ -1021,7 +1021,7 @@ fn open_proxy_log_rotates_existing_large_log() {
 #[cfg(unix)]
 #[test]
 fn open_proxy_log_rejects_hardlinked_log_file() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     fs::write(store.log_path(), b"log").unwrap();
     fs::hard_link(store.log_path(), store.root().join("linked-proxy.log")).unwrap();
@@ -1033,7 +1033,7 @@ fn open_proxy_log_rejects_hardlinked_log_file() {
 
 #[test]
 fn spawn_child_errors_preserve_io_source() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings::default();
     let spec = AppRunSpec {
         name: "missing".into(),
@@ -1062,7 +1062,7 @@ fn spawn_child_errors_preserve_io_source() {
 #[cfg(not(windows))]
 #[test]
 fn spawn_child_captures_output_without_inheriting_the_terminal() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings::default();
     let spec = AppRunSpec {
         name: "captured".into(),
@@ -1091,7 +1091,7 @@ fn spawn_child_captures_output_without_inheriting_the_terminal() {
 #[cfg(not(windows))]
 #[test]
 fn spawn_child_keeps_astro_in_the_supervised_foreground_group() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings::default();
     let spec = AppRunSpec {
         name: "astro".into(),
@@ -1129,7 +1129,7 @@ fn publication_error_after_write_is_cleaned_by_exact_ownership() {
     if !process_start_tokens_supported() {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let hostname = RouteHostname::new("committed.localhost").unwrap();
     let owner_pid = std::process::id();
@@ -1159,7 +1159,7 @@ fn publication_error_after_write_is_cleaned_by_exact_ownership() {
 #[test]
 fn captured_output_does_not_wait_for_grandchildren_holding_pipes_open() {
     let _guard = termination_test_guard();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings::default();
     let spec = AppRunSpec {
         name: "captured".into(),
@@ -1231,7 +1231,7 @@ fn repeated_silent_escaped_pipe_owners_do_not_leave_capture_threads() {
 
     let _guard = termination_test_guard();
     for iteration in 0..3 {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_tempdir().unwrap();
         let pid_path = temp.path().join("escaped-writer.pid");
         let stop_path = temp.path().join("stop-escaped-writer");
         let writer_guard = EscapedWriterGuard {
@@ -1290,7 +1290,7 @@ fn repeated_silent_escaped_pipe_owners_do_not_leave_capture_threads() {
 #[test]
 fn failure_tail_is_finalized_after_process_group_shutdown() {
     let _guard = termination_test_guard();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let ready = temp.path().join("term-trap-ready");
     let release = temp.path().join("release-wrapper");
     let settings = ProxySettings::default();
@@ -1365,7 +1365,7 @@ fn captured_output_keeps_a_bounded_tail() {
 
 #[test]
 fn remove_route_best_effort_tolerates_cleanup_failure() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     fs::write(store.root().join("routes.json"), b"{not json").unwrap();
     let ownership = ProcessRouteOwnership::new(
@@ -1429,7 +1429,7 @@ fn failed_multi_app_session_preserves_primary_failure_when_cleanup_is_incomplete
 #[test]
 fn run_apps_launches_non_proxied_apps_without_routes() {
     let _guard = termination_test_guard();
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
         http_port: 0,
@@ -1974,7 +1974,7 @@ fn choose_app_port_rejects_zero_explicit_port() {
 
 #[test]
 fn ensure_requested_https_rejects_http_only_proxy() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let settings = ProxySettings {
         state_dir: Some(temp.path().to_path_buf()),
@@ -1993,7 +1993,7 @@ fn ensure_requested_https_rejects_http_only_proxy() {
 
 #[test]
 fn proxy_ready_rejects_registered_proxy_on_different_http_port() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     let token = store.ensure_health_token().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -2019,7 +2019,7 @@ fn proxy_ready_rejects_registered_proxy_on_different_http_port() {
 
 #[test]
 fn proxy_ready_rejects_registered_proxy_on_different_https_port() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
     store.ensure_health_token().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -2062,7 +2062,7 @@ fn spawn_proxy_health_response(listener: TcpListener) -> thread::JoinHandle<()> 
 
 #[test]
 fn ensure_proxy_running_rejects_proxy_from_other_state_dir() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
@@ -2094,7 +2094,7 @@ fn ensure_proxy_running_rejects_proxy_from_other_state_dir() {
 
 #[test]
 fn ensure_proxy_running_identifies_foreign_jig_proxy_without_health_token() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = crate::test_tempdir().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {

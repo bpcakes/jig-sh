@@ -7,7 +7,10 @@ use super::*;
 use crate::context::DevConfig;
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::test_process::{read_test_process_identity, terminate_and_confirm_test_process};
+use crate::test_process::{
+    TestProcessIdentity, publish_test_process_identity, read_test_process_identity,
+    terminate_and_confirm_test_process,
+};
 
 fn write_config(root: &std::path::Path, extra: &str) {
     TestRepoBuilder::new(root).config(extra).write();
@@ -607,6 +610,46 @@ fn frontend_dependency_preflight_bounds_and_lossily_decodes_diagnostics() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn escaped_preflight_pipe_owner_helper() {
+    let Some(mode) = std::env::var_os("JIG_PREFLIGHT_ESCAPE_MODE") else {
+        return;
+    };
+    let Some(marker) = std::env::var_os("JIG_PREFLIGHT_ESCAPE_MARKER") else {
+        return;
+    };
+
+    if mode == "escaped" {
+        assert_ne!(
+            unsafe { libc::setsid() },
+            -1,
+            "escape the owned process group"
+        );
+        let identity =
+            TestProcessIdentity::capture_current().expect("capture escaped helper identity");
+        publish_test_process_identity(std::path::Path::new(&marker), &identity);
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        return;
+    }
+
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "dev_proxy::tests::escaped_preflight_pipe_owner_helper",
+            "--nocapture",
+        ])
+        .env("JIG_PREFLIGHT_ESCAPE_MODE", "escaped")
+        .env("JIG_PREFLIGHT_ESCAPE_MARKER", &marker)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    std::mem::forget(child);
+    crate::test_process::wait_for_test_file(std::path::Path::new(&marker));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn frontend_dependency_preflight_rejects_incomplete_capture_after_success() {
     let _env = lock_env();
     let temp = tempdir().unwrap();
@@ -615,7 +658,7 @@ fn frontend_dependency_preflight_rejects_incomplete_capture_after_success() {
     fs::write(
         temp.path().join("scripts/check-webapps.sh"),
         r#"#!/usr/bin/env bash
-"$JIG_PREFLIGHT_ESCAPE_TEST_EXE" --exact process::tests::owned_process_output_escape_helper --nocapture
+"$JIG_PREFLIGHT_ESCAPE_TEST_EXE" --exact dev_proxy::tests::escaped_preflight_pipe_owner_helper --nocapture
 exit 0
 "#,
     )
@@ -624,8 +667,8 @@ exit 0
         "JIG_PREFLIGHT_ESCAPE_TEST_EXE",
         std::env::current_exe().unwrap(),
     );
-    let _mode = EnvVarGuard::set("JIG_OWNED_OUTPUT_ESCAPE_HELPER", "spawn");
-    let _marker = EnvVarGuard::set("JIG_OWNED_OUTPUT_ESCAPE_MARKER", &marker);
+    let _mode = EnvVarGuard::set("JIG_PREFLIGHT_ESCAPE_MODE", "spawn");
+    let _marker = EnvVarGuard::set("JIG_PREFLIGHT_ESCAPE_MARKER", &marker);
 
     let error = frontend_dependency_readiness_with_shell(temp.path(), "web", OsStr::new("bash"))
         .unwrap_err()

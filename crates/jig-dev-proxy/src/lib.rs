@@ -33,6 +33,31 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+#[cfg(test)]
+pub(crate) fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Once;
+
+        static TEST_UMASK: Once = Once::new();
+        TEST_UMASK.call_once(|| {
+            // SAFETY: this is test-only process setup; the test process exits
+            // after the suite, so the private umask does not escape to callers.
+            unsafe { libc::umask(0o077) };
+        });
+
+        return tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir();
+    }
+
+    #[cfg(not(unix))]
+    {
+        tempfile::tempdir()
+    }
+}
+
 use crate::host::{RouteHostname, TargetHost};
 use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_listener};
 use crate::state::{StateStore, now_ms, pid_is_alive};

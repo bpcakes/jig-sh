@@ -1,4 +1,4 @@
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use super::trust::command_path_arg;

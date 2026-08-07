@@ -1,5 +1,7 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+mod support;
+
 use std::fs;
 use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
@@ -11,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use fs4::fs_std::FileExt;
 use serde_json::{Value, json};
-use tempfile::{NamedTempFile, tempdir};
+use support::tempdir;
+use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 const HELPER_ENV: &str = "JIG_DEV_SIGNAL_TEST_HELPER";

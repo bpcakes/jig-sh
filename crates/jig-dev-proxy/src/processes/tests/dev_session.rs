@@ -1,5 +1,5 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use tempfile::tempdir;
+use crate::test_tempdir as tempdir;
 
 use crate::DevPreflightError;
 use crate::dev_sessions::DevSessionRuntime;

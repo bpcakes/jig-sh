@@ -630,7 +630,7 @@ mod interruptible_lock_tests {
 
     #[test]
     fn proxy_start_lock_wait_is_interruptible() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_tempdir().unwrap();
         let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
         let held = match ProxyStartLock::lock_interruptible(&store, &|| false).unwrap() {
             LockOutcome::Acquired(lock) => lock,
@@ -646,7 +646,7 @@ mod interruptible_lock_tests {
     #[cfg(unix)]
     #[test]
     fn proxy_child_is_not_spawned_when_resource_arm_fails() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_tempdir().unwrap();
         let marker = temp.path().join("spawned");
         let mut command = Command::new("sh");
         command
@@ -676,7 +676,7 @@ mod interruptible_lock_tests {
             }
         }
 
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::test_tempdir().unwrap();
         let ready = temp.path().join("proxy-startup.ready");
         let release = temp.path().join("proxy-startup.release");
         let leaked = temp.path().join("proxy-startup.leaked");

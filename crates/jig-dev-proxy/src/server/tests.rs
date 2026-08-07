@@ -6,11 +6,11 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::test_tempdir as tempdir;
 use http_body_util::Empty;
 use hyper::header::HeaderValue;
 #[cfg(unix)]
 use rustls::pki_types::ServerName;
-use tempfile::tempdir;
 use tokio::time::{sleep, timeout};
 #[cfg(unix)]
 use tokio_rustls::TlsConnector;

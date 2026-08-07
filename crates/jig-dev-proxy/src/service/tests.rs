@@ -1,3 +1,4 @@
+use crate::test_tempdir as tempdir;
 use serde_json::json;
 use std::fs;
 #[cfg(unix)]
@@ -7,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::time::{Duration, Instant};
-use tempfile::tempdir;
 
 use super::file::*;
 use super::lifecycle::*;

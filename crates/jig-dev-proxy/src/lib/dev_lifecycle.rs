@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use crate::test_tempdir as tempdir;
 use serde_json::{Value, json};
-use tempfile::tempdir;
 
 use crate::state::StateStore;
 use crate::{
