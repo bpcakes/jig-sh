@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use fs4::fs_std::FileExt;
 
+use crate::crypto::KdfParams;
 use crate::{Result, VaultError, VaultErrorKind};
 
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
@@ -22,17 +23,27 @@ const AUDIT_TEXT_READ_LIMIT: u64 = 256 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub(crate) struct VaultStore {
     root: PathBuf,
+    initialization_kdf: KdfParams,
 }
 
 impl VaultStore {
     pub(crate) fn resolve(explicit_home: Option<PathBuf>) -> Result<Self> {
-        Self::resolve_inner(explicit_home)
+        Self::resolve_inner(explicit_home, KdfParams::production())
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))
     }
 
-    pub(crate) fn resolve_inner(explicit_home: Option<PathBuf>) -> AnyResult<Self> {
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn resolve_for_test(explicit_home: Option<PathBuf>) -> Result<Self> {
+        Self::resolve_inner(explicit_home, KdfParams::for_tests())
+            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))
+    }
+
+    fn resolve_inner(
+        explicit_home: Option<PathBuf>,
+        initialization_kdf: KdfParams,
+    ) -> AnyResult<Self> {
         let root = resolve_root(explicit_home)?;
-        prepare_private_dir(root)
+        prepare_private_dir(root, initialization_kdf)
     }
 
     pub(crate) fn inspect(explicit_home: Option<PathBuf>) -> Result<(PathBuf, bool)> {
@@ -56,6 +67,10 @@ impl VaultStore {
 
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn initialization_kdf(&self) -> &KdfParams {
+        &self.initialization_kdf
     }
 
     pub(crate) fn vault_path(&self) -> PathBuf {
@@ -219,7 +234,7 @@ fn resolve_root(explicit_home: Option<PathBuf>) -> AnyResult<PathBuf> {
     }
 }
 
-fn prepare_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
+fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResult<VaultStore> {
     if path_is_symlink(&root)? {
         bail!(
             "Vault home {} must not be a symlink. Use a dedicated real directory.",
@@ -243,7 +258,10 @@ fn prepare_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     // Re-walk after chmod so a same-user directory-entry race cannot trade a
     // checked file for a symlink while permissions are being tightened.
     ensure_tree_has_no_symlinks(&root, &root)?;
-    Ok(VaultStore { root })
+    Ok(VaultStore {
+        root,
+        initialization_kdf,
+    })
 }
 
 fn lock_file(file: &File) -> AnyResult<()> {
@@ -486,7 +504,7 @@ mod tests {
     #[test]
     fn resolve_creates_private_directory() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         assert!(store.root().is_dir());
         #[cfg(unix)]
         assert_eq!(
@@ -503,7 +521,9 @@ mod tests {
         fs::create_dir(&target).unwrap();
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let error = VaultStore::resolve(Some(link)).unwrap_err().to_string();
+        let error = VaultStore::resolve_for_test(Some(link))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("must not be a symlink"));
     }
 
@@ -516,7 +536,7 @@ mod tests {
         let link = temp.path().join("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        let error = VaultStore::resolve(Some(link.join("vault")))
+        let error = VaultStore::resolve_for_test(Some(link.join("vault")))
             .unwrap_err()
             .to_string();
         assert!(error.contains("creation base"));
@@ -527,7 +547,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("vault");
         fs::write(&home, "not a directory").unwrap();
-        let error = VaultStore::resolve(Some(home)).unwrap_err().to_string();
+        let error = VaultStore::resolve_for_test(Some(home))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("failed to create vault home"));
     }
 
@@ -535,7 +557,7 @@ mod tests {
     #[test]
     fn exists_refuses_symlinked_vault_file() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let target = temp.path().join("outside-vault.json");
         fs::write(&target, "{}").unwrap();
         std::os::unix::fs::symlink(&target, store.vault_path()).unwrap();
@@ -547,7 +569,7 @@ mod tests {
     #[test]
     fn read_refuses_symlinked_vault_file() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let target = temp.path().join("outside-vault.json");
         fs::write(&target, "{}").unwrap();
         std::os::unix::fs::symlink(&target, store.vault_path()).unwrap();
@@ -559,7 +581,7 @@ mod tests {
     #[test]
     fn read_rejects_oversized_vault_file() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let file = File::create(store.vault_path()).unwrap();
         file.set_len(VAULT_TEXT_READ_LIMIT + 1).unwrap();
 
@@ -577,7 +599,7 @@ mod tests {
         unsafe {
             std::env::set_var(VAULT_HOME_ENV, "");
         }
-        let error = VaultStore::resolve(None).unwrap_err().to_string();
+        let error = VaultStore::resolve_for_test(None).unwrap_err().to_string();
         unsafe {
             if let Some(previous) = previous {
                 std::env::set_var(VAULT_HOME_ENV, previous);
@@ -604,7 +626,7 @@ mod tests {
         unsafe {
             std::env::set_var(VAULT_HOME_ENV, home.as_os_str());
         }
-        let result = VaultStore::resolve(None);
+        let result = VaultStore::resolve_for_test(None);
         unsafe {
             if let Some(previous) = previous {
                 std::env::set_var(VAULT_HOME_ENV, previous);

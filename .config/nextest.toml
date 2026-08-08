@@ -1,0 +1,28 @@
+# Keep repository test execution fast without overwhelming the external Node
+# processes exercised by the generated frontend-check fixtures.
+nextest-version = "0.9.130"
+
+[profile.default]
+fail-fast = false
+
+[test-groups]
+frontend-node = { max-threads = 2 }
+process-signals = { max-threads = 1 }
+vault-crypto = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime) | test(bootstrap::tests::windows_dependency_checker))'
+test-group = 'frontend-node'
+
+[[profile.default.overrides]]
+filter = 'package(jig-sh) & (test(generated_pnpm_workspace_walk_is_bounded_to_relevant_branches) | test(generated_web_dependency_scope_requires_workspace_membership_and_honors_app_locks) | test(generated_root_yarn_receipt_tracks_nested_app_authority_and_runtime_assets) | test(generated_web_checks_keep_app_local_yarn_lock_authoritative))'
+test-group = 'frontend-node'
+threads-required = 2
+
+[[profile.default.overrides]]
+filter = '(package(jig-sh) & binary(dev_sigint)) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+test-group = 'process-signals'
+
+[[profile.default.overrides]]
+filter = 'package(jig-vault) | (package(jig-sh) & test(vault))'
+test-group = 'vault-crypto'

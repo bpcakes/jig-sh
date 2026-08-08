@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 use crate::audit::{AuditAction, AuditEvent, AuditVerification, verify_chain_unlocked};
 use crate::broker::BrokeredRun;
 use crate::crypto::{
-    KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN, decode_array, derive_audit_key, derive_wrap_key, open,
+    KEY_LEN, NONCE_LEN, SALT_LEN, decode_array, derive_audit_key, derive_wrap_key, open,
     random_array, seal,
 };
 use crate::error::{
@@ -53,6 +53,21 @@ impl Vault {
     pub fn resolve(explicit_home: Option<PathBuf>) -> Result<Self> {
         Ok(Self {
             store: VaultStore::resolve(explicit_home)?,
+        })
+    }
+
+    /// Resolves a vault handle that creates new test fixtures with the minimum
+    /// accepted Argon2 cost. Existing vaults continue to use the parameters in
+    /// their authenticated headers.
+    ///
+    /// This constructor is available only to this crate's tests and consumers
+    /// that explicitly enable the `test-utils` feature. Production code must
+    /// use [`Vault::resolve`].
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub fn resolve_for_test(explicit_home: Option<PathBuf>) -> Result<Self> {
+        Ok(Self {
+            store: VaultStore::resolve_for_test(explicit_home)?,
         })
     }
 
@@ -270,7 +285,7 @@ impl VaultStore {
             version: FORMAT_VERSION,
             vault_id: ulid::Ulid::new().to_string(),
             created_at_ms: now,
-            kdf: KdfParams::default(),
+            kdf: self.initialization_kdf().clone(),
             salt_b64: B64.encode(salt),
             aead: AEAD_ALGORITHM.into(),
         };

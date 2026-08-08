@@ -47,9 +47,9 @@ pub(crate) fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
             unsafe { libc::umask(0o077) };
         });
 
-        return tempfile::Builder::new()
+        tempfile::Builder::new()
             .permissions(std::fs::Permissions::from_mode(0o700))
-            .tempdir();
+            .tempdir()
     }
 
     #[cfg(not(unix))]
