@@ -9,8 +9,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
-    BrokeredEnv, BrokeredFile, BrokeredRun, FieldKind, InjectionTemplate, MAX_SECRET_VALUE_LEN,
-    SecretBytes, Vault, validate_new_vault_passphrase,
+    BrokeredEnv, BrokeredFile, BrokeredRun, EnvVarName, ExecEnvBinding, FieldKind,
+    InjectionTemplate, MAX_SECRET_VALUE_LEN, SecretBytes, Vault, VaultExec,
+    validate_new_vault_passphrase,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -18,12 +19,14 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::command::{
-    VaultAuditCommand, VaultCommand, VaultFieldCommand, VaultFieldListRequest,
-    VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest, VaultInjectRequest,
-    VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
-    VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
-    VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
+    VaultAuditCommand, VaultCommand, VaultExecRequest, VaultExecValue, VaultFieldCommand,
+    VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest,
+    VaultInjectRequest, VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest,
+    VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
+    VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
 };
+
+use super::VaultRawOutcome;
 
 const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
@@ -43,7 +46,7 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
             VaultFieldCommand::Set(request) => set_field(request),
             VaultFieldCommand::Remove(request) => remove_field(request),
         },
-        VaultCommand::Inject(_) | VaultCommand::Read(_) => {
+        VaultCommand::Exec(_) | VaultCommand::Inject(_) | VaultCommand::Read(_) => {
             bail!("internal error: raw vault output reached the structured dispatcher")
         }
         VaultCommand::Secret(command) => match command {
@@ -55,16 +58,21 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
     }
 }
 
-pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<()> {
+pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<VaultRawOutcome> {
     match command {
-        VaultCommand::Inject(request) => inject(request),
-        VaultCommand::Read(request) => read_field(request),
+        VaultCommand::Exec(request) => exec(request),
+        VaultCommand::Inject(request) => inject(request).map(|()| VaultRawOutcome::Complete),
+        VaultCommand::Read(request) => read_field(request).map(|()| VaultRawOutcome::Complete),
         _ => bail!("internal error: structured vault command reached the raw dispatcher"),
     }
 }
 
 pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
     match command {
+        VaultCommand::Exec(request) => {
+            request.environment = Some(super::vault_env::parse_vault_env_file(&request.env_file)?);
+            Ok(())
+        }
         VaultCommand::Inject(request) => {
             let bytes = read_template_input(&request.input)?;
             request.template = Some(InjectionTemplate::parse(bytes)?);
@@ -73,6 +81,33 @@ pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
         VaultCommand::Read(_) => Ok(()),
         _ => bail!("internal error: structured vault command reached raw input preparation"),
     }
+}
+
+fn exec(request: VaultExecRequest) -> Result<VaultRawOutcome> {
+    let environment = request
+        .environment
+        .ok_or_else(|| anyhow!("internal error: vault exec environment was not prepared"))?;
+    let mut bindings = Vec::with_capacity(environment.assignments.len());
+    for assignment in environment.assignments {
+        let variable = EnvVarName::parse(&assignment.name).map_err(|_| {
+            anyhow!(
+                "internal error: validated vault exec variable '{}' from line {} was rejected",
+                assignment.name,
+                assignment.line
+            )
+        })?;
+        let binding = match assignment.value {
+            VaultExecValue::Literal(value) => ExecEnvBinding::literal(variable, value)?,
+            VaultExecValue::Field(reference) => ExecEnvBinding::field(variable, reference),
+        };
+        bindings.push(binding);
+    }
+    let execution = VaultExec::new(request.command, bindings)?;
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    let outcome = vault.exec(&passphrase, execution)?;
+    Ok(VaultRawOutcome::ChildExit(outcome.exit_status))
 }
 
 fn read_field(request: VaultReadRequest) -> Result<()> {

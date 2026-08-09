@@ -42,7 +42,8 @@ pub(crate) use state::{
     StateExportReceiptsRequest, StateRestoreRequest,
 };
 pub(crate) use vault::{
-    VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultFieldCommand,
+    VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultExecAssignment,
+    VaultExecEnvironment, VaultExecRequest, VaultExecValue, VaultFieldCommand,
     VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest,
     VaultInjectRequest, VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest,
     VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,

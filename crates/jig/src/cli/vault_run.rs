@@ -7,7 +7,9 @@ use anyhow::{Result, bail};
 
 use super::output::{HumanOutput, emit};
 use super::run::finish_after_json_output;
-use super::structured_error::{require_json_ok, require_vault_child_status_ok};
+use super::structured_error::{
+    require_json_ok, require_vault_child_status_ok, vault_exec_child_exit,
+};
 use super::vault::VaultCommand;
 use crate::{context::RepoContext, runtime};
 
@@ -39,7 +41,11 @@ fn run_vault_command_with_stdout_terminal(
         }
     }
     if is_raw {
-        return runtime::dispatch_vault_raw(runtime_command);
+        return match runtime::dispatch_vault_raw(runtime_command)? {
+            runtime::VaultRawOutcome::Complete => Ok(()),
+            runtime::VaultRawOutcome::ChildExit(0) => Ok(()),
+            runtime::VaultRawOutcome::ChildExit(status) => Err(vault_exec_child_exit(status)),
+        };
     }
     let output = runtime::dispatch_vault(runtime_command)?;
     emit(json_output, human_output, &output)?;
@@ -55,7 +61,9 @@ fn run_vault_command_with_stdout_terminal(
 const fn vault_command_uses_raw_output(command: &crate::command::VaultCommand) -> bool {
     matches!(
         command,
-        crate::command::VaultCommand::Inject(_) | crate::command::VaultCommand::Read(_)
+        crate::command::VaultCommand::Exec(_)
+            | crate::command::VaultCommand::Inject(_)
+            | crate::command::VaultCommand::Read(_)
     )
 }
 
@@ -65,6 +73,14 @@ fn validate_raw_vault_command(
     stdout_is_terminal: bool,
 ) -> Result<()> {
     let (name, reveal, out_file, overwrite) = match command {
+        crate::command::VaultCommand::Exec(_) => {
+            if json_output {
+                bail!(
+                    "--json is not supported by vault exec; child output is a raw streaming protocol"
+                );
+            }
+            return Ok(());
+        }
         crate::command::VaultCommand::Read(request) => (
             "vault read",
             request.reveal,
@@ -234,6 +250,7 @@ pub(super) const fn vault_options_mut(
         crate::command::VaultCommand::Init(request) => &mut request.vault,
         crate::command::VaultCommand::Status(request) => &mut request.vault,
         crate::command::VaultCommand::Migrate(request) => &mut request.vault,
+        crate::command::VaultCommand::Exec(request) => &mut request.vault,
         crate::command::VaultCommand::Field(command) => match command {
             crate::command::VaultFieldCommand::List(request) => &mut request.vault,
             crate::command::VaultFieldCommand::Set(request) => &mut request.vault,

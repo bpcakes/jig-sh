@@ -10,12 +10,13 @@ use super::{
     ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
     ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultFieldCommand, VaultFieldListOpts,
-    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultInjectOpts, VaultMigrateOpts,
-    VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts,
-    VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts,
-    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
-    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultExecOpts, VaultFieldCommand,
+    VaultFieldListOpts, VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultInjectOpts,
+    VaultMigrateOpts, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
+    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
+    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
+    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
+    WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -97,6 +98,7 @@ impl From<VaultCommand> for command::VaultCommand {
             VaultCommand::Init(opts) => Self::Init(opts.into()),
             VaultCommand::Status(opts) => Self::Status(opts.into()),
             VaultCommand::Migrate(opts) => Self::Migrate(opts.into()),
+            VaultCommand::Exec(opts) => Self::Exec(opts.into()),
             VaultCommand::Field(command) => Self::Field(command.into()),
             VaultCommand::Inject(opts) => Self::Inject(opts.into()),
             VaultCommand::Read(opts) => Self::Read(opts.into()),
@@ -270,6 +272,17 @@ impl From<VaultInjectOpts> for command::VaultInjectRequest {
             reveal: opts.reveal,
             out_file: opts.out_file,
             overwrite: opts.overwrite,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultExecOpts> for command::VaultExecRequest {
+    fn from(opts: VaultExecOpts) -> Self {
+        Self {
+            env_file: opts.env_file,
+            environment: None,
+            command: opts.command,
             vault: opts.vault.into(),
         }
     }

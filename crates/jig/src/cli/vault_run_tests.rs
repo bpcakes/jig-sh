@@ -246,6 +246,33 @@ fn json_and_terminal_refusals_precede_passphrase_capture_and_vault_access() {
 }
 
 #[test]
+fn exec_json_refusal_precedes_env_file_and_passphrase_access() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault");
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+    let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+        env_file: temp.path().join("missing.env"),
+        vault: super::super::vault::VaultRuntimeOpts {
+            home: Some(vault_home.clone()),
+            global: false,
+        },
+        command: vec![std::ffi::OsString::from("command")],
+    });
+
+    let error = run_vault_command_with_stdout_terminal(command, true, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("--json is not supported by vault exec"));
+    assert_eq!(
+        std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+        Ok(passphrase)
+    );
+    assert!(!vault_home.exists());
+}
+
+#[test]
 fn raw_vault_commands_require_explicit_terminal_reveal() {
     for mut command in [read_request(), inject_request("template")] {
         let error = validate_raw_vault_command(&command, false, true)
@@ -372,5 +399,37 @@ fn invalid_injection_input_fails_before_passphrase_capture_or_vault_creation() {
         );
         assert!(!vault_home.exists());
         assert!(!output.exists());
+    }
+}
+
+#[test]
+fn invalid_exec_env_fails_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let invalid = temp.path().join("invalid.env");
+    std::fs::write(&invalid, b"TOKEN=$AMBIENT_VALUE\n").unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for env_file in [invalid, std::path::PathBuf::from("-")] {
+        let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+            env_file,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+            command: vec![std::ffi::OsString::from("command")],
+        });
+
+        let error = run_vault_command_with_stdout_terminal(command, false, false)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("AMBIENT_VALUE"));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
     }
 }

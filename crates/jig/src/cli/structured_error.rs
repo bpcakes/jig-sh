@@ -7,6 +7,9 @@ struct JsonOkFalse;
 struct VaultChildExitStatus(i32);
 
 #[derive(Debug)]
+struct VaultExecChildExit(i32);
+
+#[derive(Debug)]
 struct ForegroundInterrupted(i32);
 
 #[derive(Debug)]
@@ -30,6 +33,18 @@ impl std::fmt::Display for VaultChildExitStatus {
 }
 
 impl std::error::Error for VaultChildExitStatus {}
+
+impl std::fmt::Display for VaultExecChildExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Transparent vault child exited with status {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for VaultExecChildExit {}
 
 impl std::fmt::Display for ForegroundInterrupted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,9 +147,14 @@ pub(super) fn require_vault_child_status_ok(output: &serde_json::Value) -> Resul
     Ok(())
 }
 
+pub(super) fn vault_exec_child_exit(status: i32) -> anyhow::Error {
+    VaultExecChildExit(status).into()
+}
+
 pub(crate) fn is_structured_json_failure(error: &anyhow::Error) -> bool {
     error.is::<JsonOkFalse>()
         || error.is::<VaultChildExitStatus>()
+        || error.is::<VaultExecChildExit>()
         || error.is::<ForegroundInterrupted>()
         || error.is::<JsonReportedError>()
         || error.is::<crate::codex::CodexChildExitStatus>()
@@ -144,6 +164,11 @@ pub(crate) fn structured_error_exit_code(error: &anyhow::Error) -> Option<i32> {
     error
         .downcast_ref::<VaultChildExitStatus>()
         .map(|error| error.0)
+        .or_else(|| {
+            error
+                .downcast_ref::<VaultExecChildExit>()
+                .map(|error| error.0)
+        })
         .or_else(|| {
             error
                 .downcast_ref::<ForegroundInterrupted>()

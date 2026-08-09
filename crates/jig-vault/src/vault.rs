@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    ffi::OsString,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -19,6 +20,14 @@ use crate::crypto::{NONCE_LEN, SALT_LEN, derive_wrap_key, open};
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
+use crate::exec::{
+    ExecEnvValue, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN, VaultExec,
+    redactor_from_concealed_values,
+};
+use crate::exec_output::StreamingRedactor;
+use crate::exec_process::{
+    ResolvedExecEnv as ProcessExecEnv, ResolvedExecProcess, run_exec_process,
+};
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
 use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
@@ -29,7 +38,7 @@ use crate::run::{
 };
 use crate::store::VaultStore;
 use crate::template::InjectionTemplate;
-use crate::types::{FieldKind, SecretName, VaultReference};
+use crate::types::{EnvVarName, FieldKind, SecretName, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
 mod envelope;
@@ -344,6 +353,25 @@ impl Vault {
     ) -> Result<RunOutput> {
         self.store.run_brokered(passphrase, request)
     }
+
+    /// Runs an ordinary command with vault-aware environment assignments and
+    /// streaming concealed-value redaction.
+    ///
+    /// This transparent execution inherits stdin and the ordinary environment,
+    /// has no Jig timeout or output cap, and does not own a separate process
+    /// tree. Nonzero and signal exits are returned as successful outcomes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when preparation, child supervision, output streaming,
+    /// or lifecycle audit recording fails.
+    pub fn exec(
+        &self,
+        passphrase: &SecretString,
+        request: VaultExec,
+    ) -> Result<crate::ExecOutcome> {
+        self.store.exec(passphrase, request)
+    }
 }
 
 #[non_exhaustive]
@@ -600,6 +628,129 @@ impl std::fmt::Debug for PreparedReveal {
             .field("lifecycle", &self.lifecycle)
             .field("value_len", &self.value.len())
             .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+struct PreparedExec {
+    store: VaultStore,
+    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    operation_id: String,
+    command: Vec<OsString>,
+    env: Vec<ResolvedExecEnv>,
+    redactor: StreamingRedactor,
+}
+
+struct ResolvedExecEnv {
+    var: EnvVarName,
+    value: Zeroizing<String>,
+    field_kind: Option<FieldKind>,
+}
+
+impl PreparedExec {
+    #[cfg(test)]
+    fn record_finish(&self, exit_status: i32, exit_signal: Option<i32>) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            AuditAction::ExecFinish,
+            serde_json::json!({
+                "operation_id": self.operation_id,
+                "exit_status": exit_status,
+                "exit_signal": exit_signal,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn execute(self) -> Result<crate::ExecOutcome> {
+        let Self {
+            store,
+            audit_key,
+            operation_id,
+            command,
+            env,
+            redactor,
+        } = self;
+        let env = env
+            .into_iter()
+            .map(|entry| ProcessExecEnv::new(entry.var, entry.value))
+            .collect();
+        let request = ResolvedExecProcess::new(command, env, redactor);
+        match run_exec_process(request) {
+            Ok(outcome) => {
+                if let Err(error) =
+                    record_exec_finish(&store, audit_key.as_ref(), &operation_id, &outcome)
+                {
+                    let finish_error = anyhow::anyhow!(
+                        "vault exec child completed, but its finish audit event failed"
+                    )
+                    .context(error);
+                    return match record_exec_failure(
+                        &store,
+                        audit_key.as_ref(),
+                        &operation_id,
+                        "audit_finish",
+                    ) {
+                        Ok(()) => Err(VaultError::from_anyhow(
+                            VaultErrorKind::AuditTampered,
+                            finish_error,
+                        )),
+                        Err(failure_error) => Err(VaultError::from_anyhow(
+                            VaultErrorKind::AuditTampered,
+                            finish_error.context(format!(
+                                "additionally failed to append vault exec failure event: {failure_error}"
+                            )),
+                        )),
+                    };
+                }
+                Ok(outcome)
+            }
+            Err(failure) => {
+                let stage = failure.stage();
+                let process_error = failure.into_error();
+                if let Err(audit_error) =
+                    record_exec_failure(&store, audit_key.as_ref(), &operation_id, stage)
+                {
+                    return Err(VaultError::from_anyhow(
+                        VaultErrorKind::Process,
+                        process_error.context(format!(
+                            "additionally failed to append vault exec failure event: {audit_error}"
+                        )),
+                    ));
+                }
+                Err(VaultError::from_anyhow(
+                    VaultErrorKind::Process,
+                    process_error,
+                ))
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for PreparedExec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedExec")
+            .field("operation_id", &self.operation_id)
+            .field("argument_count", &self.command.len())
+            .field("arguments", &"[REDACTED]")
+            .field("environment_count", &self.env.len())
+            .field("environment_values", &"[REDACTED]")
+            .field("audit_key", &"[REDACTED]")
+            .field("redactor", &self.redactor)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ResolvedExecEnv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedExecEnv")
+            .field("var", &self.var)
+            .field("value_len", &self.value.len())
+            .field("value", &"[REDACTED]")
+            .field("field_kind", &self.field_kind)
             .finish()
     }
 }
@@ -1162,6 +1313,77 @@ impl VaultStore {
         }
     }
 
+    fn prepare_exec(&self, passphrase: &SecretString, request: VaultExec) -> Result<PreparedExec> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    AuditAction::ExecStart,
+                    exec_start_details(&request, &operation_id),
+                )
+                .map_err(exec_start_audit_error)?;
+
+            let (command, env) = match resolve_exec_environment(&vault, request) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    return Err(exec_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        &operation_id,
+                        "resolve",
+                        error,
+                    ));
+                }
+            };
+            let concealed_values = env
+                .iter()
+                .filter(|entry| entry.field_kind == Some(FieldKind::Concealed))
+                .map(|entry| entry.value.as_bytes())
+                .collect::<Vec<_>>();
+            let redactor = match redactor_from_concealed_values(&concealed_values) {
+                Ok(redactor) => redactor,
+                Err(error) => {
+                    return Err(exec_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        &operation_id,
+                        "redaction",
+                        classified(error.kind(), error.message()),
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedExec {
+                store: self.clone(),
+                audit_key,
+                operation_id,
+                command,
+                env,
+                redactor,
+            })
+        })
+        .map_err(|error| {
+            if error.is::<ClassifiedVaultError>() {
+                vault_error_from_anyhow(VaultErrorKind::Internal, error)
+            } else {
+                self.map_open_error(error)
+            }
+        })
+    }
+
+    pub(crate) fn exec(
+        &self,
+        passphrase: &SecretString,
+        request: VaultExec,
+    ) -> Result<crate::ExecOutcome> {
+        // Preparation returns only after releasing the vault lock. The direct
+        // execute call owns every normal terminal audit attempt; an abort may
+        // intentionally leave an unmatched start event.
+        self.prepare_exec(passphrase, request)?.execute()
+    }
+
     pub(crate) fn verify_audit(&self, passphrase: &SecretString) -> Result<AuditVerification> {
         self.with_lock(|| {
             let vault = self.open_unlocked(passphrase)?;
@@ -1379,6 +1601,10 @@ impl OpenVault {
     }
 
     pub(crate) fn secret_value(&self, name: &SecretName) -> AnyResult<SecretBytes> {
+        self.field_value(name).map(|(_, value)| value)
+    }
+
+    fn field_value(&self, name: &SecretName) -> AnyResult<(FieldKind, SecretBytes)> {
         let entry = self.state.secrets.get(name.as_str()).ok_or_else(|| {
             classified(
                 VaultErrorKind::NotFound,
@@ -1408,7 +1634,7 @@ impl OpenVault {
                 ),
             ));
         }
-        Ok(value)
+        Ok((entry.kind, value))
     }
 
     fn prepare_save_unlocked(&self) -> AnyResult<ResealedVaultEnvelope> {
@@ -1450,6 +1676,187 @@ fn brokered_run_start_details(request: &BrokeredRun, run_id: &str) -> serde_json
             "secret_name": mapping.secret_name().as_str(),
         })).collect::<Vec<_>>(),
     })
+}
+
+fn exec_start_details(request: &VaultExec, operation_id: &str) -> serde_json::Value {
+    let variables = request
+        .bindings()
+        .iter()
+        .map(|binding| binding.var().as_str())
+        .collect::<Vec<_>>();
+    let field_bindings = request
+        .bindings()
+        .iter()
+        .filter_map(|binding| match binding.value() {
+            ExecEnvValue::Literal(_) => None,
+            ExecEnvValue::Field(reference) => Some(serde_json::json!({
+                "var": binding.var().as_str(),
+                "reference": reference.to_string(),
+            })),
+        })
+        .collect::<Vec<_>>();
+    let field_binding_count = field_bindings.len();
+    serde_json::json!({
+        "operation_id": operation_id,
+        "argument_count": request.command_len(),
+        "binding_count": request.bindings().len(),
+        "literal_binding_count": request.bindings().len() - field_binding_count,
+        "field_binding_count": field_binding_count,
+        "variables": variables,
+        "field_bindings": field_bindings,
+    })
+}
+
+fn exec_start_audit_error(error: anyhow::Error) -> anyhow::Error {
+    classify_source(
+        VaultErrorKind::AuditTampered,
+        "failed to append vault exec start audit event",
+        error,
+    )
+}
+
+fn exec_prepare_failure_unlocked(
+    store: &VaultStore,
+    vault: &OpenVault,
+    operation_id: &str,
+    stage: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let kind = classified_kind(&error).unwrap_or(VaultErrorKind::Internal);
+    match vault.append_audit_unlocked(
+        store,
+        AuditAction::ExecFailed,
+        exec_failure_details(operation_id, stage),
+    ) {
+        Ok(_) => error,
+        Err(audit_error) => classify_source(
+            kind,
+            "vault exec preparation failed; additionally failed to append failure audit event",
+            error.context(format!(
+                "additional audit failure while recording vault exec failure: {audit_error}"
+            )),
+        ),
+    }
+}
+
+fn exec_failure_details(operation_id: &str, stage: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation_id": operation_id,
+        "stage": stage,
+        // Values, argv, and raw errors never belong in the local audit chain.
+        "error": "vault exec failed",
+    })
+}
+
+fn record_exec_finish(
+    store: &VaultStore,
+    audit_key: &[u8],
+    operation_id: &str,
+    outcome: &crate::ExecOutcome,
+) -> AnyResult<()> {
+    AuditEvent::append(
+        store,
+        audit_key,
+        AuditAction::ExecFinish,
+        serde_json::json!({
+            "operation_id": operation_id,
+            "exit_status": outcome.exit_status,
+            "exit_signal": outcome.exit_signal,
+        }),
+    )?;
+    Ok(())
+}
+
+fn record_exec_failure(
+    store: &VaultStore,
+    audit_key: &[u8],
+    operation_id: &str,
+    stage: &str,
+) -> AnyResult<()> {
+    AuditEvent::append(
+        store,
+        audit_key,
+        AuditAction::ExecFailed,
+        exec_failure_details(operation_id, stage),
+    )?;
+    Ok(())
+}
+
+fn resolve_exec_environment(
+    vault: &OpenVault,
+    request: VaultExec,
+) -> AnyResult<(Vec<OsString>, Vec<ResolvedExecEnv>)> {
+    let (command, bindings) = request.into_parts();
+    let mut env = Vec::with_capacity(bindings.len());
+    let mut total_bytes = 0_usize;
+    for binding in bindings {
+        let (var, source) = binding.into_parts();
+        let (field_kind, value, reference) = match source {
+            ExecEnvValue::Literal(value) => (None, value, None),
+            ExecEnvValue::Field(reference) => {
+                let (kind, value) = vault.field_value(&reference.to_secret_name())?;
+                (Some(kind), value, Some(reference))
+            }
+        };
+        if value.len() > MAX_EXEC_ENV_VALUE_LEN {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault exec environment value for {} exceeds the {MAX_EXEC_ENV_VALUE_LEN} byte limit",
+                    var.as_str()
+                ),
+            ));
+        }
+        total_bytes = total_bytes.checked_add(value.len()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                "vault exec resolved environment data exceeds supported bounds",
+            )
+        })?;
+        if total_bytes > MAX_EXEC_ENV_TOTAL_BYTES {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault exec resolved environment data exceeds the {MAX_EXEC_ENV_TOTAL_BYTES} byte total limit"
+                ),
+            ));
+        }
+        let value = value.into_zeroizing_string().map_err(|_| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                invalid_exec_field_value_message(&var, reference.as_ref(), "must be valid UTF-8"),
+            )
+        })?;
+        if value.as_bytes().contains(&0) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                invalid_exec_field_value_message(&var, reference.as_ref(), "must not contain NUL"),
+            ));
+        }
+        env.push(ResolvedExecEnv {
+            var,
+            value,
+            field_kind,
+        });
+    }
+    Ok((command, env))
+}
+
+fn invalid_exec_field_value_message(
+    var: &EnvVarName,
+    reference: Option<&VaultReference>,
+    requirement: &str,
+) -> String {
+    match reference {
+        Some(reference) => format!(
+            "vault exec field {reference} for {} {requirement}",
+            var.as_str()
+        ),
+        None => format!(
+            "vault exec literal environment value for {} {requirement}",
+            var.as_str()
+        ),
+    }
 }
 
 fn reveal_start_audit_error(error: anyhow::Error) -> anyhow::Error {

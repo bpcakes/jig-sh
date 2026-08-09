@@ -17,8 +17,15 @@ mod prompt;
 mod sqlx;
 mod tool_execution;
 mod vault;
+mod vault_env;
 mod work;
 mod worker_runner;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VaultRawOutcome {
+    Complete,
+    ChildExit(i32),
+}
 
 pub(crate) type CodexSupportProbeResult = std::result::Result<bool, String>;
 
@@ -126,7 +133,7 @@ pub(crate) fn dispatch_vault(command: crate::command::VaultCommand) -> Result<Va
     vault::dispatch(command)
 }
 
-pub(crate) fn dispatch_vault_raw(command: crate::command::VaultCommand) -> Result<()> {
+pub(crate) fn dispatch_vault_raw(command: crate::command::VaultCommand) -> Result<VaultRawOutcome> {
     vault::dispatch_raw(command)
 }
 

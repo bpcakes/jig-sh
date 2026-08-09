@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Args, Subcommand};
@@ -79,6 +80,30 @@ Examples:
   jig vault inject --in - < config.template > config
   jig vault inject --in config.template --out-file config --overwrite";
 
+const VAULT_EXEC_AFTER_HELP: &str = "\
+Exec is the transparent developer-process wrapper. It inherits stdin and the
+ordinary parent environment, applies the exact assignments from --env-file,
+streams redacted stdout and stderr without a Jig timeout or output cap, and
+mirrors the child exit status. It invokes COMMAND directly, never through a
+shell. The command and all arguments must follow --.
+
+The dotenv grammar is intentionally small: blank lines and full-line comments
+(with optional leading spaces or tabs) are accepted; assignments must be exact
+NAME=VALUE lines with no whitespace around NAME or '='. Unquoted values accept
+only \\\\, \\ , \\#, \\', \\\", \\n, \\r, and \\t escapes; raw whitespace, #, and quotes
+are rejected. Single quotes preserve their contents literally. Double quotes
+accept only \\\\, \\\", \\n, \\r, and \\t escapes. Within env-file values, dollar
+signs and backticks are always rejected, so interpolation and command
+substitution never run. Use jig://ITEM/FIELD as the entire decoded value to
+bind a vault field.
+
+Unlike exec, the older vault run command injects selected legacy secret names
+into a cleaned, closed-stdin child with buffered/capped output, a timeout, and
+owned process-tree cleanup.
+
+Example:
+  jig vault exec --env-file .env.jig -- sh -c 'printf \"%s\" \"$TOKEN\"'";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -102,6 +127,12 @@ pub(crate) enum VaultCommand {
     /// Add, list, or remove encrypted vault fields.
     #[command(name = tool_defs::cli_command::VAULT_FIELD, subcommand)]
     Field(VaultFieldCommand),
+    /// Transparently execute a command using a restricted reference-aware dotenv file.
+    #[command(
+        name = tool_defs::cli_command::VAULT_EXEC,
+        after_help = VAULT_EXEC_AFTER_HELP
+    )]
+    Exec(VaultExecOpts),
     /// Render a template containing canonical vault field references.
     #[command(
         name = tool_defs::cli_command::VAULT_INJECT,
@@ -362,6 +393,37 @@ pub(crate) struct VaultInjectOpts {
     pub(crate) overwrite: bool,
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args)]
+pub(crate) struct VaultExecOpts {
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Restricted UTF-8 dotenv file; - is rejected so the child can inherit stdin"
+    )]
+    pub(crate) env_file: PathBuf,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+    #[arg(
+        last = true,
+        allow_hyphen_values = true,
+        required = true,
+        help = "Command and arguments to execute directly after --"
+    )]
+    pub(crate) command: Vec<OsString>,
+}
+
+impl std::fmt::Debug for VaultExecOpts {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultExecOpts")
+            .field("env_file", &self.env_file)
+            .field("vault", &self.vault)
+            .field("command", &"[REDACTED]")
+            .field("command_len", &self.command.len())
+            .finish()
+    }
 }
 
 #[derive(Args, Debug)]

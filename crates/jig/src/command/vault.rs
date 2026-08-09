@@ -1,8 +1,9 @@
 //! Vault command DTOs.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
-use jig_vault::{InjectionTemplate, VaultItem, VaultReference};
+use jig_vault::{InjectionTemplate, SecretBytes, VaultItem, VaultReference};
 
 #[derive(Debug)]
 pub(crate) enum VaultCommand {
@@ -10,6 +11,7 @@ pub(crate) enum VaultCommand {
     Init(VaultInitRequest),
     Status(VaultStatusRequest),
     Migrate(VaultMigrateRequest),
+    Exec(VaultExecRequest),
     Field(VaultFieldCommand),
     Inject(VaultInjectRequest),
     Read(VaultReadRequest),
@@ -167,6 +169,74 @@ pub(crate) struct VaultInjectRequest {
     pub(crate) vault: VaultRuntimeOptions,
 }
 
+pub(crate) struct VaultExecRequest {
+    pub(crate) env_file: PathBuf,
+    pub(crate) environment: Option<VaultExecEnvironment>,
+    pub(crate) command: Vec<OsString>,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+pub(crate) struct VaultExecEnvironment {
+    pub(crate) assignments: Vec<VaultExecAssignment>,
+}
+
+pub(crate) struct VaultExecAssignment {
+    pub(crate) line: usize,
+    pub(crate) name: String,
+    pub(crate) value: VaultExecValue,
+}
+
+pub(crate) enum VaultExecValue {
+    Literal(SecretBytes),
+    Field(VaultReference),
+}
+
+impl std::fmt::Debug for VaultExecRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultExecRequest")
+            .field("env_file", &self.env_file)
+            .field("environment", &self.environment)
+            .field("command", &"[REDACTED]")
+            .field("command_len", &self.command.len())
+            .field("vault", &self.vault)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultExecEnvironment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultExecEnvironment")
+            .field("assignments", &self.assignments)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultExecAssignment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultExecAssignment")
+            .field("line", &self.line)
+            .field("name", &self.name)
+            .field("value", &self.value)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultExecValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Literal(value) => formatter
+                .debug_struct("Literal")
+                .field("len", &value.len())
+                .field("value", &"[REDACTED]")
+                .finish(),
+            Self::Field(reference) => formatter.debug_tuple("Field").field(reference).finish(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct VaultRunRequest {
     pub(crate) env: Vec<String>,
@@ -177,7 +247,10 @@ pub(crate) struct VaultRunRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::is_valid_vault_scope_id;
+    use super::{
+        VaultExecAssignment, VaultExecEnvironment, VaultExecRequest, VaultExecValue,
+        VaultRuntimeOptions, is_valid_vault_scope_id,
+    };
 
     #[test]
     fn vault_scope_id_validator_rejects_path_and_length_boundaries() {
@@ -186,5 +259,28 @@ mod tests {
         assert!(!is_valid_vault_scope_id("../shared"));
         assert!(!is_valid_vault_scope_id("scope/child"));
         assert!(!is_valid_vault_scope_id(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn exec_request_debug_redacts_literals_and_argv() {
+        let request = VaultExecRequest {
+            env_file: ".env.jig".into(),
+            environment: Some(VaultExecEnvironment {
+                assignments: vec![VaultExecAssignment {
+                    line: 1,
+                    name: "TOKEN".to_owned(),
+                    value: VaultExecValue::Literal(jig_vault::SecretBytes::new(
+                        b"literal-do-not-print".to_vec(),
+                    )),
+                }],
+            }),
+            command: vec![std::ffi::OsString::from("argv-do-not-print")],
+            vault: VaultRuntimeOptions::default(),
+        };
+
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("literal-do-not-print"));
+        assert!(!debug.contains("argv-do-not-print"));
     }
 }

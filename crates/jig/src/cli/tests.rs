@@ -1044,6 +1044,34 @@ fn parses_vault_commands() {
         other => panic!("expected vault inject command, got {other:?}"),
     }
 
+    let exec = Cli::try_parse_from([
+        "jig",
+        "vault",
+        "exec",
+        "--env-file",
+        ".env.jig",
+        "--home",
+        "/tmp/jig-vault",
+        "--",
+        "command",
+        "--flag",
+    ])
+    .unwrap();
+    match exec.command {
+        CommandKind::Vault(VaultCommand::Exec(opts)) => {
+            assert_eq!(opts.env_file, PathBuf::from(".env.jig"));
+            assert_eq!(opts.vault.home, Some(PathBuf::from("/tmp/jig-vault")));
+            assert_eq!(
+                opts.command,
+                vec![
+                    std::ffi::OsString::from("command"),
+                    std::ffi::OsString::from("--flag")
+                ]
+            );
+        }
+        other => panic!("expected vault exec command, got {other:?}"),
+    }
+
     let set = Cli::try_parse_from([
         "jig",
         "vault",
@@ -1215,6 +1243,17 @@ fn vault_raw_output_options_are_fail_closed_during_clap_parsing() {
             ),
             "unexpected error kind for {error}"
         );
+    }
+}
+
+#[test]
+fn vault_exec_requires_an_env_file_separator_and_command() {
+    for args in [
+        vec!["jig", "vault", "exec", "--", "command"],
+        vec!["jig", "vault", "exec", "--env-file", ".env.jig"],
+        vec!["jig", "vault", "exec", "--env-file", ".env.jig", "command"],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err());
     }
 }
 

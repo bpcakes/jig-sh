@@ -3,6 +3,9 @@ mod broker;
 mod crypto;
 mod env_policy;
 mod error;
+mod exec;
+mod exec_output;
+mod exec_process;
 mod format;
 mod output;
 mod redact;
@@ -16,6 +19,10 @@ mod vault;
 pub use audit::AuditVerification;
 pub use broker::{BrokeredEnv, BrokeredFile, BrokeredRun};
 pub use error::{Result, VaultError, VaultErrorKind};
+pub use exec::{
+    ExecEnvBinding, ExecOutcome, MAX_EXEC_ARGUMENT_BYTES, MAX_EXEC_ARGUMENTS,
+    MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN, VaultExec,
+};
 pub use redact::Redactor;
 pub use run::RunOutput;
 pub use secret::{SecretBytes, SecretBytesCapacityError};
