@@ -455,6 +455,7 @@ fn committed_local_template_ignores_ambient_git_dir() {
 
 #[test]
 fn committed_local_template_ignores_repository_replace_refs() {
+    let _guard = lock_env();
     let template = materialize_template_git_worktree();
     let original = git_stdout(template.path(), ["rev-parse", "HEAD"]).unwrap();
     let guide = template.path().join("templates/project/AGENTS.md.jinja");
