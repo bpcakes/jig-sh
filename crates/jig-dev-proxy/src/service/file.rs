@@ -232,6 +232,7 @@ WantedBy=default.target
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(super) fn service_path_text(path: &Path, label: &str) -> Result<String> {
     if !path.is_absolute() {
         anyhow::bail!("{label} path must be absolute for service files");

@@ -624,7 +624,7 @@ fn continue_exited_group_term_grace<T>(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 fn force_after_graceful_cleanup_error<T>(
     state: &mut T,
     graceful_error: &dyn std::fmt::Display,
