@@ -28,8 +28,8 @@ commit. The work deliberately changes structure, not user-observable behavior.
   phases while preserving crypto/AAD/zeroization semantics; run focused tests.
 - [x] Slice 3c: keep filesystem and audit orchestration in VaultStore; run
   crate checks and Clippy; inspect and commit the complete slice.
-- [ ] Run final crate, jig-sh (if feasible), and Jig harness checks; record
-  evidence without finishing this work session.
+- [x] Run final crate, jig-sh, and Jig harness checks; record evidence and
+  finish the structured work session after the primary agent's audit.
 
 ## Surprises & Discoveries
 
@@ -66,6 +66,10 @@ commit. The work deliberately changes structure, not user-observable behavior.
   The first draft of the new ordering tests asserted source-only detail through
   Display; switching to anyhow's alternate chain format correctly tests the
   existing source-preserving error contract.
+- A standalone jig.contract_check receipt has no worktree fingerprint, so an
+  intermediate evidence query reported freshness unknown. The enclosing
+  jig.work_check receipt supplies the fingerprint; after the complete and
+  selected checks finished, both required gates were fresh and passing.
 
 ## Decision Log
 
@@ -104,9 +108,35 @@ commit. The work deliberately changes structure, not user-observable behavior.
 
 ## Outcomes & Retrospective
 
-To be completed after all three commits and final verification. It must list the
-commit IDs, exact check results, unrun platform/MSRV coverage, any retained
-work-session files, and any deviations from this plan.
+Completed three independently revertible refactor commits in the mandated order:
+
+1. 9a5ed23 refactor(jig-vault): encapsulate brokered run audit lifecycle
+2. a4f6204 refactor(jig-vault): extract brokered process supervision
+3. 0c8ea2d refactor(jig-vault): split validated vault envelope phases
+
+Final local verification passed:
+
+    cargo fmt --all -- --check
+    cargo check -p jig-vault --all-targets --locked
+    cargo test -p jig-vault --locked       # 100 tests
+    cargo clippy -p jig-vault --all-targets --locked -- -D warnings
+    cargo +1.85 check -p jig-vault --all-targets --locked
+    cargo test -p jig-sh --locked
+
+The focused brokered-run, secret-file/output, Unix/Linux supervision,
+header/KDF ordering, init, tamper, and nonce-rotation checks also passed.
+JIG_DEV_BIN=target/debug/jig scripts/jig work check, evidence, gates,
+receipts, and status were run for this plan. The final evidence and gates views
+report both required gates fresh and passed. The Jig no-mod-rs check reports
+only the pre-existing tracked
+crates/jig/tests/support/mod.rs; this work added no mod.rs. The changed-file
+LOC policy check passed.
+
+Rust 1.85 is installed and passed the focused all-target check. Local targets
+are Linux and wasm only, so macOS and Windows compilation/test coverage remains
+for CI. After the primary agent's independent audit, the structured plan and
+session were closed successfully; their append-only state and final plan update
+are retained in a dedicated workflow-record commit.
 
 ## Context and orientation
 
