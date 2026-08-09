@@ -17,7 +17,7 @@ This is local CLI replacement scope, not a clone of the whole 1Password product.
 - [x] (2026-08-09) Open structured Jig work `plan_01KZKVRN21MBBY6YSJC88D603R`, whose body points to this authoritative ExecPlan.
 - [x] (2026-08-09) Record the baseline: format/check and all 100 `jig-vault` tests passed before source edits. The long pre-edit `jig-sh` run was stopped after hundreds of tests to unblock implementation; the immediately preceding work receipt was green, and the complete post-milestone suite later passed.
 - [x] (2026-08-09) Milestone 1: commit `cd229af` adds canonical project-local references, encrypted field kinds, vault envelope v2, explicit v1-to-v2 migration, bounded atomic field batches, field CLI, and a static legacy fixture.
-- [ ] Milestone 2: add compatible field management plus controlled `read` and `inject` revelation paths.
+- [x] (2026-08-09) Milestone 2: commit `d80f496` adds controlled exact-byte `read` and bounded template `inject`, lifecycle audit events, raw CLI dispatch, and hardened Unix file sinks.
 - [ ] Milestone 3: add transparent `exec --env-file` with inherited process behavior and streaming redaction of concealed fields only.
 - [ ] Milestone 4: add atomic dotenv batch updates and the one-time 1Password dotenv importer.
 - [ ] Milestone 5: add full-reseal passphrase rotation and encrypted backup/restore.
@@ -50,6 +50,12 @@ The first v1 reader deserialized every state through the v2 DTO before forcing k
 
 The first CLI wiring carried field/item inputs as raw strings until after passphrase capture. Clap now parses `VaultReference` and `VaultItem`, and accepts only migration target 2, before any prompt, environment clearing, or vault filesystem access.
 
+The first Milestone 2 seam parsed templates only after passphrase capture, so an unreadable, oversized, or malformed template could consume the environment passphrase before failing. `InjectionTemplate::parse` is now a nonrevealing, bounded, opaque prevalidation step; the CLI completes it before repository scope resolution or passphrase capture, and zeroizes partial input on every read path.
+
+The first Milestone 2 API exposed public prepared-reveal handles. Although their `Drop` implementation correctly avoided filesystem I/O, an ordinary caller could abandon a handle and leave a start event that looked like a process crash. The final API instead exposes four direct vault-to-sink methods. Preparation remains private, the vault lock is released before sink I/O, and every ordinary success or error return attempts a matching terminal event; only panic, abort, or process death can strand a start.
+
+Hardened reveal-file installation is implemented on Unix with owner-only same-directory temporaries, exact byte writes and fsync, parent/leaf symlink refusal, atomic hard-link no-clobber, regular-file-only atomic overwrite, and parent-directory fsync. Non-Unix file sinks compile but fail closed until equivalent DACL, reparse-point, and no-clobber guarantees exist; exact stdout remains portable.
+
 ## Decision Log
 
 2026-08-09: References are contextual and have exactly the canonical form `jig://ITEM/FIELD`. `ITEM` and `FIELD` are nonempty ASCII identifiers containing letters, digits, `_`, `-`, or `.`; each is at most 64 bytes, their combined internal `ITEM/FIELD` spelling is at most 128 bytes, and neither segment may be `.` or `..`. Thus two simultaneous 64-byte segments are rejected because their separator would exceed the existing durable `SecretName` boundary. Reject extra path segments, empty segments, percent encoding, queries, fragments, credentials, and ports. This deliberately avoids URI normalization ambiguity. `VaultReference::to_secret_name()` maps the reference to the existing internal path-shaped name `ITEM/FIELD`; the serialized map key remains compatible.
@@ -80,7 +86,7 @@ The first CLI wiring carried field/item inputs as raw strings until after passph
 
 ## Outcomes & Retrospective
 
-Implementation is active under structured work `plan_01KZKVRN21MBBY6YSJC88D603R`. Milestone 1 completed in commit `cd229af` after two implementation passes and three independent reviews. The final evidence was 128 `jig-vault` tests, 55 focused Jig vault tests, all 1,343 active `jig-sh` unit tests plus integration suites, Rust 1.85 checks for both crates, production-target Jig Clippy, all-target `jig-vault` Clippy, formatting/diff checks, and a real CLI smoke test. The intended outcome remains a general, local, project-scoped vault CLI with explicit compatibility and recovery behavior, without expanding into a remote password-manager service.
+Implementation is active under structured work `plan_01KZKVRN21MBBY6YSJC88D603R`. Milestone 1 completed in commit `cd229af` after two implementation passes and three independent reviews. Milestone 2 completed in commit `d80f496` after an additional adversarial lifecycle pass replaced abandonable public prepared handles with direct sink APIs. Its final evidence was 144 `jig-vault` tests, 1,350 active `jig-sh` unit tests plus all integration suites (including two new binary reveal/injection tests), Rust 1.85 checks for both crates, production-target Jig Clippy, all-target `jig-vault` Clippy, formatting/diff checks, and independent review. The all-target Jig Clippy gate remains blocked only by the pre-existing `needless_return` in `crates/jig/tests/support/mod.rs`; the changed targets introduced no remaining warning. The intended outcome remains a general, local, project-scoped vault CLI with explicit compatibility and recovery behavior, without expanding into a remote password-manager service.
 
 At completion, summarize whether IdentityPro can replace its `op run --env-file` and `op read` use with Jig references while retaining both secret and contextual values in encrypted storage. Also record any CI-only Windows/macOS signal or permission coverage and whether audit growth makes rotation a justified follow-up.
 
@@ -330,3 +336,5 @@ Revision note (2026-08-09): Initial ExecPlan created from the agreed general-pur
 Revision note (2026-08-09): Updated during implementation after a Terra adversarial architecture pass. The revision adds a validated item selector, replaces ambient-expanding dotenv parsing with a restricted grammar, fixes `op read` newline behavior and dry-run truthfulness, makes reveal/backup audit events lifecycle-based, defines byte-preserving streaming redaction and descendant-pipe behavior, adds total batch limits, and changes restore from an empty-target rename to absent-target atomic no-replace installation.
 
 Revision note (2026-08-09): Recorded completed Milestone 1 and its commit/evidence. The revision documents the review-found aggregate-size, v1 DTO, and CLI validation defects and their fixes, clarifies the combined 128-byte durable reference-name boundary, and records the static pre-change v1 fixture used for compatibility proof.
+
+Revision note (2026-08-09): Recorded completed Milestone 2 and commit `d80f496`. The revision documents opaque pre-passphrase template validation, direct sink lifecycle terminalization, the hardened Unix file-installer policy, non-Unix file-sink fail-closed behavior, and consolidated test/MSRV/Clippy evidence.
