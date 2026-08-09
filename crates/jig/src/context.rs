@@ -919,7 +919,7 @@ fn find_optional_repo_root_from(start: &Path) -> Result<Option<PathBuf>> {
     let mut current = start.to_path_buf();
     loop {
         if current.join(".jig.toml").exists() {
-            return Ok(Some(fs::canonicalize(current)?));
+            return Ok(Some(current));
         }
         if !current.pop() {
             return Ok(None);
