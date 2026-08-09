@@ -53,6 +53,30 @@ enum ThreadHomeProbe {
 }
 
 #[derive(Debug)]
+struct ResumeHomeProbeFailure<'a> {
+    home: &'a PathBuf,
+    error: String,
+}
+
+/// The complete, closed set of policy outcomes from resume-home probing.
+///
+/// This deliberately carries only the probe classification and its associated
+/// homes. Path canonicalization and user-facing diagnostics happen after this
+/// phase so they cannot accidentally change the selection policy.
+#[derive(Debug)]
+enum ResumeHomeSelection<'a> {
+    Unique(&'a PathBuf),
+    Unconfirmed {
+        home: &'a PathBuf,
+        failures: Vec<ResumeHomeProbeFailure<'a>>,
+    },
+    Ambiguous(Vec<&'a PathBuf>),
+    Missing {
+        failures: Vec<ResumeHomeProbeFailure<'a>>,
+    },
+}
+
+#[derive(Debug)]
 pub(crate) struct CodexChildExitStatus(pub(crate) i32);
 
 impl std::fmt::Display for CodexChildExitStatus {
@@ -500,21 +524,43 @@ fn select_resume_home(
     probes: Vec<ThreadHomeProbe>,
 ) -> Result<PathBuf> {
     debug_assert_eq!(discovered.paths.len(), probes.len());
+    let selection = classify_resume_home(&discovered.paths, discovered.errors.is_empty(), probes);
+    resolve_resume_home_selection(thread_id, &discovered, selection)
+}
+
+fn classify_resume_home<'a>(
+    homes: &'a [PathBuf],
+    discovery_complete: bool,
+    probes: Vec<ThreadHomeProbe>,
+) -> ResumeHomeSelection<'a> {
     let mut matches = Vec::new();
     let mut failures = Vec::new();
-    for (home, probe) in discovered.paths.iter().zip(probes) {
+    for (home, probe) in homes.iter().zip(probes) {
         match probe {
             ThreadHomeProbe::Found => matches.push(home),
             ThreadHomeProbe::Missing => {}
-            ThreadHomeProbe::Failed(error) => failures.push((home, error)),
+            ThreadHomeProbe::Failed(error) => {
+                failures.push(ResumeHomeProbeFailure { home, error });
+            }
         }
     }
 
     match matches.as_slice() {
-        [home] if failures.is_empty() && discovered.errors.is_empty() => {
-            return canonical_or((*home).clone());
-        }
-        [home] => {
+        [home] if failures.is_empty() && discovery_complete => ResumeHomeSelection::Unique(home),
+        [home] => ResumeHomeSelection::Unconfirmed { home, failures },
+        [_, ..] => ResumeHomeSelection::Ambiguous(matches),
+        [] => ResumeHomeSelection::Missing { failures },
+    }
+}
+
+fn resolve_resume_home_selection(
+    thread_id: &str,
+    discovered: &DiscoveredHomes,
+    selection: ResumeHomeSelection<'_>,
+) -> Result<PathBuf> {
+    match selection {
+        ResumeHomeSelection::Unique(home) => canonical_or(home.clone()),
+        ResumeHomeSelection::Unconfirmed { home, failures } => {
             let home = sanitize_text(&home.display().to_string());
             let checked = discovered
                 .paths
@@ -525,13 +571,13 @@ fn select_resume_home(
             let mut message = format!(
                 "Codex session '{thread_id}' was found in {home}, but uniqueness could not be confirmed because some homes could not be inspected; checked homes: {checked}"
             );
-            append_resume_lookup_failures(&mut message, failures, discovered.errors);
+            append_resume_lookup_failures(&mut message, failures, &discovered.errors);
             message.push_str(&format!(
                 "\nPass --home {home} to resume the confirmed home explicitly."
             ));
-            return Err(anyhow!(message));
+            Err(anyhow!(message))
         }
-        [_, ..] => {
+        ResumeHomeSelection::Ambiguous(matches) => {
             let homes = matches
                 .iter()
                 .map(|home| sanitize_text(&home.display().to_string()))
@@ -541,35 +587,36 @@ fn select_resume_home(
                 "Codex session '{thread_id}' exists in multiple homes: {homes}; pass --home HOME to choose one explicitly"
             )
         }
-        [] => {}
+        ResumeHomeSelection::Missing { failures } => {
+            let homes = discovered
+                .paths
+                .iter()
+                .map(|home| sanitize_text(&home.display().to_string()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let homes = if homes.is_empty() { "none" } else { &homes };
+            let mut message = if failures.is_empty() {
+                format!("Codex session '{thread_id}' was not found; checked homes: {homes}")
+            } else {
+                format!(
+                    "Codex session '{thread_id}' could not be resolved because some homes could not be inspected; checked homes: {homes}"
+                )
+            };
+            append_resume_lookup_failures(&mut message, failures, &discovered.errors);
+            message.push_str(
+                "\nPass --home HOME to use a non-conventional or unavailable home explicitly.",
+            );
+            Err(anyhow!(message))
+        }
     }
-
-    let homes = discovered
-        .paths
-        .iter()
-        .map(|home| sanitize_text(&home.display().to_string()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let homes = if homes.is_empty() { "none" } else { &homes };
-    let mut message = if failures.is_empty() {
-        format!("Codex session '{thread_id}' was not found; checked homes: {homes}")
-    } else {
-        format!(
-            "Codex session '{thread_id}' could not be resolved because some homes could not be inspected; checked homes: {homes}"
-        )
-    };
-    append_resume_lookup_failures(&mut message, failures, discovered.errors);
-    message
-        .push_str("\nPass --home HOME to use a non-conventional or unavailable home explicitly.");
-    Err(anyhow!(message))
 }
 
 fn append_resume_lookup_failures(
     message: &mut String,
-    failures: Vec<(&PathBuf, String)>,
-    discovery_errors: Vec<String>,
+    failures: Vec<ResumeHomeProbeFailure<'_>>,
+    discovery_errors: &[String],
 ) {
-    for (home, error) in failures {
+    for ResumeHomeProbeFailure { home, error } in failures {
         message.push_str(&format!(
             "\n  - {}: {}",
             sanitize_text(&home.display().to_string()),
@@ -577,7 +624,7 @@ fn append_resume_lookup_failures(
         ));
     }
     for warning in discovery_errors {
-        message.push_str(&format!("\n  - discovery: {}", sanitize_text(&warning)));
+        message.push_str(&format!("\n  - discovery: {}", sanitize_text(warning)));
     }
 }
 

@@ -387,6 +387,60 @@ fn resume_home_selection_requires_one_exact_match() {
 }
 
 #[test]
+fn resume_home_probe_classification_captures_each_policy_outcome() {
+    let homes = vec![
+        PathBuf::from("/tmp/.codex"),
+        PathBuf::from("/tmp/.codex-work"),
+    ];
+
+    match classify_resume_home(
+        &homes,
+        true,
+        vec![ThreadHomeProbe::Missing, ThreadHomeProbe::Found],
+    ) {
+        ResumeHomeSelection::Unique(home) => assert_eq!(home, &homes[1]),
+        selection => panic!("expected one confirmed match, got {selection:?}"),
+    }
+
+    match classify_resume_home(
+        &homes,
+        false,
+        vec![ThreadHomeProbe::Found, ThreadHomeProbe::Missing],
+    ) {
+        ResumeHomeSelection::Unconfirmed { home, failures } => {
+            assert_eq!(home, &homes[0]);
+            assert!(failures.is_empty());
+        }
+        selection => panic!("expected unconfirmed match, got {selection:?}"),
+    }
+
+    match classify_resume_home(
+        &homes,
+        true,
+        vec![ThreadHomeProbe::Found, ThreadHomeProbe::Found],
+    ) {
+        ResumeHomeSelection::Ambiguous(matches) => assert_eq!(matches, vec![&homes[0], &homes[1]]),
+        selection => panic!("expected ambiguous matches, got {selection:?}"),
+    }
+
+    match classify_resume_home(
+        &homes,
+        true,
+        vec![
+            ThreadHomeProbe::Missing,
+            ThreadHomeProbe::Failed("app-server unavailable".into()),
+        ],
+    ) {
+        ResumeHomeSelection::Missing { failures } => {
+            assert_eq!(failures.len(), 1);
+            assert_eq!(failures[0].home, &homes[1]);
+            assert_eq!(failures[0].error, "app-server unavailable");
+        }
+        selection => panic!("expected missing session, got {selection:?}"),
+    }
+}
+
+#[test]
 fn resume_home_selection_fails_closed_when_uniqueness_cannot_be_proven() {
     let temp = tempfile::tempdir().unwrap();
     let default = temp.path().join(".codex");
