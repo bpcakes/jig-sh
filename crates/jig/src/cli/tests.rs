@@ -1007,6 +1007,43 @@ fn parses_vault_commands() {
         other => panic!("expected vault field remove command, got {other:?}"),
     }
 
+    let read = Cli::try_parse_from([
+        "jig",
+        "vault",
+        "read",
+        "jig://Production/RESTIC_PASSWORD",
+        "--out-file",
+        "/tmp/restic-password",
+        "--overwrite",
+    ])
+    .unwrap();
+    match read.command {
+        CommandKind::Vault(VaultCommand::Read(opts)) => {
+            assert_eq!(
+                opts.reference.to_string(),
+                "jig://Production/RESTIC_PASSWORD"
+            );
+            assert_eq!(
+                opts.out_file.as_deref(),
+                Some(std::path::Path::new("/tmp/restic-password"))
+            );
+            assert!(opts.overwrite);
+            assert!(!opts.reveal);
+        }
+        other => panic!("expected vault read command, got {other:?}"),
+    }
+
+    let inject = Cli::try_parse_from(["jig", "vault", "inject", "--in", "-", "--reveal"]).unwrap();
+    match inject.command {
+        CommandKind::Vault(VaultCommand::Inject(opts)) => {
+            assert_eq!(opts.input, PathBuf::from("-"));
+            assert!(opts.reveal);
+            assert!(opts.out_file.is_none());
+            assert!(!opts.overwrite);
+        }
+        other => panic!("expected vault inject command, got {other:?}"),
+    }
+
     let set = Cli::try_parse_from([
         "jig",
         "vault",
@@ -1117,6 +1154,7 @@ fn rejects_invalid_vault_field_inputs_during_clap_parsing() {
         vec!["jig", "vault", "migrate", "--to", "two"],
         vec!["jig", "vault", "field", "list", "jig://Production/extra"],
         vec!["jig", "vault", "field", "set", "jig://Production"],
+        vec!["jig", "vault", "read", "jig://Production"],
         vec![
             "jig",
             "vault",
@@ -1130,6 +1168,50 @@ fn rejects_invalid_vault_field_inputs_during_clap_parsing() {
             matches!(
                 error.kind(),
                 clap::error::ErrorKind::InvalidValue | clap::error::ErrorKind::ValueValidation
+            ),
+            "unexpected error kind for {error}"
+        );
+    }
+}
+
+#[test]
+fn vault_raw_output_options_are_fail_closed_during_clap_parsing() {
+    for args in [
+        vec![
+            "jig",
+            "vault",
+            "read",
+            "jig://Production/PASSWORD",
+            "--overwrite",
+        ],
+        vec![
+            "jig",
+            "vault",
+            "read",
+            "jig://Production/PASSWORD",
+            "--reveal",
+            "--out-file",
+            "password.txt",
+        ],
+        vec!["jig", "vault", "inject"],
+        vec!["jig", "vault", "inject", "--in", "template", "--overwrite"],
+        vec![
+            "jig",
+            "vault",
+            "inject",
+            "--in",
+            "template",
+            "--reveal",
+            "--out-file",
+            "rendered",
+        ],
+    ] {
+        let error = Cli::try_parse_from(args).unwrap_err();
+        assert!(
+            matches!(
+                error.kind(),
+                clap::error::ErrorKind::ArgumentConflict
+                    | clap::error::ErrorKind::MissingRequiredArgument
             ),
             "unexpected error kind for {error}"
         );

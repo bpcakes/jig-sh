@@ -11,11 +11,11 @@ use super::{
     ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
     VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultFieldCommand, VaultFieldListOpts,
-    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultMigrateOpts, VaultRunOpts,
-    VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
-    VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand,
-    WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts,
-    WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultInjectOpts, VaultMigrateOpts,
+    VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts,
+    VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts,
+    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
+    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -98,6 +98,8 @@ impl From<VaultCommand> for command::VaultCommand {
             VaultCommand::Status(opts) => Self::Status(opts.into()),
             VaultCommand::Migrate(opts) => Self::Migrate(opts.into()),
             VaultCommand::Field(command) => Self::Field(command.into()),
+            VaultCommand::Inject(opts) => Self::Inject(opts.into()),
+            VaultCommand::Read(opts) => Self::Read(opts.into()),
             VaultCommand::Secret(command) => Self::Secret(command.into()),
             VaultCommand::Run(opts) => Self::Run(opts.into()),
         }
@@ -243,6 +245,31 @@ impl From<VaultFieldRemoveOpts> for command::VaultFieldRemoveRequest {
     fn from(opts: VaultFieldRemoveOpts) -> Self {
         Self {
             reference: opts.reference,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultReadOpts> for command::VaultReadRequest {
+    fn from(opts: VaultReadOpts) -> Self {
+        Self {
+            reference: opts.reference,
+            reveal: opts.reveal,
+            out_file: opts.out_file,
+            overwrite: opts.overwrite,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultInjectOpts> for command::VaultInjectRequest {
+    fn from(opts: VaultInjectOpts) -> Self {
+        Self {
+            input: opts.input,
+            template: None,
+            reveal: opts.reveal,
+            out_file: opts.out_file,
+            overwrite: opts.overwrite,
             vault: opts.vault.into(),
         }
     }

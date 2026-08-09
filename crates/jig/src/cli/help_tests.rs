@@ -259,6 +259,14 @@ fn vault_help_includes_quick_start_examples() {
         &vault_help,
         "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
     );
+    assert_help_contains(
+        &vault_help,
+        "jig vault read jig://Production/RESTIC_PASSWORD | command",
+    );
+    assert_help_contains(
+        &vault_help,
+        "jig vault inject --in config.template > config",
+    );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
@@ -282,6 +290,16 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_field_set_help, "--text");
     assert_help_contains(&vault_field_set_help, "jig://Production/RESTIC_PASSWORD");
     assert_help_contains(&vault_field_set_help, "use printf instead");
+
+    let vault_read_help = rendered_help(&["vault", "read"]);
+    assert_help_contains(&vault_read_help, "without an added newline");
+    assert_help_contains(&vault_read_help, "--out-file <PATH>");
+    assert_help_contains(&vault_read_help, "--reveal");
+
+    let vault_inject_help = rendered_help(&["vault", "inject"]);
+    assert_help_contains(&vault_inject_help, "--in <PATH|->");
+    assert_help_contains(&vault_inject_help, "{{ jig://ITEM/FIELD }}");
+    assert_help_contains(&vault_inject_help, "--overwrite");
 
     let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
     assert_help_contains(&vault_field_list_help, "jig://ITEM");

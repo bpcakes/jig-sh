@@ -56,6 +56,29 @@ as concealed fields.
 Example:
   jig vault migrate --to 2";
 
+const VAULT_READ_AFTER_HELP: &str = "\
+Read one encrypted field through a controlled byte-oriented output path. When
+stdout is a terminal, --reveal is required. Piped or redirected stdout receives
+the exact field bytes without an added newline. --out-file writes a private file
+and refuses an existing destination unless --overwrite is explicit.
+
+Examples:
+  jig vault read jig://Production/RESTIC_PASSWORD | command
+  jig vault read jig://Production/RESTIC_PASSWORD --reveal
+  jig vault read jig://Production/RESTIC_PASSWORD --out-file ./password.txt";
+
+const VAULT_INJECT_AFTER_HELP: &str = "\
+Replace only {{ jig://ITEM/FIELD }} placeholders in a bounded template. Pass
+--in - explicitly to read the template from stdin. When stdout is a terminal,
+--reveal is required. Piped or redirected stdout receives the exact rendered
+bytes without an added newline. --out-file uses the same private-file and
+explicit-overwrite rules as vault read.
+
+Examples:
+  jig vault inject --in config.template > config
+  jig vault inject --in - < config.template > config
+  jig vault inject --in config.template --out-file config --overwrite";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -79,6 +102,18 @@ pub(crate) enum VaultCommand {
     /// Add, list, or remove encrypted vault fields.
     #[command(name = tool_defs::cli_command::VAULT_FIELD, subcommand)]
     Field(VaultFieldCommand),
+    /// Render a template containing canonical vault field references.
+    #[command(
+        name = tool_defs::cli_command::VAULT_INJECT,
+        after_help = VAULT_INJECT_AFTER_HELP
+    )]
+    Inject(VaultInjectOpts),
+    /// Read one encrypted field through a controlled output sink.
+    #[command(
+        name = tool_defs::cli_command::VAULT_READ,
+        after_help = VAULT_READ_AFTER_HELP
+    )]
+    Read(VaultReadOpts),
     /// Add, list, or remove vault secrets.
     #[command(name = tool_defs::cli_command::VAULT_SECRET, subcommand)]
     Secret(VaultSecretCommand),
@@ -261,6 +296,70 @@ pub(crate) struct VaultFieldRemoveOpts {
         help = "Canonical field reference jig://ITEM/FIELD; names appear in local audit metadata"
     )]
     pub(crate) reference: VaultReference,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultReadOpts {
+    #[arg(
+        value_parser = parse_vault_reference,
+        help = "Canonical field reference jig://ITEM/FIELD; names appear in local audit metadata"
+    )]
+    pub(crate) reference: VaultReference,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        conflicts_with = "out_file",
+        help = "Allow exact field bytes to be written directly to an interactive terminal"
+    )]
+    pub(crate) reveal: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write exact field bytes to a private file instead of stdout"
+    )]
+    pub(crate) out_file: Option<PathBuf>,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        requires = "out_file",
+        help = "Atomically replace an existing --out-file destination"
+    )]
+    pub(crate) overwrite: bool,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultInjectOpts {
+    #[arg(
+        long = "in",
+        value_name = "PATH|-",
+        required = true,
+        help = "Bounded template path, or - to read the template explicitly from stdin"
+    )]
+    pub(crate) input: PathBuf,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        conflicts_with = "out_file",
+        help = "Allow exact rendered bytes to be written directly to an interactive terminal"
+    )]
+    pub(crate) reveal: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write exact rendered bytes to a private file instead of stdout"
+    )]
+    pub(crate) out_file: Option<PathBuf>,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        requires = "out_file",
+        help = "Atomically replace an existing --out-file destination"
+    )]
+    pub(crate) overwrite: bool,
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
 }

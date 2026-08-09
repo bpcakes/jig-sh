@@ -126,6 +126,14 @@ pub(crate) fn dispatch_vault(command: crate::command::VaultCommand) -> Result<Va
     vault::dispatch(command)
 }
 
+pub(crate) fn dispatch_vault_raw(command: crate::command::VaultCommand) -> Result<()> {
+    vault::dispatch_raw(command)
+}
+
+pub(crate) fn prepare_vault_raw_input(command: &mut crate::command::VaultCommand) -> Result<()> {
+    vault::prepare_raw_input(command)
+}
+
 pub(crate) fn dispatch_prompt(
     ctx: Option<&RepoContext>,
     command: crate::command::PromptCommand,

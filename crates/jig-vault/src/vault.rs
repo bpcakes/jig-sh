@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -21,11 +22,13 @@ use crate::error::{
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
 use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
+use crate::output::{OutputInstallFailure, install_private_bytes};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::{
     ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
 };
 use crate::store::VaultStore;
+use crate::template::InjectionTemplate;
 use crate::types::{FieldKind, SecretName, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
@@ -223,6 +226,100 @@ impl Vault {
         self.store.apply_field_batch(passphrase, mutations)
     }
 
+    /// Writes one canonical field to a caller-selected stream as exact bytes.
+    ///
+    /// Start and resolution happen under the vault lock. The lock is released
+    /// before writing and flushing, then a matching finish or failure event is
+    /// recorded before this method returns. No newline is appended. Version 1
+    /// canonical `ITEM/FIELD` entries remain readable as concealed fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without revealing bytes when preparation fails. A
+    /// writer error can occur after a partial external write; its text is
+    /// sanitized and a terminal failure event is recorded when possible.
+    pub fn read_field_to<W: Write>(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        writer: &mut W,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_field_read(passphrase, reference)?
+            .write_to(writer)
+    }
+
+    /// Atomically writes one canonical field to a hardened private file.
+    ///
+    /// Preparation happens under the vault lock, file I/O happens after lock
+    /// release, and a matching finish or failure event is recorded before this
+    /// method returns. Unix provides owner-only, fsynced, symlink-refusing,
+    /// atomic no-clobber or regular-file replacement semantics. Other
+    /// platforms reject this sink until equivalent guarantees exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns a preparation, preflight, I/O, already-exists, or audit error
+    /// without including field bytes in its message.
+    pub fn read_field_to_file(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        path: &Path,
+        overwrite: bool,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_field_read(passphrase, reference)?
+            .write_to_file(path, overwrite)
+    }
+
+    /// Resolves, renders, and writes a validated template as exact bytes.
+    ///
+    /// Call [`InjectionTemplate::parse`] before passphrase capture when CLI
+    /// ordering matters. Start, complete reference resolution, and bounded
+    /// rendering happen under the vault lock. The lock is released before
+    /// writing and flushing, then a terminal event is recorded before return.
+    /// No newline is appended.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without output when preparation fails. A writer error
+    /// can occur after a partial external write; its text is sanitized and a
+    /// terminal failure event is recorded when possible.
+    pub fn inject_template_to<W: Write>(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+        writer: &mut W,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_template_injection(passphrase, template)?
+            .write_to(writer)
+    }
+
+    /// Resolves, renders, and atomically writes a validated template to a
+    /// hardened private file.
+    ///
+    /// Preparation and rendering happen under the vault lock, file I/O happens
+    /// after lock release, and a terminal event is recorded before return.
+    /// File hardening matches [`Vault::read_field_to_file`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a preparation, preflight, I/O, already-exists, or audit error
+    /// without including rendered bytes in its message.
+    pub fn inject_template_to_file(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+        path: &Path,
+        overwrite: bool,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_template_injection(passphrase, template)?
+            .write_to_file(path, overwrite)
+    }
+
     /// Verifies the vault's tamper-evident audit chain.
     ///
     /// # Errors
@@ -267,6 +364,13 @@ pub struct FieldRecord {
     pub created_at_ms: i128,
     pub updated_at_ms: i128,
     pub value_len: usize,
+}
+
+/// Metadata-only result of a completed controlled reveal operation.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevealResult {
+    pub bytes_written: usize,
 }
 
 /// One atomic field change.
@@ -331,6 +435,173 @@ pub(crate) struct OpenVault {
     state: VaultState,
     dek: Zeroizing<[u8; KEY_LEN]>,
     audit_key: Zeroizing<[u8; KEY_LEN]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RevealOperation {
+    FieldRead,
+    TemplateInject,
+}
+
+impl RevealOperation {
+    const fn start_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadStart,
+            Self::TemplateInject => AuditAction::TemplateInjectStart,
+        }
+    }
+
+    const fn finish_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadFinish,
+            Self::TemplateInject => AuditAction::TemplateInjectFinish,
+        }
+    }
+
+    const fn failed_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadFailed,
+            Self::TemplateInject => AuditAction::TemplateInjectFailed,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::FieldRead => "field read",
+            Self::TemplateInject => "template injection",
+        }
+    }
+}
+
+struct RevealLifecycle {
+    store: VaultStore,
+    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    operation_id: String,
+    operation: RevealOperation,
+}
+
+impl RevealLifecycle {
+    fn record_finish(&self, sink: &str, bytes_written: usize) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            self.operation.finish_action(),
+            serde_json::json!({
+                "operation_id": self.operation_id,
+                "sink": sink,
+                "bytes_written": bytes_written,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn record_failure(&self, stage: &str) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            self.operation.failed_action(),
+            reveal_failure_details(&self.operation_id, stage),
+        )?;
+        Ok(())
+    }
+
+    fn output_error(&self, stage: &str, kind: VaultErrorKind, error: anyhow::Error) -> VaultError {
+        match self.record_failure(stage) {
+            Ok(()) => VaultError::from_anyhow(kind, error),
+            Err(audit_error) => VaultError::from_anyhow(
+                kind,
+                error.context(format!(
+                    "{} output failed; additionally failed to append terminal audit event: {audit_error}",
+                    self.operation.label()
+                )),
+            ),
+        }
+    }
+
+    fn finish_error(&self, error: anyhow::Error) -> VaultError {
+        match self.record_failure("audit_finish") {
+            Ok(()) => VaultError::from_anyhow(
+                VaultErrorKind::AuditTampered,
+                error.context(format!(
+                    "{} output completed, but its finish audit event failed",
+                    self.operation.label()
+                )),
+            ),
+            Err(failure_error) => VaultError::from_anyhow(
+                VaultErrorKind::AuditTampered,
+                error.context(format!(
+                    "{} output completed, but both finish and failure audit events failed: {failure_error}",
+                    self.operation.label()
+                )),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Debug for RevealLifecycle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RevealLifecycle")
+            .field("operation_id", &self.operation_id)
+            .field("operation", &self.operation)
+            .field("audit_key", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+struct PreparedReveal {
+    lifecycle: RevealLifecycle,
+    value: SecretBytes,
+}
+
+impl PreparedReveal {
+    fn write_to<W: Write>(self, writer: &mut W) -> Result<RevealResult> {
+        let Self { lifecycle, value } = self;
+        let bytes_written = value.len();
+        if let Err(error) = writer
+            .write_all(value.as_slice())
+            .and_then(|()| writer.flush())
+        {
+            let error_kind = error.kind();
+            return Err(lifecycle.output_error(
+                "sink",
+                VaultErrorKind::Io,
+                anyhow::anyhow!(
+                    "failed to write {} bytes to the selected output stream ({error_kind:?})",
+                    lifecycle.operation.label()
+                ),
+            ));
+        }
+        lifecycle
+            .record_finish("stream", bytes_written)
+            .map_err(|error| lifecycle.finish_error(error))?;
+        Ok(RevealResult { bytes_written })
+    }
+
+    fn write_to_file(self, path: &Path, overwrite: bool) -> Result<RevealResult> {
+        let Self { lifecycle, value } = self;
+        let bytes_written = value.len();
+        if let Err(OutputInstallFailure { stage, kind, error }) =
+            install_private_bytes(path, value.as_slice(), overwrite)
+        {
+            return Err(lifecycle.output_error(stage.as_str(), kind, error));
+        }
+        lifecycle
+            .record_finish("file", bytes_written)
+            .map_err(|error| lifecycle.finish_error(error))?;
+        Ok(RevealResult { bytes_written })
+    }
+}
+
+impl std::fmt::Debug for PreparedReveal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedReveal")
+            .field("lifecycle", &self.lifecycle)
+            .field("value_len", &self.value.len())
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -774,6 +1045,123 @@ impl VaultStore {
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
+    fn prepare_field_read(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<PreparedReveal> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    RevealOperation::FieldRead.start_action(),
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "reference": reference.to_string(),
+                    }),
+                )
+                .map_err(reveal_start_audit_error)?;
+            let value = match vault.secret_value(&reference.to_secret_name()) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(reveal_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        RevealOperation::FieldRead,
+                        &operation_id,
+                        "resolve",
+                        error,
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedReveal {
+                lifecycle: RevealLifecycle {
+                    store: self.clone(),
+                    audit_key,
+                    operation_id,
+                    operation: RevealOperation::FieldRead,
+                },
+                value,
+            })
+        })
+        .map_err(|error| self.map_reveal_prepare_error(error))
+    }
+
+    fn prepare_template_injection(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+    ) -> Result<PreparedReveal> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    RevealOperation::TemplateInject.start_action(),
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "references": template.references().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "reference_count": template.references().len(),
+                    }),
+                )
+                .map_err(reveal_start_audit_error)?;
+
+            let mut values = Vec::with_capacity(template.references().len());
+            for reference in template.references() {
+                match vault.secret_value(&reference.to_secret_name()) {
+                    Ok(value) => values.push(value),
+                    Err(error) => {
+                        return Err(reveal_prepare_failure_unlocked(
+                            self,
+                            &vault,
+                            RevealOperation::TemplateInject,
+                            &operation_id,
+                            "resolve",
+                            error,
+                        ));
+                    }
+                }
+            }
+            let value = match template.render(&values) {
+                Ok(value) => value,
+                Err(error) => {
+                    let error = classified(error.kind(), error.message());
+                    return Err(reveal_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        RevealOperation::TemplateInject,
+                        &operation_id,
+                        "render",
+                        error,
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedReveal {
+                lifecycle: RevealLifecycle {
+                    store: self.clone(),
+                    audit_key,
+                    operation_id,
+                    operation: RevealOperation::TemplateInject,
+                },
+                value,
+            })
+        })
+        .map_err(|error| self.map_reveal_prepare_error(error))
+    }
+
+    fn map_reveal_prepare_error(&self, error: anyhow::Error) -> VaultError {
+        if error.is::<ClassifiedVaultError>() {
+            vault_error_from_anyhow(VaultErrorKind::Internal, error)
+        } else {
+            self.map_open_error(error)
+        }
+    }
+
     pub(crate) fn verify_audit(&self, passphrase: &SecretString) -> Result<AuditVerification> {
         self.with_lock(|| {
             let vault = self.open_unlocked(passphrase)?;
@@ -1061,6 +1449,51 @@ fn brokered_run_start_details(request: &BrokeredRun, run_id: &str) -> serde_json
             "var": mapping.var().as_str(),
             "secret_name": mapping.secret_name().as_str(),
         })).collect::<Vec<_>>(),
+    })
+}
+
+fn reveal_start_audit_error(error: anyhow::Error) -> anyhow::Error {
+    classify_source(
+        VaultErrorKind::AuditTampered,
+        "failed to append reveal start audit event",
+        error,
+    )
+}
+
+fn reveal_prepare_failure_unlocked(
+    store: &VaultStore,
+    vault: &OpenVault,
+    operation: RevealOperation,
+    operation_id: &str,
+    stage: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let kind = classified_kind(&error).unwrap_or(VaultErrorKind::Internal);
+    match vault.append_audit_unlocked(
+        store,
+        operation.failed_action(),
+        reveal_failure_details(operation_id, stage),
+    ) {
+        Ok(_) => error,
+        Err(audit_error) => classify_source(
+            kind,
+            format!(
+                "{} preparation failed; additionally failed to append failure audit event",
+                operation.label()
+            ),
+            error.context(format!(
+                "additional audit failure while recording reveal failure: {audit_error}"
+            )),
+        ),
+    }
+}
+
+fn reveal_failure_details(operation_id: &str, stage: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation_id": operation_id,
+        "stage": stage,
+        // Values and raw errors never belong in the local audit chain.
+        "error": "vault reveal operation failed",
     })
 }
 

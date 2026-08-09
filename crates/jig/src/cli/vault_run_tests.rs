@@ -1,7 +1,8 @@
 use crate::command::{
-    VaultRepoScope, VaultRuntimeOptions, VaultScopeSelection, VaultStatusRequest,
+    VaultInjectRequest, VaultReadRequest, VaultRepoScope, VaultRuntimeOptions, VaultScopeSelection,
+    VaultStatusRequest,
 };
-use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
+use crate::test_env::{CurrentDirGuard, EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
@@ -168,5 +169,208 @@ fn vault_options_mut_reaches_nested_status_command() {
             assert!(matches!(request.vault.scope, VaultScopeSelection::Global));
         }
         other => panic!("expected status command, got {other:?}"),
+    }
+}
+
+fn read_request() -> crate::command::VaultCommand {
+    crate::command::VaultCommand::Read(VaultReadRequest {
+        reference: "jig://Production/PASSWORD".parse().unwrap(),
+        reveal: false,
+        out_file: None,
+        overwrite: false,
+        vault: VaultRuntimeOptions::default(),
+    })
+}
+
+fn inject_request(input: impl Into<std::path::PathBuf>) -> crate::command::VaultCommand {
+    crate::command::VaultCommand::Inject(VaultInjectRequest {
+        input: input.into(),
+        template: None,
+        reveal: false,
+        out_file: None,
+        overwrite: false,
+        vault: VaultRuntimeOptions::default(),
+    })
+}
+
+#[test]
+fn raw_vault_commands_reject_json_before_runtime_dispatch() {
+    for command in [read_request(), inject_request("template")] {
+        let error = validate_raw_vault_command(&command, true, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--json is not supported"));
+        assert!(!error.contains("PASSWORD"));
+    }
+}
+
+#[test]
+fn json_and_terminal_refusals_precede_passphrase_capture_and_vault_access() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for (json_output, stdout_is_terminal) in [(true, false), (false, true)] {
+        let vault_home = temp.path().join(format!(
+            "absent-vault-{}-{}",
+            u8::from(json_output),
+            u8::from(stdout_is_terminal)
+        ));
+        let command = VaultCommand::Read(super::super::vault::VaultReadOpts {
+            reference: "jig://Production/PASSWORD".parse().unwrap(),
+            reveal: false,
+            out_file: None,
+            overwrite: false,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        });
+
+        let error =
+            run_vault_command_with_stdout_terminal(command, json_output, stdout_is_terminal)
+                .unwrap_err()
+                .to_string();
+        if json_output {
+            assert!(error.contains("--json is not supported"));
+        } else {
+            assert!(error.contains("without --reveal"));
+        }
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+    }
+}
+
+#[test]
+fn raw_vault_commands_require_explicit_terminal_reveal() {
+    for mut command in [read_request(), inject_request("template")] {
+        let error = validate_raw_vault_command(&command, false, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("without --reveal"));
+
+        match &mut command {
+            crate::command::VaultCommand::Read(request) => request.reveal = true,
+            crate::command::VaultCommand::Inject(request) => request.reveal = true,
+            other => panic!("expected raw command, got {other:?}"),
+        }
+        validate_raw_vault_command(&command, false, true).unwrap();
+    }
+}
+
+#[test]
+fn output_file_avoids_terminal_reveal_and_requires_overwrite_for_same_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("template");
+    std::fs::write(&input, b"template").unwrap();
+
+    let mut read = read_request();
+    let crate::command::VaultCommand::Read(read) = &mut read else {
+        unreachable!();
+    };
+    read.out_file = Some(temp.path().join("read-output"));
+    validate_raw_vault_command(
+        &crate::command::VaultCommand::Read(VaultReadRequest {
+            reference: read.reference.clone(),
+            reveal: read.reveal,
+            out_file: read.out_file.clone(),
+            overwrite: read.overwrite,
+            vault: read.vault.clone(),
+        }),
+        false,
+        true,
+    )
+    .unwrap();
+
+    let mut inject = inject_request(&input);
+    let crate::command::VaultCommand::Inject(request) = &mut inject else {
+        unreachable!();
+    };
+    request.out_file = Some(input);
+    let error = validate_raw_vault_command(&inject, false, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("same file"));
+    let crate::command::VaultCommand::Inject(request) = &mut inject else {
+        unreachable!();
+    };
+    request.overwrite = true;
+    validate_raw_vault_command(&inject, false, false).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn inject_same_file_check_detects_relative_aliases_and_hard_links() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("template"), b"template").unwrap();
+    std::fs::hard_link(
+        temp.path().join("template"),
+        temp.path().join("template-link"),
+    )
+    .unwrap();
+    let _cwd = CurrentDirGuard::set(temp.path());
+
+    assert!(
+        input_and_output_are_same_file(
+            std::path::Path::new("template"),
+            std::path::Path::new("./template")
+        )
+        .unwrap()
+    );
+    assert!(
+        input_and_output_are_same_file(
+            std::path::Path::new("template"),
+            std::path::Path::new("template-link")
+        )
+        .unwrap()
+    );
+    assert!(
+        !input_and_output_are_same_file(std::path::Path::new("-"), std::path::Path::new("-"))
+            .unwrap()
+    );
+}
+
+#[test]
+fn invalid_injection_input_fails_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let output = temp.path().join("rendered-output");
+    let missing = temp.path().join("missing-template");
+    let malformed = temp.path().join("malformed-template");
+    let oversized = temp.path().join("oversized-template");
+    std::fs::write(&malformed, b"{{ jig://Production }}").unwrap();
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(u64::try_from(jig_vault::MAX_TEMPLATE_INPUT_LEN + 1).unwrap())
+        .unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for input in [missing, malformed, oversized] {
+        let command = VaultCommand::Inject(super::super::vault::VaultInjectOpts {
+            input,
+            reveal: false,
+            out_file: Some(output.clone()),
+            overwrite: false,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        });
+
+        let error = run_vault_command(command, false).unwrap_err().to_string();
+        assert!(!error.contains(passphrase));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+        assert!(!output.exists());
     }
 }

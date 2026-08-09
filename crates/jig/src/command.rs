@@ -44,9 +44,10 @@ pub(crate) use state::{
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultFieldCommand,
     VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest,
-    VaultMigrateRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection,
-    VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
-    VaultSecretValueSource, VaultStatusRequest, is_valid_vault_scope_id,
+    VaultInjectRequest, VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest,
+    VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
+    VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
+    is_valid_vault_scope_id,
 };
 pub(crate) use work::{
     DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckRequest, WorkCommand,

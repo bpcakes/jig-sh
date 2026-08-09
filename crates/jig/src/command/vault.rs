@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use jig_vault::{VaultItem, VaultReference};
+use jig_vault::{InjectionTemplate, VaultItem, VaultReference};
 
 #[derive(Debug)]
 pub(crate) enum VaultCommand {
@@ -11,6 +11,8 @@ pub(crate) enum VaultCommand {
     Status(VaultStatusRequest),
     Migrate(VaultMigrateRequest),
     Field(VaultFieldCommand),
+    Inject(VaultInjectRequest),
+    Read(VaultReadRequest),
     Secret(VaultSecretCommand),
     Run(VaultRunRequest),
 }
@@ -143,6 +145,25 @@ pub(crate) struct VaultSecretRemoveRequest {
 #[derive(Debug)]
 pub(crate) struct VaultFieldRemoveRequest {
     pub(crate) reference: VaultReference,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultReadRequest {
+    pub(crate) reference: VaultReference,
+    pub(crate) reveal: bool,
+    pub(crate) out_file: Option<PathBuf>,
+    pub(crate) overwrite: bool,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultInjectRequest {
+    pub(crate) input: PathBuf,
+    pub(crate) template: Option<InjectionTemplate>,
+    pub(crate) reveal: bool,
+    pub(crate) out_file: Option<PathBuf>,
+    pub(crate) overwrite: bool,
     pub(crate) vault: VaultRuntimeOptions,
 }
 

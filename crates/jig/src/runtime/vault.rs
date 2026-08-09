@@ -9,8 +9,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
-    BrokeredEnv, BrokeredFile, BrokeredRun, FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes, Vault,
-    validate_new_vault_passphrase,
+    BrokeredEnv, BrokeredFile, BrokeredRun, FieldKind, InjectionTemplate, MAX_SECRET_VALUE_LEN,
+    SecretBytes, Vault, validate_new_vault_passphrase,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -19,10 +19,10 @@ use zeroize::Zeroizing;
 
 use crate::command::{
     VaultAuditCommand, VaultCommand, VaultFieldCommand, VaultFieldListRequest,
-    VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest, VaultMigrateRequest,
-    VaultRepoScope, VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand,
-    VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
-    VaultSecretValueSource, VaultStatusRequest,
+    VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest, VaultInjectRequest,
+    VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
+    VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
+    VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
 };
 
 const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
@@ -43,6 +43,9 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
             VaultFieldCommand::Set(request) => set_field(request),
             VaultFieldCommand::Remove(request) => remove_field(request),
         },
+        VaultCommand::Inject(_) | VaultCommand::Read(_) => {
+            bail!("internal error: raw vault output reached the structured dispatcher")
+        }
         VaultCommand::Secret(command) => match command {
             VaultSecretCommand::List(request) => list(request),
             VaultSecretCommand::Set(request) => set(request),
@@ -50,6 +53,99 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
         },
         VaultCommand::Run(request) => run(request),
     }
+}
+
+pub(crate) fn dispatch_raw(command: VaultCommand) -> Result<()> {
+    match command {
+        VaultCommand::Inject(request) => inject(request),
+        VaultCommand::Read(request) => read_field(request),
+        _ => bail!("internal error: structured vault command reached the raw dispatcher"),
+    }
+}
+
+pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
+    match command {
+        VaultCommand::Inject(request) => {
+            let bytes = read_template_input(&request.input)?;
+            request.template = Some(InjectionTemplate::parse(bytes)?);
+            Ok(())
+        }
+        VaultCommand::Read(_) => Ok(()),
+        _ => bail!("internal error: structured vault command reached raw input preparation"),
+    }
+}
+
+fn read_field(request: VaultReadRequest) -> Result<()> {
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    if let Some(destination) = request.out_file {
+        vault.read_field_to_file(
+            &passphrase,
+            request.reference,
+            &destination,
+            request.overwrite,
+        )?;
+    } else {
+        let stdout = std::io::stdout();
+        vault.read_field_to(&passphrase, request.reference, &mut stdout.lock())?;
+    }
+    Ok(())
+}
+
+fn inject(request: VaultInjectRequest) -> Result<()> {
+    let template = request
+        .template
+        .ok_or_else(|| anyhow!("internal error: vault injection input was not prepared"))?;
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    if let Some(destination) = request.out_file {
+        vault.inject_template_to_file(&passphrase, template, &destination, request.overwrite)?;
+    } else {
+        let stdout = std::io::stdout();
+        vault.inject_template_to(&passphrase, template, &mut stdout.lock())?;
+    }
+    Ok(())
+}
+
+fn read_template_input(path: &Path) -> Result<SecretBytes> {
+    let mut input: Box<dyn Read> = if path == Path::new("-") {
+        Box::new(std::io::stdin().lock())
+    } else {
+        Box::new(std::fs::File::open(path).with_context(|| {
+            format!("failed to open vault injection template {}", path.display())
+        })?)
+    };
+    let capacity = jig_vault::MAX_TEMPLATE_INPUT_LEN
+        .checked_add(1)
+        .expect("template input limit leaves room for an overflow byte");
+    let mut bytes = SecretBytes::with_capacity(capacity);
+    let mut chunk = Zeroizing::new([0_u8; 8 * 1024]);
+    loop {
+        let remaining = capacity - bytes.len();
+        let chunk_len = remaining.min(chunk.len());
+        let read = match input.read(&mut chunk[..chunk_len]) {
+            Ok(read) => read,
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(error).context("failed to read vault injection template");
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        bytes
+            .extend_from_slice(&chunk[..read])
+            .expect("the bounded template buffer was preallocated exactly");
+        if bytes.len() > jig_vault::MAX_TEMPLATE_INPUT_LEN {
+            bail!(
+                "vault injection template exceeds the {} byte limit",
+                jig_vault::MAX_TEMPLATE_INPUT_LEN
+            );
+        }
+    }
+    Ok(bytes)
 }
 
 fn init(request: VaultInitRequest) -> Result<Value> {
