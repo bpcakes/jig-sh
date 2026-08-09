@@ -357,6 +357,10 @@ jobs:
           cache: false
           rustflags: ""
           components: clippy
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: cargo-nextest@0.9.130
       # NASM is a Windows CI build dependency for aws-lc-sys only. Pin the
       # upstream installer checksums published by the Chocolatey nasm 3.1.0
       # package; it is not bundled into Jig release artifacts.
@@ -373,10 +377,8 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run dev proxy tests
-        run: cargo test -p jig-dev-proxy --locked
-        # Dev-proxy tests exercise process-global signal hooks and fixed OS trust/process boundaries.
-        env:
-          RUST_TEST_THREADS: "1"
+        # Nextest isolates test processes; the process-signals group remains serialized.
+        run: cargo nextest run -p jig-dev-proxy --locked
       - name: Run dev proxy clippy
         run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings
 
