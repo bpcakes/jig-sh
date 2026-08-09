@@ -366,9 +366,54 @@ mod tests {
 
         assert_eq!(error.kind(), VaultErrorKind::NotFound);
         let audit = store.read_audit_text().unwrap().unwrap();
-        assert!(audit.contains("\"run_id\""));
-        assert!(audit.contains("\"stage\":\"resolve\""));
-        assert!(audit.contains("\"action\":\"brokered_run_start\""));
+        let events = audit
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(events[1]["action"], "brokered_run_start");
+        assert_eq!(events[2]["action"], "brokered_run_failed");
+        assert_eq!(
+            events[1]["details"]["run_id"],
+            events[2]["details"]["run_id"]
+        );
+        assert_eq!(events[2]["details"]["stage"], "resolve");
+        let verification = store.verify_audit(&passphrase).unwrap();
+        assert_eq!(verification.event_count, 3);
+    }
+
+    #[test]
+    fn brokered_run_process_failure_records_failure_audit_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_string());
+        store.init(&passphrase).unwrap();
+
+        let error = store
+            .run_brokered(
+                &passphrase,
+                BrokeredRun::new(
+                    vec!["jig-vault-command-that-does-not-exist".into()],
+                    Vec::new(),
+                )
+                .unwrap(),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), VaultErrorKind::Process);
+        let audit = store.read_audit_text().unwrap().unwrap();
+        let events = audit
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(events[1]["action"], "brokered_run_start");
+        assert_eq!(events[2]["action"], "brokered_run_failed");
+        assert_eq!(
+            events[1]["details"]["run_id"],
+            events[2]["details"]["run_id"]
+        );
+        assert_eq!(events[2]["details"]["stage"], "process");
         let verification = store.verify_audit(&passphrase).unwrap();
         assert_eq!(verification.event_count, 3);
     }
