@@ -17,8 +17,8 @@ pub use error::{Result, VaultError, VaultErrorKind};
 pub use redact::Redactor;
 pub use run::RunOutput;
 pub use secret::{SecretBytes, SecretBytesCapacityError};
-pub use types::{EnvVarName, SecretName};
+pub use types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 pub use vault::{
-    MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, SecretRecord, Vault, VaultStatus,
-    validate_new_vault_passphrase,
+    FieldBatchResult, FieldMutation, FieldRecord, MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN,
+    SecretRecord, Vault, VaultMigration, VaultStatus, validate_new_vault_passphrase,
 };

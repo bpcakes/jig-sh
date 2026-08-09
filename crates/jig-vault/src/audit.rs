@@ -15,8 +15,10 @@ pub(crate) enum AuditAction {
     BrokeredRunFailed,
     BrokeredRunFinish,
     BrokeredRunStart,
+    FieldBatchApply,
     SecretRemove,
     SecretSet,
+    VaultFormatMigrate,
     VaultInitialized,
 }
 
@@ -26,8 +28,10 @@ impl AuditAction {
             Self::BrokeredRunFailed => "brokered_run_failed",
             Self::BrokeredRunFinish => "brokered_run_finish",
             Self::BrokeredRunStart => "brokered_run_start",
+            Self::FieldBatchApply => "field_batch_apply",
             Self::SecretRemove => "secret_remove",
             Self::SecretSet => "secret_set",
+            Self::VaultFormatMigrate => "vault_format_migrate",
             Self::VaultInitialized => "vault_initialized",
         }
     }

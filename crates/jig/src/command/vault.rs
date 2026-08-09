@@ -2,11 +2,15 @@
 
 use std::path::PathBuf;
 
+use jig_vault::{VaultItem, VaultReference};
+
 #[derive(Debug)]
 pub(crate) enum VaultCommand {
     Audit(VaultAuditCommand),
     Init(VaultInitRequest),
     Status(VaultStatusRequest),
+    Migrate(VaultMigrateRequest),
+    Field(VaultFieldCommand),
     Secret(VaultSecretCommand),
     Run(VaultRunRequest),
 }
@@ -21,6 +25,13 @@ pub(crate) enum VaultSecretCommand {
     List(VaultSecretListRequest),
     Set(VaultSecretSetRequest),
     Remove(VaultSecretRemoveRequest),
+}
+
+#[derive(Debug)]
+pub(crate) enum VaultFieldCommand {
+    List(VaultFieldListRequest),
+    Set(VaultFieldSetRequest),
+    Remove(VaultFieldRemoveRequest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,6 +91,12 @@ pub(crate) struct VaultStatusRequest {
 }
 
 #[derive(Debug)]
+pub(crate) struct VaultMigrateRequest {
+    pub(crate) target_version: u32,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
 pub(crate) struct VaultAuditVerifyRequest {
     pub(crate) vault: VaultRuntimeOptions,
 }
@@ -90,8 +107,22 @@ pub(crate) struct VaultSecretListRequest {
 }
 
 #[derive(Debug)]
+pub(crate) struct VaultFieldListRequest {
+    pub(crate) item: Option<VaultItem>,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
 pub(crate) struct VaultSecretSetRequest {
     pub(crate) name: String,
+    pub(crate) value_source: VaultSecretValueSource,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultFieldSetRequest {
+    pub(crate) reference: VaultReference,
+    pub(crate) text: bool,
     pub(crate) value_source: VaultSecretValueSource,
     pub(crate) vault: VaultRuntimeOptions,
 }
@@ -106,6 +137,12 @@ pub(crate) enum VaultSecretValueSource {
 #[derive(Debug)]
 pub(crate) struct VaultSecretRemoveRequest {
     pub(crate) name: String,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultFieldRemoveRequest {
+    pub(crate) reference: VaultReference,
     pub(crate) vault: VaultRuntimeOptions,
 }
 

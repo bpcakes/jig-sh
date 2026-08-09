@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Args, Subcommand};
+use jig_vault::{VaultItem, VaultReference};
 
 use crate::tool_defs;
 
@@ -35,6 +36,26 @@ Examples:
   jig vault secret set api_token --value-prompt
   printf '%s' 'secret-value' | jig vault secret set api_token --value-stdin";
 
+const VAULT_FIELD_SET_AFTER_HELP: &str = "\
+Terminal use defaults to hidden input. Pass --value-prompt explicitly for the
+same behavior, or --value-stdin for automation. Stdin must be piped or
+redirected and is read byte-for-byte; use printf instead of echo when a
+trailing newline is not part of the field value. Fields are encrypted whether
+they are concealed or text; --text only prevents a contextual value from being
+used as an output-redaction needle.
+
+Examples:
+  jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
+  printf '%s' 'false' | jig vault field set jig://Production/RESTIC_COMPRESSION --text --value-stdin";
+
+const VAULT_MIGRATE_AFTER_HELP: &str = "\
+Upgrade an existing version 1 vault explicitly before changing fields with the
+field-oriented commands. The migration is one-way and retains existing values
+as concealed fields.
+
+Example:
+  jig vault migrate --to 2";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -49,6 +70,15 @@ pub(crate) enum VaultCommand {
     /// Inspect local vault presence without decrypting values.
     #[command(name = tool_defs::cli_command::VAULT_STATUS)]
     Status(VaultStatusOpts),
+    /// Explicitly upgrade an existing vault format.
+    #[command(
+        name = tool_defs::cli_command::VAULT_MIGRATE,
+        after_help = VAULT_MIGRATE_AFTER_HELP
+    )]
+    Migrate(VaultMigrateOpts),
+    /// Add, list, or remove encrypted vault fields.
+    #[command(name = tool_defs::cli_command::VAULT_FIELD, subcommand)]
+    Field(VaultFieldCommand),
     /// Add, list, or remove vault secrets.
     #[command(name = tool_defs::cli_command::VAULT_SECRET, subcommand)]
     Secret(VaultSecretCommand),
@@ -80,6 +110,22 @@ pub(crate) enum VaultSecretCommand {
     Remove(VaultSecretRemoveOpts),
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum VaultFieldCommand {
+    /// List field metadata without values, optionally limited to one item.
+    #[command(name = tool_defs::cli_command::VAULT_FIELD_LIST)]
+    List(VaultFieldListOpts),
+    /// Set an encrypted field value.
+    #[command(
+        name = tool_defs::cli_command::VAULT_FIELD_SET,
+        after_help = VAULT_FIELD_SET_AFTER_HELP
+    )]
+    Set(VaultFieldSetOpts),
+    /// Remove an encrypted field from the vault.
+    #[command(name = tool_defs::cli_command::VAULT_FIELD_REMOVE)]
+    Remove(VaultFieldRemoveOpts),
+}
+
 #[derive(Args, Clone, Debug, Default)]
 pub(crate) struct VaultRuntimeOpts {
     #[arg(
@@ -107,6 +153,18 @@ pub(crate) struct VaultStatusOpts {
     pub(crate) vault: VaultRuntimeOpts,
 }
 
+#[derive(Args, Debug)]
+pub(crate) struct VaultMigrateOpts {
+    #[arg(
+        long,
+        value_parser = parse_vault_migration_target,
+        help = "Vault format version to migrate to; currently only 2 is supported"
+    )]
+    pub(crate) to: u32,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
 #[derive(Args, Debug, Default)]
 pub(crate) struct VaultAuditVerifyOpts {
     #[command(flatten)]
@@ -115,6 +173,18 @@ pub(crate) struct VaultAuditVerifyOpts {
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct VaultSecretListOpts {
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct VaultFieldListOpts {
+    #[arg(
+        value_parser = parse_vault_item,
+        value_name = "jig://ITEM",
+        help = "Optional canonical item selector; list all fields when omitted"
+    )]
+    pub(crate) item: Option<VaultItem>,
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
 }
@@ -144,9 +214,53 @@ pub(crate) struct VaultSecretSetOpts {
 }
 
 #[derive(Args, Debug)]
+#[command(group(
+    ArgGroup::new("value_source")
+        .args(["value_stdin", "value_prompt"])
+))]
+pub(crate) struct VaultFieldSetOpts {
+    #[arg(
+        value_parser = parse_vault_reference,
+        help = "Canonical field reference jig://ITEM/FIELD; names appear in local audit metadata"
+    )]
+    pub(crate) reference: VaultReference,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Store the encrypted field as contextual text rather than a concealed redaction needle"
+    )]
+    pub(crate) text: bool,
+    #[arg(
+        long = "value-stdin",
+        action = ArgAction::SetTrue,
+        help = "Read an exact field value from stdin; concealed fields require at least 4 bytes, while text fields may be empty"
+    )]
+    pub(crate) value_stdin: bool,
+    #[arg(
+        long = "value-prompt",
+        action = ArgAction::SetTrue,
+        help = "Prompt for a UTF-8 field value with hidden terminal input; no trailing newline is stored"
+    )]
+    pub(crate) value_prompt: bool,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug)]
 pub(crate) struct VaultSecretRemoveOpts {
     #[arg(help = "Secret name to remove; names appear in local audit metadata")]
     pub(crate) name: String,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultFieldRemoveOpts {
+    #[arg(
+        value_parser = parse_vault_reference,
+        help = "Canonical field reference jig://ITEM/FIELD; names appear in local audit metadata"
+    )]
+    pub(crate) reference: VaultReference,
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
 }
@@ -178,4 +292,27 @@ pub(crate) struct VaultRunOpts {
         help = "Command to run after --"
     )]
     pub(crate) command: Vec<String>,
+}
+
+fn parse_vault_reference(value: &str) -> Result<VaultReference, String> {
+    value
+        .parse::<VaultReference>()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_vault_item(value: &str) -> Result<VaultItem, String> {
+    value
+        .parse::<VaultItem>()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_vault_migration_target(value: &str) -> Result<u32, String> {
+    let target = value
+        .parse::<u32>()
+        .map_err(|_| "vault migration target must be the integer 2".to_owned())?;
+    if target == 2 {
+        Ok(target)
+    } else {
+        Err("only vault migration target 2 is supported".to_owned())
+    }
 }

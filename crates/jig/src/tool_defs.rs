@@ -121,7 +121,12 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT: &str = "vault";
     pub(crate) const VAULT_AUDIT: &str = "audit";
     pub(crate) const VAULT_AUDIT_VERIFY: &str = "verify";
+    pub(crate) const VAULT_FIELD: &str = "field";
+    pub(crate) const VAULT_FIELD_LIST: &str = "list";
+    pub(crate) const VAULT_FIELD_REMOVE: &str = "remove";
+    pub(crate) const VAULT_FIELD_SET: &str = "set";
     pub(crate) const VAULT_INIT: &str = "init";
+    pub(crate) const VAULT_MIGRATE: &str = "migrate";
     pub(crate) const VAULT_RUN: &str = "run";
     pub(crate) const VAULT_SECRET: &str = "secret";
     pub(crate) const VAULT_SECRET_LIST: &str = "list";

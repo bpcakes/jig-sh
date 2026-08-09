@@ -68,6 +68,12 @@ pub(super) const fn vault_options_mut(
         },
         crate::command::VaultCommand::Init(request) => &mut request.vault,
         crate::command::VaultCommand::Status(request) => &mut request.vault,
+        crate::command::VaultCommand::Migrate(request) => &mut request.vault,
+        crate::command::VaultCommand::Field(command) => match command {
+            crate::command::VaultFieldCommand::List(request) => &mut request.vault,
+            crate::command::VaultFieldCommand::Set(request) => &mut request.vault,
+            crate::command::VaultFieldCommand::Remove(request) => &mut request.vault,
+        },
         crate::command::VaultCommand::Secret(command) => match command {
             crate::command::VaultSecretCommand::List(request) => &mut request.vault,
             crate::command::VaultSecretCommand::Set(request) => &mut request.vault,

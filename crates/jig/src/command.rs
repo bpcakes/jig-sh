@@ -42,9 +42,10 @@ pub(crate) use state::{
     StateExportReceiptsRequest, StateRestoreRequest,
 };
 pub(crate) use vault::{
-    VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultInitRequest, VaultRepoScope,
-    VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand,
-    VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
+    VaultAuditCommand, VaultAuditVerifyRequest, VaultCommand, VaultFieldCommand,
+    VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest,
+    VaultMigrateRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection,
+    VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
     VaultSecretValueSource, VaultStatusRequest, is_valid_vault_scope_id,
 };
 pub(crate) use work::{

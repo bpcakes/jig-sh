@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
-    BrokeredEnv, BrokeredFile, BrokeredRun, MAX_SECRET_VALUE_LEN, SecretBytes, Vault,
+    BrokeredEnv, BrokeredFile, BrokeredRun, FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes, Vault,
     validate_new_vault_passphrase,
 };
 use secrecy::SecretString;
@@ -18,9 +18,11 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::command::{
-    VaultAuditCommand, VaultCommand, VaultInitRequest, VaultRepoScope, VaultRunRequest,
-    VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
-    VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
+    VaultAuditCommand, VaultCommand, VaultFieldCommand, VaultFieldListRequest,
+    VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest, VaultMigrateRequest,
+    VaultRepoScope, VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand,
+    VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
+    VaultSecretValueSource, VaultStatusRequest,
 };
 
 const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
@@ -35,6 +37,12 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
         },
         VaultCommand::Init(request) => init(request),
         VaultCommand::Status(request) => status(request),
+        VaultCommand::Migrate(request) => migrate(request),
+        VaultCommand::Field(command) => match command {
+            VaultFieldCommand::List(request) => list_fields(request),
+            VaultFieldCommand::Set(request) => set_field(request),
+            VaultFieldCommand::Remove(request) => remove_field(request),
+        },
         VaultCommand::Secret(command) => match command {
             VaultSecretCommand::List(request) => list(request),
             VaultSecretCommand::Set(request) => set(request),
@@ -68,6 +76,23 @@ fn status(request: VaultStatusRequest) -> Result<Value> {
         "vault_home": status.root.display().to_string(),
         "exists": status.exists,
         "vault_file_exists": status.exists,
+    });
+    add_vault_scope_fields(&mut output, &resolved);
+    Ok(output)
+}
+
+fn migrate(request: VaultMigrateRequest) -> Result<Value> {
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    let migration = vault.migrate(&passphrase, request.target_version)?;
+    let mut output = json!({
+        "ok": true,
+        "command": "vault migrate",
+        "vault_home": vault.root().display().to_string(),
+        "from_version": migration.from_version,
+        "to_version": migration.to_version,
+        "changed": migration.changed,
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
@@ -116,6 +141,39 @@ fn list(request: VaultSecretListRequest) -> Result<Value> {
     Ok(output)
 }
 
+fn list_fields(request: VaultFieldListRequest) -> Result<Value> {
+    let item = request.item;
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    let fields: Vec<Value> = vault
+        .list_fields(&passphrase)?
+        .into_iter()
+        .filter(|record| {
+            item.as_ref()
+                .is_none_or(|item| record.reference.item() == item.as_str())
+        })
+        .map(|record| {
+            json!({
+                "reference": record.reference.to_string(),
+                "kind": field_kind_label(&record.kind),
+                "created_at_ms": record.created_at_ms,
+                "updated_at_ms": record.updated_at_ms,
+                "value_len": record.value_len,
+            })
+        })
+        .collect();
+    let mut output = json!({
+        "ok": true,
+        "command": "vault field list",
+        "vault_home": vault.root().display().to_string(),
+        "item": item.as_ref().map(ToString::to_string),
+        "fields": fields,
+    });
+    add_vault_scope_fields(&mut output, &resolved);
+    Ok(output)
+}
+
 fn set(request: VaultSecretSetRequest) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
     let vault = vault(&resolved)?;
@@ -152,6 +210,55 @@ fn set(request: VaultSecretSetRequest) -> Result<Value> {
     Ok(output)
 }
 
+fn set_field(request: VaultFieldSetRequest) -> Result<Value> {
+    let reference = request.reference;
+    let reference_text = reference.to_string();
+    let kind = if request.text {
+        FieldKind::Text
+    } else {
+        FieldKind::Concealed
+    };
+    let kind_label = field_kind_label(&kind);
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    let value = match request.value_source {
+        VaultSecretValueSource::Auto => {
+            if std::io::stdin().is_terminal() {
+                read_field_value_from_prompt()?
+            } else {
+                bail!(
+                    "vault field set REF defaults to hidden prompt only in an interactive terminal; use --value-stdin for piped or redirected input"
+                );
+            }
+        }
+        VaultSecretValueSource::Stdin => {
+            let stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                bail!(
+                    "--value-stdin requires piped or redirected stdin; use --value-prompt for hidden terminal input"
+                );
+            }
+            read_secret_value(stdin.lock())?
+        }
+        VaultSecretValueSource::Prompt => read_field_value_from_prompt()?,
+    };
+    let changed = !vault
+        .set_field(&passphrase, reference, kind, value)?
+        .changed
+        .is_empty();
+    let mut output = json!({
+        "ok": true,
+        "command": "vault field set",
+        "vault_home": vault.root().display().to_string(),
+        "reference": reference_text,
+        "kind": kind_label,
+        "changed": changed,
+    });
+    add_vault_scope_fields(&mut output, &resolved);
+    Ok(output)
+}
+
 fn remove(request: VaultSecretRemoveRequest) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
     let vault = vault(&resolved)?;
@@ -162,6 +269,27 @@ fn remove(request: VaultSecretRemoveRequest) -> Result<Value> {
         "command": "vault secret remove",
         "vault_home": vault.root().display().to_string(),
         "name": request.name,
+        "removed": removed,
+    });
+    add_vault_scope_fields(&mut output, &resolved);
+    Ok(output)
+}
+
+fn remove_field(request: VaultFieldRemoveRequest) -> Result<Value> {
+    let reference = request.reference;
+    let reference_text = reference.to_string();
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    let passphrase = passphrase()?;
+    let removed = !vault
+        .remove_field(&passphrase, reference)?
+        .removed
+        .is_empty();
+    let mut output = json!({
+        "ok": true,
+        "command": "vault field remove",
+        "vault_home": vault.root().display().to_string(),
+        "reference": reference_text,
         "removed": removed,
     });
     add_vault_scope_fields(&mut output, &resolved);
@@ -528,6 +656,13 @@ fn parse_file_mappings(values: &[String]) -> Result<Vec<BrokeredFile>> {
         .collect()
 }
 
+fn field_kind_label(kind: &FieldKind) -> &'static str {
+    match kind {
+        FieldKind::Concealed => "concealed",
+        FieldKind::Text => "text",
+    }
+}
+
 fn read_secret_value(mut input: impl Read) -> Result<SecretBytes> {
     // Allocate the full cap up front so secret bytes from stdin do not pass
     // through discarded intermediate Vec buffers during growth.
@@ -553,6 +688,15 @@ fn read_secret_value_from_prompt() -> Result<SecretBytes> {
     }
     let mut value =
         prompt_zeroizing("Secret value: ").context("failed to read secret value from terminal")?;
+    Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes()))
+}
+
+fn read_field_value_from_prompt() -> Result<SecretBytes> {
+    if !hidden_terminal_input_available() {
+        bail!("--value-prompt requires an interactive terminal; use --value-stdin for automation");
+    }
+    let mut value =
+        prompt_zeroizing("Field value: ").context("failed to read field value from terminal")?;
     Ok(SecretBytes::new(std::mem::take(&mut *value).into_bytes()))
 }
 
@@ -699,6 +843,131 @@ mod tests {
         .unwrap();
         assert_eq!(output["exists"], true);
         assert_eq!(output["vault_file_exists"], true);
+    }
+
+    #[test]
+    fn field_list_reports_only_metadata_and_filters_by_item() {
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("vault");
+        let passphrase = "correct horse battery staple";
+        let vault = Vault::resolve(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from(passphrase.to_owned());
+        vault.init(&passphrase).unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/RESTIC_COMPRESSION".parse().unwrap(),
+                FieldKind::Text,
+                SecretBytes::new(b"false".to_vec()),
+            )
+            .unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Staging/ARRAY_APP_KEY".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"test-key".to_vec()),
+            )
+            .unwrap();
+
+        set_captured_passphrase(SecretString::from(
+            "correct horse battery staple".to_owned(),
+        ))
+        .unwrap();
+        let output = list_fields(VaultFieldListRequest {
+            item: Some("jig://Production".parse().unwrap()),
+            vault: VaultRuntimeOptions {
+                home: Some(home),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+        assert_eq!(output["command"], "vault field list");
+        assert_eq!(output["item"], "jig://Production");
+        assert_eq!(output["fields"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            output["fields"][0]["reference"],
+            "jig://Production/RESTIC_COMPRESSION"
+        );
+        assert_eq!(output["fields"][0]["kind"], "text");
+        assert_eq!(output["fields"][0]["value_len"], 5);
+        assert!(output["fields"][0].get("value").is_none());
+    }
+
+    #[test]
+    fn field_remove_reports_whether_a_field_existed() {
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("vault");
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        let vault = Vault::resolve(Some(home.clone())).unwrap();
+        vault.init(&passphrase).unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"test-password".to_vec()),
+            )
+            .unwrap();
+
+        set_captured_passphrase(SecretString::from(
+            "correct horse battery staple".to_owned(),
+        ))
+        .unwrap();
+        let output = remove_field(VaultFieldRemoveRequest {
+            reference: "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
+            vault: VaultRuntimeOptions {
+                home: Some(home.clone()),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        assert_eq!(output["removed"], true);
+
+        set_captured_passphrase(SecretString::from(
+            "correct horse battery staple".to_owned(),
+        ))
+        .unwrap();
+        let output = remove_field(VaultFieldRemoveRequest {
+            reference: "jig://Production/RESTIC_PASSWORD".parse().unwrap(),
+            vault: VaultRuntimeOptions {
+                home: Some(home),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        assert_eq!(output["removed"], false);
+    }
+
+    #[test]
+    fn migrate_reports_when_an_already_v2_vault_is_unchanged() {
+        let _env = lock_env();
+        let temp = tempdir().unwrap();
+        let home = temp.path().join("vault");
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        let vault = Vault::resolve(Some(home.clone())).unwrap();
+        vault.init(&passphrase).unwrap();
+
+        set_captured_passphrase(SecretString::from(
+            "correct horse battery staple".to_owned(),
+        ))
+        .unwrap();
+        let output = migrate(VaultMigrateRequest {
+            target_version: 2,
+            vault: VaultRuntimeOptions {
+                home: Some(home),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+
+        assert_eq!(output["command"], "vault migrate");
+        assert_eq!(output["from_version"], 2);
+        assert_eq!(output["to_version"], 2);
+        assert_eq!(output["changed"], false);
     }
 
     #[test]

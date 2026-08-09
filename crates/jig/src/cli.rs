@@ -46,7 +46,8 @@ pub(crate) use state::{
 };
 pub(crate) use status_opts::StatusOpts;
 pub(crate) use vault::{
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
+    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultFieldCommand, VaultFieldListOpts,
+    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultMigrateOpts, VaultRunOpts,
     VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
     VaultSecretSetOpts, VaultStatusOpts,
 };
@@ -184,6 +185,8 @@ passphrases are not accepted.
 
 Quick start:
   jig vault init
+  jig vault migrate --to 2
+  jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
   jig vault secret set api_token --value-prompt
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'";

@@ -10,8 +10,8 @@ use crate::crypto::{
 };
 use crate::error::{VaultErrorKind, classify_source};
 use crate::format::{
-    AEAD_ALGORITHM, AeadRole, FORMAT_VERSION, MAGIC, VaultFile, VaultHeader, VaultState,
-    decode_b64_array, payload_aad, validate_header,
+    AEAD_ALGORITHM, AeadRole, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION, VaultFile, VaultHeader,
+    VaultState, decode_b64_array, payload_aad, validate_header,
 };
 
 pub(super) struct ParsedVaultEnvelope {
@@ -48,6 +48,15 @@ pub(super) struct ResealedVaultEnvelope {
     // The former save_unlocked local lived through the atomic write. Retain
     // this zeroizing plaintext until the serialized envelope is written too.
     _state_plaintext: Zeroizing<Vec<u8>>,
+}
+
+pub(super) struct MigratedVaultEnvelope {
+    file: VaultFile,
+    // The migration must seal v2 state under v2 AAD before the vault file is
+    // written. Keep both secret-bearing intermediate values zeroizing through
+    // the atomic write just like ordinary resealing does.
+    _state_plaintext: Zeroizing<Vec<u8>>,
+    _wrap_key: Zeroizing<[u8; KEY_LEN]>,
 }
 
 impl ParsedVaultEnvelope {
@@ -163,13 +172,14 @@ impl ValidatedVaultEnvelope {
                     error,
                 )
             })?;
-        let state = serde_json::from_slice(&state_plaintext).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault state",
-                error.into(),
-            )
-        })?;
+        let state = VaultState::deserialize_for_version(file.header.version, &state_plaintext)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::Serialization,
+                    "failed to parse vault state",
+                    error.into(),
+                )
+            })?;
         let audit_key = derive_audit_key(&dek).map_err(|error| {
             classify_source(
                 VaultErrorKind::Internal,
@@ -189,11 +199,24 @@ impl ValidatedVaultEnvelope {
 
 impl NewVaultEnvelope {
     pub(super) fn seal(passphrase: &SecretString, created_at_ms: i128) -> AnyResult<Self> {
+        Self::seal_for_version(passphrase, created_at_ms, FORMAT_VERSION)
+    }
+
+    #[cfg(test)]
+    pub(super) fn seal_v1(passphrase: &SecretString, created_at_ms: i128) -> AnyResult<Self> {
+        Self::seal_for_version(passphrase, created_at_ms, V1_FORMAT_VERSION)
+    }
+
+    fn seal_for_version(
+        passphrase: &SecretString,
+        created_at_ms: i128,
+        version: u32,
+    ) -> AnyResult<Self> {
         let salt = random_array::<SALT_LEN>()?;
         let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
         let header = VaultHeader {
             magic: MAGIC.into(),
-            version: FORMAT_VERSION,
+            version,
             vault_id: ulid::Ulid::new().to_string(),
             created_at_ms,
             kdf: KdfParams::default(),
@@ -218,7 +241,7 @@ impl NewVaultEnvelope {
             dek.as_ref(),
         )?;
         let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(&VaultState::default())?);
+        let state_plaintext = Zeroizing::new(VaultState::default().serialize_for_version(version)?);
         let state = seal(&dek, &state_nonce, &state_aad, &state_plaintext)?;
         let file = VaultFile {
             header,
@@ -251,7 +274,7 @@ impl ResealedVaultEnvelope {
         // wrapped key and state encryption together.
         let aad = payload_aad(&previous.header, AeadRole::State);
         let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(state)?);
+        let state_plaintext = Zeroizing::new(state.serialize_for_version(previous.header.version)?);
         let encrypted_state = seal(dek, &state_nonce, &aad, &state_plaintext)?;
         let file = VaultFile {
             header: previous.header.clone(),
@@ -263,6 +286,77 @@ impl ResealedVaultEnvelope {
         Ok(Self {
             file,
             _state_plaintext: state_plaintext,
+        })
+    }
+
+    pub(super) fn serialize_pretty(&self) -> AnyResult<String> {
+        Ok(serde_json::to_string_pretty(&self.file)?)
+    }
+}
+
+impl MigratedVaultEnvelope {
+    pub(super) fn v1_to_v2(
+        previous: &VaultFile,
+        passphrase: &SecretString,
+        dek: &[u8; KEY_LEN],
+        state: &VaultState,
+    ) -> AnyResult<Self> {
+        if previous.header.version != V1_FORMAT_VERSION {
+            anyhow::bail!(
+                "vault format {} cannot be migrated as a version 1 envelope",
+                previous.header.version
+            );
+        }
+
+        let mut header = previous.header.clone();
+        header.version = FORMAT_VERSION;
+        validate_header(&header).map_err(|error| {
+            classify_source(
+                VaultErrorKind::Internal,
+                "constructed version 2 vault header is invalid",
+                error,
+            )
+        })?;
+        let salt =
+            decode_b64_array::<SALT_LEN>("vault salt", &header.salt_b64).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::Serialization,
+                    "vault salt is invalid",
+                    error,
+                )
+            })?;
+        let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf).map_err(|error| {
+            classify_source(
+                VaultErrorKind::Serialization,
+                "vault KDF parameters are invalid",
+                error,
+            )
+        })?;
+        let wrapped_dek_nonce = random_array::<NONCE_LEN>()?;
+        let wrapped_dek = seal(
+            &wrap_key,
+            &wrapped_dek_nonce,
+            &payload_aad(&header, AeadRole::WrappedDek),
+            dek,
+        )?;
+        let state_nonce = random_array::<NONCE_LEN>()?;
+        let state_plaintext = Zeroizing::new(state.serialize_for_version(FORMAT_VERSION)?);
+        let state = seal(
+            dek,
+            &state_nonce,
+            &payload_aad(&header, AeadRole::State),
+            &state_plaintext,
+        )?;
+        Ok(Self {
+            file: VaultFile {
+                header,
+                wrapped_dek_nonce_b64: B64.encode(wrapped_dek_nonce),
+                wrapped_dek_b64: B64.encode(wrapped_dek),
+                state_nonce_b64: B64.encode(state_nonce),
+                state_b64: B64.encode(state),
+            },
+            _state_plaintext: state_plaintext,
+            _wrap_key: wrap_key,
         })
     }
 

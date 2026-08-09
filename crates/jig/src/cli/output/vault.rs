@@ -47,6 +47,53 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
                 .unwrap_or(false);
             lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
         }
+        "vault migrate" => {
+            if let Some(from_version) = value_u64(value, "from_version") {
+                lines.push(format!("  From version: {from_version}"));
+            }
+            if let Some(to_version) = value_u64(value, "to_version") {
+                lines.push(format!("  To version: {to_version}"));
+            }
+            if let Some(changed) = value_bool(value, "changed") {
+                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
+            }
+        }
+        "vault field list" => {
+            let fields = value["fields"].as_array().map(Vec::len).unwrap_or(0);
+            lines.push(format!("  Fields: {fields}"));
+            if let Some(item) = value_str(value, "item") {
+                lines.push(format!("  Item: {item}"));
+            }
+            if let Some(items) = value["fields"].as_array() {
+                for field in items.iter().take(20) {
+                    let reference = value_str(field, "reference").unwrap_or("<unknown>");
+                    let kind = value_str(field, "kind").unwrap_or("unknown");
+                    lines.push(format!("  - {reference} ({kind})"));
+                }
+                if items.len() > 20 {
+                    lines.push(format!("  (and {} more)", items.len() - 20));
+                }
+            }
+        }
+        "vault field set" => {
+            if let Some(reference) = value_str(value, "reference") {
+                lines.push(format!("  Field: {reference}"));
+            }
+            if let Some(kind) = value_str(value, "kind") {
+                lines.push(format!("  Kind: {kind}"));
+            }
+            if let Some(changed) = value_bool(value, "changed") {
+                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
+            }
+        }
+        "vault field remove" => {
+            if let Some(reference) = value_str(value, "reference") {
+                lines.push(format!("  Field: {reference}"));
+            }
+            if let Some(removed) = value_bool(value, "removed") {
+                lines.push(format!("  Removed: {}", if removed { "yes" } else { "no" }));
+            }
+        }
         "vault secret list" => {
             let secrets = value["secrets"].as_array().map(Vec::len).unwrap_or(0);
             lines.push(format!("  Secrets: {secrets}"));
@@ -86,4 +133,50 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::format_vault_generic_summary;
+
+    #[test]
+    fn field_list_summary_uses_only_metadata() {
+        let summary = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault field list",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "item": "jig://Production",
+            "fields": [{
+                "reference": "jig://Production/RESTIC_COMPRESSION",
+                "kind": "text",
+                "value_len": 5,
+                "created_at_ms": 1,
+                "updated_at_ms": 1,
+            }],
+        }));
+
+        assert!(summary.contains("Fields: 1"));
+        assert!(summary.contains("jig://Production/RESTIC_COMPRESSION (text)"));
+        assert!(!summary.contains("value_len"));
+    }
+
+    #[test]
+    fn migration_summary_reports_an_idempotent_result() {
+        let summary = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault migrate",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "from_version": 2,
+            "to_version": 2,
+            "changed": false,
+        }));
+
+        assert!(summary.contains("From version: 2"));
+        assert!(summary.contains("To version: 2"));
+        assert!(summary.contains("Changed: no"));
+    }
 }

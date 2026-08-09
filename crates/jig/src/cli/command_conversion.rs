@@ -10,7 +10,8 @@ use super::{
     ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
     ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
+    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultFieldCommand, VaultFieldListOpts,
+    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultMigrateOpts, VaultRunOpts,
     VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
     VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand,
     WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts,
@@ -95,6 +96,8 @@ impl From<VaultCommand> for command::VaultCommand {
             VaultCommand::Audit(command) => Self::Audit(command.into()),
             VaultCommand::Init(opts) => Self::Init(opts.into()),
             VaultCommand::Status(opts) => Self::Status(opts.into()),
+            VaultCommand::Migrate(opts) => Self::Migrate(opts.into()),
+            VaultCommand::Field(command) => Self::Field(command.into()),
             VaultCommand::Secret(command) => Self::Secret(command.into()),
             VaultCommand::Run(opts) => Self::Run(opts.into()),
         }
@@ -115,6 +118,16 @@ impl From<VaultSecretCommand> for command::VaultSecretCommand {
             VaultSecretCommand::List(opts) => Self::List(opts.into()),
             VaultSecretCommand::Set(opts) => Self::Set(opts.into()),
             VaultSecretCommand::Remove(opts) => Self::Remove(opts.into()),
+        }
+    }
+}
+
+impl From<VaultFieldCommand> for command::VaultFieldCommand {
+    fn from(command: VaultFieldCommand) -> Self {
+        match command {
+            VaultFieldCommand::List(opts) => Self::List(opts.into()),
+            VaultFieldCommand::Set(opts) => Self::Set(opts.into()),
+            VaultFieldCommand::Remove(opts) => Self::Remove(opts.into()),
         }
     }
 }
@@ -148,6 +161,15 @@ impl From<VaultStatusOpts> for command::VaultStatusRequest {
     }
 }
 
+impl From<VaultMigrateOpts> for command::VaultMigrateRequest {
+    fn from(opts: VaultMigrateOpts) -> Self {
+        Self {
+            target_version: opts.to,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
 impl From<VaultAuditVerifyOpts> for command::VaultAuditVerifyRequest {
     fn from(opts: VaultAuditVerifyOpts) -> Self {
         Self {
@@ -159,6 +181,15 @@ impl From<VaultAuditVerifyOpts> for command::VaultAuditVerifyRequest {
 impl From<VaultSecretListOpts> for command::VaultSecretListRequest {
     fn from(opts: VaultSecretListOpts) -> Self {
         Self {
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultFieldListOpts> for command::VaultFieldListRequest {
+    fn from(opts: VaultFieldListOpts) -> Self {
+        Self {
+            item: opts.item,
             vault: opts.vault.into(),
         }
     }
@@ -181,10 +212,37 @@ impl From<VaultSecretSetOpts> for command::VaultSecretSetRequest {
     }
 }
 
+impl From<VaultFieldSetOpts> for command::VaultFieldSetRequest {
+    fn from(opts: VaultFieldSetOpts) -> Self {
+        let value_source = if opts.value_prompt {
+            command::VaultSecretValueSource::Prompt
+        } else if opts.value_stdin {
+            command::VaultSecretValueSource::Stdin
+        } else {
+            command::VaultSecretValueSource::Auto
+        };
+        Self {
+            reference: opts.reference,
+            text: opts.text,
+            value_source,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
 impl From<VaultSecretRemoveOpts> for command::VaultSecretRemoveRequest {
     fn from(opts: VaultSecretRemoveOpts) -> Self {
         Self {
             name: opts.name,
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultFieldRemoveOpts> for command::VaultFieldRemoveRequest {
+    fn from(opts: VaultFieldRemoveOpts) -> Self {
+        Self {
+            reference: opts.reference,
             vault: opts.vault.into(),
         }
     }

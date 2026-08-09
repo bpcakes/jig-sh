@@ -3,6 +3,11 @@ use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result as AnyResult, anyhow, bail};
@@ -16,12 +21,14 @@ const LOCK_FILE: &str = "vault.lock";
 const AUDIT_FILE: &str = "audit.jsonl";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const VAULT_TEXT_READ_LIMIT: u64 = 16 * 1024 * 1024;
+pub(crate) const VAULT_TEXT_READ_LIMIT: u64 = 16 * 1024 * 1024;
 const AUDIT_TEXT_READ_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct VaultStore {
     root: PathBuf,
+    #[cfg(test)]
+    fail_next_vault_write: Arc<AtomicBool>,
 }
 
 impl VaultStore {
@@ -86,7 +93,27 @@ impl VaultStore {
     }
 
     pub(crate) fn write_vault_text_unlocked(&self, contents: &str) -> AnyResult<()> {
+        self.validate_vault_text_len(contents)?;
+        #[cfg(test)]
+        if self.fail_next_vault_write.swap(false, Ordering::SeqCst) {
+            bail!("injected vault state write failure");
+        }
         write_atomic_text(&self.vault_path(), contents)
+    }
+
+    pub(crate) fn validate_vault_text_len(&self, contents: &str) -> AnyResult<()> {
+        if contents.len() > VAULT_TEXT_READ_LIMIT as usize {
+            bail!(
+                "vault state is {} bytes, exceeding the {VAULT_TEXT_READ_LIMIT} byte persistent vault limit",
+                contents.len()
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_vault_write_for_test(&self) {
+        self.fail_next_vault_write.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn append_audit_line_unlocked(&self, line: &str) -> AnyResult<()> {
@@ -243,7 +270,11 @@ fn prepare_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     // Re-walk after chmod so a same-user directory-entry race cannot trade a
     // checked file for a symlink while permissions are being tightened.
     ensure_tree_has_no_symlinks(&root, &root)?;
-    Ok(VaultStore { root })
+    Ok(VaultStore {
+        root,
+        #[cfg(test)]
+        fail_next_vault_write: Arc::new(AtomicBool::new(false)),
+    })
 }
 
 fn lock_file(file: &File) -> AnyResult<()> {

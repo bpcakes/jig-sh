@@ -254,6 +254,11 @@ fn vault_help_includes_quick_start_examples() {
     let vault_help = rendered_help(&["vault"]);
     assert_help_contains(&vault_help, "JIG_VAULT_PASSPHRASE");
     assert_help_contains(&vault_help, "jig vault init");
+    assert_help_contains(&vault_help, "jig vault migrate --to 2");
+    assert_help_contains(
+        &vault_help,
+        "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
+    );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
@@ -268,6 +273,18 @@ fn vault_help_includes_quick_start_examples() {
         &vault_secret_set_help,
         "jig vault secret set api_token --value-stdin",
     );
+
+    let vault_migrate_help = rendered_help(&["vault", "migrate"]);
+    assert_help_contains(&vault_migrate_help, "jig vault migrate --to 2");
+    assert_help_contains(&vault_migrate_help, "--to <TO>");
+
+    let vault_field_set_help = rendered_help(&["vault", "field", "set"]);
+    assert_help_contains(&vault_field_set_help, "--text");
+    assert_help_contains(&vault_field_set_help, "jig://Production/RESTIC_PASSWORD");
+    assert_help_contains(&vault_field_set_help, "use printf instead");
+
+    let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
+    assert_help_contains(&vault_field_list_help, "jig://ITEM");
 
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--file");

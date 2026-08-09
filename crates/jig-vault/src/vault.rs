@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result as AnyResult;
 use base64::Engine;
@@ -17,19 +20,20 @@ use crate::error::{
 };
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
-use crate::format::{SecretEntry, VaultFile, VaultState};
+use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::{
     ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
 };
 use crate::store::VaultStore;
-use crate::types::SecretName;
+use crate::types::{FieldKind, SecretName, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
 mod envelope;
 
 use envelope::{
-    NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope, UnlockedVaultEnvelope,
+    MigratedVaultEnvelope, NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope,
+    UnlockedVaultEnvelope,
 };
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
@@ -133,6 +137,92 @@ impl Vault {
         self.store.list(passphrase)
     }
 
+    /// Explicitly upgrades a version 1 vault envelope to the current format.
+    ///
+    /// Version 1 vaults remain readable for compatibility, but field-oriented
+    /// mutations require this deliberate one-way upgrade so older binaries do
+    /// not silently discard field kinds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target is unsupported, the vault cannot be
+    /// opened and audit-verified, or the audit/state transition cannot be
+    /// written atomically.
+    pub fn migrate(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> Result<VaultMigration> {
+        self.store.migrate(passphrase, target_version)
+    }
+
+    /// Lists canonical field metadata without returning encrypted values.
+    ///
+    /// Legacy secret names that cannot be represented as `jig://ITEM/FIELD`
+    /// remain available through [`Vault::list`] and are intentionally omitted
+    /// from this field-oriented view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault cannot be opened safely.
+    pub fn list_fields(&self, passphrase: &SecretString) -> Result<Vec<FieldRecord>> {
+        self.store.list_fields(passphrase)
+    }
+
+    /// Creates or updates one canonical encrypted field.
+    ///
+    /// Fields can be set only after an explicit v1-to-v2 migration. Text
+    /// fields remain encrypted and may be empty; concealed fields retain the
+    /// existing minimum length required for reliable redaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when the field is invalid, the vault
+    /// needs migration, audit verification fails, or persistence fails.
+    pub fn set_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .apply_field_batch(passphrase, vec![FieldMutation::set(reference, kind, value)])
+    }
+
+    /// Removes one canonical field when it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when the vault needs migration or
+    /// cannot be opened, audit-verified, and saved safely.
+    pub fn remove_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .apply_field_batch(passphrase, vec![FieldMutation::remove(reference)])
+    }
+
+    /// Applies validated field changes as one audited vault-state transition.
+    ///
+    /// Set mutations create or replace fields. Duplicate references within a
+    /// batch are rejected before any audit append or state save.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when validation, migration, unlock,
+    /// or audit verification fails. A state-save failure can leave the audit
+    /// intent ahead of state, matching the vault's existing mutation invariant.
+    pub fn apply_field_batch(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+    ) -> Result<FieldBatchResult> {
+        self.store.apply_field_batch(passphrase, mutations)
+    }
+
     /// Verifies the vault's tamper-evident audit chain.
     ///
     /// # Errors
@@ -166,6 +256,74 @@ pub struct SecretRecord {
     pub created_at_ms: i128,
     pub updated_at_ms: i128,
     pub value_len: usize,
+}
+
+/// Metadata for one canonical vault field, without its encrypted value.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FieldRecord {
+    pub reference: VaultReference,
+    pub kind: FieldKind,
+    pub created_at_ms: i128,
+    pub updated_at_ms: i128,
+    pub value_len: usize,
+}
+
+/// One atomic field change.
+///
+/// `SecretBytes` owns and zeroizes the supplied value when this mutation is
+/// consumed or dropped. Its `Debug` implementation intentionally hides bytes.
+#[derive(Debug)]
+pub enum FieldMutation {
+    Set {
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+    },
+    Remove {
+        reference: VaultReference,
+    },
+}
+
+impl FieldMutation {
+    /// Creates a field set mutation.
+    pub fn set(reference: VaultReference, kind: FieldKind, value: SecretBytes) -> Self {
+        Self::Set {
+            reference,
+            kind,
+            value,
+        }
+    }
+
+    /// Creates a field removal mutation.
+    pub fn remove(reference: VaultReference) -> Self {
+        Self::Remove { reference }
+    }
+
+    fn reference(&self) -> &VaultReference {
+        match self {
+            Self::Set { reference, .. } | Self::Remove { reference } => reference,
+        }
+    }
+}
+
+/// Metadata-only outcome of an atomic field change.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FieldBatchResult {
+    /// References created or updated by set mutations.
+    pub changed: Vec<VaultReference>,
+    /// References that existed and were removed by remove mutations.
+    pub removed: Vec<VaultReference>,
+}
+
+/// Outcome of an explicit vault envelope migration.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultMigration {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub changed: bool,
 }
 
 pub(crate) struct OpenVault {
@@ -415,6 +573,15 @@ impl VaultStore {
                 )
             })?;
             let result = edit(&mut vault)?;
+            let envelope = vault.prepare_save_unlocked()?;
+            let file_text = envelope.serialize_pretty()?;
+            self.validate_vault_text_len(&file_text).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::InvalidInput,
+                    "vault state is too large to save safely",
+                    error,
+                )
+            })?;
             AuditEvent::append_unlocked(self, vault.audit_key.as_ref(), action, details(&result))
                 .map_err(|error| {
                 classify_source(
@@ -423,13 +590,14 @@ impl VaultStore {
                     error,
                 )
             })?;
-            vault.save_unlocked(self).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Io,
-                    "vault audit was appended, but state save failed",
-                    error,
-                )
-            })?;
+            self.write_vault_text_unlocked(&file_text)
+                .map_err(|error| {
+                    classify_source(
+                        VaultErrorKind::Io,
+                        "vault audit was appended, but state save failed",
+                        error,
+                    )
+                })?;
             Ok(result)
         })
     }
@@ -489,6 +657,121 @@ impl VaultStore {
     pub(crate) fn list(&self, passphrase: &SecretString) -> Result<Vec<SecretRecord>> {
         self.with_lock(|| self.open_unlocked(passphrase).map(|vault| vault.list()))
             .map_err(|error| self.map_open_error(error))
+    }
+
+    pub(crate) fn migrate(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> Result<VaultMigration> {
+        if target_version != FORMAT_VERSION {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "unsupported vault migration target {target_version}; run `jig vault migrate --to {FORMAT_VERSION}`"
+                ),
+            ));
+        }
+        self.with_lock(|| self.migrate_unlocked(passphrase, target_version))
+            .map_err(|error| self.map_open_error(error))
+    }
+
+    fn migrate_unlocked(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> AnyResult<VaultMigration> {
+        let vault = self.open_unlocked(passphrase)?;
+        vault.verify_audit_unlocked(self).map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit chain verification failed",
+                error,
+            )
+        })?;
+        let from_version = vault.format_version();
+        if from_version == target_version {
+            return Ok(VaultMigration {
+                from_version,
+                to_version: target_version,
+                changed: false,
+            });
+        }
+        if from_version != V1_FORMAT_VERSION {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("vault format {from_version} cannot be migrated to {target_version}"),
+            ));
+        }
+
+        let envelope =
+            MigratedVaultEnvelope::v1_to_v2(&vault.file, passphrase, &vault.dek, &vault.state)?;
+        let file_text = envelope.serialize_pretty()?;
+        self.validate_vault_text_len(&file_text).map_err(|error| {
+            classify_source(
+                VaultErrorKind::InvalidInput,
+                "vault format migration would exceed the persistent vault size limit",
+                error,
+            )
+        })?;
+        AuditEvent::append_unlocked(
+            self,
+            vault.audit_key.as_ref(),
+            AuditAction::VaultFormatMigrate,
+            serde_json::json!({
+                "from_version": from_version,
+                "to_version": target_version,
+            }),
+        )
+        .map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit append failed before format migration save",
+                error,
+            )
+        })?;
+        self.write_vault_text_unlocked(&file_text)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::Io,
+                    "vault format migration audit was appended, but state save failed",
+                    error,
+                )
+            })?;
+        Ok(VaultMigration {
+            from_version,
+            to_version: target_version,
+            changed: true,
+        })
+    }
+
+    pub(crate) fn list_fields(&self, passphrase: &SecretString) -> Result<Vec<FieldRecord>> {
+        self.with_lock(|| {
+            self.open_unlocked(passphrase)
+                .map(|vault| vault.list_fields())
+        })
+        .map_err(|error| self.map_open_error(error))
+    }
+
+    pub(crate) fn apply_field_batch(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+    ) -> Result<FieldBatchResult> {
+        validate_field_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let audit_sets = field_batch_set_audit_metadata(&mutations);
+        let audit_removes = field_batch_remove_audit_metadata(&mutations);
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| field_batch_audit_details(&audit_sets, &audit_removes, result),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
     pub(crate) fn verify_audit(&self, passphrase: &SecretString) -> Result<AuditVerification> {
@@ -609,12 +892,77 @@ impl OpenVault {
             .collect()
     }
 
-    pub(crate) fn set_secret(
+    pub(crate) fn list_fields(&self) -> Vec<FieldRecord> {
+        self.state
+            .secrets
+            .iter()
+            .filter_map(|(name, entry)| {
+                let name = SecretName::parse(name).ok()?;
+                let reference = VaultReference::from_secret_name(&name)?;
+                Some(FieldRecord {
+                    reference,
+                    kind: entry.kind,
+                    created_at_ms: entry.created_at_ms,
+                    updated_at_ms: entry.updated_at_ms,
+                    value_len: entry.value_len,
+                })
+            })
+            .collect()
+    }
+
+    fn format_version(&self) -> u32 {
+        self.file.header.version
+    }
+
+    fn ensure_field_format_v2(&self) -> AnyResult<()> {
+        if self.format_version() != FORMAT_VERSION {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault format {} does not support field mutations; run `jig vault migrate --to {FORMAT_VERSION}`",
+                    self.format_version()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_secret(&mut self, name: &SecretName, value: SecretBytes) -> AnyResult<()> {
+        validate_secret_value_len(value.len())?;
+        self.set_field_value_unchecked(name, FieldKind::Concealed, value);
+        Ok(())
+    }
+
+    fn apply_validated_field_batch(&mut self, mutations: Vec<FieldMutation>) -> FieldBatchResult {
+        let mut result = FieldBatchResult::default();
+        for mutation in mutations {
+            match mutation {
+                FieldMutation::Set {
+                    reference,
+                    kind,
+                    value,
+                } => {
+                    let name = reference.to_secret_name();
+                    self.set_field_value_unchecked(&name, kind, value);
+                    result.changed.push(reference);
+                }
+                FieldMutation::Remove { reference } => {
+                    let name = reference.to_secret_name();
+                    if self.remove_secret(&name) {
+                        result.removed.push(reference);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn set_field_value_unchecked(
         &mut self,
         name: &SecretName,
+        kind: FieldKind,
         mut value: SecretBytes,
-    ) -> AnyResult<()> {
-        validate_secret_value_len(value.len())?;
+    ) {
         let now = now_ms();
         let created_at_ms = self
             .state
@@ -630,12 +978,12 @@ impl OpenVault {
             value_len: value.len(),
             created_at_ms,
             updated_at_ms: now,
+            kind,
         };
         value.zeroize();
         // Replaced entries are dropped here; `SecretEntry::drop` zeroizes the
         // displaced base64 value.
         self.state.secrets.insert(name.as_str().to_string(), entry);
-        Ok(())
     }
 
     pub(crate) fn remove_secret(&mut self, name: &SecretName) -> bool {
@@ -649,7 +997,7 @@ impl OpenVault {
                 format!("vault secret '{}' does not exist", name.as_str()),
             )
         })?;
-        validate_serialized_secret_value_len(name, entry)?;
+        validate_serialized_field_value_len(name, entry)?;
         // `decoded_len_estimate` may overestimate by a couple of bytes; the
         // buffer starts zeroed and is truncated to the decoded length below.
         let mut value = SecretBytes::zeroed(base64::decoded_len_estimate(entry.value_b64.len()));
@@ -675,10 +1023,8 @@ impl OpenVault {
         Ok(value)
     }
 
-    fn save_unlocked(&self, store: &VaultStore) -> AnyResult<()> {
-        let envelope = ResealedVaultEnvelope::seal(&self.file, &self.dek, &self.state)?;
-        store.write_vault_text_unlocked(&envelope.serialize_pretty()?)?;
-        Ok(())
+    fn prepare_save_unlocked(&self) -> AnyResult<ResealedVaultEnvelope> {
+        ResealedVaultEnvelope::seal(&self.file, &self.dek, &self.state)
     }
 
     pub(crate) fn append_audit(
@@ -761,6 +1107,68 @@ fn now_ms() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
 }
 
+fn validate_field_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
+    if mutations.is_empty() {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "field batch must contain at least one mutation",
+        ));
+    }
+    let mut references = BTreeSet::new();
+    for mutation in mutations {
+        let reference = mutation.reference();
+        if !references.insert(reference) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("field batch contains duplicate reference '{reference}'"),
+            ));
+        }
+        if let FieldMutation::Set { kind, value, .. } = mutation {
+            validate_field_value_len(*kind, value.len())?;
+        }
+    }
+    Ok(())
+}
+
+fn field_batch_set_audit_metadata(mutations: &[FieldMutation]) -> Vec<(VaultReference, FieldKind)> {
+    mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            FieldMutation::Set {
+                reference, kind, ..
+            } => Some((reference.clone(), *kind)),
+            FieldMutation::Remove { .. } => None,
+        })
+        .collect()
+}
+
+fn field_batch_remove_audit_metadata(mutations: &[FieldMutation]) -> Vec<VaultReference> {
+    mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            FieldMutation::Set { .. } => None,
+            FieldMutation::Remove { reference } => Some(reference.clone()),
+        })
+        .collect()
+}
+
+fn field_batch_audit_details(
+    sets: &[(VaultReference, FieldKind)],
+    removes: &[VaultReference],
+    result: &FieldBatchResult,
+) -> serde_json::Value {
+    serde_json::json!({
+        "set": sets.iter().map(|(reference, kind)| serde_json::json!({
+            "reference": reference.to_string(),
+            "kind": kind.as_str(),
+        })).collect::<Vec<_>>(),
+        "remove": removes.iter().map(|reference| serde_json::json!({
+            "reference": reference.to_string(),
+            "removed": result.removed.contains(reference),
+        })).collect::<Vec<_>>(),
+    })
+}
+
 const fn padded_base64_len(len: usize) -> usize {
     len.div_ceil(3) * 4
 }
@@ -781,8 +1189,22 @@ fn validate_secret_value_len(len: usize) -> AnyResult<()> {
     Ok(())
 }
 
-fn validate_serialized_secret_value_len(name: &SecretName, entry: &SecretEntry) -> AnyResult<()> {
-    if entry.value_len < MIN_REDACTABLE_LEN || entry.value_len > MAX_SECRET_VALUE_LEN {
+fn validate_field_value_len(kind: FieldKind, len: usize) -> AnyResult<()> {
+    if kind == FieldKind::Concealed {
+        return validate_secret_value_len(len);
+    }
+    if len > MAX_SECRET_VALUE_LEN {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("field value must be at most {MAX_SECRET_VALUE_LEN} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_serialized_field_value_len(name: &SecretName, entry: &SecretEntry) -> AnyResult<()> {
+    let too_short = entry.kind == FieldKind::Concealed && entry.value_len < MIN_REDACTABLE_LEN;
+    if too_short || entry.value_len > MAX_SECRET_VALUE_LEN {
         return Err(classified(
             VaultErrorKind::Serialization,
             format!(
