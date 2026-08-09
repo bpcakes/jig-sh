@@ -94,6 +94,34 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
                 lines.push(format!("  Removed: {}", if removed { "yes" } else { "no" }));
             }
         }
+        "vault import onepassword" => {
+            if let Some(dry_run) = value_bool(value, "dry_run") {
+                lines.push(format!("  Dry run: {}", if dry_run { "yes" } else { "no" }));
+            }
+            if let Some(destination) = value_str(value, "destination") {
+                lines.push(format!("  Destination: {destination}"));
+            }
+            if let Some(fields) = value["fields"].as_array() {
+                lines.push(format!("  Fields: {}", fields.len()));
+                for field in fields.iter().take(20) {
+                    let reference = value_str(field, "reference").unwrap_or("<unknown>");
+                    let kind = value_str(field, "kind").unwrap_or("unknown");
+                    let action = value_str(field, "action")
+                        .map(|action| format!(", {action}"))
+                        .unwrap_or_default();
+                    lines.push(format!("  - {reference} ({kind}{action})"));
+                }
+                if fields.len() > 20 {
+                    lines.push(format!("  (and {} more)", fields.len() - 20));
+                }
+            }
+            if value_bool(value, "requires_replace") == Some(true) {
+                lines.push("  Requires: --replace".into());
+            }
+            if value_bool(value, "requires_overwrite") == Some(true) {
+                lines.push("  Requires: --overwrite".into());
+            }
+        }
         "vault secret list" => {
             let secrets = value["secrets"].as_array().map(Vec::len).unwrap_or(0);
             lines.push(format!("  Secrets: {secrets}"));

@@ -104,6 +104,22 @@ owned process-tree cleanup.
 Example:
   jig vault exec --env-file .env.jig -- sh -c 'printf \"%s\" \"$TOKEN\"'";
 
+const VAULT_IMPORT_ONEPASSWORD_AFTER_HELP: &str = "\
+Imports one restricted dotenv bundle into a single vault item. Entire op://
+values are resolved with `op read --no-newline` and stored as concealed fields;
+literal values are encrypted as text fields. The generated dotenv file contains
+only canonical jig://ITEM/FIELD references in source order.
+
+1Password references must be the entire decoded value and use exactly
+op://VAULT/ITEM/FIELD or op://VAULT/ITEM/SECTION/FIELD. Jig invokes `op`
+directly with no shell and never includes its raw diagnostic output in errors.
+
+Dry-run parses and validates the source, unlocks the vault to report whether
+each field would be created or replaced, and never invokes `op` or mutates data.
+
+If destination installation fails after the atomic vault commit, rerun the same
+command with --replace --overwrite to converge without resolving ambiguity.";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -133,6 +149,9 @@ pub(crate) enum VaultCommand {
         after_help = VAULT_EXEC_AFTER_HELP
     )]
     Exec(VaultExecOpts),
+    /// Import an external environment bundle into encrypted vault fields.
+    #[command(name = tool_defs::cli_command::VAULT_IMPORT, subcommand)]
+    Import(VaultImportCommand),
     /// Render a template containing canonical vault field references.
     #[command(
         name = tool_defs::cli_command::VAULT_INJECT,
@@ -190,6 +209,42 @@ pub(crate) enum VaultFieldCommand {
     /// Remove an encrypted field from the vault.
     #[command(name = tool_defs::cli_command::VAULT_FIELD_REMOVE)]
     Remove(VaultFieldRemoveOpts),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum VaultImportCommand {
+    /// Import a restricted dotenv file whose secret values are 1Password references.
+    #[command(
+        name = tool_defs::cli_command::VAULT_IMPORT_ONEPASSWORD,
+        after_help = VAULT_IMPORT_ONEPASSWORD_AFTER_HELP
+    )]
+    OnePassword(VaultImportOnePasswordOpts),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultImportOnePasswordOpts {
+    #[arg(
+        long,
+        value_name = "SOURCE",
+        help = "Restricted UTF-8 source dotenv file; - is rejected"
+    )]
+    pub(crate) env_file: PathBuf,
+    #[arg(long, value_name = "ITEM", value_parser = parse_import_item, help = "Project-local destination item name, without jig://")]
+    pub(crate) item: VaultItem,
+    #[arg(
+        long,
+        value_name = "DESTINATION",
+        help = "Private canonical dotenv file to install atomically"
+    )]
+    pub(crate) out_env: PathBuf,
+    #[arg(long, action = ArgAction::SetTrue, help = "Allow existing destination vault fields to be replaced")]
+    pub(crate) replace: bool,
+    #[arg(long, action = ArgAction::SetTrue, help = "Allow an existing destination dotenv file to be replaced")]
+    pub(crate) overwrite: bool,
+    #[arg(long, action = ArgAction::SetTrue, help = "Validate and report create/replace actions without invoking op or mutating")]
+    pub(crate) dry_run: bool,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
 }
 
 #[derive(Args, Clone, Debug, Default)]
@@ -465,6 +520,13 @@ fn parse_vault_item(value: &str) -> Result<VaultItem, String> {
     value
         .parse::<VaultItem>()
         .map_err(|error| error.to_string())
+}
+
+fn parse_import_item(value: &str) -> Result<VaultItem, String> {
+    if value.starts_with("jig:") {
+        return Err("--item takes the project-local item name, without jig://".to_owned());
+    }
+    VaultItem::parse(&format!("jig://{value}")).map_err(|error| error.to_string())
 }
 
 fn parse_vault_migration_target(value: &str) -> Result<u32, String> {

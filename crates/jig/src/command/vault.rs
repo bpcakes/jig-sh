@@ -12,6 +12,7 @@ pub(crate) enum VaultCommand {
     Status(VaultStatusRequest),
     Migrate(VaultMigrateRequest),
     Exec(VaultExecRequest),
+    Import(VaultImportCommand),
     Field(VaultFieldCommand),
     Inject(VaultInjectRequest),
     Read(VaultReadRequest),
@@ -36,6 +37,11 @@ pub(crate) enum VaultFieldCommand {
     List(VaultFieldListRequest),
     Set(VaultFieldSetRequest),
     Remove(VaultFieldRemoveRequest),
+}
+
+#[derive(Debug)]
+pub(crate) enum VaultImportCommand {
+    OnePassword(VaultImportOnePasswordRequest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -176,6 +182,87 @@ pub(crate) struct VaultExecRequest {
     pub(crate) vault: VaultRuntimeOptions,
 }
 
+pub(crate) struct VaultImportOnePasswordRequest {
+    pub(crate) env_file: PathBuf,
+    pub(crate) environment: Option<VaultImportEnvironment>,
+    pub(crate) destination_exists: Option<bool>,
+    pub(crate) item: VaultItem,
+    pub(crate) out_env: PathBuf,
+    pub(crate) replace: bool,
+    pub(crate) overwrite: bool,
+    pub(crate) dry_run: bool,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+pub(crate) struct VaultImportEnvironment {
+    pub(crate) assignments: Vec<VaultImportAssignment>,
+}
+
+pub(crate) struct VaultImportAssignment {
+    pub(crate) line: usize,
+    pub(crate) name: String,
+    pub(crate) reference: VaultReference,
+    pub(crate) source: VaultImportValueSource,
+}
+
+pub(crate) enum VaultImportValueSource {
+    Literal(SecretBytes),
+    OnePassword(SecretBytes),
+}
+
+impl std::fmt::Debug for VaultImportOnePasswordRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultImportOnePasswordRequest")
+            .field("env_file", &self.env_file)
+            .field("environment", &self.environment)
+            .field("destination_exists", &self.destination_exists)
+            .field("item", &self.item)
+            .field("out_env", &self.out_env)
+            .field("replace", &self.replace)
+            .field("overwrite", &self.overwrite)
+            .field("dry_run", &self.dry_run)
+            .field("vault", &self.vault)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultImportEnvironment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultImportEnvironment")
+            .field("assignments", &self.assignments)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultImportAssignment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultImportAssignment")
+            .field("line", &self.line)
+            .field("name", &self.name)
+            .field("reference", &self.reference)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultImportValueSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (kind, value) = match self {
+            Self::Literal(value) => ("literal", value),
+            Self::OnePassword(value) => ("onepassword", value),
+        };
+        formatter
+            .debug_struct("VaultImportValueSource")
+            .field("kind", &kind)
+            .field("len", &value.len())
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
 pub(crate) struct VaultExecEnvironment {
     pub(crate) assignments: Vec<VaultExecAssignment>,
 }
@@ -249,7 +336,8 @@ pub(crate) struct VaultRunRequest {
 mod tests {
     use super::{
         VaultExecAssignment, VaultExecEnvironment, VaultExecRequest, VaultExecValue,
-        VaultRuntimeOptions, is_valid_vault_scope_id,
+        VaultImportAssignment, VaultImportEnvironment, VaultImportOnePasswordRequest,
+        VaultImportValueSource, VaultRuntimeOptions, is_valid_vault_scope_id,
     };
 
     #[test]
@@ -282,5 +370,46 @@ mod tests {
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("literal-do-not-print"));
         assert!(!debug.contains("argv-do-not-print"));
+    }
+
+    #[test]
+    fn import_request_debug_redacts_literal_and_onepassword_values() {
+        let reference = jig_vault::VaultReference::parse("jig://Production/TOKEN").unwrap();
+        let request = VaultImportOnePasswordRequest {
+            env_file: ".env.op".into(),
+            environment: Some(VaultImportEnvironment {
+                assignments: vec![
+                    VaultImportAssignment {
+                        line: 1,
+                        name: "TOKEN".to_owned(),
+                        reference,
+                        source: VaultImportValueSource::OnePassword(jig_vault::SecretBytes::new(
+                            b"op://debug-do-not-print/item/field".to_vec(),
+                        )),
+                    },
+                    VaultImportAssignment {
+                        line: 2,
+                        name: "MODE".to_owned(),
+                        reference: jig_vault::VaultReference::parse("jig://Production/MODE")
+                            .unwrap(),
+                        source: VaultImportValueSource::Literal(jig_vault::SecretBytes::new(
+                            b"literal-do-not-print".to_vec(),
+                        )),
+                    },
+                ],
+            }),
+            destination_exists: Some(false),
+            item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+            out_env: ".env.jig".into(),
+            replace: false,
+            overwrite: false,
+            dry_run: false,
+            vault: VaultRuntimeOptions::default(),
+        };
+
+        let debug = format!("{request:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("op://debug-do-not-print"));
+        assert!(!debug.contains("literal-do-not-print"));
     }
 }

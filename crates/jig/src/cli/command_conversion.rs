@@ -11,12 +11,12 @@ use super::{
     ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
     VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultExecOpts, VaultFieldCommand,
-    VaultFieldListOpts, VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultInjectOpts,
-    VaultMigrateOpts, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
-    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
-    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
-    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
-    WorkStartOpts,
+    VaultFieldListOpts, VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand,
+    VaultImportOnePasswordOpts, VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultReadOpts,
+    VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
+    VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand,
+    WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts,
+    WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -99,11 +99,36 @@ impl From<VaultCommand> for command::VaultCommand {
             VaultCommand::Status(opts) => Self::Status(opts.into()),
             VaultCommand::Migrate(opts) => Self::Migrate(opts.into()),
             VaultCommand::Exec(opts) => Self::Exec(opts.into()),
+            VaultCommand::Import(command) => Self::Import(command.into()),
             VaultCommand::Field(command) => Self::Field(command.into()),
             VaultCommand::Inject(opts) => Self::Inject(opts.into()),
             VaultCommand::Read(opts) => Self::Read(opts.into()),
             VaultCommand::Secret(command) => Self::Secret(command.into()),
             VaultCommand::Run(opts) => Self::Run(opts.into()),
+        }
+    }
+}
+
+impl From<VaultImportCommand> for command::VaultImportCommand {
+    fn from(command: VaultImportCommand) -> Self {
+        match command {
+            VaultImportCommand::OnePassword(opts) => Self::OnePassword(opts.into()),
+        }
+    }
+}
+
+impl From<VaultImportOnePasswordOpts> for command::VaultImportOnePasswordRequest {
+    fn from(opts: VaultImportOnePasswordOpts) -> Self {
+        Self {
+            env_file: opts.env_file,
+            environment: None,
+            destination_exists: None,
+            item: opts.item,
+            out_env: opts.out_env,
+            replace: opts.replace,
+            overwrite: opts.overwrite,
+            dry_run: opts.dry_run,
+            vault: opts.vault.into(),
         }
     }
 }

@@ -126,6 +126,8 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT_FIELD_REMOVE: &str = "remove";
     pub(crate) const VAULT_FIELD_SET: &str = "set";
     pub(crate) const VAULT_EXEC: &str = "exec";
+    pub(crate) const VAULT_IMPORT: &str = "import";
+    pub(crate) const VAULT_IMPORT_ONEPASSWORD: &str = "onepassword";
     pub(crate) const VAULT_INIT: &str = "init";
     pub(crate) const VAULT_INJECT: &str = "inject";
     pub(crate) const VAULT_MIGRATE: &str = "migrate";

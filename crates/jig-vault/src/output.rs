@@ -1,8 +1,77 @@
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use anyhow::Error;
 
-use crate::VaultErrorKind;
+use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
+
+/// A fully written and synced private sibling file awaiting atomic install.
+///
+/// Preparation does not change the destination. Dropping an uninstalled value
+/// removes only the generated same-directory temporary file.
+pub struct PreparedPrivateFile {
+    inner: PreparedPrivateOutput,
+    destination: PathBuf,
+    overwrite: bool,
+    byte_len: usize,
+}
+
+impl PreparedPrivateFile {
+    /// Validates a destination and overwrite policy without creating a file.
+    ///
+    /// This is suitable for dry-run reporting. It checks the same supported
+    /// platform, parent, ancestor, and current leaf conditions as preparation,
+    /// but installation still rechecks them to close ordinary races.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination cannot be hardened or the current
+    /// leaf conflicts with `overwrite`.
+    pub fn preflight(destination: &Path, overwrite: bool) -> Result<()> {
+        preflight_private_destination(destination, overwrite).map_err(output_failure_to_vault_error)
+    }
+
+    /// Writes and syncs an owner-only temporary file beside `destination`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when path hardening, overwrite preflight, private
+    /// creation, writing, or syncing fails. Platforms without the required
+    /// guarantees reject preparation.
+    pub fn prepare(destination: &Path, contents: SecretBytes, overwrite: bool) -> Result<Self> {
+        let byte_len = contents.len();
+        let inner = prepare_private_bytes(destination, contents.as_slice(), overwrite)
+            .map_err(output_failure_to_vault_error)?;
+        Ok(Self {
+            inner,
+            destination: destination.to_path_buf(),
+            overwrite,
+            byte_len,
+        })
+    }
+
+    /// Atomically installs the prepared file according to its overwrite policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when close-to-install path checks or the atomic
+    /// namespace operation fail.
+    pub fn install(self) -> Result<()> {
+        install_prepared_private(self.inner).map_err(output_failure_to_vault_error)
+    }
+}
+
+impl fmt::Debug for PreparedPrivateFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedPrivateFile")
+            .field("destination", &self.destination)
+            .field("overwrite", &self.overwrite)
+            .field("byte_len", &self.byte_len)
+            .field("contents", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputFailureStage {
@@ -26,13 +95,18 @@ pub(crate) struct OutputInstallFailure {
     pub(crate) error: Error,
 }
 
+fn output_failure_to_vault_error(failure: OutputInstallFailure) -> VaultError {
+    VaultError::from_anyhow(failure.kind, failure.error)
+}
+
 #[cfg(unix)]
 pub(crate) fn install_private_bytes(
     path: &Path,
     bytes: &[u8],
     overwrite: bool,
-) -> Result<(), OutputInstallFailure> {
-    unix::install_private_bytes(path, bytes, overwrite)
+) -> std::result::Result<(), OutputInstallFailure> {
+    let prepared = prepare_private_bytes(path, bytes, overwrite)?;
+    install_prepared_private(prepared)
 }
 
 #[cfg(not(unix))]
@@ -40,15 +114,74 @@ pub(crate) fn install_private_bytes(
     path: &Path,
     _bytes: &[u8],
     _overwrite: bool,
-) -> Result<(), OutputInstallFailure> {
-    Err(OutputInstallFailure {
+) -> std::result::Result<(), OutputInstallFailure> {
+    Err(unsupported_private_output(path))
+}
+
+#[cfg(unix)]
+type PreparedPrivateOutput = unix::PreparedPrivateOutput;
+
+#[cfg(unix)]
+fn prepare_private_bytes(
+    path: &Path,
+    bytes: &[u8],
+    overwrite: bool,
+) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
+    unix::prepare_private_bytes(path, bytes, overwrite)
+}
+
+#[cfg(unix)]
+fn install_prepared_private(
+    prepared: PreparedPrivateOutput,
+) -> std::result::Result<(), OutputInstallFailure> {
+    prepared.install()
+}
+
+#[cfg(unix)]
+fn preflight_private_destination(
+    path: &Path,
+    overwrite: bool,
+) -> std::result::Result<(), OutputInstallFailure> {
+    unix::preflight_private_destination(path, overwrite)
+}
+
+#[cfg(not(unix))]
+struct PreparedPrivateOutput;
+
+#[cfg(not(unix))]
+fn prepare_private_bytes(
+    path: &Path,
+    _bytes: &[u8],
+    _overwrite: bool,
+) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
+    Err(unsupported_private_output(path))
+}
+
+#[cfg(not(unix))]
+fn install_prepared_private(
+    _prepared: PreparedPrivateOutput,
+) -> std::result::Result<(), OutputInstallFailure> {
+    unreachable!("unsupported platforms cannot construct prepared private output")
+}
+
+#[cfg(not(unix))]
+fn preflight_private_destination(
+    path: &Path,
+    _overwrite: bool,
+) -> std::result::Result<(), OutputInstallFailure> {
+    Err(unsupported_private_output(path))
+}
+
+#[cfg(not(unix))]
+fn unsupported_private_output(path: &Path) -> OutputInstallFailure {
+    OutputInstallFailure {
         stage: OutputFailureStage::Preflight,
         kind: VaultErrorKind::InvalidInput,
         error: anyhow::anyhow!(
             "private vault output to {} is unsupported on this platform because Jig cannot guarantee owner-only ACLs, reparse-point refusal, and atomic no-clobber installation",
             path.display()
         ),
-    })
+    }
 }
 
 #[cfg(unix)]
@@ -64,21 +197,68 @@ mod unix {
     use super::{OutputFailureStage, OutputInstallFailure};
     use crate::VaultErrorKind;
 
-    pub(super) fn install_private_bytes(
+    pub(super) fn preflight_private_destination(
+        path: &Path,
+        overwrite: bool,
+    ) -> Result<(), OutputInstallFailure> {
+        preflight(path, overwrite)
+            .map(|_| ())
+            .map_err(|error| OutputInstallFailure {
+                stage: OutputFailureStage::Preflight,
+                kind: preflight_error_kind(&error),
+                error,
+            })
+    }
+
+    pub(super) fn prepare_private_bytes(
         path: &Path,
         bytes: &[u8],
         overwrite: bool,
-    ) -> Result<(), OutputInstallFailure> {
-        let prepared = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
+    ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
+        let path = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
             stage: OutputFailureStage::Preflight,
             kind: preflight_error_kind(&error),
             error,
         })?;
-        install(prepared, bytes, overwrite).map_err(|error| OutputInstallFailure {
-            stage: OutputFailureStage::Sink,
-            kind: install_error_kind(&error),
-            error,
+        if let Err(error) = write_temporary(&path, bytes) {
+            let _ = fs::remove_file(&path.temporary);
+            return Err(OutputInstallFailure {
+                stage: OutputFailureStage::Sink,
+                kind: install_error_kind(&error),
+                error,
+            });
+        }
+        Ok(PreparedPrivateOutput {
+            path: Some(path),
+            overwrite,
         })
+    }
+
+    pub(super) struct PreparedPrivateOutput {
+        path: Option<PreparedPath>,
+        overwrite: bool,
+    }
+
+    impl PreparedPrivateOutput {
+        pub(super) fn install(mut self) -> Result<(), OutputInstallFailure> {
+            let path = self
+                .path
+                .take()
+                .expect("prepared private output installs at most once");
+            install(path, self.overwrite).map_err(|error| OutputInstallFailure {
+                stage: OutputFailureStage::Sink,
+                kind: install_error_kind(&error),
+                error,
+            })
+        }
+    }
+
+    impl Drop for PreparedPrivateOutput {
+        fn drop(&mut self) {
+            if let Some(path) = self.path.take() {
+                let _ = fs::remove_file(path.temporary);
+            }
+        }
     }
 
     struct PreparedPath {
@@ -120,58 +300,60 @@ mod unix {
         })
     }
 
-    fn install(prepared: PreparedPath, bytes: &[u8], overwrite: bool) -> anyhow::Result<()> {
+    fn write_temporary(prepared: &PreparedPath, bytes: &[u8]) -> anyhow::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&prepared.temporary)
+            .with_context(|| {
+                format!(
+                    "failed to create private output temporary file beside {}",
+                    prepared.destination.display()
+                )
+            })?;
+        file.write_all(bytes).with_context(|| {
+            format!(
+                "failed to write private vault output {}",
+                prepared.destination.display()
+            )
+        })?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "failed to restrict private vault output permissions for {}",
+                    prepared.destination.display()
+                )
+            })?;
+        let metadata = file.metadata().with_context(|| {
+            format!(
+                "failed to inspect private vault output temporary file for {}",
+                prepared.destination.display()
+            )
+        })?;
+        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+            bail!(
+                "private vault output temporary file is not an owner-only regular file for {}",
+                prepared.destination.display()
+            );
+        }
+        file.sync_all().with_context(|| {
+            format!(
+                "failed to sync private vault output {}",
+                prepared.destination.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    fn install(prepared: PreparedPath, overwrite: bool) -> anyhow::Result<()> {
         let PreparedPath {
             destination,
             parent,
             temporary,
         } = prepared;
         let result = (|| -> anyhow::Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&temporary)
-                .with_context(|| {
-                    format!(
-                        "failed to create private output temporary file beside {}",
-                        destination.display()
-                    )
-                })?;
-            file.write_all(bytes).with_context(|| {
-                format!(
-                    "failed to write private vault output {}",
-                    destination.display()
-                )
-            })?;
-            file.set_permissions(fs::Permissions::from_mode(0o600))
-                .with_context(|| {
-                    format!(
-                        "failed to restrict private vault output permissions for {}",
-                        destination.display()
-                    )
-                })?;
-            let metadata = file.metadata().with_context(|| {
-                format!(
-                    "failed to inspect private vault output temporary file for {}",
-                    destination.display()
-                )
-            })?;
-            if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-                bail!(
-                    "private vault output temporary file is not an owner-only regular file for {}",
-                    destination.display()
-                );
-            }
-            file.sync_all().with_context(|| {
-                format!(
-                    "failed to sync private vault output {}",
-                    destination.display()
-                )
-            })?;
-            drop(file);
-
             // Recheck immediately before the atomic namespace operation. This
             // narrows same-user directory-entry races without claiming an OS
             // isolation boundary stronger than the containing directory.
@@ -280,10 +462,11 @@ mod unix {
     }
 
     fn install_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-        if error
-            .chain()
-            .filter_map(|source| source.downcast_ref::<std::io::Error>())
-            .any(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
+        if error.to_string().contains("already exists")
+            || error
+                .chain()
+                .filter_map(|source| source.downcast_ref::<std::io::Error>())
+                .any(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
         {
             VaultErrorKind::AlreadyExists
         } else {
@@ -295,6 +478,14 @@ mod unix {
     mod tests {
         use super::*;
         use std::os::unix::fs::{PermissionsExt, symlink};
+
+        fn install_private_bytes(
+            path: &Path,
+            bytes: &[u8],
+            overwrite: bool,
+        ) -> std::result::Result<(), OutputInstallFailure> {
+            prepare_private_bytes(path, bytes, overwrite)?.install()
+        }
 
         #[test]
         fn installs_owner_only_bytes_without_clobbering() {
@@ -317,6 +508,75 @@ mod unix {
                 fs::metadata(&output).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+        }
+
+        #[test]
+        fn public_prepared_file_is_private_redacted_and_installs_only_when_consumed() {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("import.env");
+            let contents = b"TOKEN=jig://Production/TOKEN\n";
+            let prepared = crate::PreparedPrivateFile::prepare(
+                &output,
+                crate::SecretBytes::new(contents.to_vec()),
+                false,
+            )
+            .unwrap();
+            assert!(!output.exists());
+            let debug = format!("{prepared:?}");
+            assert!(debug.contains("[REDACTED]"));
+            assert!(!debug.contains("jig://Production/TOKEN"));
+
+            let temporary = fs::read_dir(temp.path())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .next()
+                .unwrap();
+            assert_eq!(fs::read(&temporary).unwrap(), contents);
+            assert_eq!(
+                fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+
+            prepared.install().unwrap();
+            assert_eq!(fs::read(&output).unwrap(), contents);
+            assert_eq!(
+                fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn public_preflight_is_non_writing_and_applies_overwrite_policy() {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("import.env");
+            crate::PreparedPrivateFile::preflight(&output, false).unwrap();
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+
+            fs::write(&output, b"existing").unwrap();
+            let collision = crate::PreparedPrivateFile::preflight(&output, false).unwrap_err();
+            assert_eq!(collision.kind(), VaultErrorKind::AlreadyExists);
+            crate::PreparedPrivateFile::preflight(&output, true).unwrap();
+            assert_eq!(fs::read(&output).unwrap(), b"existing");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn prepared_no_clobber_rechecks_destination_and_cleans_its_temporary() {
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("import.env");
+            let prepared = crate::PreparedPrivateFile::prepare(
+                &output,
+                crate::SecretBytes::new(b"prepared".to_vec()),
+                false,
+            )
+            .unwrap();
+            fs::write(&output, b"raced-existing").unwrap();
+
+            let error = prepared.install().unwrap_err();
+            assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+            assert_eq!(fs::read(&output).unwrap(), b"raced-existing");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
         }
 
         #[test]

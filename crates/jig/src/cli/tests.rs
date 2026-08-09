@@ -1072,6 +1072,49 @@ fn parses_vault_commands() {
         other => panic!("expected vault exec command, got {other:?}"),
     }
 
+    let import = Cli::try_parse_from([
+        "jig",
+        "vault",
+        "import",
+        "onepassword",
+        "--env-file",
+        ".env.op",
+        "--item",
+        "Production",
+        "--out-env",
+        ".env.jig",
+        "--replace",
+        "--overwrite",
+        "--dry-run",
+    ])
+    .unwrap();
+    match import.command {
+        CommandKind::Vault(VaultCommand::Import(VaultImportCommand::OnePassword(opts))) => {
+            assert_eq!(opts.env_file, PathBuf::from(".env.op"));
+            assert_eq!(opts.item.to_string(), "jig://Production");
+            assert_eq!(opts.out_env, PathBuf::from(".env.jig"));
+            assert!(opts.replace);
+            assert!(opts.overwrite);
+            assert!(opts.dry_run);
+        }
+        other => panic!("expected vault onepassword import command, got {other:?}"),
+    }
+    assert!(
+        Cli::try_parse_from([
+            "jig",
+            "vault",
+            "import",
+            "onepassword",
+            "--env-file",
+            ".env.op",
+            "--item",
+            "jig://Production",
+            "--out-env",
+            ".env.jig",
+        ])
+        .is_err()
+    );
+
     let set = Cli::try_parse_from([
         "jig",
         "vault",

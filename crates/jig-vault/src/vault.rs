@@ -50,6 +50,8 @@ use envelope::{
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
+const MAX_IMPORT_FIELDS: usize = 1_024;
+const MAX_IMPORT_VALUE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Vault {
@@ -233,6 +235,48 @@ impl Vault {
         mutations: Vec<FieldMutation>,
     ) -> Result<FieldBatchResult> {
         self.store.apply_field_batch(passphrase, mutations)
+    }
+
+    /// Reports which proposed import references already exist in a writable
+    /// version-two vault, without appending audit state or mutating fields.
+    ///
+    /// Returned booleans preserve the input order. The vault and its audit
+    /// chain are verified together under one lock so dry-run collision reports
+    /// are based on one consistent snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, duplicate, or oversized reference set,
+    /// a version-one vault, failed unlock, or invalid audit chain.
+    pub fn preview_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<Vec<bool>> {
+        self.store.preview_import_fields(passphrase, references)
+    }
+
+    /// Atomically imports one batch of canonical encrypted fields.
+    ///
+    /// Imports accept only set mutations. With `replace == false`, any field
+    /// collision aborts the whole batch. Collision checks, audit verification,
+    /// the single `onepassword_import` intent, and state preparation all occur
+    /// under one vault lock; the exact serialized envelope is bounded before
+    /// that intent is appended and atomically saved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without mutation for invalid input, a version-one
+    /// vault, an existing field without replacement permission, audit failure,
+    /// or an oversized final state. A save failure may leave the import intent
+    /// ahead of state, matching the vault's mutation invariant.
+    pub fn import_fields(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.store.import_fields(passphrase, mutations, replace)
     }
 
     /// Writes one canonical field to a caller-selected stream as exact bytes.
@@ -1196,6 +1240,55 @@ impl VaultStore {
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
+    pub(crate) fn preview_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<Vec<bool>> {
+        validate_import_references(references)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault.verify_audit_unlocked(self).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit chain verification failed",
+                    error,
+                )
+            })?;
+            vault.ensure_field_format_v2()?;
+            Ok(references
+                .iter()
+                .map(|reference| vault.contains_field(reference))
+                .collect())
+        })
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn import_fields(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        validate_import_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let fields = field_batch_set_audit_metadata(&mutations);
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::OnePasswordImport,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                if !replace {
+                    reject_import_collisions(vault, &fields)?;
+                }
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |_| onepassword_import_audit_details(&fields),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
     fn prepare_field_read(
         &self,
         passphrase: &SecretString,
@@ -1535,6 +1628,12 @@ impl OpenVault {
             ));
         }
         Ok(())
+    }
+
+    fn contains_field(&self, reference: &VaultReference) -> bool {
+        self.state
+            .secrets
+            .contains_key(reference.to_secret_name().as_str())
     }
 
     pub(crate) fn set_secret(&mut self, name: &SecretName, value: SecretBytes) -> AnyResult<()> {
@@ -1970,6 +2069,86 @@ fn validate_field_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
     Ok(())
 }
 
+fn validate_import_references(references: &[VaultReference]) -> AnyResult<()> {
+    if references.is_empty() {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "onepassword import must contain at least one field reference",
+        ));
+    }
+    if references.len() > MAX_IMPORT_FIELDS {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("onepassword import exceeds the {MAX_IMPORT_FIELDS} field limit"),
+        ));
+    }
+    let mut unique = BTreeSet::new();
+    for reference in references {
+        if !unique.insert(reference) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("onepassword import contains duplicate reference '{reference}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_import_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
+    validate_field_mutations(mutations)?;
+    if mutations.len() > MAX_IMPORT_FIELDS {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("onepassword import exceeds the {MAX_IMPORT_FIELDS} field limit"),
+        ));
+    }
+    let mut total_value_bytes = 0_usize;
+    for mutation in mutations {
+        let FieldMutation::Set { value, .. } = mutation else {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                "onepassword import accepts only field set mutations",
+            ));
+        };
+        total_value_bytes = total_value_bytes.checked_add(value.len()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                "onepassword import value bytes exceed supported bounds",
+            )
+        })?;
+        if total_value_bytes > MAX_IMPORT_VALUE_BYTES {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "onepassword import exceeds the {MAX_IMPORT_VALUE_BYTES} byte decoded value limit"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_import_collisions(
+    vault: &OpenVault,
+    fields: &[(VaultReference, FieldKind)],
+) -> AnyResult<()> {
+    let collisions = fields
+        .iter()
+        .filter(|(reference, _)| vault.contains_field(reference))
+        .map(|(reference, _)| reference.to_string())
+        .collect::<Vec<_>>();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    Err(classified(
+        VaultErrorKind::AlreadyExists,
+        format!(
+            "onepassword import would replace existing fields without --replace: {}",
+            collisions.join(", ")
+        ),
+    ))
+}
+
 fn field_batch_set_audit_metadata(mutations: &[FieldMutation]) -> Vec<(VaultReference, FieldKind)> {
     mutations
         .iter()
@@ -2005,6 +2184,22 @@ fn field_batch_audit_details(
         "remove": removes.iter().map(|reference| serde_json::json!({
             "reference": reference.to_string(),
             "removed": result.removed.contains(reference),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn onepassword_import_audit_details(fields: &[(VaultReference, FieldKind)]) -> serde_json::Value {
+    let concealed_count = fields
+        .iter()
+        .filter(|(_, kind)| *kind == FieldKind::Concealed)
+        .count();
+    serde_json::json!({
+        "field_count": fields.len(),
+        "concealed_count": concealed_count,
+        "text_count": fields.len() - concealed_count,
+        "fields": fields.iter().map(|(reference, kind)| serde_json::json!({
+            "reference": reference.to_string(),
+            "kind": kind.as_str(),
         })).collect::<Vec<_>>(),
     })
 }

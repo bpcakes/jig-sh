@@ -26,7 +26,7 @@ fn run_vault_command_with_stdout_terminal(
     let mut runtime_command: crate::command::VaultCommand = command.into();
     let is_raw = vault_command_uses_raw_output(&runtime_command);
     validate_raw_vault_command(&runtime_command, json_output, stdout_is_terminal)?;
-    if is_raw {
+    if vault_command_needs_input_preparation(&runtime_command) {
         runtime::prepare_vault_raw_input(&mut runtime_command)?;
     }
     apply_repo_vault_scope(&mut runtime_command)?;
@@ -56,6 +56,11 @@ fn run_vault_command_with_stdout_terminal(
         return finish_after_json_output(require_vault_child_status_ok(&output), json_output);
     }
     finish_after_json_output(require_json_ok(true, &output), json_output)
+}
+
+const fn vault_command_needs_input_preparation(command: &crate::command::VaultCommand) -> bool {
+    vault_command_uses_raw_output(command)
+        || matches!(command, crate::command::VaultCommand::Import(_))
 }
 
 const fn vault_command_uses_raw_output(command: &crate::command::VaultCommand) -> bool {
@@ -251,6 +256,9 @@ pub(super) const fn vault_options_mut(
         crate::command::VaultCommand::Status(request) => &mut request.vault,
         crate::command::VaultCommand::Migrate(request) => &mut request.vault,
         crate::command::VaultCommand::Exec(request) => &mut request.vault,
+        crate::command::VaultCommand::Import(command) => match command {
+            crate::command::VaultImportCommand::OnePassword(request) => &mut request.vault,
+        },
         crate::command::VaultCommand::Field(command) => match command {
             crate::command::VaultFieldCommand::List(request) => &mut request.vault,
             crate::command::VaultFieldCommand::Set(request) => &mut request.vault,

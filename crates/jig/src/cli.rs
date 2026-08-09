@@ -47,9 +47,10 @@ pub(crate) use state::{
 pub(crate) use status_opts::StatusOpts;
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultExecOpts, VaultFieldCommand,
-    VaultFieldListOpts, VaultFieldRemoveOpts, VaultFieldSetOpts, VaultInitOpts, VaultInjectOpts,
-    VaultMigrateOpts, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
-    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
+    VaultFieldListOpts, VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand,
+    VaultImportOnePasswordOpts, VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultReadOpts,
+    VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
+    VaultSecretSetOpts, VaultStatusOpts,
 };
 pub(crate) use work::{
     WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
@@ -190,6 +191,7 @@ Quick start:
   jig vault read jig://Production/RESTIC_PASSWORD | command
   jig vault inject --in config.template > config
   jig vault exec --env-file .env.jig -- command
+  jig vault import onepassword --env-file .env.op --item Production --out-env .env.jig
   jig vault secret set api_token --value-prompt
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'";

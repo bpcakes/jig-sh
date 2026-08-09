@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_vault::{
     BrokeredEnv, BrokeredFile, BrokeredRun, EnvVarName, ExecEnvBinding, FieldKind,
-    InjectionTemplate, MAX_SECRET_VALUE_LEN, SecretBytes, Vault, VaultExec,
+    InjectionTemplate, MAX_SECRET_VALUE_LEN, PreparedPrivateFile, SecretBytes, Vault, VaultExec,
     validate_new_vault_passphrase,
 };
 use secrecy::SecretString;
@@ -20,10 +20,11 @@ use zeroize::Zeroizing;
 
 use crate::command::{
     VaultAuditCommand, VaultCommand, VaultExecRequest, VaultExecValue, VaultFieldCommand,
-    VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultInitRequest,
-    VaultInjectRequest, VaultMigrateRequest, VaultReadRequest, VaultRepoScope, VaultRunRequest,
-    VaultRuntimeOptions, VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest,
-    VaultSecretRemoveRequest, VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest,
+    VaultFieldListRequest, VaultFieldRemoveRequest, VaultFieldSetRequest, VaultImportCommand,
+    VaultImportOnePasswordRequest, VaultInitRequest, VaultInjectRequest, VaultMigrateRequest,
+    VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions, VaultScopeSelection,
+    VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest, VaultSecretSetRequest,
+    VaultSecretValueSource, VaultStatusRequest,
 };
 
 use super::VaultRawOutcome;
@@ -48,6 +49,9 @@ pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
         },
         VaultCommand::Exec(_) | VaultCommand::Inject(_) | VaultCommand::Read(_) => {
             bail!("internal error: raw vault output reached the structured dispatcher")
+        }
+        VaultCommand::Import(VaultImportCommand::OnePassword(request)) => {
+            import_onepassword(request)
         }
         VaultCommand::Secret(command) => match command {
             VaultSecretCommand::List(request) => list(request),
@@ -78,9 +82,161 @@ pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
             request.template = Some(InjectionTemplate::parse(bytes)?);
             Ok(())
         }
+        VaultCommand::Import(VaultImportCommand::OnePassword(request)) => {
+            request.environment = Some(super::vault_env::parse_onepassword_env_file(
+                &request.env_file,
+                &request.item,
+            )?);
+            let destination_exists = super::vault_import::preflight_destination(&request.out_env)?;
+            if destination_exists && !request.overwrite && !request.dry_run {
+                bail!(
+                    "vault import destination {} already exists; pass --overwrite to replace it atomically",
+                    request.out_env.display()
+                );
+            }
+            PreparedPrivateFile::preflight(
+                &request.out_env,
+                request.overwrite || (request.dry_run && destination_exists),
+            )?;
+            request.destination_exists = Some(destination_exists);
+            Ok(())
+        }
         VaultCommand::Read(_) => Ok(()),
         _ => bail!("internal error: structured vault command reached raw input preparation"),
     }
+}
+
+fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Value> {
+    let environment = request.environment.take().ok_or_else(|| {
+        anyhow!("internal error: vault onepassword import input was not prepared")
+    })?;
+    let destination_exists = request.destination_exists.ok_or_else(|| {
+        anyhow!("internal error: vault onepassword import destination was not preflighted")
+    })?;
+    let entries = super::vault_import::import_entries(&environment);
+    let references = entries
+        .iter()
+        .map(|entry| entry.reference.clone())
+        .collect::<Vec<_>>();
+    let resolved = resolve_vault_runtime(&request.vault)?;
+    let vault = vault(&resolved)?;
+    // Compute the exact recovery command before unlock, external resolution,
+    // or mutation. This rejects non-UTF-8 path metadata rather than emitting a
+    // lossy command only after a post-commit destination failure.
+    let recovery_command = onepassword_import_recovery_command(&request, vault.root())?;
+    let passphrase = passphrase()?;
+    let existing = vault.preview_import_fields(&passphrase, &references)?;
+
+    if request.dry_run {
+        let fields = entries
+            .iter()
+            .zip(&existing)
+            .map(|(entry, exists)| {
+                json!({
+                    "variable": entry.name,
+                    "reference": entry.reference.to_string(),
+                    "kind": field_kind_label(&entry.kind),
+                    "action": if *exists { "replace" } else { "create" },
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut output = json!({
+            "ok": true,
+            "command": "vault import onepassword",
+            "dry_run": true,
+            "vault_home": vault.root().display().to_string(),
+            "source": request.env_file.display().to_string(),
+            "destination": request.out_env.display().to_string(),
+            "destination_action": if destination_exists { "replace" } else { "create" },
+            "requires_overwrite": destination_exists && !request.overwrite,
+            "requires_replace": existing.iter().any(|exists| *exists) && !request.replace,
+            "fields": fields,
+        });
+        add_vault_scope_fields(&mut output, &resolved);
+        return Ok(output);
+    }
+
+    if !request.replace {
+        if let Some((entry, _)) = entries.iter().zip(&existing).find(|(_, exists)| **exists) {
+            bail!(
+                "vault field '{}' already exists; pass --replace to replace existing import fields",
+                entry.reference
+            );
+        }
+    }
+
+    let imported = super::vault_import::resolve_import(environment)?;
+    let prepared =
+        PreparedPrivateFile::prepare(&request.out_env, imported.destination, request.overwrite)?;
+    let result = vault.import_fields(&passphrase, imported.mutations, request.replace)?;
+    if let Err(error) = prepared.install() {
+        bail!(
+            "vault import succeeded, but destination installation failed: {error}. Safe rerun: {}",
+            recovery_command
+        );
+    }
+
+    let fields = imported
+        .entries
+        .iter()
+        .map(|entry| {
+            json!({
+                "variable": entry.name,
+                "reference": entry.reference.to_string(),
+                "kind": field_kind_label(&entry.kind),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut output = json!({
+        "ok": true,
+        "command": "vault import onepassword",
+        "dry_run": false,
+        "vault_home": vault.root().display().to_string(),
+        "source": request.env_file.display().to_string(),
+        "destination": request.out_env.display().to_string(),
+        "changed": result.changed.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "fields": fields,
+    });
+    add_vault_scope_fields(&mut output, &resolved);
+    Ok(output)
+}
+
+fn onepassword_import_recovery_command(
+    request: &VaultImportOnePasswordRequest,
+    vault_home: &Path,
+) -> Result<String> {
+    let source = exact_recovery_path("source", &request.env_file)?;
+    let destination = exact_recovery_path("destination", &request.out_env)?;
+    let vault_home = exact_recovery_path("vault home", vault_home)?;
+    Ok([
+        "jig".to_owned(),
+        "vault".to_owned(),
+        "import".to_owned(),
+        "onepassword".to_owned(),
+        "--env-file".to_owned(),
+        shell_quote(source),
+        "--item".to_owned(),
+        shell_quote(request.item.as_str()),
+        "--out-env".to_owned(),
+        shell_quote(destination),
+        "--replace".to_owned(),
+        "--overwrite".to_owned(),
+        "--home".to_owned(),
+        shell_quote(vault_home),
+    ]
+    .join(" "))
+}
+
+fn exact_recovery_path<'a>(label: &str, path: &'a Path) -> Result<&'a str> {
+    path.to_str().ok_or_else(|| {
+        anyhow!(
+            "vault import {label} path is not valid UTF-8; choose a UTF-8 path so a post-commit recovery command can be exact"
+        )
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn exec(request: VaultExecRequest) -> Result<VaultRawOutcome> {

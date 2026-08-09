@@ -433,3 +433,49 @@ fn invalid_exec_env_fails_before_passphrase_capture_or_vault_creation() {
         assert!(!vault_home.exists());
     }
 }
+
+#[test]
+fn invalid_import_input_and_destination_fail_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let malformed = temp.path().join("malformed.env");
+    let empty = temp.path().join("empty.env");
+    let valid = temp.path().join("valid.env");
+    std::fs::write(&malformed, b"TOKEN=OP://value-do-not-print/item/field\n").unwrap();
+    std::fs::write(&empty, b"# no assignments\n").unwrap();
+    std::fs::write(&valid, b"TOKEN=op://Vault/Item/Field\n").unwrap();
+    let missing_parent_destination = temp.path().join("missing-parent/out.env");
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for (env_file, out_env) in [
+        (malformed, temp.path().join("malformed.out")),
+        (empty, temp.path().join("empty.out")),
+        (std::path::PathBuf::from("-"), temp.path().join("stdin.out")),
+        (valid, missing_parent_destination),
+    ] {
+        let command = VaultCommand::Import(super::super::vault::VaultImportCommand::OnePassword(
+            super::super::vault::VaultImportOnePasswordOpts {
+                env_file,
+                item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+                out_env,
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        ));
+
+        let error = run_vault_command(command, false).unwrap_err().to_string();
+        assert!(!error.contains("value-do-not-print"));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+    }
+}

@@ -18,7 +18,10 @@ use anyhow::{Context, Result, bail};
 use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes, VaultReference};
 use zeroize::Zeroizing;
 
-use crate::command::{VaultExecAssignment, VaultExecEnvironment, VaultExecValue};
+use crate::command::{
+    VaultExecAssignment, VaultExecEnvironment, VaultExecValue, VaultImportAssignment,
+    VaultImportEnvironment, VaultImportValueSource,
+};
 
 pub(crate) const MAX_VAULT_ENV_FILE_LEN: usize = 1024 * 1024;
 pub(crate) const MAX_VAULT_ENV_ASSIGNMENTS: usize = 1024;
@@ -27,27 +30,104 @@ pub(crate) const MAX_VAULT_ENV_TOTAL_DECODED_LEN: usize = 1024 * 1024;
 const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
 const NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 
-pub(crate) fn parse_vault_env_file(path: &Path) -> Result<VaultExecEnvironment> {
-    if path == Path::new("-") {
-        bail!("vault exec rejects --env-file - so the child can inherit stdin");
-    }
-    let bytes = read_bounded_file(path)?;
-    parse_vault_env_bytes(bytes.as_slice())
+#[derive(Clone, Copy)]
+enum EnvOperation {
+    Exec,
+    Import,
 }
 
+impl EnvOperation {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Exec => "vault exec env",
+            Self::Import => "vault import env",
+        }
+    }
+}
+
+pub(crate) fn parse_vault_env_file(path: &Path) -> Result<VaultExecEnvironment> {
+    parse_vault_env_file_for(path, EnvOperation::Exec)
+}
+
+fn parse_vault_env_file_for(path: &Path, operation: EnvOperation) -> Result<VaultExecEnvironment> {
+    if path == Path::new("-") {
+        match operation {
+            EnvOperation::Exec => {
+                bail!("vault exec rejects --env-file - so the child can inherit stdin")
+            }
+            EnvOperation::Import => bail!("vault import env rejects --env-file -"),
+        }
+    }
+    let bytes = read_bounded_file(path, operation)?;
+    parse_vault_env_bytes_for(bytes.as_slice(), operation)
+}
+
+pub(crate) fn parse_onepassword_env_file(
+    path: &Path,
+    item: &jig_vault::VaultItem,
+) -> Result<VaultImportEnvironment> {
+    let environment = parse_vault_env_file_for(path, EnvOperation::Import)?;
+    if environment.assignments.is_empty() {
+        bail!("vault import env must contain at least one assignment");
+    }
+    let mut assignments = Vec::with_capacity(environment.assignments.len());
+    for assignment in environment.assignments {
+        let reference = VaultReference::parse(&format!(
+            "jig://{}/{}",
+            item.as_str(),
+            assignment.name
+        ))
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "vault import env line {} variable '{}': destination field reference is invalid",
+                assignment.line,
+                assignment.name
+            )
+        })?;
+        let source = match assignment.value {
+            VaultExecValue::Field(_) => {
+                bail!(
+                    "vault import env line {} variable '{}': jig:// references are not import sources",
+                    assignment.line,
+                    assignment.name
+                )
+            }
+            VaultExecValue::Literal(value) => {
+                classify_onepassword_value(value, assignment.line, &assignment.name)?
+            }
+        };
+        assignments.push(VaultImportAssignment {
+            line: assignment.line,
+            name: assignment.name,
+            reference,
+            source,
+        });
+    }
+    Ok(VaultImportEnvironment { assignments })
+}
+
+#[cfg(test)]
 pub(crate) fn parse_vault_env_bytes(input: &[u8]) -> Result<VaultExecEnvironment> {
+    parse_vault_env_bytes_for(input, EnvOperation::Exec)
+}
+
+fn parse_vault_env_bytes_for(
+    input: &[u8],
+    operation: EnvOperation,
+) -> Result<VaultExecEnvironment> {
+    let label = operation.label();
     if input.len() > MAX_VAULT_ENV_FILE_LEN {
-        bail!("vault exec env file exceeds the {MAX_VAULT_ENV_FILE_LEN} byte limit");
+        bail!("{label} file exceeds the {MAX_VAULT_ENV_FILE_LEN} byte limit");
     }
     if let Some(offset) = input.iter().position(|byte| *byte == 0) {
         bail!(
-            "vault exec env line {} contains a NUL byte",
+            "{label} line {} contains a NUL byte",
             line_number_at(input, offset)
         );
     }
     let text = std::str::from_utf8(input).map_err(|error| {
         anyhow::anyhow!(
-            "vault exec env line {} is not valid UTF-8",
+            "{label} line {} is not valid UTF-8",
             line_number_at(input, error.valid_up_to())
         )
     })?;
@@ -64,34 +144,34 @@ pub(crate) fn parse_vault_env_bytes(input: &[u8]) -> Result<VaultExecEnvironment
             continue;
         }
         if line.as_bytes().contains(&b'\r') {
-            bail!("vault exec env line {line_number} contains an unsupported control character");
+            bail!("{label} line {line_number} contains an unsupported control character");
         }
 
         let Some((name, raw_value)) = line.split_once('=') else {
-            bail!("vault exec env line {line_number} must be an exact NAME=VALUE assignment");
+            bail!("{label} line {line_number} must be an exact NAME=VALUE assignment");
         };
         if !valid_env_name(name) {
-            bail!("vault exec env line {line_number} has an invalid environment variable name");
+            bail!("{label} line {line_number} has an invalid environment variable name");
         }
         if reserved_env_name(name) {
-            bail!("vault exec env line {line_number} may not assign reserved variable '{name}'");
+            bail!("{label} line {line_number} may not assign reserved variable '{name}'");
         }
         let comparison_name = comparable_env_name(name);
         if !names.insert(comparison_name) {
-            bail!("vault exec env line {line_number} duplicates variable '{name}'");
+            bail!("{label} line {line_number} duplicates variable '{name}'");
         }
         if assignments.len() >= MAX_VAULT_ENV_ASSIGNMENTS {
             bail!(
-                "vault exec env line {line_number} exceeds the {MAX_VAULT_ENV_ASSIGNMENTS} assignment limit"
+                "{label} line {line_number} exceeds the {MAX_VAULT_ENV_ASSIGNMENTS} assignment limit"
             );
         }
 
         let decoded = decode_value(raw_value.as_bytes()).map_err(|reason| {
-            anyhow::anyhow!("vault exec env line {line_number} variable '{name}': {reason}")
+            anyhow::anyhow!("{label} line {line_number} variable '{name}': {reason}")
         })?;
         if decoded.len() > MAX_SECRET_VALUE_LEN {
             bail!(
-                "vault exec env line {line_number} variable '{name}' exceeds the {MAX_SECRET_VALUE_LEN} byte value limit"
+                "{label} line {line_number} variable '{name}' exceeds the {MAX_SECRET_VALUE_LEN} byte value limit"
             );
         }
         total_decoded_len = total_decoded_len
@@ -99,17 +179,17 @@ pub(crate) fn parse_vault_env_bytes(input: &[u8]) -> Result<VaultExecEnvironment
             .and_then(|total| total.checked_add(decoded.len()))
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "vault exec env line {line_number} variable '{name}' exceeds the total decoded data limit"
+                    "{label} line {line_number} variable '{name}' exceeds the total decoded data limit"
                 )
             })?;
         if total_decoded_len > MAX_VAULT_ENV_TOTAL_DECODED_LEN {
             bail!(
-                "vault exec env line {line_number} variable '{name}' exceeds the {MAX_VAULT_ENV_TOTAL_DECODED_LEN} byte total decoded data limit"
+                "{label} line {line_number} variable '{name}' exceeds the {MAX_VAULT_ENV_TOTAL_DECODED_LEN} byte total decoded data limit"
             );
         }
 
         let value = classify_value(decoded).map_err(|reason| {
-            anyhow::anyhow!("vault exec env line {line_number} variable '{name}': {reason}")
+            anyhow::anyhow!("{label} line {line_number} variable '{name}': {reason}")
         })?;
         assignments.push(VaultExecAssignment {
             line: line_number,
@@ -121,9 +201,10 @@ pub(crate) fn parse_vault_env_bytes(input: &[u8]) -> Result<VaultExecEnvironment
     Ok(VaultExecEnvironment { assignments })
 }
 
-fn read_bounded_file(path: &Path) -> Result<SecretBytes> {
+fn read_bounded_file(path: &Path, operation: EnvOperation) -> Result<SecretBytes> {
+    let label = operation.label();
     let mut file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open vault exec env file {}", path.display()))?;
+        .with_context(|| format!("failed to open {label} file {}", path.display()))?;
     let capacity = MAX_VAULT_ENV_FILE_LEN
         .checked_add(1)
         .expect("vault env file limit leaves room for an overflow byte");
@@ -136,9 +217,8 @@ fn read_bounded_file(path: &Path) -> Result<SecretBytes> {
             Ok(read) => read,
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to read vault exec env file {}", path.display())
-                });
+                return Err(error)
+                    .with_context(|| format!("failed to read {label} file {}", path.display()));
             }
         };
         if read == 0 {
@@ -149,7 +229,7 @@ fn read_bounded_file(path: &Path) -> Result<SecretBytes> {
             .expect("the bounded vault env buffer was preallocated exactly");
         if bytes.len() > MAX_VAULT_ENV_FILE_LEN {
             bail!(
-                "vault exec env file {} exceeds the {MAX_VAULT_ENV_FILE_LEN} byte limit",
+                "{label} file {} exceeds the {MAX_VAULT_ENV_FILE_LEN} byte limit",
                 path.display()
             );
         }
@@ -257,6 +337,37 @@ fn classify_value(value: SecretBytes) -> std::result::Result<VaultExecValue, &'s
         return Err("Jig-looking value must be canonical jig://ITEM/FIELD");
     }
     Ok(VaultExecValue::Literal(value))
+}
+
+fn classify_onepassword_value(
+    value: SecretBytes,
+    line: usize,
+    name: &str,
+) -> Result<VaultImportValueSource> {
+    let bytes = value.as_slice();
+    if bytes.starts_with(b"op://") {
+        let reference =
+            std::str::from_utf8(bytes).expect("restricted dotenv input was validated as UTF-8");
+        let path = &reference[5..];
+        let segment_count = path.split('/').count();
+        let segments_valid =
+            matches!(segment_count, 3 | 4) && path.split('/').all(|segment| !segment.is_empty());
+        if !segments_valid {
+            bail!(
+                "vault import env line {line} variable '{name}': 1Password reference must be exact op://VAULT/ITEM/FIELD or op://VAULT/ITEM/SECTION/FIELD"
+            );
+        }
+        return Ok(VaultImportValueSource::OnePassword(value));
+    }
+    if bytes
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"op:"))
+    {
+        bail!(
+            "vault import env line {line} variable '{name}': 1Password-looking value must use an exact op:// reference"
+        );
+    }
+    Ok(VaultImportValueSource::Literal(value))
 }
 
 fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
@@ -413,5 +524,72 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("inherit stdin"));
+    }
+
+    #[test]
+    fn onepassword_import_classifies_exact_references_and_keeps_interior_op_text_literal() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.env");
+        std::fs::write(
+            &source,
+            b"TOKEN=op://Team/Login/password\nSECTION='op://Team/Login/credentials/password'\nTEXT=stop:value\n",
+        )
+        .unwrap();
+        let item = jig_vault::VaultItem::parse("jig://Production").unwrap();
+
+        let parsed = parse_onepassword_env_file(&source, &item).unwrap();
+
+        assert_eq!(parsed.assignments.len(), 3);
+        assert_eq!(
+            parsed.assignments[0].reference.to_string(),
+            "jig://Production/TOKEN"
+        );
+        assert!(matches!(
+            &parsed.assignments[0].source,
+            VaultImportValueSource::OnePassword(_)
+        ));
+        assert!(matches!(
+            &parsed.assignments[1].source,
+            VaultImportValueSource::OnePassword(_)
+        ));
+        match &parsed.assignments[2].source {
+            VaultImportValueSource::Literal(value) => assert_eq!(value.as_slice(), b"stop:value"),
+            VaultImportValueSource::OnePassword(_) => panic!("expected literal"),
+        }
+    }
+
+    #[test]
+    fn onepassword_import_rejects_empty_and_malformed_sources_with_import_diagnostics() {
+        let temp = tempfile::tempdir().unwrap();
+        let item = jig_vault::VaultItem::parse("jig://Production").unwrap();
+        let cases: &[(&[u8], &str)] = &[
+            (b"", "at least one assignment"),
+            (b"TOKEN=op://Team/Login\n", "op://VAULT/ITEM/FIELD"),
+            (b"TOKEN=op://Team//password\n", "op://VAULT/ITEM/FIELD"),
+            (b"TOKEN=OP://Team/Login/password\n", "exact op://"),
+            (b"TOKEN=jig://Production/TOKEN\n", "not import sources"),
+        ];
+
+        for (index, (contents, expected)) in cases.iter().enumerate() {
+            let source = temp.path().join(format!("invalid-{index}.env"));
+            std::fs::write(&source, contents).unwrap();
+            let error = parse_onepassword_env_file(&source, &item)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("vault import env"),
+                "unexpected error: {error}"
+            );
+            assert!(error.contains(expected), "unexpected error: {error}");
+            assert!(
+                !error.contains("vault exec env"),
+                "unexpected error: {error}"
+            );
+        }
+
+        let error = parse_onepassword_env_file(Path::new("-"), &item)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("vault import env"));
     }
 }

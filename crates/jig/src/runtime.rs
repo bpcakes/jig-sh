@@ -18,6 +18,7 @@ mod sqlx;
 mod tool_execution;
 mod vault;
 mod vault_env;
+mod vault_import;
 mod work;
 mod worker_runner;
 

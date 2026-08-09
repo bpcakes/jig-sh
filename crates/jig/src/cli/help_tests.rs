@@ -268,6 +268,10 @@ fn vault_help_includes_quick_start_examples() {
         "jig vault inject --in config.template > config",
     );
     assert_help_contains(&vault_help, "jig vault exec --env-file .env.jig -- command");
+    assert_help_contains(
+        &vault_help,
+        "jig vault import onepassword --env-file .env.op --item Production --out-env .env.jig",
+    );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
@@ -310,6 +314,14 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_exec_help, "Within env-file values");
     assert_help_contains(&vault_exec_help, "older vault run command");
     assert_help_contains(&vault_exec_help, "must follow --");
+
+    let vault_import_help = rendered_help(&["vault", "import", "onepassword"]);
+    assert_help_contains(&vault_import_help, "op read --no-newline");
+    assert_help_contains(&vault_import_help, "op://VAULT/ITEM/FIELD");
+    assert_help_contains(&vault_import_help, "--item <ITEM>");
+    assert_help_contains(&vault_import_help, "--out-env <DESTINATION>");
+    assert_help_contains(&vault_import_help, "never invokes `op`");
+    assert_help_contains(&vault_import_help, "--replace --overwrite");
 
     let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
     assert_help_contains(&vault_field_list_help, "jig://ITEM");
