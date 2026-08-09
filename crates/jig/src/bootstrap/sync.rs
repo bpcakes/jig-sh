@@ -138,12 +138,12 @@ pub(super) fn apply_staged_render(
         active_managed_paths: staged
             .active_paths
             .iter()
-            .map(|path| path.display().to_string())
+            .map(|path| repository_relative_path_string(path))
             .collect(),
         retired_managed_paths: staged
             .retirement_paths
             .iter()
-            .map(|path| path.display().to_string())
+            .map(|path| repository_relative_path_string(path))
             .collect(),
         conflicts,
         ..ApplyRenderReport::default()
@@ -151,7 +151,7 @@ pub(super) fn apply_staged_render(
     for relative in ordered_operation_paths(staged) {
         let rendered_path = staged.destination.join(relative);
         let destination_path = destination.join(relative);
-        let relative_text = relative.display().to_string();
+        let relative_text = repository_relative_path_string(relative);
         validate_managed_destination_leaf(destination, relative)?;
         if path_exists(&rendered_path) {
             if path_exists(&destination_path) {
@@ -269,7 +269,7 @@ fn staged_render_conflicts(
                 }
                 if path_exists(&destination_path) {
                     conflicts.insert(RenderConflict {
-                        path: relative.display().to_string(),
+                        path: repository_relative_path_string(relative),
                         kind: RenderConflictKind::NonRegularRootAgents,
                         detail: format!(
                             "{} exists but is not a regular file; managed block merge cannot apply safely",
@@ -281,14 +281,14 @@ fn staged_render_conflicts(
             }
             if path_exists(&destination_path) && !files_match(&rendered_path, &destination_path)? {
                 conflicts.insert(RenderConflict {
-                    path: relative.display().to_string(),
+                    path: repository_relative_path_string(relative),
                     kind: RenderConflictKind::ModifiedManagedPath,
                     detail: "destination differs from the rendered template-managed path".into(),
                 });
             }
         } else if path_exists(&destination_path) {
             conflicts.insert(RenderConflict {
-                path: relative.display().to_string(),
+                path: repository_relative_path_string(relative),
                 kind: RenderConflictKind::RemovedManagedPath,
                 detail: "template no longer renders this managed path".into(),
             });
@@ -524,7 +524,7 @@ fn backup_destination_path(
     }
     copy_file_or_symlink_with_permissions(destination_path, &backup_path, &metadata)?;
     report.backups.push(ApplyRenderBackup {
-        path: relative.display().to_string(),
+        path: repository_relative_path_string(relative),
         backup_path: backup_path.display().to_string(),
     });
     Ok(())
@@ -596,7 +596,7 @@ fn collect_sync_conflicts(
 
         if file_type.is_dir() {
             if destination_path.exists() && !destination_path.is_dir() {
-                conflicts.insert(relative.display().to_string());
+                conflicts.insert(repository_relative_path_string(relative));
                 continue;
             }
             collect_sync_conflicts(rendered_root, destination_root, &rendered_path, conflicts)?;
@@ -604,7 +604,7 @@ fn collect_sync_conflicts(
         }
 
         if destination_path.exists() && !files_match(&rendered_path, &destination_path)? {
-            conflicts.insert(relative.display().to_string());
+            conflicts.insert(repository_relative_path_string(relative));
         }
     }
     Ok(())
@@ -633,6 +633,16 @@ fn files_match(rendered_path: &Path, destination_path: &Path) -> Result<bool> {
     }
 
     file_contents_match(rendered_path, destination_path)
+}
+
+fn repository_relative_path_string(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn either_is_symlink(rendered_meta: &fs::Metadata, destination_meta: &fs::Metadata) -> bool {

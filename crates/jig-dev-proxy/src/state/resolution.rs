@@ -1,14 +1,55 @@
 use std::fs;
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use super::{
     LockOutcome, StateStore, ensure_default_state_parent_permissions,
-    ensure_state_create_ancestor_is_not_shared_writable, ensure_state_dir_has_no_symlinks,
-    ensure_state_dir_permissions, existing_dir_is_empty, path_is_symlink,
-    recover_replace_backups_with_lock_interruptible,
+    ensure_state_create_ancestor_is_not_shared_writable, ensure_state_dir_permissions,
+    existing_dir_is_empty, path_is_symlink, recover_replace_backups_with_lock_interruptible,
 };
+
+const STATE_TREE_SCAN_ATTEMPTS: usize = 8;
+
+pub(super) fn ensure_state_dir_has_no_symlinks(path: &Path) -> Result<()> {
+    for attempt in 0..STATE_TREE_SCAN_ATTEMPTS {
+        match ensure_state_tree_has_no_symlinks(path, path) {
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == ErrorKind::NotFound)
+                    && attempt + 1 < STATE_TREE_SCAN_ATTEMPTS =>
+            {
+                // Atomic state-file replacement can remove a directory entry
+                // between read_dir and symlink_metadata. Require a complete,
+                // stable scan rather than treating that vanished entry as safe.
+                std::thread::yield_now();
+            }
+            result => return result,
+        }
+    }
+    unreachable!("the final state-tree scan attempt always returns")
+}
+
+fn ensure_state_tree_has_no_symlinks(root: &Path, path: &Path) -> Result<()> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let metadata = fs::symlink_metadata(&entry_path)?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!(
+                "Proxy state dir {} contains symlink {}. Use a dedicated state directory without symlinks.",
+                root.display(),
+                entry_path.display()
+            );
+        }
+        if metadata.is_dir() {
+            ensure_state_tree_has_no_symlinks(root, &entry_path)?;
+        }
+    }
+    Ok(())
+}
 
 impl StateStore {
     /// Resolves an existing proxy state directory without creating one.

@@ -28,6 +28,7 @@ pub(crate) use git::{
     scrub_git_repository_environment_except, scrub_known_repository_git_environment,
 };
 use init_transaction::InitMutationTransaction;
+#[cfg_attr(windows, allow(unused_imports))]
 #[cfg(test)]
 use init_transaction::{
     InitPathSnapshot, MAX_EXISTING_INIT_RETAINED_GENERATIONS, RETAINED_GENERATION_HANDLE_HEADROOM,
@@ -1448,7 +1449,6 @@ fn parse_scaffold_frontend_kind(value: &str) -> Result<ScaffoldFrontendKind, Str
         }
     })
 }
-
 fn default_dev_app_kind() -> String {
     "env-port".into()
 }

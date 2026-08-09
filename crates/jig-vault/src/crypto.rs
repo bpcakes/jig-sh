@@ -17,7 +17,7 @@ const MAX_ARGON2_MEMORY_KIB: u32 = 524_288;
 const MAX_ARGON2_ITERATIONS: u32 = 10;
 const MAX_ARGON2_PARALLELISM: u32 = 16;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(crate) struct KdfParams {
     pub(crate) algorithm: String,
     pub(crate) memory_kib: u32,
@@ -28,11 +28,28 @@ pub(crate) struct KdfParams {
 
 impl Default for KdfParams {
     fn default() -> Self {
+        Self::production()
+    }
+}
+
+impl KdfParams {
+    pub(crate) fn production() -> Self {
         Self {
             algorithm: "argon2id".into(),
             memory_kib: 131_072,
             iterations: 3,
             parallelism: 4,
+            output_len: KEY_LEN as u32,
+        }
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn for_tests() -> Self {
+        Self {
+            algorithm: "argon2id".into(),
+            memory_kib: MIN_ARGON2_MEMORY_KIB,
+            iterations: 1,
+            parallelism: 1,
             output_len: KEY_LEN as u32,
         }
     }
@@ -153,6 +170,27 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
+
+    #[test]
+    fn production_and_test_kdf_parameters_are_explicit_and_valid() {
+        let production = KdfParams::default();
+        assert_eq!(production, KdfParams::production());
+        assert_eq!(production.memory_kib, 131_072);
+        assert_eq!(production.iterations, 3);
+        assert_eq!(production.parallelism, 4);
+
+        let test = KdfParams::for_tests();
+        assert_eq!(test.memory_kib, MIN_ARGON2_MEMORY_KIB);
+        assert_eq!(test.iterations, 1);
+        assert_eq!(test.parallelism, 1);
+        Params::new(
+            test.memory_kib,
+            test.iterations,
+            test.parallelism,
+            Some(test.output_len as usize),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn rejects_absurd_kdf_memory_before_argon2_allocation() {

@@ -635,18 +635,21 @@ fn restore_with_default_fallback<T>(
     }
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug)]
 struct TransactionalInstallError {
     message: String,
     handlers_may_remain: bool,
 }
 
+#[cfg(any(unix, test))]
 impl std::fmt::Display for TransactionalInstallError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
+#[cfg(any(unix, test))]
 fn install_transactionally<T>(
     signals: &[(i32, &'static str)],
     mut install: impl FnMut(i32) -> std::result::Result<T, String>,
@@ -681,6 +684,7 @@ fn install_transactionally<T>(
     Ok(installed)
 }
 
+#[cfg(any(unix, test))]
 const fn signal_label(signal: i32) -> &'static str {
     #[cfg(unix)]
     match signal {

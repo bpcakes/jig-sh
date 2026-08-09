@@ -2,6 +2,14 @@
 
 ## Local development
 
+The configured full Rust test gates use cargo-nextest 0.9.130 or newer so tests
+that mutate process-global environment or working-directory state run in
+separate processes. Install that prerequisite using the
+[official cargo-nextest installation instructions](https://nexte.st/docs/installation/pre-built-binaries/),
+confirm it with `cargo nextest --version`, then run `scripts/jig doctor` for the
+remaining repository prerequisites. Focused `cargo test -p <package>` commands
+remain supported for crate development.
+
 Release `jig init` and `jig adopt` builds use the official remote template at the `vVERSION` tag for the running binary. Unreleased local builds use the templates embedded in the binary when `--template` is omitted. Repos rendered from embedded templates record `_src_path = "embedded:jig-sh"`; generated launchers reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to the configured or official release-tag install path. When you need checkout-driven template metadata during development, pass `--template /path/to/jig-sh --template-mode committed`, or pass `--vcs-ref main` to use the current official branch.
 
 When editing `templates/project`, refresh the checked-in embedded-template snapshot before committing:

@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn append_chains_previous_mac() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         let first = AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({}))
             .unwrap();
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn append_truncates_torn_final_audit_line() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         let first = AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({}))
             .unwrap();
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn append_rejects_reserved_recovery_key_on_torn_tail_recovery() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({})).unwrap();
         let mut text = store.read_audit_text().unwrap().unwrap();
@@ -434,7 +434,7 @@ mod tests {
     #[test]
     fn append_rejects_nested_reserved_recovery_key_on_torn_tail_recovery() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({})).unwrap();
         let mut text = store.read_audit_text().unwrap().unwrap();
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn append_preserves_complete_final_audit_line_without_newline() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({})).unwrap();
         let text = store.read_audit_text().unwrap().unwrap();
@@ -514,7 +514,7 @@ mod tests {
     #[test]
     fn verify_chain_rejects_tampered_event_details() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(
             &store,
@@ -537,7 +537,7 @@ mod tests {
     #[test]
     fn append_rejects_existing_tampered_audit_log() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(
             &store,
@@ -565,7 +565,7 @@ mod tests {
     #[test]
     fn append_rejects_forged_inserted_audit_event() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         let first = AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({}))
             .unwrap();
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn verify_chain_rejects_inserted_blank_lines() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let key = [7_u8; 32];
         AuditEvent::append(&store, &key, AuditAction::SecretSet, serde_json::json!({})).unwrap();
         let text = store.read_audit_text().unwrap().unwrap();

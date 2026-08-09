@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::io::BufReader;
@@ -7,6 +8,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::test_tempdir as tempdir;
+#[cfg(unix)]
 use http_body_util::Empty;
 use hyper::header::HeaderValue;
 #[cfg(unix)]
@@ -33,7 +35,6 @@ fn websocket_detection_requires_connection_upgrade() {
     headers.remove("sec-websocket-key");
     assert!(!is_websocket(&headers));
 }
-
 #[test]
 fn websocket_upgrade_rejects_request_bodies() {
     let mut headers = HeaderMap::new();
@@ -928,14 +929,14 @@ fn tls_acceptor_retries_transient_key_pair_mismatch() {
     )
     .unwrap();
 
-    let restore_key_path = key_path;
-    let restore = std::thread::spawn(move || {
-        std::thread::sleep(TLS_RELOAD_FILE_RETRY_DELAY / 2);
-        fs::write(restore_key_path, original_key).unwrap();
-    });
+    let mut retry_count = 0;
+    tls::tls_acceptor_with_retry(&store, false, || {
+        retry_count += 1;
+        fs::write(&key_path, &original_key).unwrap();
+    })
+    .unwrap();
 
-    tls_acceptor(&store, false).unwrap();
-    restore.join().unwrap();
+    assert_eq!(retry_count, 1);
 }
 
 #[tokio::test]
@@ -1652,7 +1653,6 @@ async fn websocket_switching_protocols_tunnels_bytes() {
     proxy_task.abort();
     backend_task.abort();
 }
-
 async fn wait_for_http_port(store: &StateStore) -> u16 {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

@@ -101,7 +101,7 @@ fn replace_file_inner(tmp: &Path, path: &Path, fallback_name: &str) -> Result<()
 fn replace_existing_file_windows(tmp: &Path, path: &Path, fallback_name: &str) -> Result<()> {
     #[cfg(windows)]
     {
-        return replace_existing_file_windows_native(tmp, path, fallback_name);
+        replace_existing_file_windows_native(tmp, path, fallback_name)
     }
     #[cfg(not(windows))]
     {
