@@ -209,12 +209,16 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: cargo-nextest@0.9.130
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
-        run: cargo test -p jig-sh --no-default-features --locked
+        run: cargo nextest run -p jig-sh --no-default-features --locked
 
   no-default-features-windows:
     name: cargo test -p jig-sh --no-default-features (Windows)
@@ -233,12 +237,16 @@ jobs:
           cache: false
           rustflags: ""
           components: clippy
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
+        with:
+          tool: cargo-nextest@0.9.130
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
-        run: cargo test -p jig-sh --no-default-features --locked
+        run: cargo nextest run -p jig-sh --no-default-features --locked
       - name: Run no-default-features all-targets clippy
         run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
 

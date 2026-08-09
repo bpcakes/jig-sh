@@ -247,6 +247,7 @@ fn resume_suspended_windows_process(pid: u32) -> Result<()> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildObservation {
     Running,
+    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
     ExitedUnreaped(ExitStatus),
     ExitedReaped(ExitStatus),
 }
@@ -603,7 +604,7 @@ fn wait_unscannable_exited_group_term_grace<T>(
     force_cleanup(state)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 fn continue_exited_group_term_grace<T>(
     state: &mut T,
     live_members: Result<bool>,
@@ -794,18 +795,16 @@ pub(super) fn terminate_child(child: &mut Child) -> Result<()> {
         None => return terminate_pid(pid),
     }
 
-    {
-        return terminate_registered_windows_job_with(
-            pid,
-            force_cleanup_requested(),
-            || generate_windows_console_break(pid),
-            || run_taskkill(pid, false),
-            |timeout| wait_for_windows_app_job_empty(pid, timeout),
-            || terminate_windows_app_job(pid),
-            |timeout| wait_for_windows_app_job_empty(pid, timeout),
-            || remove_windows_app_job(pid),
-        );
-    }
+    terminate_registered_windows_job_with(
+        pid,
+        force_cleanup_requested(),
+        || generate_windows_console_break(pid),
+        || run_taskkill(pid, false),
+        |timeout| wait_for_windows_app_job_empty(pid, timeout),
+        || terminate_windows_app_job(pid),
+        |timeout| wait_for_windows_app_job_empty(pid, timeout),
+        || remove_windows_app_job(pid),
+    )
 }
 
 #[cfg(any(windows, test))]

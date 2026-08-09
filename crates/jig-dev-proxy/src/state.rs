@@ -1274,18 +1274,18 @@ fn ensure_state_dir_permissions(path: &Path, can_chmod: bool) -> Result<()> {
                 mode
             );
         }
+        Ok(())
     }
     #[cfg(windows)]
     {
         let _ = can_chmod;
-        harden_windows_state_dir(path)?;
-        return Ok(());
+        harden_windows_state_dir(path)
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, can_chmod);
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(windows)]

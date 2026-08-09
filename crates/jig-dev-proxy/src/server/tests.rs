@@ -928,14 +928,14 @@ fn tls_acceptor_retries_transient_key_pair_mismatch() {
     )
     .unwrap();
 
-    let restore_key_path = key_path;
-    let restore = std::thread::spawn(move || {
-        std::thread::sleep(TLS_RELOAD_FILE_RETRY_DELAY / 2);
-        fs::write(restore_key_path, original_key).unwrap();
-    });
+    let mut retry_count = 0;
+    tls::tls_acceptor_with_retry(&store, false, || {
+        retry_count += 1;
+        fs::write(&key_path, &original_key).unwrap();
+    })
+    .unwrap();
 
-    tls_acceptor(&store, false).unwrap();
-    restore.join().unwrap();
+    assert_eq!(retry_count, 1);
 }
 
 #[tokio::test]

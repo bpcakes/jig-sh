@@ -115,9 +115,13 @@ pub(super) fn service_body(
         bail!("proxy HTTP and HTTPS ports must be different for service files");
     }
     validate_tld(&settings.tld)?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let current_exe = service_path_text(current_exe, "current executable")?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let repo_root = service_path_text(repo_root, "repo root")?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let state_dir = service_path_text(store.root(), "proxy state dir")?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let log_path = service_path_text(&store.log_path(), "proxy log path")?;
 
     #[cfg(target_os = "macos")]
@@ -222,7 +226,10 @@ WantedBy=default.target
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    anyhow::bail!("Jig proxy service install is not supported on this platform.");
+    {
+        let _ = (store, current_exe, repo_root);
+        anyhow::bail!("Jig proxy service install is not supported on this platform.");
+    }
 }
 
 pub(super) fn service_path_text(path: &Path, label: &str) -> Result<String> {

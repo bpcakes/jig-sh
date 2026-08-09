@@ -299,11 +299,7 @@ fn sorted_dirs(path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn relative_string(root: &Path, path: &Path) -> Result<String> {
-    Ok(path
-        .strip_prefix(root)?
-        .to_string_lossy()
-        .trim_start_matches("./")
-        .to_string())
+    Ok(normalize_relative_path(path.strip_prefix(root)?))
 }
 
 #[cfg(test)]
