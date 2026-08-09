@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use super::app_server::{
     APP_SERVER_INSPECTION_CANCELLED, APP_SERVER_PROTOCOL_MESSAGE_LIMIT, AppServerThreadLookup,
-    app_server_account_with_timeout, app_server_protocol, app_server_thread_protocol,
-    protocol_message_too_large, read_next_response, read_response,
+    app_server_account_with_timeout, app_server_protocol, app_server_thread,
+    app_server_thread_protocol, protocol_message_too_large, read_next_response, read_response,
 };
 use super::*;
 
@@ -1600,6 +1600,43 @@ exit 64
     );
     assert!(error.len() < 512, "stderr preview was not bounded: {error}");
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn app_server_client_thread_attaches_stderr_to_protocol_failures() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("codex-home");
+    fs::create_dir(&home).unwrap();
+    let stub = temp.path().join("codex-stub.sh");
+    fs::write(
+        &stub,
+        r#"#!/bin/sh
+read -r initialize
+printf '%s\n' '{"id":0,"result":{}}'
+read -r initialized
+read -r thread
+printf '%s\n' 'thread lookup diagnostics' >&2
+printf '%s\n' '{"id":1,"error":{"code":-32603,"message":"thread state unavailable"}}'
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = app_server_thread(
+        &home,
+        stub.as_os_str(),
+        "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+        &|| false,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        "thread/read failed: thread state unavailable; app-server stderr: thread lookup diagnostics"
+    );
 }
 
 #[cfg(unix)]
