@@ -218,7 +218,11 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run no-default-features tests
-        run: cargo nextest run -p jig-sh --no-default-features --locked
+        run: >-
+          cargo nextest run -p jig-sh --no-default-features --locked
+          -E 'not binary(codex_launcher)'
+      - name: Run Codex signal tests
+        run: cargo test -p jig-sh --test codex_launcher --no-default-features --locked -- --test-threads=1
 
   no-default-features-windows:
     name: cargo test --no-run -p jig-sh --no-default-features (Windows)
