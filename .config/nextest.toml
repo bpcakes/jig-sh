@@ -22,7 +22,7 @@ test-group = 'frontend-node'
 threads-required = 2
 
 [[profile.default.overrides]]
-filter = '(package(jig-sh) & binary(dev_sigint)) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 test-group = 'process-signals'
 
 [[profile.default.overrides]]
