@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow, bail};
 use jig_codex_tui::{Home, HomeUpdate, InspectionSource};
 use jig_tui::sanitize_text;
 
-use super::codex::{CodexCommand, CodexLaunchOpts};
+use super::codex::{CodexCommand, CodexLaunchOpts, CodexResumeOpts};
 use super::output::{HumanOutput, emit};
 use crate::progress::CliProgress;
 
@@ -19,7 +19,27 @@ pub(super) fn run_codex_command(command: CodexCommand, json_output: bool) -> Res
             emit(json_output, HumanOutput::CodexHomes, &report)
         }
         CodexCommand::Launch(opts) => run_codex_launch(opts, json_output),
+        CodexCommand::Resume(opts) => run_codex_resume(opts, json_output),
     }
+}
+
+fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
+    if json_output && !opts.dry_run {
+        bail!("--json can be used with `jig codex resume` only when --dry-run is present");
+    }
+    let session_id = crate::codex::normalize_session_id(&opts.session_id)?;
+    let home = match opts.home {
+        Some(home) => crate::codex::resolve_launch_home(&home)?,
+        None => crate::codex::resolve_resume_home(&session_id)?,
+    };
+    let mut codex_args = vec!["resume".into(), session_id.into()];
+    codex_args.extend(opts.codex_args);
+
+    if opts.dry_run {
+        let report = crate::codex::resume_dry_run_report(&home, &codex_args);
+        return emit(json_output, HumanOutput::CodexResume, &report);
+    }
+    crate::codex::launch(&home, &codex_args)
 }
 
 fn homes_report_with_cli_progress(include_usage: bool) -> Result<serde_json::Value> {
@@ -163,6 +183,22 @@ mod tests {
     fn real_launch_rejects_json_before_resolving_or_starting_codex() {
         let error = run_codex_launch(
             CodexLaunchOpts {
+                home: Some(PathBuf::from("does-not-need-to-exist")),
+                dry_run: false,
+                codex_args: Vec::new(),
+            },
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("only when --dry-run is present"));
+    }
+
+    #[test]
+    fn real_resume_rejects_json_before_validating_or_resolving() {
+        let error = run_codex_resume(
+            CodexResumeOpts {
+                session_id: "not-a-session-id".into(),
                 home: Some(PathBuf::from("does-not-need-to-exist")),
                 dry_run: false,
                 codex_args: Vec::new(),

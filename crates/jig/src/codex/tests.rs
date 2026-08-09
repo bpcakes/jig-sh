@@ -4,9 +4,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::app_server::{
-    APP_SERVER_INSPECTION_CANCELLED, APP_SERVER_PROTOCOL_MESSAGE_LIMIT,
-    app_server_account_with_timeout, app_server_protocol, protocol_message_too_large,
-    read_next_response, read_response,
+    APP_SERVER_INSPECTION_CANCELLED, APP_SERVER_PROTOCOL_MESSAGE_LIMIT, AppServerThreadLookup,
+    app_server_account_with_timeout, app_server_protocol, app_server_thread_protocol,
+    protocol_message_too_large, read_next_response, read_response,
 };
 use super::*;
 
@@ -313,6 +313,169 @@ fn launch_home_resolution_reports_named_attempts() {
     assert!(error.contains(&user_home.join(".codex-missing").display().to_string()));
     assert!(!error.contains(&current_dir.join("missing").display().to_string()));
     assert!(error.contains("Discovered homes: codex"));
+}
+
+#[test]
+fn session_ids_are_validated_and_normalized() {
+    assert_eq!(
+        normalize_session_id("019FE6E4-972F-7392-AAF3-58CB652A4E20").unwrap(),
+        "019fe6e4-972f-7392-aaf3-58cb652a4e20"
+    );
+    for invalid in [
+        "",
+        "019fe6e4-972f-7392-aaf3-58cb652a4e2",
+        "019fe6e4_972f-7392-aaf3-58cb652a4e20",
+        "019fe6e4-972f-7392-aaf3-58cb652a4e2z",
+    ] {
+        assert!(normalize_session_id(invalid).is_err(), "accepted {invalid}");
+    }
+
+    let error = normalize_session_id("invalid\u{1b}[2Jsession")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid"), "{error}");
+    assert!(!error.contains('\u{1b}'), "{error}");
+}
+
+#[test]
+fn resume_home_selection_requires_one_exact_match() {
+    let temp = tempfile::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let discovered = || DiscoveredHomes {
+        paths: vec![default.clone(), work.clone()],
+        errors: Vec::new(),
+        representation_lossy: false,
+    };
+    let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+
+    assert_eq!(
+        select_resume_home(
+            thread_id,
+            discovered(),
+            vec![ThreadHomeProbe::Missing, ThreadHomeProbe::Found],
+        )
+        .unwrap(),
+        work.canonicalize().unwrap()
+    );
+
+    let error = select_resume_home(
+        thread_id,
+        discovered(),
+        vec![ThreadHomeProbe::Found, ThreadHomeProbe::Found],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("exists in multiple homes"), "{error}");
+    assert!(error.contains("pass --home HOME"), "{error}");
+
+    let error = select_resume_home(
+        thread_id,
+        discovered(),
+        vec![
+            ThreadHomeProbe::Missing,
+            ThreadHomeProbe::Failed("app-server unavailable\u{1b}[2J".into()),
+        ],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("could not be resolved"), "{error}");
+    assert!(error.contains("app-server unavailable"), "{error}");
+    assert!(!error.contains('\u{1b}'), "{error}");
+}
+
+#[test]
+fn resume_home_selection_fails_closed_when_uniqueness_cannot_be_proven() {
+    let temp = tempfile::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+
+    let error = select_resume_home(
+        thread_id,
+        DiscoveredHomes {
+            paths: vec![default.clone(), work.clone()],
+            errors: Vec::new(),
+            representation_lossy: false,
+        },
+        vec![
+            ThreadHomeProbe::Found,
+            ThreadHomeProbe::Failed("app-server unavailable".into()),
+        ],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("uniqueness could not be confirmed"),
+        "{error}"
+    );
+    assert!(error.contains("app-server unavailable"), "{error}");
+    assert!(error.contains("Pass --home"), "{error}");
+
+    let error = select_resume_home(
+        thread_id,
+        DiscoveredHomes {
+            paths: vec![default, work],
+            errors: vec!["candidate disappeared during discovery".into()],
+            representation_lossy: false,
+        },
+        vec![ThreadHomeProbe::Found, ThreadHomeProbe::Missing],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("uniqueness could not be confirmed"),
+        "{error}"
+    );
+    assert!(error.contains("candidate disappeared"), "{error}");
+}
+
+#[test]
+fn cancelled_resume_lookup_does_not_start_queued_probes() {
+    let cancelled = AtomicBool::new(false);
+    let probe_count = AtomicUsize::new(0);
+    let homes = (0..4)
+        .map(|index| PathBuf::from(format!("/tmp/.codex-{index}")))
+        .collect::<Vec<_>>();
+
+    let probes = probe_thread_homes_parallel_with_limit(
+        &homes,
+        &|| cancelled.load(Ordering::SeqCst),
+        |_| {
+            probe_count.fetch_add(1, Ordering::SeqCst);
+            cancelled.store(true, Ordering::SeqCst);
+            ThreadHomeProbe::Found
+        },
+        1,
+    );
+
+    assert_eq!(probe_count.load(Ordering::SeqCst), 1);
+    assert!(matches!(probes.first(), Some(ThreadHomeProbe::Found)));
+    assert!(probes[1..].iter().all(|probe| {
+        matches!(
+            probe,
+            ThreadHomeProbe::Failed(error) if error == SESSION_LOOKUP_CANCELLED
+        )
+    }));
+
+    cancelled.store(true, Ordering::SeqCst);
+    let probes = probe_thread_homes_parallel(&homes, &|| true, |_| {
+        probe_count.fetch_add(1, Ordering::SeqCst);
+        ThreadHomeProbe::Found
+    });
+
+    assert_eq!(probe_count.load(Ordering::SeqCst), 1);
+    assert_eq!(probes.len(), homes.len());
+    assert!(probes.into_iter().all(|probe| {
+        matches!(
+            probe,
+            ThreadHomeProbe::Failed(error) if error == SESSION_LOOKUP_CANCELLED
+        )
+    }));
 }
 
 #[test]
@@ -739,6 +902,16 @@ fn dry_run_report_is_schema_versioned() {
 
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["representation_lossy"], false);
+
+    let resume = resume_dry_run_report(
+        Path::new("/tmp/.codex-work"),
+        &[
+            OsString::from("resume"),
+            OsString::from("019fe6e4-972f-7392-aaf3-58cb652a4e20"),
+        ],
+    );
+    assert_eq!(resume["command"], "codex resume");
+    assert_eq!(resume["args"][0], "resume");
 }
 
 #[cfg(unix)]
@@ -917,6 +1090,91 @@ fn app_server_protocol_completes_handshake_before_account_requests() {
     assert_eq!(messages[2]["method"], "account/read");
     assert_eq!(messages[3]["method"], "account/rateLimits/read");
     assert_eq!(messages[2]["params"]["refreshToken"], false);
+}
+
+#[test]
+fn app_server_thread_protocol_reads_only_the_requested_thread_metadata() {
+    let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let responses = format!(
+        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"result\":{{\"thread\":{{\"id\":\"{thread_id}\"}}}}}}\n"
+    );
+    let mut reader = Cursor::new(responses.as_bytes());
+    let mut requests = Vec::new();
+
+    let result =
+        app_server_thread_protocol(&mut requests, &mut reader, thread_id, None, &|| false).unwrap();
+
+    assert_eq!(result, AppServerThreadLookup::Found);
+    let messages = String::from_utf8(requests)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<JsonValue>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(messages[0]["method"], "initialize");
+    assert_eq!(messages[1]["method"], "initialized");
+    assert_eq!(messages[2]["method"], "thread/read");
+    assert_eq!(messages[2]["params"]["threadId"], thread_id);
+    assert_eq!(messages[2]["params"]["includeTurns"], false);
+}
+
+#[test]
+fn app_server_thread_protocol_distinguishes_missing_threads_from_failures() {
+    let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let missing = format!(
+        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32600,\"message\":\"thread not loaded: {thread_id}\"}}}}\n"
+    );
+    let mut reader = Cursor::new(missing.as_bytes());
+    assert_eq!(
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap(),
+        AppServerThreadLookup::Missing
+    );
+
+    let alternate_missing = format!(
+        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32600,\"message\":\"thread not found: {thread_id}\"}}}}\n"
+    );
+    let mut reader = Cursor::new(alternate_missing.as_bytes());
+    assert_eq!(
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap(),
+        AppServerThreadLookup::Missing
+    );
+
+    let wrong_code = format!(
+        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32603,\"message\":\"thread not loaded: {thread_id}\"}}}}\n"
+    );
+    let mut reader = Cursor::new(wrong_code.as_bytes());
+    assert!(
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap_err()
+            .contains("thread not loaded")
+    );
+
+    let failed = concat!(
+        "{\"id\":0,\"result\":{}}\n",
+        "{\"id\":1,\"error\":{\"code\":-32603,\"message\":\"state database unavailable\"}}\n"
+    );
+    let mut reader = Cursor::new(failed.as_bytes());
+    let error =
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap_err();
+    assert!(error.contains("state database unavailable"), "{error}");
+}
+
+#[test]
+fn app_server_thread_protocol_uses_method_neutral_eof_errors() {
+    let mut reader = Cursor::new(b"{\"id\":0,\"result\":{}}\n".as_slice());
+    let error = app_server_thread_protocol(
+        &mut Vec::new(),
+        &mut reader,
+        "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+        None,
+        &|| false,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("requested response"), "{error}");
+    assert!(!error.contains("account data"), "{error}");
 }
 
 #[test]

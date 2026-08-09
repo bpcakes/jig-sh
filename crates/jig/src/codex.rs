@@ -10,15 +10,19 @@ use std::sync::mpsc;
 use std::thread;
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_tui::sanitize_text;
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
-use self::app_server::{AppServerAccountResponse, app_server_account};
+use self::app_server::{
+    AppServerAccountResponse, AppServerThreadLookup, app_server_account, app_server_thread,
+};
 
 mod app_server;
 
 const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const MAX_PARALLEL_INSPECTIONS: usize = 4;
+const SESSION_LOOKUP_CANCELLED: &str = "Codex session lookup was cancelled";
 
 #[derive(Clone)]
 struct DiscoveredHomes {
@@ -39,6 +43,13 @@ pub(crate) struct CodexHomeCandidate {
     pub(crate) path: PathBuf,
     pub(crate) name: String,
     pub(crate) current: bool,
+}
+
+#[derive(Debug)]
+enum ThreadHomeProbe {
+    Found,
+    Missing,
+    Failed(String),
 }
 
 #[derive(Debug)]
@@ -355,6 +366,221 @@ pub(crate) fn resolve_launch_home(input: &Path) -> Result<PathBuf> {
     )
 }
 
+pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
+    let bytes = input.as_bytes();
+    let valid = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => *byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    if !valid {
+        bail!(
+            "Invalid Codex session ID '{}'; expected a UUID",
+            sanitize_text(input)
+        )
+    }
+    Ok(input.to_ascii_lowercase())
+}
+
+pub(crate) fn resolve_resume_home(thread_id: &str) -> Result<PathBuf> {
+    #[cfg(all(unix, not(test)))]
+    {
+        let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+            anyhow!(
+                "Codex session lookup was not started because the process-wide signal session is unavailable"
+            )
+        })?;
+        let result =
+            resolve_resume_home_with_cancellation(thread_id, &|| signal_session.cancelled());
+        finish_signal_supervised(
+            result,
+            signal_session.finish(),
+            "Codex session lookup signal supervision could not retire safely",
+        )
+    }
+    #[cfg(any(not(unix), test))]
+    {
+        resolve_resume_home_with_cancellation(thread_id, &|| false)
+    }
+}
+
+fn resolve_resume_home_with_cancellation(
+    thread_id: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<PathBuf> {
+    let discovered = discover_homes()?;
+    let codex_bin = codex_bin();
+    let probes =
+        probe_thread_homes_parallel(
+            &discovered.paths,
+            cancelled,
+            |home| match app_server_thread(&home, &codex_bin, thread_id, cancelled) {
+                Ok(AppServerThreadLookup::Found) => ThreadHomeProbe::Found,
+                Ok(AppServerThreadLookup::Missing) => ThreadHomeProbe::Missing,
+                Err(error) => ThreadHomeProbe::Failed(error),
+            },
+        );
+    select_resume_home(thread_id, discovered, probes)
+}
+
+fn probe_thread_homes_parallel<F>(
+    homes: &[PathBuf],
+    cancelled: &(dyn Fn() -> bool + Sync),
+    probe: F,
+) -> Vec<ThreadHomeProbe>
+where
+    F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
+{
+    probe_thread_homes_parallel_with_limit(homes, cancelled, probe, MAX_PARALLEL_INSPECTIONS)
+}
+
+fn probe_thread_homes_parallel_with_limit<F>(
+    homes: &[PathBuf],
+    cancelled: &(dyn Fn() -> bool + Sync),
+    probe: F,
+    max_parallel: usize,
+) -> Vec<ThreadHomeProbe>
+where
+    F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
+{
+    if homes.is_empty() {
+        return Vec::new();
+    }
+
+    let worker_count = homes.len().min(max_parallel.max(1));
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = mpsc::channel();
+    let mut probed = (0..homes.len()).map(|_| None).collect::<Vec<_>>();
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let sender = sender.clone();
+            let next = &next;
+            let probe = &probe;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(home) = homes.get(index).cloned() else {
+                        break;
+                    };
+                    let result = if cancelled() {
+                        ThreadHomeProbe::Failed(SESSION_LOOKUP_CANCELLED.into())
+                    } else {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(home)))
+                            .unwrap_or_else(|_| {
+                                ThreadHomeProbe::Failed(
+                                    "Codex session lookup worker panicked".into(),
+                                )
+                            })
+                    };
+                    if sender.send((index, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        for (index, result) in receiver {
+            probed[index] = Some(result);
+        }
+    });
+
+    probed
+        .into_iter()
+        .map(|result| {
+            result.unwrap_or_else(|| {
+                ThreadHomeProbe::Failed("Codex session lookup worker stopped".into())
+            })
+        })
+        .collect()
+}
+
+fn select_resume_home(
+    thread_id: &str,
+    discovered: DiscoveredHomes,
+    probes: Vec<ThreadHomeProbe>,
+) -> Result<PathBuf> {
+    debug_assert_eq!(discovered.paths.len(), probes.len());
+    let mut matches = Vec::new();
+    let mut failures = Vec::new();
+    for (home, probe) in discovered.paths.iter().zip(probes) {
+        match probe {
+            ThreadHomeProbe::Found => matches.push(home),
+            ThreadHomeProbe::Missing => {}
+            ThreadHomeProbe::Failed(error) => failures.push((home, error)),
+        }
+    }
+
+    match matches.as_slice() {
+        [home] if failures.is_empty() && discovered.errors.is_empty() => {
+            return canonical_or((*home).clone());
+        }
+        [home] => {
+            let home = sanitize_text(&home.display().to_string());
+            let checked = discovered
+                .paths
+                .iter()
+                .map(|home| sanitize_text(&home.display().to_string()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut message = format!(
+                "Codex session '{thread_id}' was found in {home}, but uniqueness could not be confirmed because some homes could not be inspected; checked homes: {checked}"
+            );
+            append_resume_lookup_failures(&mut message, failures, discovered.errors);
+            message.push_str(&format!(
+                "\nPass --home {home} to resume the confirmed home explicitly."
+            ));
+            return Err(anyhow!(message));
+        }
+        [_, ..] => {
+            let homes = matches
+                .iter()
+                .map(|home| sanitize_text(&home.display().to_string()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Codex session '{thread_id}' exists in multiple homes: {homes}; pass --home HOME to choose one explicitly"
+            )
+        }
+        [] => {}
+    }
+
+    let homes = discovered
+        .paths
+        .iter()
+        .map(|home| sanitize_text(&home.display().to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let homes = if homes.is_empty() { "none" } else { &homes };
+    let mut message = if failures.is_empty() {
+        format!("Codex session '{thread_id}' was not found; checked homes: {homes}")
+    } else {
+        format!(
+            "Codex session '{thread_id}' could not be resolved because some homes could not be inspected; checked homes: {homes}"
+        )
+    };
+    append_resume_lookup_failures(&mut message, failures, discovered.errors);
+    message
+        .push_str("\nPass --home HOME to use a non-conventional or unavailable home explicitly.");
+    Err(anyhow!(message))
+}
+
+fn append_resume_lookup_failures(
+    message: &mut String,
+    failures: Vec<(&PathBuf, String)>,
+    discovery_errors: Vec<String>,
+) {
+    for (home, error) in failures {
+        message.push_str(&format!(
+            "\n  - {}: {}",
+            sanitize_text(&home.display().to_string()),
+            sanitize_text(&error)
+        ));
+    }
+    for warning in discovery_errors {
+        message.push_str(&format!("\n  - discovery: {}", sanitize_text(&warning)));
+    }
+}
+
 pub(crate) fn resolve_configured_home_from_dir(
     input: &Path,
     current_dir: &Path,
@@ -464,6 +690,14 @@ fn resolve_launch_home_from(
 }
 
 pub(crate) fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+    command_dry_run_report("codex launch", home, args)
+}
+
+pub(crate) fn resume_dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+    command_dry_run_report("codex resume", home, args)
+}
+
+fn command_dry_run_report(command: &str, home: &Path, args: &[OsString]) -> JsonValue {
     let codex_bin = codex_bin();
     let representation_lossy = home.as_os_str().to_str().is_none()
         || codex_bin.to_str().is_none()
@@ -471,7 +705,7 @@ pub(crate) fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
     json!({
         "schema_version": 1,
         "ok": true,
-        "command": "codex launch",
+        "command": command,
         "dry_run": true,
         "home": home.display().to_string(),
         "codex_bin": codex_bin.to_string_lossy(),

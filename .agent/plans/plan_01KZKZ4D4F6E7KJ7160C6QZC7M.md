@@ -1,0 +1,3 @@
+Address merged review findings: fail closed on incomplete uniqueness, make missing-thread classification version-aware, avoid post-cancellation process starts, correct protocol diagnostics, sanitize invalid IDs, and add regression tests.
+
+Implemented merged review fixes and regression coverage. Automatic resume now fails closed when a confirmed match coexists with probe/discovery failures; cancellation skips queued probes; missing-thread compatibility requires code -32600 plus a recognized ID-specific message; thread EOF diagnostics are method-neutral; invalid IDs are terminal-sanitized. Focused tests, launcher integration, jig-sh lib Clippy, formatting, diff checks, build, and real-session dry-run pass.

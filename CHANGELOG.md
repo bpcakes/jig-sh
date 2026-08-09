@@ -10,6 +10,7 @@
 - Add cancellable status collection
 - Standardize JSON errors and work validation
 - Add interactive Codex home launcher
+- Add home-aware Codex session resume
 - Configure Codex home for loop workers
 - Add command availability inventory
 - Namespace SQLx project commands

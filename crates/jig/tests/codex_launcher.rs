@@ -93,6 +93,67 @@ printf '<%s>\n' "$@"
 }
 
 #[test]
+fn resume_finds_the_owning_home_and_forwards_codex_arguments() {
+    let temp = support::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    let launched = temp.path().join("launched-home");
+    let arguments = temp.path().join("launched-arguments");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let session_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let stub = write_executable(
+        temp.path().join("codex-stub.sh"),
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "app-server" ]; then
+  read -r initialize
+  printf '%s\n' '{{"id":0,"result":{{}}}}'
+  read -r initialized
+  read -r thread
+  case "$CODEX_HOME" in
+    */.codex-work)
+      printf '%s\n' '{{"id":1,"result":{{"thread":{{"id":"{session_id}"}}}}}}'
+      ;;
+    *)
+      printf '%s\n' '{{"id":1,"error":{{"code":-32600,"message":"thread not loaded: {session_id}"}}}}'
+      ;;
+  esac
+  sleep 30
+  exit 0
+fi
+printf '%s\n' "$CODEX_HOME" > "$JIG_TEST_LAUNCHED"
+printf '<%s>\n' "$@" > "$JIG_TEST_ARGUMENTS"
+"#,
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["codex", "resume", session_id, "--", "--search"])
+        .env("HOME", temp.path())
+        .env("CODEX_HOME", &default)
+        .env("JIG_CODEX_BIN", &stub)
+        .env("JIG_TEST_LAUNCHED", &launched)
+        .env("JIG_TEST_ARGUMENTS", &arguments)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "resume failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(launched).unwrap().trim(),
+        work.canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(
+        fs::read_to_string(arguments).unwrap(),
+        format!("<resume>\n<{session_id}>\n<--search>\n")
+    );
+}
+
+#[test]
 fn interactive_picker_opens_before_inspection_and_launches_searched_exact_home() {
     let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");

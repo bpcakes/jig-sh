@@ -15,6 +15,7 @@ use serde_json::{Value as JsonValue, json};
 use super::CODEX_HOME_ENV;
 
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(5);
+const THREAD_MISSING_ERROR_CODE: i64 = -32600;
 pub(super) const APP_SERVER_PROTOCOL_MESSAGE_LIMIT: usize = 64 * 1024;
 pub(super) const APP_SERVER_INSPECTION_CANCELLED: &str =
     "Codex app-server inspection was cancelled";
@@ -25,6 +26,12 @@ pub(super) struct AppServerAccountResponse {
     pub(super) account: JsonValue,
     pub(super) rate_limits: Option<JsonValue>,
     pub(super) usage_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AppServerThreadLookup {
+    Found,
+    Missing,
 }
 
 pub(super) fn app_server_account(
@@ -49,6 +56,37 @@ pub(super) fn app_server_account_with_timeout(
     timeout: Duration,
     cancelled: &(dyn Fn() -> bool + Sync),
 ) -> std::result::Result<AppServerAccountResponse, String> {
+    run_app_server(home, codex_bin, timeout, move |stdin, stdout, deadline| {
+        app_server_exchange(stdin, stdout, include_usage, deadline, cancelled)
+    })
+}
+
+pub(super) fn app_server_thread(
+    home: &Path,
+    codex_bin: &OsStr,
+    thread_id: &str,
+    cancelled: &(dyn Fn() -> bool + Sync),
+) -> std::result::Result<AppServerThreadLookup, String> {
+    run_app_server(
+        home,
+        codex_bin,
+        APP_SERVER_TIMEOUT,
+        move |stdin, stdout, deadline| {
+            app_server_thread_exchange(stdin, stdout, thread_id, deadline, cancelled)
+        },
+    )
+}
+
+fn run_app_server<T>(
+    home: &Path,
+    codex_bin: &OsStr,
+    timeout: Duration,
+    interaction: impl FnOnce(
+        ChildStdin,
+        ProcessInteractionStdout,
+        Option<Instant>,
+    ) -> std::result::Result<T, String>,
+) -> std::result::Result<T, String> {
     let mut command = Command::new(codex_bin);
     command
         .arg("app-server")
@@ -58,14 +96,8 @@ pub(super) fn app_server_account_with_timeout(
         .stderr(Stdio::piped());
     crate::shell::sanitize_bash_environment(&mut command);
 
-    run_owned_process_tree_with_cooperative_interaction(
-        &mut command,
-        timeout,
-        move |stdin, stdout, deadline| {
-            app_server_exchange(stdin, stdout, include_usage, deadline, cancelled)
-        },
-    )
-    .map_err(|error| app_server_error(&error, timeout))
+    run_owned_process_tree_with_cooperative_interaction(&mut command, timeout, interaction)
+        .map_err(|error| app_server_error(&error, timeout))
 }
 
 fn app_server_exchange(
@@ -82,6 +114,21 @@ fn app_server_exchange(
     outcome.map_err(|error| append_stderr_context(error, stderr.as_ref()))
 }
 
+fn app_server_thread_exchange(
+    stdin: ChildStdin,
+    stdout: ProcessInteractionStdout,
+    thread_id: &str,
+    deadline: Option<Instant>,
+    cancelled: &dyn Fn() -> bool,
+) -> std::result::Result<AppServerThreadLookup, String> {
+    let mut writer = BufWriter::new(stdin);
+    let mut reader = BufReader::new(stdout);
+    let outcome =
+        app_server_thread_protocol(&mut writer, &mut reader, thread_id, deadline, cancelled);
+    let stderr = reader.get_mut().take_stderr_output();
+    outcome.map_err(|error| append_stderr_context(error, stderr.as_ref()))
+}
+
 pub(super) fn app_server_protocol(
     writer: &mut impl Write,
     reader: &mut impl BufRead,
@@ -89,24 +136,7 @@ pub(super) fn app_server_protocol(
     deadline: Option<Instant>,
     cancelled: &dyn Fn() -> bool,
 ) -> std::result::Result<AppServerAccountResponse, String> {
-    ensure_protocol_active(deadline, cancelled)?;
-    write_message(
-        writer,
-        &json!({
-            "method": "initialize",
-            "id": 0,
-            "params": {
-                "clientInfo": {
-                    "name": "jig",
-                    "title": "Jig",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }
-        }),
-    )?;
-    response_result(read_response(reader, 0, deadline, cancelled)?, "initialize")?;
-    ensure_protocol_active(deadline, cancelled)?;
-    write_message(writer, &json!({ "method": "initialized", "params": {} }))?;
+    initialize_protocol(writer, reader, deadline, cancelled)?;
     ensure_protocol_active(deadline, cancelled)?;
     write_message(
         writer,
@@ -173,6 +203,88 @@ pub(super) fn app_server_protocol(
     })
 }
 
+pub(super) fn app_server_thread_protocol(
+    writer: &mut impl Write,
+    reader: &mut impl BufRead,
+    thread_id: &str,
+    deadline: Option<Instant>,
+    cancelled: &dyn Fn() -> bool,
+) -> std::result::Result<AppServerThreadLookup, String> {
+    initialize_protocol(writer, reader, deadline, cancelled)?;
+    ensure_protocol_active(deadline, cancelled)?;
+    write_message(
+        writer,
+        &json!({
+            "method": "thread/read",
+            "id": 1,
+            "params": {
+                "threadId": thread_id,
+                "includeTurns": false
+            }
+        }),
+    )?;
+    let response = read_response(reader, 1, deadline, cancelled)?;
+    if let Some(error) = response.get("error") {
+        if thread_missing_error(error, thread_id) {
+            return Ok(AppServerThreadLookup::Missing);
+        }
+        return response_result(response, "thread/read").map(|_| AppServerThreadLookup::Found);
+    }
+    let result = response_result(response, "thread/read")?;
+    let returned_id = result
+        .get("thread")
+        .and_then(|thread| thread.get("id"))
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| "thread/read response did not include a thread id".to_owned())?;
+    if returned_id != thread_id {
+        return Err("thread/read returned a different thread id".into());
+    }
+    Ok(AppServerThreadLookup::Found)
+}
+
+fn thread_missing_error(error: &JsonValue, thread_id: &str) -> bool {
+    if error.get("code").and_then(JsonValue::as_i64) != Some(THREAD_MISSING_ERROR_CODE) {
+        return false;
+    }
+    let Some(message) = error.get("message").and_then(JsonValue::as_str) else {
+        return false;
+    };
+    ["thread not loaded:", "thread not found:"]
+        .into_iter()
+        .any(|prefix| {
+            message
+                .strip_prefix(prefix)
+                .is_some_and(|id| id.trim() == thread_id)
+        })
+}
+
+fn initialize_protocol(
+    writer: &mut impl Write,
+    reader: &mut impl BufRead,
+    deadline: Option<Instant>,
+    cancelled: &dyn Fn() -> bool,
+) -> std::result::Result<(), String> {
+    ensure_protocol_active(deadline, cancelled)?;
+    write_message(
+        writer,
+        &json!({
+            "method": "initialize",
+            "id": 0,
+            "params": {
+                "clientInfo": {
+                    "name": "jig",
+                    "title": "Jig",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }
+        }),
+    )?;
+    response_result(read_response(reader, 0, deadline, cancelled)?, "initialize")?;
+    ensure_protocol_active(deadline, cancelled)?;
+    write_message(writer, &json!({ "method": "initialized", "params": {} }))?;
+    Ok(())
+}
+
 fn write_message(writer: &mut impl Write, message: &JsonValue) -> std::result::Result<(), String> {
     serde_json::to_writer(&mut *writer, message)
         .map_err(|error| format!("could not encode app-server request: {error}"))?;
@@ -205,7 +317,7 @@ pub(super) fn read_next_response(
     loop {
         line.clear();
         let Some(line) = read_protocol_line(reader, &mut line, deadline, cancelled)? else {
-            return Err("app-server closed before returning the requested account data".into());
+            return Err("app-server closed before returning the requested response".into());
         };
         if !line.ends_with(b"\n") {
             return Err("app-server closed before completing a protocol line".into());
