@@ -533,6 +533,48 @@ fn cancelled_resume_lookup_does_not_start_queued_probes() {
 }
 
 #[test]
+fn resume_probe_limit_of_zero_still_probes_each_home() {
+    let homes = (0..3)
+        .map(|index| PathBuf::from(format!("/tmp/.codex-{index}")))
+        .collect::<Vec<_>>();
+    let probe_count = AtomicUsize::new(0);
+
+    let probes = probe_thread_homes_parallel_with_limit(
+        &homes,
+        &|| false,
+        |_| {
+            probe_count.fetch_add(1, Ordering::SeqCst);
+            ThreadHomeProbe::Missing
+        },
+        0,
+    );
+
+    assert_eq!(probe_count.load(Ordering::SeqCst), homes.len());
+    assert!(
+        probes
+            .into_iter()
+            .all(|probe| matches!(probe, ThreadHomeProbe::Missing))
+    );
+}
+
+#[test]
+fn panicking_resume_probe_keeps_its_domain_specific_failure() {
+    let homes = vec![PathBuf::from("/tmp/.codex")];
+
+    let probes = probe_thread_homes_parallel_with_limit(
+        &homes,
+        &|| false,
+        |_| panic!("simulated resume-probe panic"),
+        1,
+    );
+
+    assert!(matches!(
+        probes.first(),
+        Some(ThreadHomeProbe::Failed(error)) if error == "Codex session lookup worker panicked"
+    ));
+}
+
+#[test]
 fn logged_out_home_is_observed_without_becoming_an_inspection_error() {
     let response = AppServerAccountResponse {
         account: json!({ "account": null }),
@@ -1022,6 +1064,94 @@ fn parallel_inspection_starts_new_work_before_a_slow_home_finishes() {
         assert_eq!(result["index"], index);
     }
     assert_eq!(progress.len(), homes.len());
+}
+
+#[test]
+fn parallel_inspection_reports_completions_before_slow_work_finishes() {
+    let homes = vec![PathBuf::from("0"), PathBuf::from("1")];
+    let first_completion = Arc::new((Mutex::new(false), Condvar::new()));
+    let mut completion_order = Vec::new();
+
+    let inspected = inspect_homes_parallel(
+        &homes,
+        |home| {
+            let index = home
+                .to_string_lossy()
+                .parse::<usize>()
+                .expect("test home should contain its index");
+            if index == 0 {
+                let (completed, wake) = &*first_completion;
+                let completed = completed.lock().unwrap();
+                let (completed, _) = wake
+                    .wait_timeout_while(completed, Duration::from_secs(1), |completed| !*completed)
+                    .unwrap();
+                assert!(
+                    *completed,
+                    "a completed home was not reported while another worker was still running"
+                );
+            }
+            json!({ "index": index })
+        },
+        |index, _| {
+            completion_order.push(index);
+            if index == 1 {
+                let (completed, wake) = &*first_completion;
+                *completed.lock().unwrap() = true;
+                wake.notify_all();
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(completion_order, vec![1, 0]);
+    assert_eq!(inspected[0]["index"], 0);
+    assert_eq!(inspected[1]["index"], 1);
+}
+
+#[test]
+fn parallel_inspection_drains_workers_after_progress_error() {
+    let homes = (0..5)
+        .map(|index| PathBuf::from(index.to_string()))
+        .collect::<Vec<_>>();
+    let progress_failed = Arc::new((Mutex::new(false), Condvar::new()));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let mut callbacks = Vec::new();
+
+    let error = inspect_homes_parallel(
+        &homes,
+        |home| {
+            let index = home
+                .to_string_lossy()
+                .parse::<usize>()
+                .expect("test home should contain its index");
+            if index != 0 {
+                let (failed, wake) = &*progress_failed;
+                let failed = failed.lock().unwrap();
+                let (failed, _) = wake
+                    .wait_timeout_while(failed, Duration::from_secs(1), |failed| !*failed)
+                    .unwrap();
+                assert!(
+                    *failed,
+                    "workers were not released after the progress callback failed"
+                );
+            }
+            completed.fetch_add(1, Ordering::SeqCst);
+            json!({ "index": index })
+        },
+        |index, _| {
+            callbacks.push(index);
+            let (failed, wake) = &*progress_failed;
+            *failed.lock().unwrap() = true;
+            wake.notify_all();
+            Err(anyhow::anyhow!("simulated progress failure"))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "simulated progress failure");
+    assert_eq!(callbacks, vec![0]);
+    assert_eq!(completed.load(Ordering::SeqCst), homes.len());
 }
 
 #[test]

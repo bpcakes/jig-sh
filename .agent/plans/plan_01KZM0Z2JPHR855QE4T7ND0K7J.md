@@ -1,3 +1,5 @@
 Implement three behavior-preserving Fowler refactorings in separate commits: split resume classification from rendering, consolidate parallel home execution, and encapsulate app-server protocol state. Preserve CLI/errors/JSON/concurrency/cancellation/process cleanup.
 
 Slice 1 complete: split resume-home probe classification into a closed ResumeHomeSelection enum and separate resolution/diagnostic rendering without changing canonicalization or error output. Focused resume/session tests, launcher integration, fmt, Clippy, and diff checks pass.
+
+Slice 2 complete: consolidated bounded home execution behind execute_homes_parallel while preserving input-order results, completion-order progress, callback-error draining, cancellation preflight, worker panic isolation, and exact diagnostics. Added regression coverage for live progress, drain-after-error, zero-limit clamping, and resume-probe panic text. Verified 74 Codex unit tests, all 6 launcher integration tests, rustfmt, scoped Clippy, and diff hygiene.

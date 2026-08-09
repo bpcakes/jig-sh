@@ -280,31 +280,78 @@ where
     F: Fn(PathBuf) -> JsonValue + Sync,
     P: FnMut(usize, &mut JsonValue) -> Result<()>,
 {
-    if discovered.is_empty() {
-        return Ok(Vec::new());
+    let mut progress_error = None;
+    let inspected = execute_homes_parallel(
+        discovered,
+        MAX_PARALLEL_INSPECTIONS,
+        |_| None,
+        inspect,
+        |index, result| match progress(index, result) {
+            Ok(()) => true,
+            Err(error) => {
+                progress_error = Some(error);
+                false
+            }
+        },
+        || inspection_failure("Codex home inspection worker panicked"),
+        || inspection_failure("Codex home inspection worker stopped"),
+    );
+
+    if let Some(error) = progress_error {
+        return Err(error);
     }
 
-    let worker_count = discovered.len().min(MAX_PARALLEL_INSPECTIONS);
+    Ok(inspected)
+}
+
+/// Runs bounded work over exact homes while retaining input-order results.
+///
+/// Completion callbacks observe results as workers finish. Returning `false`
+/// stops further callbacks but deliberately keeps draining worker results so
+/// scoped threads finish before the caller observes its callback error.
+fn execute_homes_parallel<T, C, F, P, H, S>(
+    homes: &[PathBuf],
+    max_parallel: usize,
+    preflight: C,
+    work: F,
+    mut on_complete: P,
+    panicked: H,
+    stopped: S,
+) -> Vec<T>
+where
+    T: Send,
+    C: Fn(&Path) -> Option<T> + Sync,
+    F: Fn(PathBuf) -> T + Sync,
+    P: FnMut(usize, &mut T) -> bool,
+    H: Fn() -> T + Sync,
+    S: Fn() -> T,
+{
+    if homes.is_empty() {
+        return Vec::new();
+    }
+
+    let worker_count = homes.len().min(max_parallel.max(1));
     let next = AtomicUsize::new(0);
     let (sender, receiver) = mpsc::channel();
-    let mut inspected = vec![None; discovered.len()];
-    let mut progress_error = None;
+    let mut results = (0..homes.len()).map(|_| None).collect::<Vec<_>>();
+    let mut report_completions = true;
     thread::scope(|scope| {
         for _ in 0..worker_count {
             let sender = sender.clone();
-            let inspect = &inspect;
             let next = &next;
+            let preflight = &preflight;
+            let work = &work;
+            let panicked = &panicked;
             scope.spawn(move || {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(home) = discovered.get(index).cloned() else {
+                    let Some(home) = homes.get(index).cloned() else {
                         break;
                     };
-                    let result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inspect(home)))
-                            .unwrap_or_else(|_| {
-                                inspection_failure("Codex home inspection worker panicked")
-                            });
+                    let result = preflight(&home).unwrap_or_else(|| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(home)))
+                            .unwrap_or_else(|_| panicked())
+                    });
                     if sender.send((index, result)).is_err() {
                         break;
                     }
@@ -313,25 +360,17 @@ where
         }
         drop(sender);
         for (index, mut result) in receiver {
-            if progress_error.is_none() {
-                if let Err(error) = progress(index, &mut result) {
-                    progress_error = Some(error);
-                }
+            if report_completions {
+                report_completions = on_complete(index, &mut result);
             }
-            inspected[index] = Some(result);
+            results[index] = Some(result);
         }
     });
 
-    if let Some(error) = progress_error {
-        return Err(error);
-    }
-
-    Ok(inspected
+    results
         .into_iter()
-        .map(|result| {
-            result.unwrap_or_else(|| inspection_failure("Codex home inspection worker stopped"))
-        })
-        .collect())
+        .map(|result| result.unwrap_or_else(&stopped))
+        .collect()
 }
 
 fn enrich_inspected_home(
@@ -467,55 +506,15 @@ fn probe_thread_homes_parallel_with_limit<F>(
 where
     F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
 {
-    if homes.is_empty() {
-        return Vec::new();
-    }
-
-    let worker_count = homes.len().min(max_parallel.max(1));
-    let next = AtomicUsize::new(0);
-    let (sender, receiver) = mpsc::channel();
-    let mut probed = (0..homes.len()).map(|_| None).collect::<Vec<_>>();
-    thread::scope(|scope| {
-        for _ in 0..worker_count {
-            let sender = sender.clone();
-            let next = &next;
-            let probe = &probe;
-            scope.spawn(move || {
-                loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(home) = homes.get(index).cloned() else {
-                        break;
-                    };
-                    let result = if cancelled() {
-                        ThreadHomeProbe::Failed(SESSION_LOOKUP_CANCELLED.into())
-                    } else {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe(home)))
-                            .unwrap_or_else(|_| {
-                                ThreadHomeProbe::Failed(
-                                    "Codex session lookup worker panicked".into(),
-                                )
-                            })
-                    };
-                    if sender.send((index, result)).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
-        for (index, result) in receiver {
-            probed[index] = Some(result);
-        }
-    });
-
-    probed
-        .into_iter()
-        .map(|result| {
-            result.unwrap_or_else(|| {
-                ThreadHomeProbe::Failed("Codex session lookup worker stopped".into())
-            })
-        })
-        .collect()
+    execute_homes_parallel(
+        homes,
+        max_parallel,
+        |_| cancelled().then(|| ThreadHomeProbe::Failed(SESSION_LOOKUP_CANCELLED.into())),
+        probe,
+        |_, _| true,
+        || ThreadHomeProbe::Failed("Codex session lookup worker panicked".into()),
+        || ThreadHomeProbe::Failed("Codex session lookup worker stopped".into()),
+    )
 }
 
 fn select_resume_home(
