@@ -17,10 +17,11 @@ commit. The work deliberately changes structure, not user-observable behavior.
 - [x] Slice 1: introduce a closed brokered-run stage enum and state-owning
   started/prepared lifecycle helpers; add exact wire-level stage tests; run
   focused and crate checks; commit.
-- [ ] Slice 2a: extract secret-file delivery unchanged; run focused checks.
-- [ ] Slice 2b: extract capped pipe capture unchanged; run focused checks.
-- [ ] Slice 2c: extract BrokeredProcess and platform implementations under
-  src/run/; run crate checks and Clippy; commit the complete slice.
+- [x] Slice 2a: extract secret-file delivery unchanged; run focused checks.
+- [x] Slice 2b: extract capped pipe capture unchanged; run focused checks.
+- [x] Slice 2c: extract BrokeredProcess and platform implementations under
+  src/run/; run focused and crate checks and Clippy; inspect and commit the
+  complete slice.
 - [ ] Slice 3a: extract parse/decode and header-validation phases behind private
   types while preserving validation order; run focused tests.
 - [ ] Slice 3b: extract unlock/decrypt, new-envelope seal, and state-reseal
@@ -47,6 +48,18 @@ commit. The work deliberately changes structure, not user-observable behavior.
 - Slice 1's focused brokered-run test filter passed 18 tests after the structural
   move; the complete crate suite then passed 98 tests after adding the process
   failure characterization test.
+- Slice 2's secret-file and capped-output moves each compiled and passed their
+  focused tests before the process move. A mechanical process extraction left a
+  trailing cfg attribute during the first format pass; it was corrected before
+  the combined module compiled, so no behavioral check was run against that
+  malformed intermediate state.
+- Slice 2's combined run tests passed: 18 brokered-run, 6 Linux-group, and 6
+  Unix-group focused cases; the full jig-vault suite passed all 98 tests.
+  cargo check and Clippy with warnings denied passed, as did a Rust 1.85
+  all-target check. Only Linux and wasm targets are installed locally.
+- The Jig no-mod-rs harness check currently reports the pre-existing tracked
+  crates/jig/tests/support/mod.rs. This slice introduced no mod.rs; the
+  changed-file LOC harness check passed.
 
 ## Decision Log
 
@@ -68,6 +81,11 @@ commit. The work deliberately changes structure, not user-observable behavior.
   to the persisted resolve and process stage strings. StartedBrokeredRun owns
   both locked-resolution failure recording and unlocked terminal audit state;
   PreparedBrokeredRun consumes itself to execute and record normal completion.
+- 2026-08-09: Keep run.rs as orchestration and its existing integration tests
+  as the stable helper-test owner. Private process, Unix, Linux, Windows,
+  output, and secret-file modules expose only pub(super) mechanisms. This keeps
+  compile-time dispatch and test helper paths unchanged while avoiding a
+  forbidden mod.rs directory root.
 
 ## Outcomes & Retrospective
 
