@@ -269,6 +269,44 @@ fn header_tamper_fails_authentication() {
 }
 
 #[test]
+fn open_validates_header_before_decoding_payload_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    store.init(&passphrase()).unwrap();
+    let text = store.read_vault_text().unwrap().unwrap();
+    let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    file["header"]["magic"] = serde_json::Value::String("not-a-vault".into());
+    file["header"]["salt_b64"] = serde_json::Value::String("not valid base64".into());
+    store
+        .write_vault_text(&serde_json::to_string_pretty(&file).unwrap())
+        .unwrap();
+
+    let error = format!("{:#}", store.open_unlocked(&passphrase()).unwrap_err());
+    assert!(error.contains("vault header is invalid"));
+    assert!(error.contains("unsupported vault magic"));
+    assert!(!error.contains("vault salt is invalid"));
+}
+
+#[test]
+fn open_validates_kdf_before_decoding_wrapped_key_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    store.init(&passphrase()).unwrap();
+    let text = store.read_vault_text().unwrap().unwrap();
+    let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    file["header"]["kdf"]["memory_kib"] = serde_json::json!(0);
+    file["wrapped_dek_nonce_b64"] = serde_json::Value::String("not valid base64".into());
+    store
+        .write_vault_text(&serde_json::to_string_pretty(&file).unwrap())
+        .unwrap();
+
+    let error = format!("{:#}", store.open_unlocked(&passphrase()).unwrap_err());
+    assert!(error.contains("vault KDF parameters are invalid"));
+    assert!(error.contains("memory cost"));
+    assert!(!error.contains("wrapped vault key nonce is invalid"));
+}
+
+#[test]
 fn wrapped_vault_key_rejects_state_aad_role() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();

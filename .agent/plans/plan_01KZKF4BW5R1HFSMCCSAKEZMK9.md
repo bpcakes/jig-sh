@@ -22,12 +22,12 @@ commit. The work deliberately changes structure, not user-observable behavior.
 - [x] Slice 2c: extract BrokeredProcess and platform implementations under
   src/run/; run focused and crate checks and Clippy; inspect and commit the
   complete slice.
-- [ ] Slice 3a: extract parse/decode and header-validation phases behind private
+- [x] Slice 3a: extract parse/decode and header-validation phases behind private
   types while preserving validation order; run focused tests.
-- [ ] Slice 3b: extract unlock/decrypt, new-envelope seal, and state-reseal
+- [x] Slice 3b: extract unlock/decrypt, new-envelope seal, and state-reseal
   phases while preserving crypto/AAD/zeroization semantics; run focused tests.
-- [ ] Slice 3c: keep filesystem and audit orchestration in VaultStore; run
-  crate checks and Clippy; commit the complete slice.
+- [x] Slice 3c: keep filesystem and audit orchestration in VaultStore; run
+  crate checks and Clippy; inspect and commit the complete slice.
 - [ ] Run final crate, jig-sh (if feasible), and Jig harness checks; record
   evidence without finishing this work session.
 
@@ -60,6 +60,12 @@ commit. The work deliberately changes structure, not user-observable behavior.
 - The Jig no-mod-rs harness check currently reports the pre-existing tracked
   crates/jig/tests/support/mod.rs. This slice introduced no mod.rs; the
   changed-file LOC harness check passed.
+- Slice 3's focused header/KDF ordering and nonce-rotation tests passed. The
+  full jig-vault suite passed all 100 tests; cargo check, Clippy with warnings
+  denied, format, diff checks, and a Rust 1.85 all-target check passed.
+  The first draft of the new ordering tests asserted source-only detail through
+  Display; switching to anyhow's alternate chain format correctly tests the
+  existing source-preserving error contract.
 
 ## Decision Log
 
@@ -86,6 +92,15 @@ commit. The work deliberately changes structure, not user-observable behavior.
   output, and secret-file modules expose only pub(super) mechanisms. This keeps
   compile-time dispatch and test helper paths unchanged while avoiding a
   forbidden mod.rs directory root.
+- 2026-08-09: Make vault/envelope.rs a child of vault.rs so every phase type is
+  pub(super), rather than expanding crate-visible implementation APIs. Decode
+  operations remain interleaved with unlock in their original order because
+  moving all base64 decoding ahead of KDF or authenticated decryption would
+  change error precedence.
+- 2026-08-09: New and resealed envelope values retain the existing zeroizing
+  plaintext across the audit/write boundary. The field order intentionally
+  preserves the prior sensitive-material drop order while moving no plaintext
+  into new allocations.
 
 ## Outcomes & Retrospective
 

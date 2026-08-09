@@ -9,17 +9,15 @@ use zeroize::Zeroizing;
 
 use crate::audit::{AuditAction, AuditEvent, AuditVerification, verify_chain_unlocked};
 use crate::broker::BrokeredRun;
-use crate::crypto::{
-    KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN, decode_array, derive_audit_key, derive_wrap_key, open,
-    random_array, seal,
-};
+use crate::crypto::KEY_LEN;
+#[cfg(test)]
+use crate::crypto::{NONCE_LEN, SALT_LEN, derive_wrap_key, open};
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
-use crate::format::{
-    AEAD_ALGORITHM, AeadRole, FORMAT_VERSION, MAGIC, SecretEntry, VaultFile, VaultHeader,
-    VaultState, decode_b64_array, payload_aad, validate_header,
-};
+#[cfg(test)]
+use crate::format::{AeadRole, decode_b64_array, payload_aad};
+use crate::format::{SecretEntry, VaultFile, VaultState};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::{
     ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
@@ -27,6 +25,12 @@ use crate::run::{
 use crate::store::VaultStore;
 use crate::types::SecretName;
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
+
+mod envelope;
+
+use envelope::{
+    NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope, UnlockedVaultEnvelope,
+};
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
@@ -322,6 +326,23 @@ impl std::fmt::Debug for OpenVault {
     }
 }
 
+impl OpenVault {
+    fn from_unlocked(envelope: UnlockedVaultEnvelope) -> Self {
+        let UnlockedVaultEnvelope {
+            file,
+            state,
+            dek,
+            audit_key,
+        } = envelope;
+        Self {
+            file,
+            state,
+            dek,
+            audit_key,
+        }
+    }
+}
+
 impl VaultStore {
     pub(crate) fn init(&self, passphrase: &SecretString) -> Result<()> {
         self.with_lock(|| self.init_unlocked(passphrase))
@@ -346,53 +367,13 @@ impl VaultStore {
         }
         validate_new_vault_passphrase_inner(passphrase)?;
 
-        let now = now_ms();
-        let salt = random_array::<SALT_LEN>()?;
-        let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
-        let header = VaultHeader {
-            magic: MAGIC.into(),
-            version: FORMAT_VERSION,
-            vault_id: ulid::Ulid::new().to_string(),
-            created_at_ms: now,
-            kdf: KdfParams::default(),
-            salt_b64: B64.encode(salt),
-            aead: AEAD_ALGORITHM.into(),
-        };
-        validate_header(&header).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Internal,
-                "constructed vault header is invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_aad = payload_aad(&header, AeadRole::WrappedDek);
-        let state_aad = payload_aad(&header, AeadRole::State);
-        let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf)?;
-        let wrapped_dek_nonce = random_array::<NONCE_LEN>()?;
-        let wrapped_dek = seal(
-            &wrap_key,
-            &wrapped_dek_nonce,
-            &wrapped_dek_aad,
-            dek.as_ref(),
-        )?;
-        let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(&VaultState::default())?);
-        let state = seal(&dek, &state_nonce, &state_aad, &state_plaintext)?;
-        let file = VaultFile {
-            header,
-            wrapped_dek_nonce_b64: B64.encode(wrapped_dek_nonce),
-            wrapped_dek_b64: B64.encode(wrapped_dek),
-            state_nonce_b64: B64.encode(state_nonce),
-            state_b64: B64.encode(state),
-        };
-        let file_text = serde_json::to_string_pretty(&file)?;
-        let audit_key = derive_audit_key(&dek)?;
+        let envelope = NewVaultEnvelope::seal(passphrase, now_ms())?;
         if let Err(error) = AuditEvent::append_unlocked(
             self,
-            audit_key.as_ref(),
+            envelope.audit_key.as_ref(),
             AuditAction::VaultInitialized,
             serde_json::json!({
-                "vault_id": file.header.vault_id,
+                "vault_id": envelope.file.header.vault_id,
             }),
         ) {
             let cleanup_error = rollback_failed_init(self);
@@ -402,7 +383,7 @@ impl VaultStore {
                 None => Err(error),
             };
         }
-        if let Err(error) = self.write_vault_text_unlocked(&file_text) {
+        if let Err(error) = self.write_vault_text_unlocked(&envelope.file_text) {
             let cleanup_error = rollback_failed_init(self);
             let error = error.context("failed to write initialized vault file");
             return match cleanup_error {
@@ -592,119 +573,10 @@ impl VaultStore {
                 format!("vault does not exist at {}", self.vault_path().display()),
             )
         })?;
-        let file: VaultFile = serde_json::from_str(&text).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault file",
-                error.into(),
-            )
-        })?;
-        validate_header(&file.header).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault header is invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_aad = payload_aad(&file.header, AeadRole::WrappedDek);
-        let state_aad = payload_aad(&file.header, AeadRole::State);
-        let salt =
-            decode_b64_array::<SALT_LEN>("vault salt", &file.header.salt_b64).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault salt is invalid",
-                    error,
-                )
-            })?;
-        let wrap_key = derive_wrap_key(passphrase, &salt, &file.header.kdf).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault KDF parameters are invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_nonce =
-            decode_b64_array::<NONCE_LEN>("wrapped vault key nonce", &file.wrapped_dek_nonce_b64)
-                .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "wrapped vault key nonce is invalid",
-                    error,
-                )
-            })?;
-        let wrapped_dek = B64.decode(&file.wrapped_dek_b64).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "wrapped vault key is not valid base64",
-                error.into(),
-            )
-        })?;
-        let dek_plaintext = open(
-            &wrap_key,
-            &wrapped_dek_nonce,
-            &wrapped_dek_aad,
-            &wrapped_dek,
-        )
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::Authentication,
-                "failed to unlock vault key",
-                error,
-            )
-        })?;
-        let dek = Zeroizing::new(
-            decode_array::<KEY_LEN>("vault key", &dek_plaintext).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault key has invalid length",
-                    error,
-                )
-            })?,
-        );
-        let state_nonce = decode_b64_array::<NONCE_LEN>("vault state nonce", &file.state_nonce_b64)
-            .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault state nonce is invalid",
-                    error,
-                )
-            })?;
-        let state_ciphertext = B64.decode(&file.state_b64).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault state is not valid base64",
-                error.into(),
-            )
-        })?;
-        let state_plaintext =
-            open(&dek, &state_nonce, &state_aad, &state_ciphertext).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Authentication,
-                    "failed to decrypt vault state",
-                    error,
-                )
-            })?;
-        let state = serde_json::from_slice(&state_plaintext).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault state",
-                error.into(),
-            )
-        })?;
-        let audit_key = derive_audit_key(&dek).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Internal,
-                "failed to derive vault audit key",
-                error,
-            )
-        })?;
-
-        Ok(OpenVault {
-            file,
-            state,
-            dek,
-            audit_key,
-        })
+        let parsed = ParsedVaultEnvelope::parse(&text)?;
+        let validated = parsed.validate()?;
+        let unlocked = validated.unlock(passphrase)?;
+        Ok(OpenVault::from_unlocked(unlocked))
     }
 }
 
@@ -804,21 +676,8 @@ impl OpenVault {
     }
 
     fn save_unlocked(&self, store: &VaultStore) -> AnyResult<()> {
-        // Keep the state AAD derived from the immutable, validated header that
-        // was parsed at open/init time. Header-changing migrations must update
-        // wrapped key and state encryption together.
-        let aad = payload_aad(&self.file.header, AeadRole::State);
-        let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(&self.state)?);
-        let encrypted_state = seal(&self.dek, &state_nonce, &aad, &state_plaintext)?;
-        let file = VaultFile {
-            header: self.file.header.clone(),
-            wrapped_dek_nonce_b64: self.file.wrapped_dek_nonce_b64.clone(),
-            wrapped_dek_b64: self.file.wrapped_dek_b64.clone(),
-            state_nonce_b64: B64.encode(state_nonce),
-            state_b64: B64.encode(encrypted_state),
-        };
-        store.write_vault_text_unlocked(&serde_json::to_string_pretty(&file)?)?;
+        let envelope = ResealedVaultEnvelope::seal(&self.file, &self.dek, &self.state)?;
+        store.write_vault_text_unlocked(&envelope.serialize_pretty()?)?;
         Ok(())
     }
 
