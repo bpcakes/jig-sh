@@ -16,10 +16,16 @@ use std::{
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use anyhow::Result;
-use serde_json::{Value, json};
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+use serde_json::Value;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use serde_json::json;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const SERVICE_MANAGER_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const SERVICE_MANAGER_KILL_GRACE_TIMEOUT: Duration = Duration::from_secs(1);
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(super) const SERVICE_STATUS_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 static COMMAND_OUTPUT_CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -394,6 +400,7 @@ fn executable_regular_file(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub(super) fn command_completed_without_error_or_timeout(output: &Value) -> bool {
     output.get("error").is_none() && output["timed_out"].as_bool() != Some(true)
 }

@@ -8,7 +8,7 @@ fn passphrase() -> SecretString {
 #[test]
 fn create_open_set_list_remove_secret() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
 
     store
@@ -35,7 +35,7 @@ fn create_open_set_list_remove_secret() {
 #[test]
 fn missing_audit_log_with_existing_vault_fails_closed() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     std::fs::remove_file(store.audit_path()).unwrap();
 
@@ -68,7 +68,7 @@ fn error_chain_contains(error: &(dyn std::error::Error + 'static), needle: &str)
 #[test]
 fn secret_value_rejects_corrupt_serialized_entry_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -92,7 +92,7 @@ fn secret_value_rejects_corrupt_serialized_entry_metadata() {
 #[test]
 fn secret_value_rejects_out_of_bounds_serialized_entry_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -116,7 +116,7 @@ fn secret_value_rejects_out_of_bounds_serialized_entry_metadata() {
 #[test]
 fn open_vault_debug_output_does_not_include_secret_values() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -135,7 +135,7 @@ fn open_vault_debug_output_does_not_include_secret_values() {
 #[test]
 fn updating_secret_preserves_created_at() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -161,7 +161,7 @@ fn updating_secret_preserves_created_at() {
 #[test]
 fn consecutive_saves_rotate_state_nonce() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let initial: VaultFile =
         serde_json::from_str(&store.read_vault_text().unwrap().unwrap()).unwrap();
@@ -193,7 +193,7 @@ fn consecutive_saves_rotate_state_nonce() {
 #[test]
 fn second_init_refuses_existing_vault() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let error = store.init(&passphrase()).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
@@ -203,7 +203,7 @@ fn second_init_refuses_existing_vault() {
 #[test]
 fn init_refuses_stale_audit_without_vault() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     std::fs::write(store.audit_path(), "stale audit\n").unwrap();
 
     let error = store.init(&passphrase()).unwrap_err();
@@ -214,7 +214,7 @@ fn init_refuses_stale_audit_without_vault() {
 #[test]
 fn init_rejects_short_passphrase() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let error = store
         .init(&SecretString::from("too-short".to_string()))
         .unwrap_err();
@@ -225,7 +225,7 @@ fn init_rejects_short_passphrase() {
 #[test]
 fn wrong_passphrase_fails() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let error = store
         .open_unlocked(&SecretString::from("wrong passphrase".to_string()))
@@ -237,7 +237,7 @@ fn wrong_passphrase_fails() {
 #[test]
 fn public_open_errors_are_classified() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
 
     let missing = store.list(&passphrase()).unwrap_err();
     assert_eq!(missing.kind(), VaultErrorKind::NotFound);
@@ -256,7 +256,7 @@ fn public_open_errors_are_classified() {
 #[test]
 fn header_tamper_fails_authentication() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let text = store.read_vault_text().unwrap().unwrap();
     let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -271,7 +271,7 @@ fn header_tamper_fails_authentication() {
 #[test]
 fn wrapped_vault_key_rejects_state_aad_role() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let text = store.read_vault_text().unwrap().unwrap();
     let file: VaultFile = serde_json::from_str(&text).unwrap();
@@ -289,7 +289,7 @@ fn wrapped_vault_key_rejects_state_aad_role() {
 #[test]
 fn ciphertext_tamper_fails_authentication() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let text = store.read_vault_text().unwrap().unwrap();
     let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -305,7 +305,7 @@ fn ciphertext_tamper_fails_authentication() {
 #[test]
 fn audited_edit_rejects_tampered_audit_before_saving_state() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .edit_with_audit(
@@ -362,7 +362,7 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
 #[test]
 fn public_verify_audit_reports_torn_tail_bytes() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let mut audit = store.read_audit_text().unwrap().unwrap();
     audit.push_str("{\"partial\"");
@@ -376,7 +376,7 @@ fn public_verify_audit_reports_torn_tail_bytes() {
 #[test]
 fn set_secret_rejects_too_short_values_before_unlock() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
 
     let error = store
         .set_secret(
@@ -392,7 +392,7 @@ fn set_secret_rejects_too_short_values_before_unlock() {
 #[test]
 fn set_secret_rejects_oversized_values() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let error = store
         .set_secret(

@@ -123,6 +123,10 @@ pub(crate) fn loop_status_snapshot_with_cancellation(
 }
 
 pub(crate) fn dispatch_vault(command: crate::command::VaultCommand) -> Result<Value> {
+    #[cfg(test)]
+    return vault::dispatch_for_test(command);
+
+    #[cfg(not(test))]
     vault::dispatch(command)
 }
 

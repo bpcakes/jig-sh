@@ -14,6 +14,16 @@ use crate::state::StateStore;
 use super::{TLS_RELOAD_FILE_ATTEMPTS, TLS_RELOAD_FILE_RETRY_DELAY};
 
 pub(super) fn tls_acceptor(store: &StateStore, http2: bool) -> Result<TlsAcceptor> {
+    tls_acceptor_with_retry(store, http2, || {
+        std::thread::sleep(TLS_RELOAD_FILE_RETRY_DELAY);
+    })
+}
+
+pub(super) fn tls_acceptor_with_retry(
+    store: &StateStore,
+    http2: bool,
+    mut retry: impl FnMut(),
+) -> Result<TlsAcceptor> {
     let mut last_error = None;
     for attempt in 0..TLS_RELOAD_FILE_ATTEMPTS {
         match tls_acceptor_once(store, http2) {
@@ -23,7 +33,7 @@ pub(super) fn tls_acceptor(store: &StateStore, http2: bool) -> Result<TlsAccepto
                     && tls_acceptor_error_is_retryable(&error) =>
             {
                 last_error = Some(error);
-                std::thread::sleep(TLS_RELOAD_FILE_RETRY_DELAY);
+                retry();
             }
             Err(error) => return Err(error),
         }

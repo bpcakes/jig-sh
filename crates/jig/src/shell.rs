@@ -109,8 +109,9 @@ fn is_legacy_windows_path_component(component: &OsStr, reject_reserved: bool) ->
         || wide.len() > 255
         || wide.iter().any(|character| {
             *character <= 31
-                || [b'<', b'>', b':', b'"', b'/', b'\\', b'|', b'?', b'*']
-                    .into_iter()
+                || b"<>:\"/\\|?*"
+                    .iter()
+                    .copied()
                     .map(u16::from)
                     .any(|reserved| *character == reserved)
         })

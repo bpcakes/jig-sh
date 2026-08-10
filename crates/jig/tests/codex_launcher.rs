@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -419,6 +420,7 @@ sleep 30
         return;
     };
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .process_group(0)
         .args(["codex", "launch"])
         .env("HOME", temp.path())
         .env("CODEX_HOME", &default)
@@ -497,6 +499,7 @@ sleep 30
 "#,
     );
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .process_group(0)
         .args(["codex", "homes", "--usage"])
         .env("HOME", temp.path())
         .env("CODEX_HOME", &default)

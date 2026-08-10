@@ -27,26 +27,37 @@ const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 static CAPTURED_PASSPHRASE: Mutex<Option<SecretString>> = Mutex::new(None);
+type VaultResolver = fn(Option<PathBuf>) -> jig_vault::Result<Vault>;
 
+#[cfg(not(test))]
 pub(crate) fn dispatch(command: VaultCommand) -> Result<Value> {
+    dispatch_with_resolver(command, Vault::resolve)
+}
+
+#[cfg(test)]
+pub(crate) fn dispatch_for_test(command: VaultCommand) -> Result<Value> {
+    dispatch_with_resolver(command, Vault::resolve_for_test)
+}
+
+fn dispatch_with_resolver(command: VaultCommand, resolver: VaultResolver) -> Result<Value> {
     match command {
         VaultCommand::Audit(command) => match command {
-            VaultAuditCommand::Verify(request) => verify_audit(request),
+            VaultAuditCommand::Verify(request) => verify_audit(request, resolver),
         },
-        VaultCommand::Init(request) => init(request),
+        VaultCommand::Init(request) => init(request, resolver),
         VaultCommand::Status(request) => status(request),
         VaultCommand::Secret(command) => match command {
-            VaultSecretCommand::List(request) => list(request),
-            VaultSecretCommand::Set(request) => set(request),
-            VaultSecretCommand::Remove(request) => remove(request),
+            VaultSecretCommand::List(request) => list(request, resolver),
+            VaultSecretCommand::Set(request) => set(request, resolver),
+            VaultSecretCommand::Remove(request) => remove(request, resolver),
         },
-        VaultCommand::Run(request) => run(request),
+        VaultCommand::Run(request) => run(request, resolver),
     }
 }
 
-fn init(request: VaultInitRequest) -> Result<Value> {
+fn init(request: VaultInitRequest, resolver: VaultResolver) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     vault.init(&passphrase)?;
     let mut output = json!({
@@ -73,9 +84,12 @@ fn status(request: VaultStatusRequest) -> Result<Value> {
     Ok(output)
 }
 
-fn verify_audit(request: crate::command::VaultAuditVerifyRequest) -> Result<Value> {
+fn verify_audit(
+    request: crate::command::VaultAuditVerifyRequest,
+    resolver: VaultResolver,
+) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     let verification = vault.verify_audit(&passphrase)?;
     let mut output = json!({
@@ -90,9 +104,9 @@ fn verify_audit(request: crate::command::VaultAuditVerifyRequest) -> Result<Valu
     Ok(output)
 }
 
-fn list(request: VaultSecretListRequest) -> Result<Value> {
+fn list(request: VaultSecretListRequest, resolver: VaultResolver) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     let secrets: Vec<Value> = vault
         .list(&passphrase)?
@@ -116,9 +130,9 @@ fn list(request: VaultSecretListRequest) -> Result<Value> {
     Ok(output)
 }
 
-fn set(request: VaultSecretSetRequest) -> Result<Value> {
+fn set(request: VaultSecretSetRequest, resolver: VaultResolver) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     let value = match request.value_source {
         VaultSecretValueSource::Auto => {
@@ -152,9 +166,9 @@ fn set(request: VaultSecretSetRequest) -> Result<Value> {
     Ok(output)
 }
 
-fn remove(request: VaultSecretRemoveRequest) -> Result<Value> {
+fn remove(request: VaultSecretRemoveRequest, resolver: VaultResolver) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     let removed = vault.remove_secret(&passphrase, &request.name)?;
     let mut output = json!({
@@ -168,9 +182,9 @@ fn remove(request: VaultSecretRemoveRequest) -> Result<Value> {
     Ok(output)
 }
 
-fn run(request: VaultRunRequest) -> Result<Value> {
+fn run(request: VaultRunRequest, resolver: VaultResolver) -> Result<Value> {
     let resolved = resolve_vault_runtime(&request.vault)?;
-    let vault = vault(&resolved)?;
+    let vault = vault(&resolved, resolver)?;
     let passphrase = passphrase()?;
     let env = parse_env_mappings(&request.env)?;
     let files = parse_file_mappings(&request.files)?;
@@ -197,8 +211,8 @@ fn run(request: VaultRunRequest) -> Result<Value> {
     Ok(output)
 }
 
-fn vault(resolved: &ResolvedVaultRuntime) -> Result<Vault> {
-    Ok(Vault::resolve(resolved.home.clone())?)
+fn vault(resolved: &ResolvedVaultRuntime, resolver: VaultResolver) -> Result<Vault> {
+    Ok(resolver(resolved.home.clone())?)
 }
 
 #[derive(Clone, Debug)]
@@ -684,7 +698,7 @@ mod tests {
     fn status_reports_existing_vault() {
         let temp = tempdir().unwrap();
         let home = temp.path().join("vault");
-        let vault = Vault::resolve(Some(home.clone())).unwrap();
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
         vault
             .init(&SecretString::from(
                 "correct horse battery staple".to_string(),
@@ -733,7 +747,7 @@ mod tests {
         std::fs::create_dir_all(&repo).unwrap();
         let _home = EnvVarGuard::set(VAULT_HOME_ENV, &base);
         let legacy_home = base.join("scopes").join("legacy_scope");
-        let legacy_vault = Vault::resolve(Some(legacy_home.clone())).unwrap();
+        let legacy_vault = Vault::resolve_for_test(Some(legacy_home.clone())).unwrap();
         legacy_vault
             .init(&SecretString::from(
                 "correct horse battery staple".to_string(),

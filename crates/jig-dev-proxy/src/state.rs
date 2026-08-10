@@ -35,6 +35,8 @@ mod process_identity;
 mod resolution;
 mod signature;
 
+use resolution::ensure_state_dir_has_no_symlinks;
+
 const ROUTES_VERSION: u32 = 1;
 const ROUTES_FILE: &str = "routes.json";
 const LOCK_FILE: &str = "routes.lock";
@@ -1274,18 +1276,18 @@ fn ensure_state_dir_permissions(path: &Path, can_chmod: bool) -> Result<()> {
                 mode
             );
         }
+        Ok(())
     }
     #[cfg(windows)]
     {
         let _ = can_chmod;
-        harden_windows_state_dir(path)?;
-        return Ok(());
+        harden_windows_state_dir(path)
     }
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, can_chmod);
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -1416,29 +1418,6 @@ fn ensure_existing_state_ancestor_is_not_shared_writable(
             ancestor.display(),
             mode
         );
-    }
-    Ok(())
-}
-
-fn ensure_state_dir_has_no_symlinks(path: &Path) -> Result<()> {
-    ensure_state_tree_has_no_symlinks(path, path)
-}
-
-fn ensure_state_tree_has_no_symlinks(root: &Path, path: &Path) -> Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        let metadata = fs::symlink_metadata(&entry_path)?;
-        if metadata.file_type().is_symlink() {
-            anyhow::bail!(
-                "Proxy state dir {} contains symlink {}. Use a dedicated state directory without symlinks.",
-                root.display(),
-                entry_path.display()
-            );
-        }
-        if metadata.is_dir() {
-            ensure_state_tree_has_no_symlinks(root, &entry_path)?;
-        }
     }
     Ok(())
 }

@@ -64,4 +64,4 @@ jobs:
         env:
           JIG_DEV_BIN: target/debug/jig
         run: |
-          scripts/jig agent-map check
+          scripts/jig check agent-map

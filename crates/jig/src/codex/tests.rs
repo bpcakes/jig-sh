@@ -5,9 +5,11 @@ use std::time::{Duration, Instant};
 
 use super::app_server::{
     APP_SERVER_INSPECTION_CANCELLED, APP_SERVER_PROTOCOL_MESSAGE_LIMIT, AppServerThreadLookup,
-    app_server_account_with_timeout, app_server_protocol, app_server_thread,
-    app_server_thread_protocol, protocol_message_too_large, read_next_response, read_response,
+    app_server_protocol, app_server_thread_protocol, protocol_message_too_large,
+    read_next_response, read_response,
 };
+#[cfg(unix)]
+use super::app_server::{app_server_account_with_timeout, app_server_thread};
 use super::*;
 
 struct FragmentedNonblockingReader {
@@ -1776,7 +1778,6 @@ exit 64
     assert!(error.len() < 512, "stderr preview was not bounded: {error}");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
-
 #[cfg(unix)]
 #[test]
 fn app_server_client_thread_attaches_stderr_to_protocol_failures() {

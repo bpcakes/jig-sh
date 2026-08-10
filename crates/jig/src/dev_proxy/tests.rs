@@ -5,6 +5,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::context::DevConfig;
+#[cfg_attr(windows, allow(unused_imports))]
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_process::{
@@ -31,7 +32,6 @@ fi
     )
     .unwrap();
 }
-
 fn mark_frontend_dependencies_ready(root: &std::path::Path, app_dir: &str) {
     let marker = root.join(".agent/tmp/test-ready").join(app_dir);
     fs::create_dir_all(marker.parent().unwrap()).unwrap();

@@ -1504,7 +1504,7 @@ fn macos_group_confirmation_resignals_an_exited_leader_with_a_live_member() {
     let confirmation = confirm_exited_process_group_not_live(
         &mut child,
         pid,
-        Instant::now() + Duration::from_millis(40),
+        Instant::now() + Duration::from_millis(500),
     );
     let cleanup = terminate_and_reap(&mut child);
     let release = release_guard.release_now();

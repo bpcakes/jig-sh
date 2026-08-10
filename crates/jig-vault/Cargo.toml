@@ -14,6 +14,12 @@ categories = ["command-line-utilities", "cryptography"]
 [lib]
 name = "jig_vault"
 
+[features]
+# Exposes explicit low-cost fixture constructors. Production constructors and
+# serialized defaults remain production-strength even when this feature is
+# compiled; callers must opt into the test-only constructor at the call site.
+test-utils = []
+
 [dependencies]
 anyhow.workspace = true
 argon2.workspace = true

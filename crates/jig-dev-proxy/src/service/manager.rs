@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 mod command;
 #[cfg(any(target_os = "macos", test))]
 mod launchctl;
