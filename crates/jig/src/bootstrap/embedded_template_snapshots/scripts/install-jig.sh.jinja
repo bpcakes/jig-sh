@@ -961,6 +961,7 @@ configured_source_is_mutable() {
 
 mark_mutable_source_refresh_reminder() {
   local install_root="$1"
+  mkdir -p "$install_root" 2>/dev/null || return 1
   ( : >"$install_root/.jig-mutable-source-reminder" ) 2>/dev/null
 }
 
@@ -978,7 +979,8 @@ record_mutable_source_refresh_reminder() {
 
 warn_for_mutable_source_cache_if_due() {
   local install_root="$1"
-  local marker="$install_root/.jig-mutable-source-reminder"
+  local reminder_root="${2:-$install_root}"
+  local marker="$reminder_root/.jig-mutable-source-reminder"
   local now mtime
   [[ "$RESOLVE_ONLY" == "0" ]] || return 0
   configured_source_is_mutable || return 0
@@ -998,7 +1000,7 @@ warn_for_mutable_source_cache_if_due() {
     fi
   fi
   echo "Using a cached Jig runtime from a mutable source; pass --refresh or set JIG_INSTALL_REFRESH=1 to check that source again (and reapprove an unpinned remote if prompted)." >&2
-  record_mutable_source_refresh_reminder "$install_root"
+  record_mutable_source_refresh_reminder "$reminder_root"
 }
 
 install_from_dev_bin() {
@@ -1643,7 +1645,9 @@ if [[ "$INSTALL_PROFILE" != "default" && -z "$INSTALL_ROOT_ARG" ]]; then
   FULL_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY"
   FULL_BIN_PATH="$FULL_INSTALL_ROOT/bin/jig"
   if cached_install_is_current "$FULL_INSTALL_ROOT" "$FULL_BIN_PATH"; then
-    warn_for_mutable_source_cache_if_due "$FULL_INSTALL_ROOT"
+    # Rate-limit this cross-cache warning under the profile cache lock that is
+    # actually held, leaving the reused full cache read-only.
+    warn_for_mutable_source_cache_if_due "$FULL_INSTALL_ROOT" "$INSTALL_ROOT"
     printf '%s\n' "$FULL_BIN_PATH"
     exit 0
   fi

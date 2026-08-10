@@ -92,6 +92,11 @@ validate_mutable_source_reminder_requires_matching_cache_lock() {
     capture { print }
   ' "$ROOT_DIR/scripts/install-jig.sh")"
 
+  INSTALL_LOCK_HELD=0 INSTALL_LOCK_PATH="$source_cache.lock" \
+    REMINDER_FUNCTIONS="$function_source" SOURCE_CACHE="$source_cache" \
+    /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"'
+  [[ ! -e "$source_cache/.jig-mutable-source-reminder" ]]
+
   INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$active_cache.lock" \
     REMINDER_FUNCTIONS="$function_source" SOURCE_CACHE="$source_cache" \
     /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"'
