@@ -322,6 +322,86 @@ sleep 30
 }
 
 #[test]
+fn resume_shows_terminal_progress_while_session_homes_are_probed() {
+    let temp = support::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let session_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let stub = write_executable(
+        temp.path().join("codex-stub.sh"),
+        &format!(
+            r#"#!/bin/sh
+read -r initialize
+printf '%s\n' '{{"id":0,"result":{{}}}}'
+read -r initialized
+read -r thread
+case "$CODEX_HOME" in
+  */.codex-work)
+    printf '%s\n' '{{"id":1,"result":{{"thread":{{"id":"{session_id}"}}}}}}'
+    ;;
+  *)
+    printf '%s\n' '{{"id":1,"error":{{"code":-32600,"message":"no rollout found for thread id {session_id}"}}}}'
+    ;;
+esac
+sleep 30
+"#,
+        ),
+    );
+    let Some((mut master, stdout, stderr)) = required_pseudo_terminal("resume progress") else {
+        return;
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["codex", "resume", session_id, "--dry-run"])
+        .env("HOME", temp.path())
+        .env("CODEX_HOME", &default)
+        .env("JIG_CODEX_BIN", &stub)
+        .env("NO_COLOR", "1")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    set_nonblocking(&master);
+
+    let mut output = Vec::new();
+    read_until(
+        &mut master,
+        &mut output,
+        "Codex resume: dry run",
+        Duration::from_secs(5),
+    );
+    let status = child
+        .wait_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_or_else(|| {
+            child.kill().unwrap();
+            child.wait().unwrap()
+        });
+    read_available(&mut master, &mut output);
+
+    let output = String::from_utf8_lossy(&output);
+    assert!(
+        status.success(),
+        "resume exited with {status}; output: {output}"
+    );
+    assert!(
+        output.contains("jig codex resume | find the Codex home containing the session"),
+        "{output}"
+    );
+    assert!(output.contains("inspect homes"), "{output}");
+    assert!(output.contains("0/2"), "{output}");
+    assert!(output.contains("1/2"), "{output}");
+    assert!(output.contains("2/2"), "{output}");
+    assert!(
+        output.contains("found the session's Codex home"),
+        "{output}"
+    );
+}
+
+#[test]
 fn sigint_restores_picker_and_cancels_all_active_home_inspections() {
     let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");

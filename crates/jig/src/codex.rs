@@ -21,14 +21,47 @@ mod app_server;
 
 const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
-const MAX_PARALLEL_INSPECTIONS: usize = 4;
+const MAX_PARALLEL_HOME_WORKERS: usize = 4;
 const SESSION_LOOKUP_CANCELLED: &str = "Codex session lookup was cancelled";
 
 #[derive(Clone)]
 struct DiscoveredHomes {
     paths: Vec<PathBuf>,
-    errors: Vec<String>,
+    issues: Vec<DiscoveryIssue>,
     representation_lossy: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveryIssueKind {
+    CandidateMissing,
+    CandidateUnreadable,
+    EntryUnreadable,
+    ScanIncomplete,
+}
+
+#[derive(Clone, Debug)]
+struct DiscoveryIssue {
+    kind: DiscoveryIssueKind,
+    message: String,
+}
+
+impl DiscoveryIssue {
+    fn new(kind: DiscoveryIssueKind, message: String) -> Self {
+        Self { kind, message }
+    }
+
+    fn blocks_resume_uniqueness(&self) -> bool {
+        self.kind != DiscoveryIssueKind::CandidateMissing
+    }
+}
+
+impl DiscoveredHomes {
+    fn resume_coverage_complete(&self) -> bool {
+        !self
+            .issues
+            .iter()
+            .any(DiscoveryIssue::blocks_resume_uniqueness)
+    }
 }
 
 /// Exact discovered homes plus the inputs needed for background inspection.
@@ -49,13 +82,32 @@ pub(crate) struct CodexHomeCandidate {
 enum ThreadHomeProbe {
     Found,
     Missing,
-    Failed(String),
+    Failed(ResumeProbeFailure),
+}
+
+#[derive(Debug)]
+enum ResumeProbeFailure {
+    Cancelled,
+    Inspection(String),
+    WorkerPanicked,
+    WorkerStopped,
+}
+
+impl ResumeProbeFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Cancelled => SESSION_LOOKUP_CANCELLED,
+            Self::Inspection(message) => message,
+            Self::WorkerPanicked => "Codex session lookup worker panicked",
+            Self::WorkerStopped => "Codex session lookup worker stopped",
+        }
+    }
 }
 
 #[derive(Debug)]
 struct ResumeHomeProbeFailure<'a> {
     home: &'a PathBuf,
-    error: String,
+    failure: ResumeProbeFailure,
 }
 
 /// The complete, closed set of policy outcomes from resume-home probing.
@@ -65,6 +117,7 @@ struct ResumeHomeProbeFailure<'a> {
 /// phase so they cannot accidentally change the selection policy.
 #[derive(Debug)]
 enum ResumeHomeSelection<'a> {
+    Cancelled,
     Unique(&'a PathBuf),
     Unconfirmed {
         home: &'a PathBuf,
@@ -73,6 +126,7 @@ enum ResumeHomeSelection<'a> {
     Ambiguous(Vec<&'a PathBuf>),
     Missing {
         failures: Vec<ResumeHomeProbeFailure<'a>>,
+        discovery_incomplete: bool,
     },
 }
 
@@ -184,13 +238,13 @@ where
     })?;
 
     let mut errors = discovered
-        .errors
+        .issues
         .iter()
-        .map(|message| {
+        .map(|issue| {
             json!({
                 "home": null,
                 "kind": "discovery",
-                "message": message
+                "message": issue.message
             })
         })
         .collect::<Vec<_>>();
@@ -232,8 +286,12 @@ pub(crate) fn discover_home_inspection() -> Result<CodexHomeInspection> {
 }
 
 impl CodexHomeInspection {
-    pub(crate) fn discovery_warnings(&self) -> &[String] {
-        &self.discovered.errors
+    pub(crate) fn discovery_warnings(&self) -> Vec<String> {
+        self.discovered
+            .issues
+            .iter()
+            .map(|issue| issue.message.clone())
+            .collect()
     }
 
     pub(crate) fn candidates(&self) -> Vec<CodexHomeCandidate> {
@@ -283,7 +341,7 @@ where
     let mut progress_error = None;
     let inspected = execute_homes_parallel(
         discovered,
-        MAX_PARALLEL_INSPECTIONS,
+        MAX_PARALLEL_HOME_WORKERS,
         |_| None,
         inspect,
         |index, result| match progress(index, result) {
@@ -446,6 +504,13 @@ pub(crate) fn normalize_session_id(input: &str) -> Result<String> {
 }
 
 pub(crate) fn resolve_resume_home(thread_id: &str) -> Result<PathBuf> {
+    resolve_resume_home_with_progress(thread_id, |_, _| {})
+}
+
+pub(crate) fn resolve_resume_home_with_progress<F>(thread_id: &str, progress: F) -> Result<PathBuf>
+where
+    F: FnMut(usize, usize),
+{
     #[cfg(all(unix, not(test)))]
     {
         let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
@@ -453,8 +518,11 @@ pub(crate) fn resolve_resume_home(thread_id: &str) -> Result<PathBuf> {
                 "Codex session lookup was not started because the process-wide signal session is unavailable"
             )
         })?;
-        let result =
-            resolve_resume_home_with_cancellation(thread_id, &|| signal_session.cancelled());
+        let result = resolve_resume_home_with_cancellation(
+            thread_id,
+            &|| signal_session.cancelled(),
+            progress,
+        );
         finish_signal_supervised(
             result,
             signal_session.finish(),
@@ -463,29 +531,37 @@ pub(crate) fn resolve_resume_home(thread_id: &str) -> Result<PathBuf> {
     }
     #[cfg(any(not(unix), test))]
     {
-        resolve_resume_home_with_cancellation(thread_id, &|| false)
+        resolve_resume_home_with_cancellation(thread_id, &|| false, progress)
     }
 }
 
-fn resolve_resume_home_with_cancellation(
+fn resolve_resume_home_with_cancellation<F>(
     thread_id: &str,
     cancelled: &(dyn Fn() -> bool + Sync),
-) -> Result<PathBuf> {
+    progress: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(usize, usize),
+{
     let discovered = discover_homes()?;
     let codex_bin = codex_bin();
-    let probes =
-        probe_thread_homes_parallel(
-            &discovered.paths,
-            cancelled,
-            |home| match app_server_thread(&home, &codex_bin, thread_id, cancelled) {
-                Ok(AppServerThreadLookup::Found) => ThreadHomeProbe::Found,
-                Ok(AppServerThreadLookup::Missing) => ThreadHomeProbe::Missing,
-                Err(error) => ThreadHomeProbe::Failed(error),
-            },
-        );
+    let probes = probe_thread_homes_parallel_with_progress(
+        &discovered.paths,
+        cancelled,
+        |home| match app_server_thread(&home, &codex_bin, thread_id, cancelled) {
+            Ok(AppServerThreadLookup::Found) => ThreadHomeProbe::Found,
+            Ok(AppServerThreadLookup::Missing) => ThreadHomeProbe::Missing,
+            Err(error) if error == app_server::APP_SERVER_INSPECTION_CANCELLED => {
+                ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled)
+            }
+            Err(error) => ThreadHomeProbe::Failed(ResumeProbeFailure::Inspection(error)),
+        },
+        progress,
+    );
     select_resume_home(thread_id, discovered, probes)
 }
 
+#[cfg(test)]
 fn probe_thread_homes_parallel<F>(
     homes: &[PathBuf],
     cancelled: &(dyn Fn() -> bool + Sync),
@@ -494,9 +570,35 @@ fn probe_thread_homes_parallel<F>(
 where
     F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
 {
-    probe_thread_homes_parallel_with_limit(homes, cancelled, probe, MAX_PARALLEL_INSPECTIONS)
+    probe_thread_homes_parallel_with_limit_and_progress(
+        homes,
+        cancelled,
+        probe,
+        MAX_PARALLEL_HOME_WORKERS,
+        |_, _| {},
+    )
 }
 
+fn probe_thread_homes_parallel_with_progress<F, P>(
+    homes: &[PathBuf],
+    cancelled: &(dyn Fn() -> bool + Sync),
+    probe: F,
+    progress: P,
+) -> Vec<ThreadHomeProbe>
+where
+    F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
+    P: FnMut(usize, usize),
+{
+    probe_thread_homes_parallel_with_limit_and_progress(
+        homes,
+        cancelled,
+        probe,
+        MAX_PARALLEL_HOME_WORKERS,
+        progress,
+    )
+}
+
+#[cfg(test)]
 fn probe_thread_homes_parallel_with_limit<F>(
     homes: &[PathBuf],
     cancelled: &(dyn Fn() -> bool + Sync),
@@ -506,14 +608,41 @@ fn probe_thread_homes_parallel_with_limit<F>(
 where
     F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
 {
+    probe_thread_homes_parallel_with_limit_and_progress(
+        homes,
+        cancelled,
+        probe,
+        max_parallel,
+        |_, _| {},
+    )
+}
+
+fn probe_thread_homes_parallel_with_limit_and_progress<F, P>(
+    homes: &[PathBuf],
+    cancelled: &(dyn Fn() -> bool + Sync),
+    probe: F,
+    max_parallel: usize,
+    mut progress: P,
+) -> Vec<ThreadHomeProbe>
+where
+    F: Fn(PathBuf) -> ThreadHomeProbe + Sync,
+    P: FnMut(usize, usize),
+{
+    let total = homes.len();
+    progress(0, total);
+    let mut completed = 0;
     execute_homes_parallel(
         homes,
         max_parallel,
-        |_| cancelled().then(|| ThreadHomeProbe::Failed(SESSION_LOOKUP_CANCELLED.into())),
+        |_| cancelled().then_some(ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled)),
         probe,
-        |_, _| true,
-        || ThreadHomeProbe::Failed("Codex session lookup worker panicked".into()),
-        || ThreadHomeProbe::Failed("Codex session lookup worker stopped".into()),
+        |_, _| {
+            completed += 1;
+            progress(completed, total);
+            true
+        },
+        || ThreadHomeProbe::Failed(ResumeProbeFailure::WorkerPanicked),
+        || ThreadHomeProbe::Failed(ResumeProbeFailure::WorkerStopped),
     )
 }
 
@@ -523,7 +652,11 @@ fn select_resume_home(
     probes: Vec<ThreadHomeProbe>,
 ) -> Result<PathBuf> {
     debug_assert_eq!(discovered.paths.len(), probes.len());
-    let selection = classify_resume_home(&discovered.paths, discovered.errors.is_empty(), probes);
+    let selection = classify_resume_home(
+        &discovered.paths,
+        discovered.resume_coverage_complete(),
+        probes,
+    );
     resolve_resume_home_selection(thread_id, &discovered, selection)
 }
 
@@ -534,21 +667,30 @@ fn classify_resume_home<'a>(
 ) -> ResumeHomeSelection<'a> {
     let mut matches = Vec::new();
     let mut failures = Vec::new();
+    let mut cancelled = false;
     for (home, probe) in homes.iter().zip(probes) {
         match probe {
             ThreadHomeProbe::Found => matches.push(home),
             ThreadHomeProbe::Missing => {}
-            ThreadHomeProbe::Failed(error) => {
-                failures.push(ResumeHomeProbeFailure { home, error });
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled) => cancelled = true,
+            ThreadHomeProbe::Failed(failure) => {
+                failures.push(ResumeHomeProbeFailure { home, failure });
             }
         }
+    }
+
+    if cancelled {
+        return ResumeHomeSelection::Cancelled;
     }
 
     match matches.as_slice() {
         [home] if failures.is_empty() && discovery_complete => ResumeHomeSelection::Unique(home),
         [home] => ResumeHomeSelection::Unconfirmed { home, failures },
         [_, ..] => ResumeHomeSelection::Ambiguous(matches),
-        [] => ResumeHomeSelection::Missing { failures },
+        [] => ResumeHomeSelection::Missing {
+            failures,
+            discovery_incomplete: !discovery_complete,
+        },
     }
 }
 
@@ -558,6 +700,7 @@ fn resolve_resume_home_selection(
     selection: ResumeHomeSelection<'_>,
 ) -> Result<PathBuf> {
     match selection {
+        ResumeHomeSelection::Cancelled => bail!(SESSION_LOOKUP_CANCELLED),
         ResumeHomeSelection::Unique(home) => canonical_or(home.clone()),
         ResumeHomeSelection::Unconfirmed { home, failures } => {
             let home = sanitize_text(&home.display().to_string());
@@ -567,13 +710,23 @@ fn resolve_resume_home_selection(
                 .map(|home| sanitize_text(&home.display().to_string()))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let inspection_incomplete = !failures.is_empty();
+            let discovery_incomplete = !discovered.resume_coverage_complete();
+            let reason = match (discovery_incomplete, inspection_incomplete) {
+                (true, true) => {
+                    "home discovery was incomplete and some discovered homes could not be inspected"
+                }
+                (true, false) => "home discovery was incomplete",
+                (false, true) => "some discovered homes could not be inspected",
+                (false, false) => {
+                    unreachable!("unconfirmed selection requires incomplete evidence")
+                }
+            };
             let mut message = format!(
-                "Codex session '{thread_id}' was found in {home}, but uniqueness could not be confirmed because some homes could not be inspected; checked homes: {checked}"
+                "Codex session '{thread_id}' was found in {home}, but uniqueness could not be confirmed because {reason}; checked homes: {checked}"
             );
-            append_resume_lookup_failures(&mut message, failures, &discovered.errors);
-            message.push_str(&format!(
-                "\nPass --home {home} to resume the confirmed home explicitly."
-            ));
+            append_resume_lookup_failures(&mut message, failures, &discovered.issues);
+            message.push_str("\nPass --home HOME to resume the confirmed home explicitly.");
             Err(anyhow!(message))
         }
         ResumeHomeSelection::Ambiguous(matches) => {
@@ -586,7 +739,10 @@ fn resolve_resume_home_selection(
                 "Codex session '{thread_id}' exists in multiple homes: {homes}; pass --home HOME to choose one explicitly"
             )
         }
-        ResumeHomeSelection::Missing { failures } => {
+        ResumeHomeSelection::Missing {
+            failures,
+            discovery_incomplete,
+        } => {
             let homes = discovered
                 .paths
                 .iter()
@@ -594,16 +750,16 @@ fn resolve_resume_home_selection(
                 .collect::<Vec<_>>()
                 .join(", ");
             let homes = if homes.is_empty() { "none" } else { &homes };
-            let mut message = if failures.is_empty() {
+            let mut message = if failures.is_empty() && !discovery_incomplete {
                 format!("Codex session '{thread_id}' was not found; checked homes: {homes}")
             } else {
                 format!(
-                    "Codex session '{thread_id}' could not be resolved because some homes could not be inspected; checked homes: {homes}"
+                    "Codex session '{thread_id}' could not be resolved because lookup coverage was incomplete; checked homes: {homes}"
                 )
             };
-            append_resume_lookup_failures(&mut message, failures, &discovered.errors);
+            append_resume_lookup_failures(&mut message, failures, &discovered.issues);
             message.push_str(
-                "\nPass --home HOME to use a non-conventional or unavailable home explicitly.",
+                "\nPass --home HOME to choose a non-conventional home or bypass app-server lookup explicitly.",
             );
             Err(anyhow!(message))
         }
@@ -613,17 +769,20 @@ fn resolve_resume_home_selection(
 fn append_resume_lookup_failures(
     message: &mut String,
     failures: Vec<ResumeHomeProbeFailure<'_>>,
-    discovery_errors: &[String],
+    discovery_issues: &[DiscoveryIssue],
 ) {
-    for ResumeHomeProbeFailure { home, error } in failures {
+    for ResumeHomeProbeFailure { home, failure } in failures {
         message.push_str(&format!(
             "\n  - {}: {}",
             sanitize_text(&home.display().to_string()),
-            sanitize_text(&error)
+            sanitize_text(failure.message())
         ));
     }
-    for warning in discovery_errors {
-        message.push_str(&format!("\n  - discovery: {}", sanitize_text(warning)));
+    for issue in discovery_issues {
+        message.push_str(&format!(
+            "\n  - discovery: {}",
+            sanitize_text(&issue.message)
+        ));
     }
 }
 
@@ -998,7 +1157,7 @@ where
     R: FnOnce(&Path, &mut dyn FnMut(io::Result<(OsString, PathBuf)>)) -> io::Result<()>,
 {
     let mut candidates = Vec::new();
-    let mut errors = Vec::new();
+    let mut issues = Vec::new();
     let mut representation_lossy = false;
     let mut inspected = HashSet::new();
     let default = user_home.join(".codex");
@@ -1008,7 +1167,7 @@ where
         false,
         &metadata,
         &mut candidates,
-        &mut errors,
+        &mut issues,
         &mut representation_lossy,
     );
     let scan_result = {
@@ -1016,7 +1175,10 @@ where
             let (name, path) = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    errors.push(format!("Failed to inspect a Codex home candidate: {error}"));
+                    issues.push(DiscoveryIssue::new(
+                        DiscoveryIssueKind::EntryUnreadable,
+                        format!("Failed to inspect a Codex home candidate: {error}"),
+                    ));
                     return;
                 }
             };
@@ -1027,7 +1189,7 @@ where
                     true,
                     &metadata,
                     &mut candidates,
-                    &mut errors,
+                    &mut issues,
                     &mut representation_lossy,
                 );
             }
@@ -1035,9 +1197,12 @@ where
         read_entries(user_home, &mut inspect_entry)
     };
     if let Err(error) = scan_result {
-        errors.push(format!(
-            "Failed to inspect {} for Codex homes: {error}",
-            user_home.display()
+        issues.push(DiscoveryIssue::new(
+            DiscoveryIssueKind::ScanIncomplete,
+            format!(
+                "Failed to inspect {} for Codex homes: {error}",
+                user_home.display()
+            ),
         ));
     }
     if !inspected.contains(current) {
@@ -1046,7 +1211,7 @@ where
             true,
             &metadata,
             &mut candidates,
-            &mut errors,
+            &mut issues,
             &mut representation_lossy,
         );
     }
@@ -1060,7 +1225,7 @@ where
     });
     DiscoveredHomes {
         paths: candidates,
-        errors,
+        issues,
         representation_lossy,
     }
 }
@@ -1070,7 +1235,7 @@ fn add_directory_candidate<F>(
     report_not_found: bool,
     metadata: &F,
     candidates: &mut Vec<PathBuf>,
-    errors: &mut Vec<String>,
+    issues: &mut Vec<DiscoveryIssue>,
     representation_lossy: &mut bool,
 ) where
     F: Fn(&Path) -> io::Result<fs::Metadata>,
@@ -1080,10 +1245,20 @@ fn add_directory_candidate<F>(
         Ok(metadata) if metadata.is_dir() => candidates.push(candidate),
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound && !report_not_found => {}
-        Err(error) => errors.push(format!(
-            "Failed to inspect Codex home candidate {}: {error}",
-            candidate.display()
-        )),
+        Err(error) => {
+            let kind = if error.kind() == io::ErrorKind::NotFound {
+                DiscoveryIssueKind::CandidateMissing
+            } else {
+                DiscoveryIssueKind::CandidateUnreadable
+            };
+            issues.push(DiscoveryIssue::new(
+                kind,
+                format!(
+                    "Failed to inspect Codex home candidate {}: {error}",
+                    candidate.display()
+                ),
+            ));
+        }
     }
 }
 

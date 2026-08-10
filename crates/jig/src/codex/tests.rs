@@ -346,7 +346,7 @@ fn resume_home_selection_requires_one_exact_match() {
     fs::create_dir(&work).unwrap();
     let discovered = || DiscoveredHomes {
         paths: vec![default.clone(), work.clone()],
-        errors: Vec::new(),
+        issues: Vec::new(),
         representation_lossy: false,
     };
     let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
@@ -376,7 +376,9 @@ fn resume_home_selection_requires_one_exact_match() {
         discovered(),
         vec![
             ThreadHomeProbe::Missing,
-            ThreadHomeProbe::Failed("app-server unavailable\u{1b}[2J".into()),
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Inspection(
+                "app-server unavailable\u{1b}[2J".into(),
+            )),
         ],
     )
     .unwrap_err()
@@ -428,13 +430,19 @@ fn resume_home_probe_classification_captures_each_policy_outcome() {
         true,
         vec![
             ThreadHomeProbe::Missing,
-            ThreadHomeProbe::Failed("app-server unavailable".into()),
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Inspection(
+                "app-server unavailable".into(),
+            )),
         ],
     ) {
-        ResumeHomeSelection::Missing { failures } => {
+        ResumeHomeSelection::Missing {
+            failures,
+            discovery_incomplete,
+        } => {
             assert_eq!(failures.len(), 1);
             assert_eq!(failures[0].home, &homes[1]);
-            assert_eq!(failures[0].error, "app-server unavailable");
+            assert_eq!(failures[0].failure.message(), "app-server unavailable");
+            assert!(!discovery_incomplete);
         }
         selection => panic!("expected missing session, got {selection:?}"),
     }
@@ -453,12 +461,14 @@ fn resume_home_selection_fails_closed_when_uniqueness_cannot_be_proven() {
         thread_id,
         DiscoveredHomes {
             paths: vec![default.clone(), work.clone()],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         vec![
             ThreadHomeProbe::Found,
-            ThreadHomeProbe::Failed("app-server unavailable".into()),
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Inspection(
+                "app-server unavailable".into(),
+            )),
         ],
     )
     .unwrap_err()
@@ -468,13 +478,21 @@ fn resume_home_selection_fails_closed_when_uniqueness_cannot_be_proven() {
         "{error}"
     );
     assert!(error.contains("app-server unavailable"), "{error}");
-    assert!(error.contains("Pass --home"), "{error}");
+    assert!(
+        error.contains("some discovered homes could not be inspected"),
+        "{error}"
+    );
+    assert!(error.contains("Pass --home HOME"), "{error}");
+    assert!(!error.contains(&format!("Pass --home {}", default.display())));
 
     let error = select_resume_home(
         thread_id,
         DiscoveredHomes {
             paths: vec![default, work],
-            errors: vec!["candidate disappeared during discovery".into()],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::ScanIncomplete,
+                "candidate disappeared during discovery".into(),
+            )],
             representation_lossy: false,
         },
         vec![ThreadHomeProbe::Found, ThreadHomeProbe::Missing],
@@ -485,7 +503,29 @@ fn resume_home_selection_fails_closed_when_uniqueness_cannot_be_proven() {
         error.contains("uniqueness could not be confirmed"),
         "{error}"
     );
+    assert!(error.contains("home discovery was incomplete"), "{error}");
+    assert!(
+        !error.contains("some discovered homes could not be inspected"),
+        "{error}"
+    );
     assert!(error.contains("candidate disappeared"), "{error}");
+
+    let error = select_resume_home(
+        thread_id,
+        DiscoveredHomes {
+            paths: vec![PathBuf::from("/tmp/.codex")],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::ScanIncomplete,
+                "home directory scan denied".into(),
+            )],
+            representation_lossy: false,
+        },
+        vec![ThreadHomeProbe::Missing],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("lookup coverage was incomplete"), "{error}");
+    assert!(!error.contains("was not found"), "{error}");
 }
 
 #[test]
@@ -512,7 +552,7 @@ fn cancelled_resume_lookup_does_not_start_queued_probes() {
     assert!(probes[1..].iter().all(|probe| {
         matches!(
             probe,
-            ThreadHomeProbe::Failed(error) if error == SESSION_LOOKUP_CANCELLED
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled)
         )
     }));
 
@@ -527,9 +567,60 @@ fn cancelled_resume_lookup_does_not_start_queued_probes() {
     assert!(probes.into_iter().all(|probe| {
         matches!(
             probe,
-            ThreadHomeProbe::Failed(error) if error == SESSION_LOOKUP_CANCELLED
+            ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled)
         )
     }));
+
+    assert!(matches!(
+        classify_resume_home(
+            &homes,
+            true,
+            vec![
+                ThreadHomeProbe::Found,
+                ThreadHomeProbe::Failed(ResumeProbeFailure::Cancelled),
+                ThreadHomeProbe::Missing,
+                ThreadHomeProbe::Missing,
+            ],
+        ),
+        ResumeHomeSelection::Cancelled
+    ));
+
+    let error = resolve_resume_home_selection(
+        "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+        &DiscoveredHomes {
+            paths: homes,
+            issues: Vec::new(),
+            representation_lossy: false,
+        },
+        ResumeHomeSelection::Cancelled,
+    )
+    .unwrap_err()
+    .to_string();
+    assert_eq!(error, SESSION_LOOKUP_CANCELLED);
+    assert!(!error.contains("--home"));
+}
+
+#[test]
+fn resume_probe_progress_reports_initial_state_and_every_completion() {
+    let homes = (0..3)
+        .map(|index| PathBuf::from(format!("/tmp/.codex-{index}")))
+        .collect::<Vec<_>>();
+    let mut progress = Vec::new();
+
+    let probes = probe_thread_homes_parallel_with_limit_and_progress(
+        &homes,
+        &|| false,
+        |_| ThreadHomeProbe::Missing,
+        2,
+        |completed, total| progress.push((completed, total)),
+    );
+
+    assert_eq!(progress, vec![(0, 3), (1, 3), (2, 3), (3, 3)]);
+    assert!(
+        probes
+            .into_iter()
+            .all(|probe| matches!(probe, ThreadHomeProbe::Missing))
+    );
 }
 
 #[test]
@@ -570,7 +661,7 @@ fn panicking_resume_probe_keeps_its_domain_specific_failure() {
 
     assert!(matches!(
         probes.first(),
-        Some(ThreadHomeProbe::Failed(error)) if error == "Codex session lookup worker panicked"
+        Some(ThreadHomeProbe::Failed(ResumeProbeFailure::WorkerPanicked))
     ));
 }
 
@@ -719,7 +810,7 @@ fn assembled_home_report(
         include_usage,
         DiscoveredHomes {
             paths: vec![home],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         current,
@@ -748,7 +839,7 @@ fn homes_report_envelope_maps_complete_and_partial_outcomes() {
         true,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         &home,
@@ -770,7 +861,10 @@ fn homes_report_envelope_maps_complete_and_partial_outcomes() {
         true,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: vec!["could not inspect one directory entry".into()],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::EntryUnreadable,
+                "could not inspect one directory entry".into(),
+            )],
             representation_lossy: false,
         },
         &home,
@@ -791,7 +885,10 @@ fn picker_inspection_retains_nonfatal_discovery_warnings() {
     let inspection = CodexHomeInspection {
         discovered: DiscoveredHomes {
             paths: vec![PathBuf::from("/tmp/.codex")],
-            errors: vec!["could not inspect one directory entry".into()],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::EntryUnreadable,
+                "could not inspect one directory entry".into(),
+            )],
             representation_lossy: false,
         },
         current: PathBuf::from("/tmp/.codex"),
@@ -822,9 +919,63 @@ fn discovery_retains_candidate_metadata_errors() {
     });
 
     assert_eq!(discovered.paths, vec![default]);
-    assert_eq!(discovered.errors.len(), 1);
-    assert!(discovered.errors[0].contains(&inaccessible.display().to_string()));
-    assert!(discovered.errors[0].contains("denied"));
+    assert_eq!(discovered.issues.len(), 1);
+    assert_eq!(
+        discovered.issues[0].kind,
+        DiscoveryIssueKind::CandidateUnreadable
+    );
+    assert!(
+        discovered.issues[0]
+            .message
+            .contains(&inaccessible.display().to_string())
+    );
+    assert!(discovered.issues[0].message.contains("denied"));
+}
+
+#[test]
+fn missing_candidate_warning_does_not_block_a_unique_resume_match() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path();
+    let default = user_home.join(".codex");
+    let work = user_home.join(".codex-work");
+    let stale = user_home.join(".codex-stale");
+    for directory in [&default, &work] {
+        fs::create_dir(directory).unwrap();
+    }
+
+    let discovered = discover_homes_from_with_sources(
+        user_home,
+        &default,
+        |path| {
+            if path == stale {
+                Err(io::ErrorKind::NotFound.into())
+            } else {
+                fs::metadata(path)
+            }
+        },
+        |_, inspect_entry| {
+            inspect_entry(Ok((OsString::from(".codex-work"), work.clone())));
+            inspect_entry(Ok((OsString::from(".codex-stale"), stale.clone())));
+            Ok(())
+        },
+    );
+
+    assert_eq!(discovered.paths, vec![default, work.clone()]);
+    assert_eq!(discovered.issues.len(), 1);
+    assert_eq!(
+        discovered.issues[0].kind,
+        DiscoveryIssueKind::CandidateMissing
+    );
+    assert!(discovered.resume_coverage_complete());
+    assert_eq!(
+        select_resume_home(
+            "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+            discovered,
+            vec![ThreadHomeProbe::Missing, ThreadHomeProbe::Found],
+        )
+        .unwrap(),
+        work.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -848,11 +999,12 @@ fn discovery_retains_current_home_when_user_home_scan_fails() {
     );
     assert_eq!(discovered.paths, vec![current]);
     assert!(
-        discovered.errors.iter().any(|error| {
-            error.contains(&user_home.display().to_string()) && error.contains("for Codex homes")
+        discovered.issues.iter().any(|issue| {
+            issue.message.contains(&user_home.display().to_string())
+                && issue.message.contains("for Codex homes")
         }),
         "{:?}",
-        discovered.errors
+        discovered.issues
     );
 }
 
@@ -887,7 +1039,7 @@ fn discovery_processes_directory_entries_as_the_source_yields_them() {
     );
 
     assert_eq!(discovered.paths, vec![work, current]);
-    assert!(discovered.errors.is_empty());
+    assert!(discovered.issues.is_empty());
 }
 
 #[cfg(unix)]
@@ -900,7 +1052,7 @@ fn homes_report_marks_lossy_non_utf8_paths() {
         false,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         &home,
@@ -1195,7 +1347,7 @@ fn discovery_finds_conventional_and_current_homes_and_ignores_other_directories(
     let discovered = discover_homes_from(&user_home, &current);
 
     assert_eq!(discovered.paths, vec![default, work, current]);
-    assert!(discovered.errors.is_empty());
+    assert!(discovered.issues.is_empty());
 }
 
 #[test]
@@ -1304,25 +1456,26 @@ fn app_server_thread_protocol_reads_only_the_requested_thread_metadata() {
 #[test]
 fn app_server_thread_protocol_distinguishes_missing_threads_from_failures() {
     let thread_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
-    let missing = format!(
-        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32600,\"message\":\"thread not loaded: {thread_id}\"}}}}\n"
-    );
-    let mut reader = Cursor::new(missing.as_bytes());
-    assert_eq!(
-        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
-            .unwrap(),
-        AppServerThreadLookup::Missing
-    );
-
-    let alternate_missing = format!(
-        "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32600,\"message\":\"thread not found: {thread_id}\"}}}}\n"
-    );
-    let mut reader = Cursor::new(alternate_missing.as_bytes());
-    assert_eq!(
-        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
-            .unwrap(),
-        AppServerThreadLookup::Missing
-    );
+    for message in [
+        format!("thread not loaded: {thread_id}"),
+        format!("thread not found: {thread_id}"),
+        format!("thread {thread_id} not found"),
+        format!("no rollout found for thread id {thread_id}"),
+        format!("no rollout found for conversation id {thread_id}"),
+        format!("thread/read failed: thread not loaded: {thread_id}"),
+    ] {
+        let missing = format!(
+            "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32600,\"message\":{}}}}}\n",
+            serde_json::to_string(&message).unwrap()
+        );
+        let mut reader = Cursor::new(missing.as_bytes());
+        assert_eq!(
+            app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+                .unwrap(),
+            AppServerThreadLookup::Missing,
+            "missing-thread variant was not recognized: {message}"
+        );
+    }
 
     let wrong_code = format!(
         "{{\"id\":0,\"result\":{{}}}}\n{{\"id\":1,\"error\":{{\"code\":-32603,\"message\":\"thread not loaded: {thread_id}\"}}}}\n"
@@ -1332,6 +1485,28 @@ fn app_server_thread_protocol_distinguishes_missing_threads_from_failures() {
         app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
             .unwrap_err()
             .contains("thread not loaded")
+    );
+
+    let unrelated_invalid_request = concat!(
+        "{\"id\":0,\"result\":{}}\n",
+        "{\"id\":1,\"error\":{\"code\":-32600,\"message\":\"failed to load configuration\"}}\n"
+    );
+    let mut reader = Cursor::new(unrelated_invalid_request.as_bytes());
+    assert!(
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap_err()
+            .contains("failed to load configuration")
+    );
+
+    let different_thread = concat!(
+        "{\"id\":0,\"result\":{}}\n",
+        "{\"id\":1,\"error\":{\"code\":-32600,\"message\":\"no rollout found for thread id 00000000-0000-0000-0000-000000000000\"}}\n"
+    );
+    let mut reader = Cursor::new(different_thread.as_bytes());
+    assert!(
+        app_server_thread_protocol(&mut Vec::new(), &mut reader, thread_id, None, &|| false)
+            .unwrap_err()
+            .contains("no rollout found")
     );
 
     let failed = concat!(
@@ -1637,6 +1812,37 @@ printf '%s\n' '{"id":1,"error":{"code":-32603,"message":"thread state unavailabl
         error,
         "thread/read failed: thread state unavailable; app-server stderr: thread lookup diagnostics"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn app_server_client_thread_keeps_cancellation_distinct_from_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("codex-home");
+    let cancelled = temp.path().join("cancelled");
+    fs::create_dir(&home).unwrap();
+    let stub = temp.path().join("codex-stub.sh");
+    fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nread -r initialize\nprintf '%s\\n' 'shutdown diagnostics' >&2\ntouch '{}'\nsleep 30\n",
+            cancelled.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let error = app_server_thread(
+        &home,
+        stub.as_os_str(),
+        "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+        &|| cancelled.exists(),
+    )
+    .unwrap_err();
+
+    assert_eq!(error, APP_SERVER_INSPECTION_CANCELLED);
 }
 
 #[cfg(unix)]

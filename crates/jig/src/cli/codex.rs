@@ -34,8 +34,8 @@ Examples:
 pub(super) const CODEX_RESUME_AFTER_HELP: &str = "\
 Jig queries every discovered Codex home for SESSION_ID, then launches Codex with
 the single matching directory as CODEX_HOME. Use --home to select an explicit
-home without automatic lookup. Arguments after -- are forwarded to `codex resume`
-without shell parsing.
+home without automatic lookup. Interactive terminals show lookup progress.
+Arguments after -- are forwarded to `codex resume` without shell parsing.
 
 Examples:
   jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20

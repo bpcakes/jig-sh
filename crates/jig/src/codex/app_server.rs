@@ -258,7 +258,7 @@ where
             if thread_missing_error(error, thread_id) {
                 return Ok(AppServerThreadLookup::Missing);
             }
-            return response_result(response, "thread/read").map(|_| AppServerThreadLookup::Found);
+            return Err(response_error(error, "thread/read"));
         }
         let result = response_result(response, "thread/read")?;
         let returned_id = result
@@ -399,13 +399,22 @@ fn thread_missing_error(error: &JsonValue, thread_id: &str) -> bool {
     let Some(message) = error.get("message").and_then(JsonValue::as_str) else {
         return false;
     };
-    ["thread not loaded:", "thread not found:"]
-        .into_iter()
-        .any(|prefix| {
-            message
-                .strip_prefix(prefix)
-                .is_some_and(|id| id.trim() == thread_id)
-        })
+    let message = message
+        .strip_prefix("thread/read failed:")
+        .map(str::trim)
+        .unwrap_or(message);
+    // Codex has emitted each of these missing-rollout forms across supported
+    // app-server generations. Keep the templates and requested id exact:
+    // -32600 is also used for unrelated failures such as invalid config.
+    [
+        format!("thread not loaded: {thread_id}"),
+        format!("thread not found: {thread_id}"),
+        format!("thread {thread_id} not found"),
+        format!("no rollout found for thread id {thread_id}"),
+        format!("no rollout found for conversation id {thread_id}"),
+    ]
+    .iter()
+    .any(|missing| message == missing)
 }
 
 #[cfg(test)]
@@ -442,16 +451,20 @@ pub(super) fn protocol_message_too_large() -> String {
 
 fn response_result(response: JsonValue, method: &str) -> std::result::Result<JsonValue, String> {
     if let Some(error) = response.get("error") {
-        let message = error
-            .get("message")
-            .and_then(JsonValue::as_str)
-            .unwrap_or("unknown app-server error");
-        return Err(format!("{method} failed: {}", bounded_message(message)));
+        return Err(response_error(error, method));
     }
     response
         .get("result")
         .cloned()
         .ok_or_else(|| format!("{method} response did not include a result"))
+}
+
+fn response_error(error: &JsonValue, method: &str) -> String {
+    let message = error
+        .get("message")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("unknown app-server error");
+    format!("{method} failed: {}", bounded_message(message))
 }
 
 fn app_server_error(error: &OwnedProcessTreeInteractionError, timeout: Duration) -> String {
@@ -482,6 +495,12 @@ fn app_server_error(error: &OwnedProcessTreeInteractionError, timeout: Duration)
 }
 
 fn append_stderr_context(error: String, stderr: Option<&BoundedProcessOutput>) -> String {
+    // Cancellation is control flow, not a protocol failure. Keep its sentinel
+    // stable so callers can promote it to a typed cancellation outcome even
+    // when the child happened to write diagnostics before it was stopped.
+    if error == APP_SERVER_INSPECTION_CANCELLED {
+        return error;
+    }
     let Some(stderr) = stderr else {
         return error;
     };

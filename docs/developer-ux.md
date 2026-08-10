@@ -104,7 +104,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
 - `scripts/jig mcp` exposes the same command contract to MCP clients.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
-- `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account and usage details fill in without blocking navigation, while `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` finds the state root that owns a session before launching Codex. Launch and resume forward Codex arguments after `--`.
+- `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account and usage details fill in without blocking navigation, while `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 
 This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
 

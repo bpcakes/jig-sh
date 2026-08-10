@@ -30,16 +30,36 @@ fn run_codex_resume(opts: CodexResumeOpts, json_output: bool) -> Result<()> {
     let session_id = crate::codex::normalize_session_id(&opts.session_id)?;
     let home = match opts.home {
         Some(home) => crate::codex::resolve_launch_home(&home)?,
-        None => crate::codex::resolve_resume_home(&session_id)?,
+        None if json_output => crate::codex::resolve_resume_home(&session_id)?,
+        None => resolve_resume_home_with_cli_progress(&session_id)?,
     };
-    let mut codex_args = vec!["resume".into(), session_id.into()];
-    codex_args.extend(opts.codex_args);
+    let codex_args = resume_codex_args(session_id, opts.codex_args);
 
     if opts.dry_run {
         let report = crate::codex::resume_dry_run_report(&home, &codex_args);
         return emit(json_output, HumanOutput::CodexResume, &report);
     }
     crate::codex::launch(&home, &codex_args)
+}
+
+fn resolve_resume_home_with_cli_progress(session_id: &str) -> Result<PathBuf> {
+    let progress = CliProgress::new("codex resume");
+    progress.header("find the Codex home containing the session");
+    let result = crate::codex::resolve_resume_home_with_progress(session_id, |completed, total| {
+        progress.step("inspect homes", format!("{completed}/{total}"))
+    });
+    let home = progress.log_blocked_on_err(result)?;
+    progress.done("found the session's Codex home");
+    Ok(home)
+}
+
+fn resume_codex_args(
+    session_id: String,
+    forwarded: Vec<std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let mut args = vec!["resume".into(), session_id.into()];
+    args.extend(forwarded);
+    args
 }
 
 fn homes_report_with_cli_progress(include_usage: bool) -> Result<serde_json::Value> {
@@ -88,7 +108,7 @@ fn select_home_interactively() -> Result<Option<PathBuf>> {
         })
         .collect::<Vec<_>>();
     if homes.is_empty() {
-        return Err(no_codex_homes_error(inspection.discovery_warnings()));
+        return Err(no_codex_homes_error(&inspection.discovery_warnings()));
     }
     select_picker(homes, PickerInspectionSource(inspection))?
         .map(|path| revalidate_picker_home(&path))
@@ -139,7 +159,7 @@ struct PickerInspectionSource(crate::codex::CodexHomeInspection);
 
 impl InspectionSource for PickerInspectionSource {
     fn discovery_warnings(&self) -> Vec<String> {
-        self.0.discovery_warnings().to_vec()
+        self.0.discovery_warnings()
     }
 
     fn inspect(
@@ -208,6 +228,25 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("only when --dry-run is present"));
+    }
+
+    #[test]
+    fn resume_arguments_keep_the_normalized_id_before_forwarded_arguments() {
+        let args = resume_codex_args(
+            "019fe6e4-972f-7392-aaf3-58cb652a4e20".into(),
+            vec!["--search".into(), "prompt with spaces".into()],
+        );
+
+        assert_eq!(
+            args,
+            [
+                "resume",
+                "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+                "--search",
+                "prompt with spaces",
+            ]
+            .map(std::ffi::OsString::from)
+        );
     }
 
     #[test]
