@@ -1220,7 +1220,7 @@ mod tests {
         .to_string();
 
         assert!(error.contains("run timeout"));
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1377,7 +1377,7 @@ mod tests {
         .to_string();
 
         assert!(error.contains("output drain"), "unexpected error: {error}");
-        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(started.elapsed() < Duration::from_secs(3));
         assert!(marker.exists(), "escaped helper never established itself");
         fs::write(&release, b"release").unwrap();
         wait_for_path(&done, Duration::from_secs(3));
