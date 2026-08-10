@@ -308,6 +308,11 @@ fn generated_launcher_handoff_validates_and_reuses_the_loaded_context() {
     std::fs::write(temp.path().join(".jig.toml"), "[malformed").unwrap();
     let _cwd = CurrentDirGuard::set(temp.path());
 
+    let worker_ctx = std::thread::spawn(RepoContext::load)
+        .join()
+        .expect("launcher-context worker panicked")
+        .expect("worker should reuse the launcher-validated context");
+    assert_eq!(worker_ctx.contract_version(), 4);
     let ctx = RepoContext::load().expect("launcher-validated context should be reused");
     assert_eq!(ctx.contract_version(), 4);
 }

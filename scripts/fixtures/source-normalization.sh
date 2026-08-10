@@ -21,7 +21,7 @@ write_fake_cargo_installer() {
     '  printf "%s\n" "// changed while cargo install was running" >>"$JIG_FIXTURE_MUTATE_SOURCE_PATH"' \
     'fi' \
     'mkdir -p "$install_root/bin"' \
-    'printf "%s\n" "#!/bin/sh" "if [ \"\${1:-}\" = \"__runtime-compatible\" ]; then exit 0; fi" "if [ \"\${1:-}\" = \"--version\" ]; then printf \"%s\\n\" \"jig 99.0.0\"; exit 0; fi" "if [ \"\${1:-}\" = \"--help\" ] || [ \"\${1:-}\" = \"mcp\" ] || [ \"\${1:-}\" = \"doctor\" ]; then exit 0; fi" "exit 99" >"$install_root/bin/jig"' \
+    'printf "%s\n" "#!/bin/sh" "if [ \"\${1:-}\" = \"__runtime-compatible\" ]; then exit 0; fi" "if [ \"\${1:-}\" = \"--version\" ]; then printf \"%s\\n\" \"jig 99.0.0\"; exit 0; fi" "while [ \"\$#\" -ge 2 ]; do case \"\$1\" in --__launcher-contract-version|--__launcher-profile|--__launcher-repo-root) shift 2 ;; *) break ;; esac; done" "if [ \"\${1:-}\" = \"--help\" ] || [ \"\${1:-}\" = \"mcp\" ] || [ \"\${1:-}\" = \"doctor\" ]; then exit 0; fi" "exit 99" >"$install_root/bin/jig"' \
     'chmod +x "$install_root/bin/jig"' \
     >"$bin_dir/cargo"
   chmod +x "$bin_dir/cargo"
@@ -1279,6 +1279,7 @@ validate_seed_checks_the_copy_before_cache_publication() {
   local install_root="$TMP_DIR/seed-publication-install"
   local expected_bin="$TMP_DIR/seed-publication-expected"
   local changing_dev_bin="$TMP_DIR/changing-dev-jig"
+  local probe_state="$TMP_DIR/changing-dev-jig.probed"
   local stderr_file="$TMP_DIR/seed-publication.stderr"
 
   create_template_snapshot_repo "$template_snapshot"
@@ -1292,10 +1293,13 @@ validate_seed_checks_the_copy_before_cache_publication() {
   printf '%s\n' \
     '#!/bin/sh' \
     'if [ "${1:-}" = "__runtime-compatible" ]; then' \
-    '  printf "%s\n" "#!/bin/sh" "exit 1" >"$0.next"' \
-    '  chmod +x "$0.next"' \
-    '  mv "$0.next" "$0"' \
-    '  exit 0' \
+    '  probes=0' \
+    '  if [ -r "$JIG_FIXTURE_SEED_PROBE_STATE" ]; then read -r probes <"$JIG_FIXTURE_SEED_PROBE_STATE"; fi' \
+    '  probes=$((probes + 1))' \
+    '  printf "%s\n" "$probes" >"$JIG_FIXTURE_SEED_PROBE_STATE"' \
+    '  if [ "$probes" -le 2 ]; then' \
+    '    exit 0' \
+    '  fi' \
     'fi' \
     'exit 1' \
     >"$changing_dev_bin"
@@ -1303,7 +1307,8 @@ validate_seed_checks_the_copy_before_cache_publication() {
 
   if (
     cd "$rendered_dir"
-    JIG_DEV_BIN="$changing_dev_bin" scripts/install-jig.sh \
+    JIG_DEV_BIN="$changing_dev_bin" \
+      JIG_FIXTURE_SEED_PROBE_STATE="$probe_state" scripts/install-jig.sh \
       --profile runtime --seed-dev-bin "$install_root" >/dev/null 2>"$stderr_file"
   ); then
     echo "Seed unexpectedly published a development binary that changed after validation." >&2

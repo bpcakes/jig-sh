@@ -16,7 +16,11 @@ on:
       - "scripts/jig"
       - "scripts/install-jig.sh"
       - "scripts/check-launcher-template.sh"
+      - "scripts/validate-fixtures.sh"
+      - "scripts/fixtures/**"
       - "templates/project/**"
+      - "examples/**"
+      - "tests/fixtures/**"
       - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   push:
@@ -36,7 +40,11 @@ on:
       - "scripts/jig"
       - "scripts/install-jig.sh"
       - "scripts/check-launcher-template.sh"
+      - "scripts/validate-fixtures.sh"
+      - "scripts/fixtures/**"
       - "templates/project/**"
+      - "examples/**"
+      - "tests/fixtures/**"
       - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   merge_group:
@@ -61,6 +69,25 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Check launcher, installer, and contract parity
         run: bash scripts/check-launcher-template.sh
+
+  rendered-fixtures:
+    name: Validate rendered repository fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Validate behavioral fixtures
+        run: bash scripts/validate-fixtures.sh
 
   fmt:
     name: scripts/jig check fmt

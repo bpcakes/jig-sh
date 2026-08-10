@@ -65,6 +65,7 @@
 - Consolidate SQLx command modules
 
 ### Tests
+- Run rendered-repository and runtime-source behavioral fixtures in pull-request CI.
 - Move doctor tests beside module
 - Move adopt inference tests beside module
 - Move git bootstrap tests beside module

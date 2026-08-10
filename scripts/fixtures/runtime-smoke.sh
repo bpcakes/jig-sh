@@ -527,8 +527,17 @@ assert_malformed_answers_keep_diagnostics_reachable() {
       echo "Malformed .jig.toml leaked a Python traceback before doctor could run." >&2
       exit 1
     fi
-    grep -Fq 'Failed to parse' "$doctor_stderr"
-    python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["command"] == "doctor"' <"$doctor_stdout"
+    python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+assert payload["command"] == "doctor", payload
+checks = {check["id"]: check for check in payload["checks"]}
+config = checks["config"]
+assert config["status"] == "invalid", config
+assert "Failed to parse" in config["detail"], config
+' <"$doctor_stdout"
 
     env -u JIG_DEV_BIN scripts/jig --help >"$help_stdout" 2>"$help_stderr"
     if grep -Fq 'Traceback (most recent call last)' "$help_stderr"; then

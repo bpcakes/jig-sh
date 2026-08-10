@@ -1,9 +1,9 @@
-#[cfg(test)]
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(test)]
+use std::sync::Mutex;
 #[cfg(not(test))]
 use std::sync::OnceLock;
 
@@ -33,11 +33,11 @@ pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 #[cfg(not(test))]
 static PREVALIDATED_LAUNCHER_CONTEXT: OnceLock<RepoContext> = OnceLock::new();
 #[cfg(test)]
-thread_local! {
-    // Unit tests run several synthetic CLI invocations in one process, so they
-    // use a resettable per-test-thread equivalent of the production OnceLock.
-    static PREVALIDATED_LAUNCHER_CONTEXT: RefCell<Option<RepoContext>> = const { RefCell::new(None) };
-}
+// Unit tests run several synthetic CLI invocations in one process, so they use
+// a resettable global equivalent of the production OnceLock. Keeping this
+// process-global preserves the production invariant that worker threads see the
+// launcher-validated context; environment-mutating tests serialize access.
+static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(None);
 pub(crate) const DEFAULT_CODEX_MARKETPLACE_ID: &str = "jig-skills";
 pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
@@ -391,22 +391,22 @@ impl RepoContext {
         }
         #[cfg(test)]
         {
-            PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| {
-                let mut slot = slot.borrow_mut();
-                if slot.is_some() {
-                    bail!("Launcher repository context was already initialized");
-                }
-                *slot = Some(self);
-                Ok(())
-            })
+            let mut slot = PREVALIDATED_LAUNCHER_CONTEXT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_some() {
+                bail!("Launcher repository context was already initialized");
+            }
+            *slot = Some(self);
+            Ok(())
         }
     }
 
     #[cfg(test)]
     pub(crate) fn clear_prevalidated_launcher_context() {
-        PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| {
-            *slot.borrow_mut() = None;
-        });
+        *PREVALIDATED_LAUNCHER_CONTEXT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     fn prevalidated_launcher_context() -> Option<Self> {
@@ -416,7 +416,11 @@ impl RepoContext {
         }
         #[cfg(test)]
         {
-            PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| slot.borrow().as_ref().cloned())
+            PREVALIDATED_LAUNCHER_CONTEXT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned()
         }
     }
 
