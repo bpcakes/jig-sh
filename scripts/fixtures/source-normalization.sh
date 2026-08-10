@@ -79,6 +79,39 @@ validate_gnu_stat_fallback_rejects_successful_malformed_bsd_output() {
   [[ "$identity" == "10:20:30:40:2026-08-06T12:00:00.123T+0000:2026-08-06T12:00:00.456T+0000" ]]
 }
 
+validate_mutable_source_reminder_requires_matching_cache_lock() {
+  local source_cache="$TMP_DIR/mutable-source-cache"
+  local active_cache="$TMP_DIR/mutable-runtime-cache"
+  local stderr_file="$TMP_DIR/mutable-source-reminder-stderr"
+  local function_source
+
+  mkdir -p "$source_cache" "$active_cache"
+  function_source="$(awk '
+    /^mark_mutable_source_refresh_reminder\(\) \{/ { capture = 1 }
+    /^warn_for_mutable_source_cache_if_due\(\) \{/ { exit }
+    capture { print }
+  ' "$ROOT_DIR/scripts/install-jig.sh")"
+
+  INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$active_cache.lock" \
+    REMINDER_FUNCTIONS="$function_source" SOURCE_CACHE="$source_cache" \
+    /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"'
+  [[ ! -e "$source_cache/.jig-mutable-source-reminder" ]]
+
+  INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$source_cache.lock" \
+    REMINDER_FUNCTIONS="$function_source" SOURCE_CACHE="$source_cache" \
+    /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"'
+  [[ -f "$source_cache/.jig-mutable-source-reminder" ]]
+
+  rm "$source_cache/.jig-mutable-source-reminder"
+  mkdir "$source_cache/.jig-mutable-source-reminder"
+  INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$source_cache.lock" \
+    REMINDER_FUNCTIONS="$function_source" SOURCE_CACHE="$source_cache" \
+    /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"' \
+    2>"$stderr_file"
+  grep -Fxq "Could not record the mutable-source reminder under $source_cache; this warning may repeat until that cache directory is writable." "$stderr_file"
+  [[ "$(wc -l <"$stderr_file" | tr -d ' ')" == "1" ]]
+}
+
 validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_links() {
   local source_repo="$TMP_DIR/local-stamp-source"
   local empty_diff="$TMP_DIR/empty-external-diff"
@@ -1821,6 +1854,7 @@ PY
 
 validate_source_normalization_fixtures() {
   validate_gnu_stat_fallback_rejects_successful_malformed_bsd_output
+  validate_mutable_source_reminder_requires_matching_cache_lock
   validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_links
   validate_git_local_source_stamp_fails_closed_when_untracked_hashing_fails
   validate_unpushed_commit_stays_local

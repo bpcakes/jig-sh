@@ -961,11 +961,15 @@ configured_source_is_mutable() {
 
 mark_mutable_source_refresh_reminder() {
   local install_root="$1"
-  : >"$install_root/.jig-mutable-source-reminder" 2>/dev/null
+  ( : >"$install_root/.jig-mutable-source-reminder" ) 2>/dev/null
 }
 
 record_mutable_source_refresh_reminder() {
   local install_root="$1"
+  local reminder_lock="${install_root}.lock"
+  # A non-default profile may inspect the full cache while holding only its
+  # profile lock. Keep the reminder read-only in that cross-cache path.
+  [[ "$INSTALL_LOCK_HELD" == "1" && "$reminder_lock" == "$INSTALL_LOCK_PATH" ]] || return 0
   if ! mark_mutable_source_refresh_reminder "$install_root"; then
     echo "Could not record the mutable-source reminder under $install_root; this warning may repeat until that cache directory is writable." >&2
   fi
