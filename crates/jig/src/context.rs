@@ -24,8 +24,7 @@ pub(crate) use defaults::{
 };
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 pub(crate) use runtime::{
-    CURRENT_CONTRACT_VERSION, CURRENT_SESSION_FILE, INSTALLER_CACHE_LAYOUT_MARKER,
-    JIG_REPO_ROOT_ENV, LAST_VERSION_LOCKED_CONTRACT_VERSION, LAUNCHER_REPAIR_STAGING_PREFIX,
+    CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX,
     MIN_SUPPORTED_CONTRACT_VERSION, RepoConfigProbe, RuntimeCacheProfile,
     is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
     runtime_profile_cache_path,
@@ -42,6 +41,11 @@ pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
     parse_review_scope_arg,
 };
+
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
+pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
+    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 #[derive(Clone, Debug, Deserialize)]

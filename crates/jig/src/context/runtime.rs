@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 
-use super::{RepoContext, find_repo_root_from_or_env};
+use super::{CURRENT_CONTRACT_VERSION, RepoContext, find_repo_root_from_or_env};
 
 #[derive(serde::Deserialize)]
 pub(super) struct ContractVersionProbe {
@@ -28,17 +28,13 @@ static PREVALIDATED_LAUNCHER_CONTEXT: OnceLock<RepoContext> = OnceLock::new();
 // launcher-validated context; environment-mutating tests serialize access.
 static PREVALIDATED_LAUNCHER_CONTEXT: Mutex<Option<RepoContext>> = Mutex::new(None);
 
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
 pub(crate) const CURRENT_SESSION_FILE: &str = "jig-current-session.txt";
 pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
 pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
-pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const GIT_RUNTIME_CACHE_BASE: &str = ".git/jig-tools";
 pub(crate) const FALLBACK_RUNTIME_CACHE_BASE: &str = ".agent/.cache/jig";
 pub(crate) const RUNTIME_CACHE_PROFILE_SUFFIX: &str = "-runtime";
 pub(crate) const LAUNCHER_REPAIR_STAGING_PREFIX: &str = ".jig-launcher-repair-";
-pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
-    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 
 pub(crate) fn runtime_cache_base(root: &Path) -> PathBuf {
     if root.join(".git").is_dir() {

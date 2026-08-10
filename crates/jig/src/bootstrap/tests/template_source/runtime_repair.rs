@@ -1,5 +1,7 @@
 use super::*;
 
+// agentic-loc-exception: legacy migration and launcher-only recovery scenarios share one end-to-end repository fixture suite.
+
 #[test]
 fn full_update_recovers_missing_and_malformed_contract_manifests() {
     let _guard = lock_env();
