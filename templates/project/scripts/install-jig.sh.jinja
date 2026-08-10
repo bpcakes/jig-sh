@@ -1280,15 +1280,46 @@ else:
 
 token = secrets.token_hex(16)
 record = f"owner-v1 {os.getpid()} {token}\n".encode("ascii")
+
+def remove_owned_lock_directory():
+    cleanup_error = None
+    try:
+        os.unlink(owner_path)
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        cleanup_error = error
+    if cleanup_error is None:
+        try:
+            os.rmdir(lock_directory)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            cleanup_error = error
+    if cleanup_error is not None:
+        try:
+            pathlib.Path(owner_path).write_bytes(record)
+        except OSError as restore_error:
+            print(f"Warning: also failed to restore Jig installer owner {owner_path}: {restore_error}", file=sys.stderr)
+    return cleanup_error
+
 try:
     with open(owner_path, "xb") as owner_file:
         owner_file.write(record)
         owner_file.flush()
         os.fsync(owner_file.fileno())
 except BaseException:
-    os.rmdir(lock_directory)
-    unlock(file_descriptor)
-    os.close(file_descriptor)
+    cleanup_error = remove_owned_lock_directory()
+    if cleanup_error is not None:
+        print(f"Warning: failed to clean up Jig installer lock {lock_directory}: {cleanup_error}", file=sys.stderr)
+    try:
+        unlock(file_descriptor)
+    except OSError as error:
+        print(f"Warning: failed to unlock Jig installer guard {guard_path}: {error}", file=sys.stderr)
+    try:
+        os.close(file_descriptor)
+    except OSError as error:
+        print(f"Warning: failed to close Jig installer guard {guard_path}: {error}", file=sys.stderr)
     raise
 environment = os.environ.copy()
 environment["JIG_INSTALL_LOCK_TOKEN"] = token
@@ -1316,15 +1347,9 @@ finally:
         except (OSError, UnicodeError):
             fields = []
         if len(fields) == 3 and fields[0] == "owner-v1" and fields[2] == token:
-            try:
-                os.unlink(owner_path)
-                os.rmdir(lock_directory)
-            except OSError as error:
-                try:
-                    pathlib.Path(owner_path).write_bytes(record)
-                except OSError as restore_error:
-                    print(f"Warning: also failed to restore Jig installer owner {owner_path}: {restore_error}", file=sys.stderr)
-                print(f"Warning: failed to clean up Jig installer lock {lock_directory}: {error}", file=sys.stderr)
+            cleanup_error = remove_owned_lock_directory()
+            if cleanup_error is not None:
+                print(f"Warning: failed to clean up Jig installer lock {lock_directory}: {cleanup_error}", file=sys.stderr)
         try:
             unlock(file_descriptor)
         except OSError as error:
@@ -1342,13 +1367,9 @@ finally:
 }
 
 release_install_lock() {
-  local record owner token ignored
-  if [[ "$INSTALL_LOCK_HELD" == "1" ]] \
-    && IFS=' ' read -r record owner token ignored <"$INSTALL_LOCK_PATH/owner-v1" \
-    && [[ "$record" == "owner-v1" && "$token" == "$INSTALL_LOCK_TOKEN_HELD" && -z "$ignored" ]]; then
-    rm -f "$INSTALL_LOCK_PATH/owner-v1" 2>/dev/null || true
-    rmdir "$INSTALL_LOCK_PATH" 2>/dev/null || true
-  fi
+  # The Python process owns the OS guard and removes the legacy directory in
+  # its finally block. Leaving the owner record intact here lets that single
+  # cleanup path restore a reclaimable marker if directory removal fails.
   INSTALL_LOCK_HELD=0
   INSTALL_LOCK_TOKEN_HELD=""
   trap - EXIT
