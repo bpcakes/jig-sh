@@ -498,7 +498,7 @@ mod unix {
                     ancestor.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
                 bail!(
                     "refusing private vault output through symlinked parent {}",
                     ancestor.display()
@@ -506,6 +506,18 @@ mod unix {
             }
         }
         Ok(())
+    }
+
+    fn is_trusted_root_alias(path: &Path, metadata: &fs::Metadata) -> bool {
+        // macOS exposes system paths such as /var through root-owned aliases.
+        // Only aliases rooted directly in a non-writable, root-owned `/` are
+        // outside an unprivileged caller's namespace control.
+        if path.parent() != Some(Path::new("/")) || metadata.uid() != 0 {
+            return false;
+        }
+        fs::symlink_metadata("/").is_ok_and(|root| {
+            root.is_dir() && root.uid() == 0 && root.permissions().mode() & 0o022 == 0
+        })
     }
 
     fn inspect_destination(path: &Path, overwrite: bool) -> anyhow::Result<()> {
