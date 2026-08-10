@@ -264,20 +264,20 @@ fn release_legacy_directory(directory: &Path, owner_record: &str) {
         );
         return;
     }
-    if let Err(error) = fs::remove_dir(directory)
-        && error.kind() != ErrorKind::NotFound
-    {
-        let restore_error = fs::write(&owner, owner_record).err();
-        match restore_error {
-            Some(restore_error) => eprintln!(
-                "Warning: failed to release legacy Jig installer lock {}: {error}; also failed to restore {}: {restore_error}",
-                directory.display(),
-                owner.display()
-            ),
-            None => eprintln!(
-                "Warning: failed to release legacy Jig installer lock {}: {error}; restored its reclaimable owner record",
-                directory.display()
-            ),
+    if let Err(error) = fs::remove_dir(directory) {
+        if error.kind() != ErrorKind::NotFound {
+            let restore_error = fs::write(&owner, owner_record).err();
+            match restore_error {
+                Some(restore_error) => eprintln!(
+                    "Warning: failed to release legacy Jig installer lock {}: {error}; also failed to restore {}: {restore_error}",
+                    directory.display(),
+                    owner.display()
+                ),
+                None => eprintln!(
+                    "Warning: failed to release legacy Jig installer lock {}: {error}; restored its reclaimable owner record",
+                    directory.display()
+                ),
+            }
         }
     }
 }

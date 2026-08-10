@@ -575,13 +575,13 @@ pub(super) fn publish_launcher_repair_caches_with_lock_policy(
                 destination.display()
             ));
             let mut rollback_failures = Vec::new();
-            if let Some(backup) = &backup
-                && let Err(error) = fs::rename(backup, &destination)
-            {
-                rollback_failures.push(format!(
-                    "Failed to restore repair cache {} after staged publication failed: {error}",
-                    destination.display()
-                ));
+            if let Some(backup) = &backup {
+                if let Err(error) = fs::rename(backup, &destination) {
+                    rollback_failures.push(format!(
+                        "Failed to restore repair cache {} after staged publication failed: {error}",
+                        destination.display()
+                    ));
+                }
             }
             if let Err(error) = rollback_published_repair_caches(&staging, &mut published) {
                 rollback_failures.push(format!(
@@ -636,13 +636,13 @@ pub(super) fn rollback_published_repair_caches(
             ));
             continue;
         }
-        if let Some(backup) = cache.backup
-            && let Err(error) = fs::rename(&backup, &cache.destination)
-        {
-            failures.push(format!(
-                "Failed to restore previous repair cache {}: {error}",
-                cache.destination.display()
-            ));
+        if let Some(backup) = cache.backup {
+            if let Err(error) = fs::rename(&backup, &cache.destination) {
+                failures.push(format!(
+                    "Failed to restore previous repair cache {}: {error}",
+                    cache.destination.display()
+                ));
+            }
         }
     }
     if failures.is_empty() {

@@ -394,14 +394,14 @@ impl RuntimeCompatibilityRequest<'_> {
                 self.repo_root.display()
             )
         })?;
-        if let Some(contract_version) = self.contract_version
-            && !crate::context::is_supported_contract_version(contract_version)
-        {
-            bail!(
-                "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
-                crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
-                crate::context::CURRENT_CONTRACT_VERSION
-            );
+        if let Some(contract_version) = self.contract_version {
+            if !crate::context::is_supported_contract_version(contract_version) {
+                bail!(
+                    "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
+                    crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
+                    crate::context::CURRENT_CONTRACT_VERSION
+                );
+            }
         }
         Ok(repo_root)
     }
