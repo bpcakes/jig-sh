@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -16,8 +17,14 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
+#[cfg(not(test))]
+use crate::context::runtime_cache_base;
+use crate::context::{
+    LAUNCHER_REPAIR_STAGING_PREFIX, RepoContext, RuntimeCacheProfile, runtime_profile_cache_name,
+};
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::progress::CliProgress;
+use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 use answers::{AnswerInput, RenderAnswers};
 #[cfg(test)]
 use file_copy::create_symlink;
@@ -48,15 +55,16 @@ use initial_template::{prepare_initial_template_source, resolve_initial_template
 use path::{absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
-use renderer::{RenderStageRequest, stage_render};
+use renderer::{RenderStageRequest, stage_render, stage_selected_render};
 #[cfg(test)]
 use sync::rendered_conflicts;
-use sync::{ApplyRenderOptions, apply_staged_render};
-#[cfg(test)]
-use template_source::EMBEDDED_TEMPLATE_SOURCE;
+use sync::{ApplyRenderConflictPolicy, ApplyRenderOptions, apply_staged_render};
 #[cfg(test)]
 use template_source::PrivateAnswerOverrides;
-use template_source::{prepare_update_template_source, read_stored_template_state};
+use template_source::{
+    EMBEDDED_TEMPLATE_SOURCE, prepare_template_source_from_base, prepare_update_template_source,
+    read_stored_template_state,
+};
 
 mod adopt_infer;
 mod answers;
@@ -85,6 +93,33 @@ pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
 
 const ANSWERS_FILE: &str = ".jig.toml";
+pub(crate) const MANAGED_PATHS_MANIFEST_PATH: &str = managed_paths::MANIFEST_PATH;
+const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scripts/jig"];
+const STALE_LAUNCHER_REPAIR_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+const LAUNCHER_REPAIR_ENVIRONMENT_KEYS: &[&str] = &[
+    "LD_AUDIT",
+    "LD_DEBUG",
+    "LD_LIBRARY_PATH",
+    "LD_ORIGIN_PATH",
+    "LD_PRELOAD",
+    "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    "DYLD_IMAGE_SUFFIX",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_ROOT_PATH",
+    "PYTHONHOME",
+    "PYTHONINSPECT",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONWARNINGS",
+];
+const GENERATED_RUNTIME_LAUNCHER_MARKER: &str = "# jig-generated-runtime-launcher:v1";
+const GENERATED_RUNTIME_INSTALLER_MARKER: &str = "# jig-generated-runtime-installer:v1";
+const RUNTIME_REPOSITORY_SCOPE_MARKER: &str = "# jig-runtime-repository-scope:v1";
+#[cfg(test)]
+const TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV: &str = "JIG_TEST_FAIL_LAUNCHER_REPAIR_SEED";
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
 const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];
@@ -276,11 +311,13 @@ pub struct AdoptOpts {
 Update modes:
   jig update advances to the resolved template source.
   jig update --recopy re-renders from the stored .jig.toml commit.
+  jig update --launcher-only repairs only scripts/jig and scripts/install-jig.sh.
   Add --force only when changed template-managed files should be replaced.
 
 Examples:
   jig update
   jig update --recopy
+  jig update /path/to/repo --launcher-only --force
   jig update --template /path/to/jig-sh --template-mode committed --force")]
 pub struct UpdateOpts {
     #[arg(default_value = ".", help = "Adopted repository directory to update")]
@@ -294,6 +331,20 @@ pub struct UpdateOpts {
         help = "Re-render from the stored .jig.toml commit instead of advancing"
     )]
     pub recopy: bool,
+    #[arg(
+        long,
+        requires = "force",
+        conflicts_with_all = [
+            "template",
+            "template_mode",
+            "recopy",
+            "vcs_ref",
+            "defaults",
+            "no_input"
+        ],
+        help = "Repair only the managed launcher and installer from this binary's embedded templates"
+    )]
+    pub launcher_only: bool,
     #[arg(long, help = "Overwrite changed template-managed files")]
     pub force: bool,
     #[arg(long, help = "Git revision to render from the template source")]
@@ -648,6 +699,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     progress.header_for_path("render harness into existing repo", &destination);
     progress.step("validate destination", "existing repository directory");
     progress.log_blocked_on_err(validate_adopt_destination(&destination))?;
+    progress.log_blocked_on_err(reject_newer_declared_contract(&destination))?;
     let prior_managed_paths =
         progress.log_blocked_on_err(managed_paths::load_manifest(&destination))?;
     progress.step(
@@ -805,22 +857,197 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
 }
 
 pub fn run_update(opts: UpdateOpts) -> Result<Value> {
+    if opts.launcher_only && !opts.force {
+        bail!("--launcher-only requires --force");
+    }
     let invocation_cwd = bootstrap_invocation_cwd()?;
     let destination = absolute_path_from(&opts.path, &invocation_cwd)?;
     let progress = CliProgress::new("update");
-    let mode = if opts.recopy { "recopy" } else { "update" };
+    let mode = if opts.launcher_only {
+        "launcher-only"
+    } else if opts.recopy {
+        "recopy"
+    } else {
+        "update"
+    };
     progress.header_for_path(format!("refresh harness ({mode})"), &destination);
     progress.step("validate destination", "adopted repository directory");
     progress.log_blocked_on_err(validate_update_destination(&destination))?;
-    let prior_managed_paths = progress
+    progress.log_blocked_on_err(reject_newer_declared_contract(&destination))?;
+    let (prior_managed_paths, legacy_manifest_missing) = match progress
         .log_blocked_on_err(managed_paths::load_manifest(&destination))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
+    {
+        Some(paths) => (paths, false),
+        None if opts.launcher_only => {
+            progress.info(
+                "ownership",
+                "managed-path manifest is missing; validating legacy generated launcher signatures",
+            );
+            (
+                progress.log_blocked_on_err(legacy_launcher_only_paths(&destination))?,
+                true,
+            )
+        }
+        None => {
+            bail!(
                 "Cannot update this repository because {} is missing. Run `jig adopt . --write` with the current harness footprint to establish exact managed-path ownership, then retry `jig update`.",
                 managed_paths::MANIFEST_PATH
-            )
-        })?;
+            );
+        }
+    };
     let answers_path = destination.join(ANSWERS_FILE);
+    if opts.launcher_only {
+        let destination_contract_version = progress.log_blocked_on_err(
+            RepoContext::supported_contract_version_from_root(&destination),
+        )?;
+        progress.step("read answers", answers_path.display());
+        let stored_template =
+            progress.log_blocked_on_err(read_stored_template_state(&answers_path))?;
+        let answers =
+            progress.log_blocked_on_err(RenderAnswers::from_answers_file(&answers_path))?;
+        if answers.harness_footprint() == HarnessFootprint::Minimal {
+            bail!(
+                "Cannot run launcher-only repair because .jig.toml declares harness_footprint = \"minimal\"; minimal harnesses do not manage scripts/jig or scripts/install-jig.sh. Restore the repository's full-footprint answers before repairing those generated scripts, or invoke the external Jig binary directly."
+            );
+        }
+
+        let launcher_paths = LAUNCHER_ONLY_MANAGED_PATHS
+            .map(PathBuf::from)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let unowned_paths = launcher_paths
+            .difference(&prior_managed_paths)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        if !unowned_paths.is_empty() {
+            bail!(
+                "Cannot run launcher-only repair because {} does not own these required managed paths: {}",
+                managed_paths::MANIFEST_PATH,
+                unowned_paths.join(", ")
+            );
+        }
+
+        if !stored_template.has_source_path() {
+            bail!(
+                "Cannot run launcher-only repair because .jig.toml does not define a non-empty _src_path. Restore the repository's recorded Jig template source before repairing the generated launcher scripts."
+            );
+        }
+        let configured_source = if answers.template_source_url().is_empty()
+            || answers.template_source_url() == stored_template.source_path()
+        {
+            format!("_src_path {:?}", stored_template.source_path())
+        } else {
+            format!(
+                "_src_path {:?} and template_source_url {:?}",
+                stored_template.source_path(),
+                answers.template_source_url()
+            )
+        };
+        let warnings = if stored_template.source_path() != EMBEDDED_TEMPLATE_SOURCE
+            || (!answers.template_source_url().is_empty()
+                && answers.template_source_url() != EMBEDDED_TEMPLATE_SOURCE)
+        {
+            let warning = format!(
+                "Launcher-only repair renders scripts/jig and scripts/install-jig.sh from this Jig binary's embedded templates, while .jig.toml records {configured_source}; source-specific launcher customizations will be replaced until the next full update."
+            );
+            progress.info("warning", &warning);
+            vec![warning]
+        } else {
+            Vec::new()
+        };
+        progress.step("resolve template", "embedded launcher templates");
+        let update_template = progress.log_blocked_on_err(prepare_template_source_from_base(
+            EMBEDDED_TEMPLATE_SOURCE,
+            None,
+            None,
+            &invocation_cwd,
+        ))?;
+        let contract_version = destination_contract_version;
+        let staged = stage_selected_render(
+            &update_template,
+            &answers,
+            &launcher_paths,
+            contract_version,
+            progress,
+        )?;
+
+        let mut transaction = InitMutationTransaction::create(&destination)?;
+        transaction.plan_staged_render(&staged, &[])?;
+        let repair_result = (|| -> Result<_> {
+            let render_report = apply_staged_render(
+                &staged,
+                &destination,
+                ApplyRenderOptions {
+                    // Launcher-only repair is an explicit forced replacement:
+                    // Clap and run_update both reject this mode without
+                    // --force, and staged paths are limited to the two owned
+                    // runtime scripts above.
+                    conflict_policy: ApplyRenderConflictPolicy::Accept,
+                    dry_run: false,
+                    allow_answers_overwrite: false,
+                    allow_contract_overwrite: false,
+                    allow_manifest_overwrite: false,
+                    backup_root: None,
+                    progress,
+                    init_transaction: Some(&mut transaction),
+                },
+            )?;
+            progress.step("seed repair runtime", "managed launcher cache");
+            let cache_publication = progress
+                .log_blocked_on_err(seed_launcher_repair_runtime(&destination, contract_version))?;
+            Ok((render_report, cache_publication))
+        })();
+        let render_report = match repair_result {
+            Ok((render_report, cache_publication)) => match transaction.commit() {
+                Ok(()) => {
+                    cache_publication.commit();
+                    render_report
+                }
+                Err(primary) if transaction.needs_rollback() => {
+                    let primary = cache_publication.finish_failed(primary);
+                    return Err(
+                        transaction.finish_failed_mutation(primary, "launcher-only repair changes")
+                    );
+                }
+                Err(primary) => {
+                    // Commit can report incomplete retained-preimage cleanup
+                    // after the rendered scripts are already durable. Keep the
+                    // corresponding cache publication in that case.
+                    cache_publication.commit();
+                    return Err(primary);
+                }
+            },
+            Err(primary) => {
+                return Err(
+                    transaction.finish_failed_mutation(primary, "launcher-only repair changes")
+                );
+            }
+        };
+        progress.done("launcher-only repair complete");
+
+        let next_steps = if legacy_manifest_missing {
+            vec![format!(
+                "Because {} was missing, review the repository's current harness footprint and answer overrides, then run `cd {} && scripts/jig adopt . --write --force` to establish exact managed-path ownership before a full update.",
+                managed_paths::MANIFEST_PATH,
+                crate::shell::quote(&destination.to_string_lossy()),
+            )]
+        } else {
+            Vec::new()
+        };
+
+        return Ok(json!({
+            "ok": true,
+            "command": "update",
+            "render_mode": mode,
+            "destination": destination.display().to_string(),
+            "answers_file": ANSWERS_FILE,
+            "git_initialized": false,
+            "render_report": render_report,
+            "warnings": warnings,
+            "next_steps": next_steps,
+        }));
+    }
+
     progress.step("read answers", answers_path.display());
     let stored = progress.log_blocked_on_err(read_stored_template_state(&answers_path))?;
     progress.step("resolve template", "stored source metadata");
@@ -844,19 +1071,28 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         seed_repo_path: Some(&destination),
         prior_managed_paths: Some(&prior_managed_paths),
         reconcile_runtime_config,
+        // A full update adopts the contract epoch declared by the current
+        // template. Only the narrow launcher-only repair preserves a legacy
+        // destination epoch while leaving its manifest and answers untouched.
+        contract_version: None,
         progress,
     })?;
     let render_report = apply_staged_render(
         &staged,
         &destination,
         ApplyRenderOptions {
-            force: opts.force,
+            conflict_policy: if opts.force {
+                ApplyRenderConflictPolicy::Accept
+            } else {
+                ApplyRenderConflictPolicy::Reject(
+                    "Update would overwrite or remove template-managed paths. No files were changed. Re-run with --force to accept the rendered output:",
+                )
+            },
             dry_run: false,
             allow_answers_overwrite: true,
             allow_contract_overwrite: false,
             allow_manifest_overwrite: true,
             backup_root: None,
-            conflict_message: "Update would overwrite or remove template-managed paths. No files were changed. Re-run with --force to accept the rendered output:",
             progress,
             init_transaction: None,
         },
@@ -872,6 +1108,644 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         "git_initialized": false,
         "render_report": render_report,
     }))
+}
+
+#[cfg(test)]
+fn seed_launcher_repair_runtime(
+    _destination: &Path,
+    _contract_version: u32,
+) -> Result<LauncherRepairCachePublication> {
+    if env::var_os(TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV).is_some() {
+        bail!("injected launcher repair seed failure");
+    }
+    Ok(LauncherRepairCachePublication::empty())
+}
+
+#[cfg(not(test))]
+fn seed_launcher_repair_runtime(
+    destination: &Path,
+    contract_version: u32,
+) -> Result<LauncherRepairCachePublication> {
+    let executable = env::current_exe().context("Failed to locate the running Jig binary")?;
+    let cache_base = runtime_cache_base(destination);
+    fs::create_dir_all(&cache_base).with_context(|| {
+        format!(
+            "Failed to create repair cache root {}",
+            cache_base.display()
+        )
+    })?;
+    if let Err(error) = reap_stale_launcher_repair_staging(&cache_base, SystemTime::now()) {
+        eprintln!(
+            "Warning: could not remove abandoned launcher-repair staging under {}: {error:#}",
+            cache_base.display()
+        );
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(LAUNCHER_REPAIR_STAGING_PREFIX)
+        .tempdir_in(&cache_base)
+        .with_context(|| {
+            format!(
+                "Failed to create launcher-repair cache staging under {}",
+                cache_base.display()
+            )
+        })?;
+    let mut profiles = vec![RuntimeCacheProfile::Runtime];
+    let mut default_compatibility = std::process::Command::new(&executable);
+    default_compatibility
+        .arg("__runtime-compatible")
+        .arg("--capability-only")
+        .arg("--contract-version")
+        .arg(contract_version.to_string())
+        .arg("--profile")
+        .arg("default")
+        .arg(destination)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    sanitize_launcher_repair_environment(&mut default_compatibility);
+    let default_compatible = default_compatibility
+        .status()
+        .is_ok_and(|status| status.success());
+    if default_compatible {
+        profiles.push(RuntimeCacheProfile::Default);
+    }
+    for profile in &profiles {
+        let install_root = staging.path().join(profile.as_str());
+        seed_launcher_repair_profile(
+            destination,
+            contract_version,
+            &executable,
+            *profile,
+            &install_root,
+        )?;
+    }
+    publish_launcher_repair_caches(staging, &cache_base, contract_version, &profiles)
+}
+
+#[cfg(not(test))]
+fn seed_launcher_repair_profile(
+    destination: &Path,
+    contract_version: u32,
+    executable: &Path,
+    profile: RuntimeCacheProfile,
+    install_root: &Path,
+) -> Result<()> {
+    let installer = destination.join("scripts/install-jig.sh");
+    // Launcher repair is a recovery boundary. Execute the freshly rendered
+    // installer and all helper commands it resolves from root-owned,
+    // non-writable locations. Standard absolute locations are preferred;
+    // trusted ambient entries keep Nix-style systems usable.
+    let bash = trusted_bash_path()?;
+    let trusted_path = trusted_repair_path(&bash)?;
+    let trusted_path_display = trusted_path.to_string_lossy().into_owned();
+    let mut command = std::process::Command::new(&bash);
+    command
+        .arg(&installer)
+        .arg("--contract-version")
+        .arg(contract_version.to_string())
+        .arg("--profile")
+        .arg(profile.as_str())
+        .arg("--seed-dev-bin")
+        .arg(install_root)
+        .env("JIG_DEV_BIN", executable)
+        .env("PATH", trusted_path)
+        .current_dir(destination);
+    crate::shell::sanitize_bash_environment(&mut command);
+    scrub_git_repository_environment_except(&mut command, &[]);
+    sanitize_launcher_repair_environment(&mut command);
+    let output = command.output().with_context(|| {
+        format!(
+            "Failed to start the repaired launcher runtime seeder for profile {} with {}",
+            profile.as_str(),
+            installer.display()
+        )
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        bail!(
+            "Failed to seed the repaired launcher runtime for profile {}{}. Launcher repair restricts helper commands to root-owned, non-writable PATH entries; ensure Python 3 and standard POSIX tools are available there (trusted PATH: {trusted_path_display}).",
+            profile.as_str(),
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    Ok(())
+}
+
+fn sanitize_launcher_repair_environment(command: &mut std::process::Command) {
+    for &key in LAUNCHER_REPAIR_ENVIRONMENT_KEYS {
+        command.env_remove(key);
+    }
+}
+
+#[cfg(all(not(test), unix))]
+fn trusted_bash_path() -> Result<PathBuf> {
+    let mut candidates = vec![PathBuf::from("/bin/bash"), PathBuf::from("/usr/bin/bash")];
+    if let Some(path) = env::var_os("PATH") {
+        candidates.extend(env::split_paths(&path).map(|directory| directory.join("bash")));
+    }
+    for candidate in candidates {
+        let Ok(canonical) = fs::canonicalize(&candidate) else {
+            continue;
+        };
+        let Ok(metadata) = fs::metadata(&canonical) else {
+            continue;
+        };
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.is_file()
+            && metadata.permissions().mode() & 0o111 != 0
+            && is_root_owned_nonwritable_path(&canonical)
+        {
+            return Ok(canonical);
+        }
+    }
+    bail!(
+        "Launcher-only repair requires Bash at /bin/bash, /usr/bin/bash, or an executable root-owned non-writable bash on PATH"
+    )
+}
+
+#[cfg(all(not(test), unix))]
+fn trusted_repair_path(bash: &Path) -> Result<std::ffi::OsString> {
+    let mut candidates = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if let Some(parent) = bash.parent() {
+        candidates.push(parent.to_path_buf());
+    }
+    if let Some(path) = env::var_os("PATH") {
+        candidates.extend(env::split_paths(&path));
+    }
+
+    let mut trusted = Vec::new();
+    for candidate in candidates {
+        let Ok(canonical) = fs::canonicalize(candidate) else {
+            continue;
+        };
+        let Ok(metadata) = fs::metadata(&canonical) else {
+            continue;
+        };
+        if metadata.is_dir()
+            && is_root_owned_nonwritable_path(&canonical)
+            && !trusted.contains(&canonical)
+        {
+            trusted.push(canonical);
+        }
+    }
+    if trusted.is_empty() {
+        bail!("Launcher-only repair could not construct a trusted helper-command PATH");
+    }
+    env::join_paths(trusted).context("Failed to construct the launcher-repair helper-command PATH")
+}
+
+#[cfg(all(not(test), not(unix)))]
+fn trusted_repair_path(_bash: &Path) -> Result<std::ffi::OsString> {
+    bail!("Launcher-only repair requires a trusted helper-command PATH on this platform")
+}
+
+#[cfg(unix)]
+fn is_root_owned_nonwritable_path(path: &Path) -> bool {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    path.ancestors().enumerate().all(|(index, ancestor)| {
+        fs::metadata(ancestor).is_ok_and(|metadata| {
+            root_owned_nonwritable_component(
+                metadata.uid(),
+                metadata.permissions().mode(),
+                index == 0,
+            )
+        })
+    })
+}
+
+#[cfg(unix)]
+const fn root_owned_nonwritable_component(uid: u32, mode: u32, is_leaf: bool) -> bool {
+    uid == 0 && (mode & 0o022 == 0 || (!is_leaf && mode & 0o1000 != 0))
+}
+
+#[cfg(all(not(test), not(unix)))]
+fn trusted_bash_path() -> Result<PathBuf> {
+    bail!("Launcher-only repair requires a trusted Bash executable")
+}
+
+fn reap_stale_launcher_repair_staging(cache_base: &Path, now: SystemTime) -> Result<usize> {
+    let mut removed = 0;
+    for entry in fs::read_dir(cache_base).with_context(|| {
+        format!(
+            "Failed to inspect launcher-repair cache root {}",
+            cache_base.display()
+        )
+    })? {
+        let entry = entry.with_context(|| {
+            format!(
+                "Failed to inspect an entry under launcher-repair cache root {}",
+                cache_base.display()
+            )
+        })?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(LAUNCHER_REPAIR_STAGING_PREFIX)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).with_context(|| {
+            format!(
+                "Failed to inspect launcher-repair staging {}",
+                path.display()
+            )
+        })?;
+        if !metadata.file_type().is_dir() {
+            continue;
+        }
+        let modified = metadata.modified().with_context(|| {
+            format!(
+                "Failed to read launcher-repair staging timestamp for {}",
+                path.display()
+            )
+        })?;
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age < STALE_LAUNCHER_REPAIR_STAGING_AGE
+            || launcher_repair_staging_contains_recovery_artifacts(&path)?
+        {
+            continue;
+        }
+        fs::remove_dir_all(&path).with_context(|| {
+            format!(
+                "Failed to remove abandoned launcher-repair staging {}",
+                path.display()
+            )
+        })?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+fn launcher_repair_staging_contains_recovery_artifacts(path: &Path) -> Result<bool> {
+    for entry in fs::read_dir(path).with_context(|| {
+        format!(
+            "Failed to inspect launcher-repair staging {} for recovery artifacts",
+            path.display()
+        )
+    })? {
+        let name = entry
+            .with_context(|| {
+                format!(
+                    "Failed to inspect an entry in launcher-repair staging {}",
+                    path.display()
+                )
+            })?
+            .file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("backup-") || name.starts_with("displaced-") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[derive(Debug)]
+struct PublishedLauncherRepairCache {
+    destination: PathBuf,
+    backup: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct LauncherRepairCachePublication {
+    staging: Option<tempfile::TempDir>,
+    published: Vec<PublishedLauncherRepairCache>,
+    // Ownership is the protocol: these locks are released only after cache
+    // publication commits or finishes rolling back.
+    _locks: RuntimeCacheLocks,
+}
+
+impl LauncherRepairCachePublication {
+    #[cfg(test)]
+    fn empty() -> Self {
+        Self {
+            staging: None,
+            published: Vec::new(),
+            _locks: RuntimeCacheLocks::empty(),
+        }
+    }
+
+    fn commit(mut self) {
+        self.published.clear();
+        drop(self.staging.take());
+    }
+
+    fn finish_failed(mut self, primary: anyhow::Error) -> anyhow::Error {
+        let Some(staging) = self.staging.take() else {
+            return primary;
+        };
+        match rollback_published_repair_caches(&staging, &mut self.published) {
+            Ok(()) => primary,
+            Err(rollback) => preserve_launcher_repair_staging(
+                staging,
+                primary,
+                &[format!(
+                    "Failed to roll back repair-cache publication after the rendered-script transaction failed: {rollback:#}"
+                )],
+            ),
+        }
+    }
+}
+
+impl Drop for LauncherRepairCachePublication {
+    fn drop(&mut self) {
+        let Some(staging) = self.staging.take() else {
+            return;
+        };
+        if let Err(error) = rollback_published_repair_caches(&staging, &mut self.published) {
+            let preserved = staging.keep();
+            eprintln!(
+                "Warning: failed to roll back an uncommitted launcher-repair cache publication: {error:#}. Recovery artifacts were preserved at {}",
+                preserved.display()
+            );
+        }
+    }
+}
+
+fn publish_launcher_repair_caches(
+    staging: tempfile::TempDir,
+    cache_base: &Path,
+    contract_version: u32,
+    profiles: &[RuntimeCacheProfile],
+) -> Result<LauncherRepairCachePublication> {
+    publish_launcher_repair_caches_with_lock_policy(
+        staging,
+        cache_base,
+        contract_version,
+        profiles,
+        RuntimeCacheLockPolicy::INSTALLER,
+    )
+}
+
+fn publish_launcher_repair_caches_with_lock_policy(
+    staging: tempfile::TempDir,
+    cache_base: &Path,
+    contract_version: u32,
+    profiles: &[RuntimeCacheProfile],
+    lock_policy: RuntimeCacheLockPolicy,
+) -> Result<LauncherRepairCachePublication> {
+    let destinations = profiles
+        .iter()
+        .map(|profile| cache_base.join(runtime_profile_cache_name(contract_version, *profile)))
+        .collect::<Vec<_>>();
+    let locks = RuntimeCacheLocks::acquire(&destinations, lock_policy)?;
+    let mut published = Vec::<PublishedLauncherRepairCache>::new();
+    for profile in profiles {
+        let profile_name = profile.as_str();
+        let staged = staging.path().join(profile_name);
+        let cache_name = runtime_profile_cache_name(contract_version, *profile);
+        let destination = cache_base.join(cache_name);
+        let backup = if path_entry_exists(&destination)? {
+            let backup = staging.path().join(format!("backup-{profile_name}"));
+            if let Err(error) = fs::rename(&destination, &backup) {
+                let primary = anyhow::Error::new(error).context(format!(
+                    "Failed to preserve existing repair cache {}",
+                    destination.display()
+                ));
+                let rollback = rollback_published_repair_caches(&staging, &mut published)
+                    .err()
+                    .map(|error| {
+                        format!(
+                            "Failed to roll back earlier repair-cache publications after preserving {} failed: {error:#}",
+                            destination.display()
+                        )
+                    });
+                return Err(match rollback {
+                    Some(rollback) => preserve_launcher_repair_staging(
+                        staging,
+                        primary,
+                        std::slice::from_ref(&rollback),
+                    ),
+                    None => primary,
+                });
+            }
+            Some(backup)
+        } else {
+            None
+        };
+        if let Err(error) = fs::rename(&staged, &destination) {
+            let primary = anyhow::Error::new(error).context(format!(
+                "Failed to publish staged launcher-repair cache {}",
+                destination.display()
+            ));
+            let mut rollback_failures = Vec::new();
+            if let Some(backup) = &backup
+                && let Err(error) = fs::rename(backup, &destination)
+            {
+                rollback_failures.push(format!(
+                    "Failed to restore repair cache {} after staged publication failed: {error}",
+                    destination.display()
+                ));
+            }
+            if let Err(error) = rollback_published_repair_caches(&staging, &mut published) {
+                rollback_failures.push(format!(
+                    "Failed to roll back earlier repair-cache publications after publishing {} failed: {error:#}",
+                    destination.display()
+                ));
+            }
+            return Err(if rollback_failures.is_empty() {
+                primary
+            } else {
+                preserve_launcher_repair_staging(staging, primary, &rollback_failures)
+            });
+        }
+        published.push(PublishedLauncherRepairCache {
+            destination,
+            backup,
+        });
+    }
+    Ok(LauncherRepairCachePublication {
+        staging: Some(staging),
+        published,
+        _locks: locks,
+    })
+}
+
+fn preserve_launcher_repair_staging(
+    staging: tempfile::TempDir,
+    primary: anyhow::Error,
+    rollback_failures: &[String],
+) -> anyhow::Error {
+    let preserved = staging.keep();
+    anyhow::anyhow!(
+        "{primary:#}\nRepair-cache rollback also failed: {}\nRecovery artifacts were preserved at {}",
+        rollback_failures.join("; "),
+        preserved.display()
+    )
+}
+
+fn rollback_published_repair_caches(
+    staging: &tempfile::TempDir,
+    published: &mut Vec<PublishedLauncherRepairCache>,
+) -> Result<()> {
+    let mut failures = Vec::new();
+    while let Some(cache) = published.pop() {
+        let displaced = staging
+            .path()
+            .join(format!("displaced-{}", published.len()));
+        if let Err(error) = fs::rename(&cache.destination, &displaced) {
+            failures.push(format!(
+                "Failed to withdraw newly published repair cache {}: {error}",
+                cache.destination.display()
+            ));
+            continue;
+        }
+        if let Some(backup) = cache.backup
+            && let Err(error) = fs::rename(&backup, &cache.destination)
+        {
+            failures.push(format!(
+                "Failed to restore previous repair cache {}: {error}",
+                cache.destination.display()
+            ));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!(failures.join("\n"))
+    }
+}
+
+fn path_entry_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to inspect repair cache {}", path.display()))
+        }
+    }
+}
+
+fn legacy_launcher_only_paths(destination: &Path) -> Result<BTreeSet<PathBuf>> {
+    let launcher_path = destination.join("scripts/jig");
+    let installer_path = destination.join("scripts/install-jig.sh");
+    for path in [&launcher_path, &installer_path] {
+        let metadata = fs::symlink_metadata(path).with_context(|| {
+            format!("Failed to inspect legacy launcher path {}", path.display())
+        })?;
+        if !metadata.file_type().is_file() {
+            bail!(
+                "Cannot run launcher-only repair without {}: expected a regular generated file at {}",
+                managed_paths::MANIFEST_PATH,
+                path.display()
+            );
+        }
+    }
+
+    let launcher = fs::read_to_string(&launcher_path)
+        .with_context(|| format!("Failed to read {}", launcher_path.display()))?;
+    let installer = fs::read_to_string(&installer_path)
+        .with_context(|| format!("Failed to read {}", installer_path.display()))?;
+    let launcher_is_generated = recognizable_generated_launcher(&launcher);
+    let installer_is_generated = recognizable_generated_installer(&installer);
+    if !launcher_is_generated || !installer_is_generated {
+        bail!(
+            "Cannot run launcher-only repair because {} is missing and the existing scripts are not a recognizable generated Jig launcher/installer pair",
+            managed_paths::MANIFEST_PATH
+        );
+    }
+
+    Ok(LAUNCHER_ONLY_MANAGED_PATHS
+        .map(PathBuf::from)
+        .into_iter()
+        .collect())
+}
+
+pub(crate) fn launcher_only_repair_scripts_are_recognizable(destination: &Path) -> bool {
+    legacy_launcher_only_paths(destination).is_ok()
+}
+
+pub(crate) fn launcher_only_repair_answers_are_valid(destination: &Path) -> bool {
+    RenderAnswers::from_answers_file(&destination.join(ANSWERS_FILE)).is_ok()
+}
+
+fn contains_all(text: &str, markers: &[&str]) -> bool {
+    markers.iter().all(|marker| text.contains(marker))
+}
+
+fn recognizable_generated_launcher(text: &str) -> bool {
+    text.contains(GENERATED_RUNTIME_LAUNCHER_MARKER)
+        || (recognizable_posix_launcher_core(text) && recognizable_legacy_launcher_body(text))
+        || (recognizable_beta_bash_launcher_core(text) && recognizable_legacy_launcher_body(text))
+}
+
+pub(crate) fn recognizable_contract_launcher(text: &str) -> bool {
+    text.contains(GENERATED_RUNTIME_LAUNCHER_MARKER)
+        && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER)
+}
+
+fn recognizable_posix_launcher_core(text: &str) -> bool {
+    contains_all(
+        text,
+        &[
+            "#!/bin/sh\nset -eu\n",
+            "ROOT_DIR=\"$(CDPATH= cd \"$SCRIPT_DIR/..\" && pwd -P)\"",
+            "INSTALLER=\"$ROOT_DIR/scripts/install-jig.sh\"",
+            "exec \"$bin_path\" \"$@\"",
+        ],
+    )
+}
+
+fn recognizable_beta_bash_launcher_core(text: &str) -> bool {
+    contains_all(
+        text,
+        &[
+            "#!/usr/bin/env bash\nset -euo pipefail\n",
+            "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd -P)\"",
+            "INSTALLER=\"$ROOT_DIR/scripts/install-jig.sh\"",
+            "exec \"$bin_path\" \"$@\"",
+        ],
+    )
+}
+
+fn recognizable_legacy_launcher_body(text: &str) -> bool {
+    contains_all(
+        text,
+        &[
+            "JIG_VERSION=",
+            "binary_version() {",
+            "use_matching_binary() {",
+            "actual_version=\"$(binary_version \"$bin_path\" || true)\"",
+        ],
+    )
+}
+
+fn recognizable_generated_installer(text: &str) -> bool {
+    text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
+        || (recognizable_generated_installer_core(text) && recognizable_legacy_installer_body(text))
+}
+
+pub(crate) fn recognizable_contract_installer(text: &str) -> bool {
+    text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
+        && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER)
+}
+
+fn recognizable_generated_installer_core(text: &str) -> bool {
+    contains_all(
+        text,
+        &[
+            "#!/usr/bin/env bash\nset -euo pipefail\n",
+            "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd -P)\"",
+            "ANSWERS_FILE=\"$ROOT_DIR/.jig.toml\"",
+            "acquire_install_lock() {",
+            "install_from_local_source() {",
+            "install_from_git_source() {",
+            "printf '%s\\n' \"$BIN_PATH\"",
+        ],
+    )
+}
+
+fn recognizable_legacy_installer_body(text: &str) -> bool {
+    contains_all(text, &["JIG_VERSION=", "assert_exact_version() {"])
 }
 
 fn recognized_prior_answers(destination: &Path) -> Option<RenderAnswers> {
@@ -972,7 +1846,7 @@ fn initial_notes(
         ]
     } else {
         vec![
-            "The first scripts/jig command may install or compile the pinned Jig runtime into this repo's local cache.".into(),
+            "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.".into(),
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
             "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
             "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
@@ -1505,6 +2379,20 @@ fn validate_update_destination(path: &Path) -> Result<()> {
             "Update destination does not contain {}: {}",
             ANSWERS_FILE,
             path.display()
+        );
+    }
+    Ok(())
+}
+
+fn reject_newer_declared_contract(path: &Path) -> Result<()> {
+    let Ok(contract_version) = RepoContext::declared_contract_version_from_root(path) else {
+        // Missing or damaged manifests remain repairable through adopt/update.
+        return Ok(());
+    };
+    if contract_version > crate::context::CURRENT_CONTRACT_VERSION {
+        bail!(
+            "Refusing to rewrite repository contract {contract_version} with this older Jig runtime, which supports contracts through {}. Install a newer compatible Jig runtime and retry; --force does not permit contract downgrades.",
+            crate::context::CURRENT_CONTRACT_VERSION
         );
     }
     Ok(())

@@ -108,7 +108,10 @@ fn repo_info_with_vault(ctx: &RepoContext, vault: VaultCapability) -> Value {
             "root": ctx.root().display().to_string(),
             "template_source": ctx.source_path(),
             "template_commit": ctx.source_commit(),
-            "jig_version": ctx.jig_version(),
+            // Compatibility alias for v2/v3 repositories. It is null for v4,
+            // where generated configuration no longer pins a product release.
+            "jig_version": ctx.legacy_jig_version(),
+            "runtime_version": env!("CARGO_PKG_VERSION"),
             "contract_version": ctx.contract_version(),
         },
         "capabilities": {
@@ -351,6 +354,9 @@ mod tests {
         assert_eq!(output["repo"]["name"], "demo");
         assert_eq!(output["repo"]["template_source"], "/tmp/template");
         assert_eq!(output["repo"]["template_commit"], "abc123");
+        assert_eq!(output["repo"]["runtime_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(output["repo"]["contract_version"], 3);
+        assert_eq!(output["repo"]["jig_version"], "0.2.0-beta.1");
         assert_eq!(output["capabilities"]["sqlx"], true);
         assert_eq!(output["capabilities"]["schema_dumps"], true);
         assert_eq!(output["capabilities"]["frontend_apps"], true);
@@ -373,6 +379,10 @@ mod tests {
         let summary = format_summary(&output);
         assert!(summary.contains("Jig info: demo"));
         assert!(summary.contains("Template source: /tmp/template @ abc123"));
+        assert!(summary.contains(&format!(
+            "Runtime: jig {} · contract v3",
+            env!("CARGO_PKG_VERSION")
+        )));
         assert!(summary.contains(
             "Capabilities: SQLx, schema dumps, frontend apps, dev proxy, vault initialized"
         ));

@@ -33,8 +33,8 @@ pub struct AnswerOpts {
     pub ci_github_runner: Option<String>,
     #[arg(
         long,
-        help_heading = "Advanced Template Source",
-        help = "Exact Jig runtime version to pin in generated repos"
+        hide = true,
+        help = "Legacy render input retained for committed pre-v4 templates; current v4 renders use contract compatibility and do not persist this value"
     )]
     pub jig_version: Option<String>,
     #[arg(

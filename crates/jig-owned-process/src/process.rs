@@ -12,6 +12,13 @@ const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 const OWNED_PROCESS_TREE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 const OWNED_PROCESS_OUTPUT_LIMIT: usize = 16 * 1024;
+// Output progress warrants a faster retry than idle process polling. A 1 ms
+// floor keeps deadline and capture-limit enforcement responsive without
+// sustaining thousands of wakeups per second for continuously chatty children.
+const ACTIVE_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const TRUNCATED_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(2);
+const MAX_OUTPUT_READS_PER_POLL: usize = 64;
+const MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION: usize = 16;
 
 pub fn run_checked_output(
     command: &mut Command,
@@ -280,37 +287,48 @@ impl OutputDrain {
         })
     }
 
-    fn poll(&mut self) {
-        const MAX_READS_PER_POLL: usize = 16;
+    fn poll(&mut self) -> bool {
+        // A shell can issue thousands of tiny writes. Bound every poll to 64
+        // read attempts while the retained output is capped separately. Once
+        // capture truncates, tighten the same attempt budget to 16 so repeated
+        // short reads and interrupts remain bounded alike.
 
         let Some(reader) = self.reader.as_mut() else {
-            return;
+            return false;
         };
         let mut chunk = [0_u8; 4096];
-        for _ in 0..MAX_READS_PER_POLL {
+        let mut made_progress = false;
+        for read_index in 0..MAX_OUTPUT_READS_PER_POLL {
+            if self.truncated && read_index >= MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION {
+                return made_progress;
+            }
             match reader.read_available(&mut chunk) {
                 Ok(0) => {
                     self.complete = true;
                     self.reader = None;
-                    return;
+                    return made_progress;
                 }
                 Ok(read) => {
+                    made_progress = true;
                     let remaining = self.limit.saturating_sub(self.bytes.len());
                     let retained = remaining.min(read);
                     self.bytes.extend_from_slice(&chunk[..retained]);
                     self.truncated |= retained < read;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    return made_progress;
+                }
                 Err(_) => {
                     // Closing the reader makes an I/O failure terminal and
                     // records the capture as incomplete without retaining a
                     // blocked worker or retry loop.
                     self.reader = None;
-                    return;
+                    return made_progress;
                 }
             }
         }
+        made_progress
     }
 
     const fn is_terminal(&self) -> bool {
@@ -346,18 +364,25 @@ impl OwnedProcessOutputDrains {
         Ok(Self { stdout, stderr })
     }
 
-    fn poll(&mut self) {
-        if let Some(stdout) = &mut self.stdout {
-            stdout.poll();
-        }
-        if let Some(stderr) = &mut self.stderr {
-            stderr.poll();
-        }
+    fn poll(&mut self) -> bool {
+        let stdout_progress = self.stdout.as_mut().is_some_and(OutputDrain::poll);
+        let stderr_progress = self.stderr.as_mut().is_some_and(OutputDrain::poll);
+        stdout_progress || stderr_progress
     }
 
     fn is_terminal(&self) -> bool {
         self.stdout.as_ref().is_none_or(OutputDrain::is_terminal)
             && self.stderr.as_ref().is_none_or(OutputDrain::is_terminal)
+    }
+
+    fn active_poll_interval(&self) -> Duration {
+        if self.stdout.as_ref().is_some_and(|drain| drain.truncated)
+            || self.stderr.as_ref().is_some_and(|drain| drain.truncated)
+        {
+            TRUNCATED_OUTPUT_POLL_INTERVAL
+        } else {
+            ACTIVE_OUTPUT_POLL_INTERVAL
+        }
     }
 
     fn finish(
@@ -368,9 +393,13 @@ impl OwnedProcessOutputDrains {
             .checked_add(timeout)
             .unwrap_or_else(Instant::now);
         while !self.is_terminal() && Instant::now() < deadline {
-            self.poll();
+            let made_progress = self.poll();
             if !self.is_terminal() {
-                std::thread::sleep(Duration::from_millis(2));
+                if made_progress {
+                    std::thread::sleep(self.active_poll_interval());
+                } else {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
             }
         }
         // Dropping any still-open reader here closes the local pipe promptly.
@@ -566,7 +595,7 @@ fn wait_for_owned_process(
 ) -> std::io::Result<OwnedProcessWait> {
     let deadline = Instant::now().checked_add(timeout);
     loop {
-        drains.poll();
+        let made_output_progress = drains.poll();
         if cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
         }
@@ -579,8 +608,13 @@ fn wait_for_owned_process(
                 let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                     return Ok(OwnedProcessWait::TimedOut);
                 };
-                std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                if made_output_progress {
+                    std::thread::sleep(remaining.min(drains.active_poll_interval()));
+                } else {
+                    std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                }
             }
+            None if made_output_progress => std::thread::sleep(drains.active_poll_interval()),
             None => std::thread::sleep(Duration::from_millis(10)),
         }
     }

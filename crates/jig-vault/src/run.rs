@@ -38,7 +38,17 @@ const BROKERED_RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const BROKERED_PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const BROKERED_PROCESS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const BROKERED_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
-const MAX_STREAM_READS_PER_POLL: usize = 16;
+// Output progress warrants a faster retry than idle process polling. A 1 ms
+// floor keeps deadline and capture-limit enforcement responsive without
+// sustaining thousands of wakeups per second for continuously chatty children.
+const ACTIVE_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+// A shell can issue thousands of tiny writes. Keep each poll bounded while
+// draining enough syscalls to avoid throttling finite output behind the poll
+// interval and turning a capture-limit error into a process timeout.
+const MAX_STREAM_READS_PER_POLL: usize = 1024;
+// Also bound byte work so a normally buffered writer cannot postpone the next
+// process/deadline observation for an entire capture-sized burst.
+const MAX_STREAM_BYTES_PER_POLL: usize = 64 * 1024;
 
 fn checked_deadline(label: &str, timeout: Duration) -> AnyResult<Instant> {
     Instant::now()
@@ -1116,7 +1126,7 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains("capture limit"));
+        assert!(error.contains("capture limit"), "unexpected error: {error}");
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1180,7 +1190,7 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains("capture limit"));
+        assert!(error.contains("capture limit"), "unexpected error: {error}");
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(ready.exists());
         fs::write(release, b"release").unwrap();

@@ -235,6 +235,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
         template: Some(template.path().display().to_string()),
         template_mode: None,
         recopy: true,
+        launcher_only: false,
         force: false,
         vcs_ref: None,
         defaults: true,

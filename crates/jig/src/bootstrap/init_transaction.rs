@@ -169,6 +169,10 @@ fn verify_tracked_init_directories(
 }
 
 impl InitMutationTransaction {
+    pub(super) fn needs_rollback(&self) -> bool {
+        self.armed
+    }
+
     pub(super) fn create(destination: &Path) -> Result<Self> {
         let (existing_ancestor, missing_tail) = path::split_existing_ancestor(destination)?;
         path::ensure_atomic_noreplace_publication_supported(&existing_ancestor)?;

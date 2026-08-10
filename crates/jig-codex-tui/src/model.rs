@@ -5,12 +5,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::sanitize_text;
+use jig_tui::{format_percent, sanitize_text};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
 
 const UNKNOWN: &str = "-";
+const MIN_PROJECTION_ELAPSED_FRACTION: f64 = 0.1;
+const STALE_PROJECTION_AFTER_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone, Debug)]
 pub(crate) struct App {
@@ -84,7 +86,40 @@ impl App {
         self.selected_row().map(|row| row.home.path.clone())
     }
 
+    #[cfg(test)]
+    pub(crate) fn best_projection_index(&self) -> Option<usize> {
+        self.best_projection_index_where(|_| true)
+    }
+
+    pub(crate) fn best_projection_index_at(&self, now: u64) -> Option<usize> {
+        self.best_projection_index_where(|row| !row.projection_is_stale_at(now))
+    }
+
+    fn best_projection_index_where(
+        &self,
+        mut eligible: impl FnMut(&HomeRow) -> bool,
+    ) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for index in self.visible_indices() {
+            let row = &self.rows[index];
+            if !eligible(row) {
+                continue;
+            }
+            let Some(recommendation) = row.recommendation() else {
+                continue;
+            };
+            if best.is_none_or(|(_, best_score)| recommendation.score > best_score) {
+                best = Some((index, recommendation.score));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
     pub(crate) fn apply_update(&mut self, update: HomeUpdate) {
+        self.apply_update_at(update, unix_timestamp_now());
+    }
+
+    pub(crate) fn apply_update_at(&mut self, update: HomeUpdate, observed_at: u64) {
         let Some(row) = self.rows.get_mut(update.index) else {
             self.record_inspection_error(&format!(
                 "inspection returned unknown home index {}",
@@ -95,7 +130,7 @@ impl App {
         if !matches!(row.inspection, Inspection::Ready(_)) {
             self.completed += 1;
         }
-        row.inspection = Inspection::Ready(Details::from_value(update.details));
+        row.inspection = Inspection::Ready(Details::from_value(update.details, observed_at));
         self.reconcile_selection();
     }
 
@@ -314,13 +349,6 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn plan(&self) -> &str {
-        match &self.inspection {
-            Inspection::Ready(details) => &details.plan,
-            Inspection::Loading | Inspection::Unavailable => UNKNOWN,
-        }
-    }
-
     pub(crate) fn usage(&self) -> String {
         match &self.inspection {
             Inspection::Loading => "loading…".into(),
@@ -329,13 +357,25 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn state(&self) -> &str {
+    pub(crate) fn projection(&self) -> Projection {
         match &self.inspection {
-            Inspection::Loading => "loading",
-            Inspection::Unavailable => "unavailable",
-            Inspection::Ready(details) if details.inspection_error.is_some() => "error",
-            Inspection::Ready(details) => &details.status,
+            Inspection::Loading => Projection::Loading,
+            Inspection::Unavailable => Projection::InspectionUnavailable,
+            Inspection::Ready(details) => details.projection(),
         }
+    }
+
+    pub(crate) fn projection_is_stale_at(&self, now: u64) -> bool {
+        match &self.inspection {
+            Inspection::Ready(details) => {
+                details.sample_is_stale_at(now) && details.projection().is_usage_projection()
+            }
+            Inspection::Loading | Inspection::Unavailable => false,
+        }
+    }
+
+    pub(crate) fn recommendation(&self) -> Option<Recommendation> {
+        self.projection().recommendation()
     }
 }
 
@@ -355,10 +395,11 @@ pub(crate) struct Details {
     pub(crate) buckets: Vec<RateLimitBucket>,
     pub(crate) inspection_error: Option<String>,
     pub(crate) usage_error: Option<String>,
+    observed_at: u64,
 }
 
 impl Details {
-    fn from_value(mut value: Value) -> Self {
+    fn from_value(mut value: Value, observed_at: u64) -> Self {
         sanitize_value(&mut value);
         let account = value.get("account").filter(|account| account.is_object());
         let inferred_status = if account.is_some() {
@@ -387,6 +428,7 @@ impl Details {
                 .collect(),
             inspection_error: optional_text(&value, "inspection_error"),
             usage_error: optional_text(&value, "usage_error"),
+            observed_at,
         }
     }
 
@@ -405,12 +447,7 @@ impl Details {
         if let Some(error) = &self.usage_error {
             return format!("error: {error}");
         }
-        let Some(bucket) = self
-            .buckets
-            .iter()
-            .find(|bucket| bucket.id == "codex")
-            .or_else(|| self.buckets.first())
-        else {
+        let Some(bucket) = self.primary_bucket() else {
             return if self.status == "not logged in" {
                 "not signed in".into()
             } else {
@@ -418,6 +455,60 @@ impl Details {
             };
         };
         bucket.summary()
+    }
+
+    fn projection(&self) -> Projection {
+        if let Some(projection) = self.blocking_projection() {
+            return projection;
+        }
+        let Some(bucket) = self.primary_bucket() else {
+            return Projection::Unavailable;
+        };
+        bucket.projection_at(self.observed_at)
+    }
+
+    fn primary_bucket(&self) -> Option<&RateLimitBucket> {
+        self.buckets
+            .iter()
+            .find(|bucket| bucket.id == "codex")
+            .or_else(|| self.buckets.first())
+    }
+
+    fn blocking_projection(&self) -> Option<Projection> {
+        if self.inspection_error.is_some() {
+            return Some(Projection::InspectionError);
+        }
+        if self.usage_error.is_some() {
+            return Some(Projection::UsageError);
+        }
+        if self.status == "not logged in" {
+            return Some(Projection::SignedOut);
+        }
+        if self.status != "authenticated" {
+            return Some(Projection::Unavailable);
+        }
+        None
+    }
+
+    pub(crate) fn window_projection(&self, bucket: &RateLimitBucket, index: usize) -> Projection {
+        bucket.window_projection_at(index, self.observed_at)
+    }
+
+    pub(crate) fn sample_age_label_at(&self, now: u64) -> String {
+        let age = now.saturating_sub(self.observed_at);
+        if age < 60 {
+            "just now".into()
+        } else if age < 3_600 {
+            format!("{}m ago", age / 60)
+        } else if age < 86_400 {
+            format!("{}h ago", age / 3_600)
+        } else {
+            format!("{}d ago", age / 86_400)
+        }
+    }
+
+    fn sample_is_stale_at(&self, now: u64) -> bool {
+        now.saturating_sub(self.observed_at) >= STALE_PROJECTION_AFTER_SECONDS
     }
 }
 
@@ -459,22 +550,89 @@ impl RateLimitBucket {
     pub(crate) fn summary(&self) -> String {
         match self.windows.as_slice() {
             [] => "unavailable".into(),
-            [only] if self.id == "codex" => format!("weekly {}", only.compact()),
-            [only] => only.compact(),
+            [only] if self.id == "codex" => format!("weekly {}", only.remaining()),
+            [only] => self.generic_summary(std::slice::from_ref(only)),
             [first, second, ..] if self.id == "codex" => [first, second]
                 .into_iter()
                 .map(|window| match window.codex_role() {
-                    Some(role) => format!("{role} {}", window.compact()),
-                    None => window.compact(),
+                    Some(role) => format!("{role} {}", window.remaining()),
+                    None => format!(
+                        "{} {}",
+                        format_duration(window.duration_minutes),
+                        window.remaining()
+                    ),
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            windows => windows
-                .iter()
-                .map(RateLimitWindow::compact)
-                .collect::<Vec<_>>()
-                .join(", "),
+            windows => self.generic_summary(windows),
         }
+    }
+
+    fn generic_summary(&self, windows: &[RateLimitWindow]) -> String {
+        let summary = windows
+            .iter()
+            .map(|window| {
+                format!(
+                    "{} {}",
+                    format_duration(window.duration_minutes),
+                    window.remaining()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if self.label() == UNKNOWN {
+            summary
+        } else {
+            format!("{} {summary}", self.label())
+        }
+    }
+
+    fn projection_at(&self, now: u64) -> Projection {
+        if self.windows.is_empty() {
+            return Projection::Unavailable;
+        }
+
+        let mut worst: Option<Projection> = None;
+        let mut collecting: Option<(&'static str, f64)> = None;
+        let mut incomplete = false;
+        for (index, window) in self.windows.iter().enumerate() {
+            let role = self.window_role(index);
+            match window.projection_at(now) {
+                WindowProjection::Unavailable => incomplete = true,
+                WindowProjection::Collecting { remaining_percent } => {
+                    incomplete = true;
+                    if collecting
+                        .is_none_or(|(_, current_remaining)| remaining_percent < current_remaining)
+                    {
+                        collecting = Some((role, remaining_percent));
+                    }
+                }
+                projection => {
+                    let Some((candidate, score)) =
+                        Projection::from_scored_window(role, projection, false)
+                    else {
+                        continue;
+                    };
+                    if worst
+                        .as_ref()
+                        .and_then(Projection::severity_score)
+                        .is_none_or(|worst_score| score < worst_score)
+                    {
+                        worst = Some(candidate);
+                    }
+                }
+            }
+        }
+
+        worst
+            .map(|projection| projection.with_partial(incomplete))
+            .or_else(|| {
+                collecting.map(|(role, remaining_percent)| Projection::Collecting {
+                    role,
+                    remaining_percent,
+                })
+            })
+            .unwrap_or(Projection::Unavailable)
     }
 
     pub(crate) fn window_role(&self, index: usize) -> &'static str {
@@ -488,6 +646,18 @@ impl RateLimitBucket {
             .get(index)
             .and_then(RateLimitWindow::codex_role)
             .unwrap_or("window")
+    }
+
+    pub(crate) fn window_projection_at(&self, index: usize, now: u64) -> Projection {
+        let role = self.window_role(index);
+        match self
+            .windows
+            .get(index)
+            .map(|window| window.projection_at(now))
+        {
+            None => Projection::Unavailable,
+            Some(projection) => Projection::from_window(role, projection, false),
+        }
     }
 }
 
@@ -508,28 +678,31 @@ impl RateLimitWindow {
         })
     }
 
-    pub(crate) fn compact(&self) -> String {
-        let used = self
-            .used_percent
-            .map(|used| {
-                if used.fract() == 0.0 {
-                    format!("{used:.0}%")
-                } else {
-                    format!("{used:.1}%")
-                }
-            })
-            .unwrap_or_else(|| "-%".into());
-        format!("{used}/{}", format_duration(self.duration_minutes))
+    pub(crate) fn remaining(&self) -> String {
+        self.valid_used_percent()
+            .map(|used| format!("{} left", format_percent((100.0 - used).max(0.0))))
+            .unwrap_or_else(|| "remaining unavailable".into())
     }
 
-    pub(crate) fn reset_label(&self) -> String {
+    pub(crate) fn usage_detail(&self) -> String {
+        let Some(used) = self.valid_used_percent() else {
+            return format!(
+                "usage unavailable · {} window",
+                format_duration(self.duration_minutes)
+            );
+        };
+        format!(
+            "{} used · {} left · {} window",
+            format_percent(used),
+            format_percent((100.0 - used).max(0.0)),
+            format_duration(self.duration_minutes)
+        )
+    }
+
+    pub(crate) fn reset_label_at(&self, now: u64) -> String {
         let Some(timestamp) = self.resets_at.and_then(|value| u64::try_from(value).ok()) else {
             return "reset unknown".into();
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
         let Some(remaining) = timestamp
             .checked_sub(now)
             .filter(|remaining| *remaining > 0)
@@ -545,6 +718,55 @@ impl RateLimitWindow {
         }
     }
 
+    fn projection_at(&self, now: u64) -> WindowProjection {
+        let Some(used) = self.valid_used_percent() else {
+            return WindowProjection::Unavailable;
+        };
+        if used >= 100.0 {
+            return WindowProjection::Exhausted;
+        }
+        let Some(duration) = self
+            .duration_minutes
+            .filter(|duration| *duration > 0)
+            .and_then(|duration| duration.checked_mul(60))
+        else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(reset) = self.resets_at.and_then(|reset| u64::try_from(reset).ok()) else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(start) = reset.checked_sub(duration) else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(elapsed) = now.checked_sub(start).filter(|elapsed| *elapsed < duration) else {
+            return WindowProjection::Unavailable;
+        };
+        let elapsed_fraction = elapsed as f64 / duration as f64;
+        // Zero measured usage is immediately actionable: regardless of how
+        // young the window is, it has the full quota headroom the picker is
+        // ranking for. Nonzero burn rates still wait for the warmup threshold.
+        if used == 0.0 {
+            return WindowProjection::Remaining { percent: 100.0 };
+        }
+        if elapsed_fraction < MIN_PROJECTION_ELAPSED_FRACTION {
+            return WindowProjection::Collecting {
+                remaining_percent: 100.0 - used,
+            };
+        }
+
+        let projected_used = used / elapsed_fraction;
+        let score = 100.0 - projected_used;
+        if score >= 0.0 {
+            WindowProjection::Remaining { percent: score }
+        } else {
+            let exhaustion_fraction = elapsed_fraction * (100.0 / used);
+            let seconds = ((1.0 - exhaustion_fraction) * duration as f64)
+                .max(0.0)
+                .round() as u64;
+            WindowProjection::ExhaustsEarly { seconds, score }
+        }
+    }
+
     fn codex_role(&self) -> Option<&'static str> {
         match self.duration_minutes {
             Some(300) => Some("5h"),
@@ -552,6 +774,268 @@ impl RateLimitWindow {
             _ => None,
         }
     }
+
+    fn valid_used_percent(&self) -> Option<f64> {
+        self.used_percent
+            .filter(|used| used.is_finite() && *used >= 0.0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WindowProjection {
+    Unavailable,
+    Collecting { remaining_percent: f64 },
+    Remaining { percent: f64 },
+    ExhaustsEarly { seconds: u64, score: f64 },
+    Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Projection {
+    Loading,
+    InspectionUnavailable,
+    InspectionError,
+    UsageError,
+    SignedOut,
+    Unavailable,
+    Collecting {
+        role: &'static str,
+        remaining_percent: f64,
+    },
+    Remaining {
+        role: &'static str,
+        percent: f64,
+        partial: bool,
+    },
+    ExhaustsEarly {
+        role: &'static str,
+        seconds: u64,
+        score: f64,
+        partial: bool,
+    },
+    Exhausted {
+        role: &'static str,
+        partial: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Recommendation {
+    pub(crate) score: f64,
+    pub(crate) label: &'static str,
+}
+
+impl Projection {
+    fn is_usage_projection(self) -> bool {
+        matches!(
+            self,
+            Self::Collecting { .. }
+                | Self::Remaining { .. }
+                | Self::ExhaustsEarly { .. }
+                | Self::Exhausted { .. }
+        )
+    }
+
+    fn from_window(role: &'static str, projection: WindowProjection, partial: bool) -> Self {
+        match projection {
+            WindowProjection::Unavailable => Self::Unavailable,
+            WindowProjection::Collecting { remaining_percent } => Self::Collecting {
+                role,
+                remaining_percent,
+            },
+            WindowProjection::Remaining { percent } => Self::Remaining {
+                role,
+                percent,
+                partial,
+            },
+            WindowProjection::ExhaustsEarly { seconds, score } => Self::ExhaustsEarly {
+                role,
+                seconds,
+                score,
+                partial,
+            },
+            WindowProjection::Exhausted => Self::Exhausted { role, partial },
+        }
+    }
+
+    fn from_scored_window(
+        role: &'static str,
+        projection: WindowProjection,
+        partial: bool,
+    ) -> Option<(Self, f64)> {
+        match projection {
+            WindowProjection::Unavailable | WindowProjection::Collecting { .. } => None,
+            WindowProjection::Remaining { percent } => Some((
+                Self::Remaining {
+                    role,
+                    percent,
+                    partial,
+                },
+                percent,
+            )),
+            WindowProjection::ExhaustsEarly { seconds, score } => Some((
+                Self::ExhaustsEarly {
+                    role,
+                    seconds,
+                    score,
+                    partial,
+                },
+                score,
+            )),
+            WindowProjection::Exhausted => {
+                Some((Self::Exhausted { role, partial }, f64::NEG_INFINITY))
+            }
+        }
+    }
+
+    fn with_partial(self, partial: bool) -> Self {
+        match self {
+            Self::Remaining { role, percent, .. } => Self::Remaining {
+                role,
+                percent,
+                partial,
+            },
+            Self::ExhaustsEarly {
+                role,
+                seconds,
+                score,
+                ..
+            } => Self::ExhaustsEarly {
+                role,
+                seconds,
+                score,
+                partial,
+            },
+            Self::Exhausted { role, .. } => Self::Exhausted { role, partial },
+            projection => projection,
+        }
+    }
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Loading => "loading…".into(),
+            Self::InspectionUnavailable => "inspection stopped".into(),
+            Self::InspectionError => "inspection error".into(),
+            Self::UsageError => "usage error".into(),
+            Self::SignedOut => "signed out".into(),
+            Self::Unavailable => "projection unavailable".into(),
+            Self::Collecting {
+                role,
+                remaining_percent,
+            } => format!(
+                "{role}: {} left · collecting",
+                format_percent(remaining_percent)
+            ),
+            Self::Remaining {
+                role,
+                percent,
+                partial,
+                ..
+            } => {
+                if partial {
+                    format!("{role}: ~{} left · partial", format_percent(percent))
+                } else {
+                    format!("{role}: ~{} left at reset", format_percent(percent))
+                }
+            }
+            Self::ExhaustsEarly {
+                role,
+                seconds,
+                partial,
+                ..
+            } => {
+                let label = format!("{role}: runs out {} early", format_early(seconds));
+                if partial {
+                    format!("{label} · partial")
+                } else {
+                    label
+                }
+            }
+            Self::Exhausted { role, partial, .. } => {
+                if partial {
+                    format!("{role}: exhausted · partial")
+                } else {
+                    format!("{role}: exhausted until reset")
+                }
+            }
+        }
+    }
+
+    pub(crate) fn outcome_label(self) -> String {
+        match self {
+            Self::Loading => "loading…".into(),
+            Self::InspectionUnavailable => "inspection stopped".into(),
+            Self::InspectionError => "inspection error".into(),
+            Self::UsageError => "usage error".into(),
+            Self::SignedOut => "signed out".into(),
+            Self::Unavailable => "projection unavailable".into(),
+            Self::Collecting {
+                remaining_percent, ..
+            } => format!("{} left · collecting", format_percent(remaining_percent)),
+            Self::Remaining { percent, .. } => {
+                format!("~{} left at reset", format_percent(percent))
+            }
+            Self::ExhaustsEarly { seconds, .. } => {
+                format!("runs out {} early", format_early(seconds))
+            }
+            Self::Exhausted { .. } => "exhausted until reset".into(),
+        }
+    }
+
+    pub(crate) fn list_outcome_label(self) -> String {
+        match self {
+            Self::Remaining {
+                percent,
+                partial: true,
+                ..
+            } => format!("~{} left · partial", format_percent(percent)),
+            Self::ExhaustsEarly {
+                seconds,
+                partial: true,
+                ..
+            } => format!("{} early · partial", format_early(seconds)),
+            Self::Exhausted { partial: true, .. } => "exhausted · partial".into(),
+            projection => projection.outcome_label(),
+        }
+    }
+
+    fn recommendation(self) -> Option<Recommendation> {
+        match self {
+            Self::Remaining {
+                percent,
+                partial: false,
+                ..
+            } => Some(Recommendation {
+                score: percent,
+                label: "best projected headroom at reset",
+            }),
+            Self::ExhaustsEarly {
+                score,
+                partial: false,
+                ..
+            } => Some(Recommendation {
+                score,
+                label: "least projected overrun; runs out early",
+            }),
+            _ => None,
+        }
+    }
+
+    fn severity_score(&self) -> Option<f64> {
+        match *self {
+            Self::Remaining { percent, .. } => Some(percent),
+            Self::ExhaustsEarly { score, .. } => Some(score),
+            Self::Exhausted { .. } => Some(f64::NEG_INFINITY),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn text_at(value: Option<&Value>, key: &str) -> String {
@@ -583,6 +1067,29 @@ fn format_duration(minutes: Option<u64>) -> String {
         Some(minutes) if minutes > 0 && minutes % 60 == 0 => format!("{}h", minutes / 60),
         Some(minutes) => format!("{minutes}m"),
         None => "?".into(),
+    }
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    let (value, unit) = if seconds >= 86_400 {
+        (seconds as f64 / 86_400.0, "d")
+    } else if seconds >= 3_600 {
+        (seconds as f64 / 3_600.0, "h")
+    } else {
+        (seconds as f64 / 60.0, "m")
+    };
+    if (value - value.round()).abs() < 0.05 {
+        format!("{value:.0}{unit}")
+    } else {
+        format!("{value:.1}{unit}")
+    }
+}
+
+fn format_early(seconds: u64) -> String {
+    if seconds < 60 {
+        "<1m".into()
+    } else {
+        format!("~{}", format_elapsed(seconds))
     }
 }
 

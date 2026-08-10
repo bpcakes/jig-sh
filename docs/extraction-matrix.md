@@ -9,7 +9,7 @@ This matrix captures what was extracted from the source application workflow and
 | `.agent/PLANS.md` | Templated | Preserved as the generic ExecPlan contract. |
 | `.agent/jig-contract.json` | Templated | Declares command-backed and native repo contract tools for CLI and MCP consumers, with SQLx tools gated by `sqlx_enabled`. |
 | `.agent/state/*.jsonl` | Runtime-owned | Append-only repo memory populated by `jig`. |
-| `scripts/jig doctor` / `scripts/jig doctor --json` | Runtime-owned | Unified read-only readiness check for the pinned runtime, config, contract, required command executables, Codex-side Jig skills, dev proxy status, vault status, and the next setup command. Human-readable by default; `--json` for automation. |
+| `scripts/jig doctor` / `scripts/jig doctor --json` | Runtime-owned | Unified read-only readiness check for runtime/contract compatibility, config, required command executables, Codex-side Jig skills, dev proxy status, vault status, and the next setup command. Human-readable by default; `--json` for automation. |
 | `scripts/jig agent doctor` / `scripts/jig agent doctor --json` + `scripts/jig agent bootstrap` | Runtime-owned | Checks and explicitly installs expected Codex-side Jig skills without adding more rendered shell scripts. Human-readable output is the default; pass `--json` for structured automation output. |
 | `scripts/jig codex homes` + `scripts/jig codex launch` | Runtime-owned | Discovers separate `CODEX_HOME` account/state roots through the Codex app-server API and launches Codex with the selected home. CLI-only; no rendered launcher or MCP surface. |
 | `.mcp.json` | Templated | Repo-local MCP entrypoint that launches `scripts/jig mcp`. |
@@ -17,7 +17,7 @@ This matrix captures what was extracted from the source application workflow and
 | Agent map, guide, Rust LOC, `mod.rs`, migration immutability, and SQLx unchecked-query checks | Runtime-owned | Implemented natively in `crates/jig`; generated repos call `scripts/jig ...` instead of rendered helper scripts. |
 | `scripts/jig sqlx migration add` | Runtime-owned | Adds timestamped forward-only migration stubs when `sqlx_enabled` is `true`; the legacy `scripts/jig migration-add` path remains accepted. |
 | `scripts/jig check contract` | Runtime-owned | Validates runtime wiring and manifest drift. |
-| `scripts/install-jig.sh` + `scripts/jig` | Templated | Exact-version runtime launcher and installer for generated repos. |
+| `scripts/install-jig.sh` + `scripts/jig` | Templated | Contract/profile-compatible runtime launcher and installer for generated repos. |
 | `scripts/enforce-coverage.cjs` | Extracted | Kept generic and CommonJS so it runs inside ESM frontend packages. |
 | `scripts/new-checkout.sh` | Extracted + generalized | Uses current repo basename instead of source-specific naming. |
 | `.github/workflows/agent-map-check.yml` | Templated | Runner label is configurable. |

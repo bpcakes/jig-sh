@@ -2,6 +2,7 @@ use std::process::Command;
 
 use super::*;
 use crate::bootstrap::template_source::{TemplateRenderSource, prepare_template_source_from_base};
+use crate::context::CURRENT_CONTRACT_VERSION;
 
 #[test]
 fn adopt_without_template_uses_official_template_release_tag_and_records_metadata() {
@@ -170,12 +171,21 @@ fn run_adopt_uses_embedded_template_for_unreleased_build_policy() {
     assert_eq!(answers.get("_commit").and_then(TomlValue::as_str), Some(""));
     assert!(repo.join("scripts/jig").exists());
     assert!(repo.join("scripts/install-jig.sh").exists());
+    let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+    assert!(launcher.contains("--repository-scope"));
+    assert!(launcher.contains("jig_capability_only_requested"));
     let installer = fs::read_to_string(repo.join("scripts/install-jig.sh")).unwrap();
-    assert!(installer.contains("resolve_installed_jig_for_embedded_source"));
+    assert!(installer.contains("resolve_compatible_path_jig"));
+    assert!(installer.contains("--capability-only"));
+    assert!(installer.contains("JIG_INSTALL_ALLOW_PATH_BINARY"));
+    assert!(installer.contains("Using explicitly allowed PATH Jig binary"));
     assert!(installer.contains(r#"[[ "$source" == "embedded:jig-sh" ]]"#));
-    assert!(installer.contains("no same-version jig binary was found on PATH"));
+    assert!(installer.contains("no contract-compatible Jig binary was found"));
     assert!(installer.contains("JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1"));
-    assert!(installer.contains("diff HEAD -- Cargo.toml Cargo.lock crates"));
+    assert!(installer.contains("JIG_INSTALL_ALLOW_UNPINNED_REMOTE=1"));
+    assert!(installer.contains("local cargo_args=(--git \"$SRC_PATH\")"));
+    assert!(!installer.contains("git_ref_args"));
+    assert!(installer.contains("--no-textconv HEAD -- Cargo.toml Cargo.lock crates"));
     assert!(installer.contains("ls-files --others --exclude-standard -z"));
     assert!(installer.contains("hash-object --no-filters"));
 }
@@ -215,20 +225,94 @@ fn local_source_stamp_tracks_transitive_and_untracked_crate_content() {
 
 #[cfg(unix)]
 #[test]
-fn local_source_stamp_fails_quietly_outside_a_git_worktree() {
+fn local_source_stamp_tracks_content_outside_a_git_worktree() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("source");
     fs::create_dir_all(source.join("crates/jig")).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let first = run_local_source_stamp(installer, &source);
+
+    assert!(first.status.success());
+    assert!(
+        first.stderr.is_empty(),
+        "source stamp leaked diagnostics: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    fs::create_dir_all(source.join("crates/jig/src")).unwrap();
+    fs::write(source.join("crates/jig/src/main.rs"), "fn main() {}\n").unwrap();
+    let second = run_local_source_stamp(installer, &source);
+    assert!(second.status.success());
+    assert_ne!(first.stdout, second.stdout);
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_stamp_bounds_non_git_source_bytes() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    fs::create_dir_all(source.join("crates/jig/src")).unwrap();
+    fs::File::create(source.join("crates/jig/src/oversized.bin"))
+        .unwrap()
+        .set_len(512 * 1024 * 1024 + 1)
+        .unwrap();
     let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
 
     let output = run_local_source_stamp(installer, &source);
 
     assert!(!output.status.success());
     assert!(
-        output.stderr.is_empty(),
-        "source stamp leaked Git diagnostics: {}",
         String::from_utf8_lossy(&output.stderr)
+            .contains("Local Jig source stamp limit exceeded: file bytes exceed")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_stamp_publication_fails_when_fingerprint_is_unbounded() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    let install_root = temp.path().join("install");
+    fs::create_dir_all(source.join("crates/jig/src")).unwrap();
+    fs::create_dir(&install_root).unwrap();
+    fs::File::create(source.join("crates/jig/src/oversized.bin"))
+        .unwrap()
+        .set_len(512 * 1024 * 1024 + 1)
+        .unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    let require_start = installer
+        .find("require_python3() {")
+        .expect("installer should define its Python prerequisite check");
+    let require_end = installer[require_start..]
+        .find("\n\nread_config_fields() {")
+        .map(|offset| require_start + offset)
+        .expect("installer should define config parsing after its Python prerequisite check");
+    let stamp_start = installer
+        .find("hash_stdin() {")
+        .expect("installer should define hash_stdin");
+    let stamp_end = installer[stamp_start..]
+        .find("\nwrite_configured_source_stamp() {")
+        .map(|offset| stamp_start + offset)
+        .expect("installer should define configured stamps after local stamp publication");
+    let script = format!(
+        "set -euo pipefail\n{}\n{}\nINSTALL_ROOT=\"$2\"\nwrite_local_source_stamp \"$1\"\n",
+        &installer[require_start..require_end],
+        &installer[stamp_start..stamp_end],
+    );
+
+    let output = Command::new("/bin/bash")
+        .args(["-c", &script, "installer-local-source-publication"])
+        .arg(&source)
+        .arg(&install_root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("the installed runtime will not be treated as cacheable")
+    );
+    assert!(!install_root.join(".jig-source-stamp").exists());
 }
 
 #[cfg(unix)]
@@ -295,6 +379,176 @@ exec "$JIG_TEST_REAL_GIT" "$@"
 }
 
 #[cfg(unix)]
+#[test]
+fn local_source_stamp_fails_closed_when_git_diff_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("source");
+    fs::create_dir_all(repo.join("crates/jig/src")).unwrap();
+    fs::write(repo.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    fs::write(repo.join("Cargo.lock"), "version = 3\n").unwrap();
+    fs::write(repo.join("crates/jig/src/main.rs"), "fn main() {}\n").unwrap();
+    init_git_repo_for_test(&repo);
+    git(&repo, ["add", "."]).unwrap();
+    git(&repo, ["commit", "-m", "source fixture"]).unwrap();
+
+    let real_git = std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )
+    .map(|directory| directory.join("git"))
+    .find(|candidate| candidate.is_file())
+    .expect("git should be available on PATH");
+    let shim_dir = temp.path().join("bin");
+    fs::create_dir(&shim_dir).unwrap();
+    let shim = shim_dir.join("git");
+    fs::write(
+        &shim,
+        r#"#!/bin/sh
+case " $* " in
+  *" diff "*)
+    printf '%s\n' 'simulated diff diagnostic' >&2
+    exit 65
+    ;;
+esac
+exec "$JIG_TEST_REAL_GIT" "$@"
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(shim_dir).chain(std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )))
+    .unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let output = local_source_stamp_command(installer, &repo)
+        .env("PATH", path)
+        .env("JIG_TEST_REAL_GIT", real_git)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn hash_stdin_falls_back_to_required_python() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir(&bin_dir).unwrap();
+    let python = std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )
+    .map(|directory| directory.join("python3"))
+    .find(|candidate| candidate.is_file())
+    .expect("python3 should be available on PATH");
+    symlink(python, bin_dir.join("python3")).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    let start = installer
+        .find("hash_stdin() {")
+        .expect("installer should define hash_stdin");
+    let end = installer[start..]
+        .find("\nlocal_source_stamp() {")
+        .map(|offset| start + offset)
+        .expect("installer should define local_source_stamp after hash_stdin");
+    let script = format!(
+        "set -euo pipefail\n{}\nprintf 'abc' | hash_stdin\n",
+        &installer[start..end]
+    );
+
+    let output = Command::new("/bin/bash")
+        .args(["-c", &script])
+        .env("PATH", bin_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "python hash fallback failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hash_stdin_rejects_a_malformed_python_fallback_digest() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir(&bin_dir).unwrap();
+    let fake_python = bin_dir.join("python3");
+    fs::write(&fake_python, "#!/bin/sh\nprintf malformed-digest\n").unwrap();
+    fs::set_permissions(&fake_python, fs::Permissions::from_mode(0o755)).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    let start = installer
+        .find("hash_stdin() {")
+        .expect("installer should define hash_stdin");
+    let end = installer[start..]
+        .find("\nlocal_source_stamp() {")
+        .map(|offset| start + offset)
+        .expect("installer should define local_source_stamp after hash_stdin");
+    let script = format!(
+        "set -euo pipefail\n{}\nprintf 'abc' | hash_stdin\n",
+        &installer[start..end]
+    );
+
+    let output = Command::new("/bin/bash")
+        .args(["-c", &script])
+        .env("PATH", bin_dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn hash_stdin_rejects_an_empty_hasher_result() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir(&bin_dir).unwrap();
+    let fake_hasher = bin_dir.join("sha256sum");
+    fs::write(&fake_hasher, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&fake_hasher, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin_dir).chain(std::env::split_paths(
+        &std::env::var_os("PATH").expect("the test environment should define PATH"),
+    )))
+    .unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+    let start = installer
+        .find("hash_stdin() {")
+        .expect("installer should define hash_stdin");
+    let end = installer[start..]
+        .find("\nlocal_source_stamp() {")
+        .map(|offset| start + offset)
+        .expect("installer should define local_source_stamp after hash_stdin");
+    let script = format!(
+        "set -euo pipefail\n{}\nprintf 'abc' | hash_stdin\n",
+        &installer[start..end]
+    );
+
+    let output = Command::new("/bin/bash")
+        .args(["-c", &script])
+        .env("PATH", path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+}
+
+#[cfg(unix)]
 fn evaluate_local_source_stamp(installer: &str, repo: &Path) -> String {
     let output = run_local_source_stamp(installer, repo);
     assert!(
@@ -314,6 +568,13 @@ fn run_local_source_stamp(installer: &str, repo: &Path) -> std::process::Output 
 
 #[cfg(unix)]
 fn local_source_stamp_command(installer: &str, repo: &Path) -> Command {
+    let require_start = installer
+        .find("require_python3() {")
+        .expect("installer should define its Python prerequisite check");
+    let require_end = installer[require_start..]
+        .find("\n\nread_config_fields() {")
+        .map(|offset| require_start + offset)
+        .expect("installer should define config parsing after its Python prerequisite check");
     let start = installer
         .find("hash_stdin() {")
         .expect("installer should define hash_stdin");
@@ -322,8 +583,9 @@ fn local_source_stamp_command(installer: &str, repo: &Path) -> Command {
         .map(|offset| start + offset)
         .expect("installer should define the source-cache check after its stamp helpers");
     let script = format!(
-        "set -euo pipefail\n{}\nlocal_source_stamp \"$1\"\n",
-        &installer[start..end]
+        "set -euo pipefail\n{}\n{}\nstamp=\"$(local_source_stamp \"$1\")\" || exit $?\nprintf '%s\\n' \"$stamp\"\n",
+        &installer[require_start..require_end],
+        &installer[start..end],
     );
     let mut command = Command::new("bash");
     command
@@ -365,6 +627,7 @@ fn update_uses_stored_embedded_template_by_default() {
         template: None,
         template_mode: None,
         recopy: false,
+        launcher_only: false,
         force: true,
         vcs_ref: None,
         defaults: true,
@@ -382,6 +645,847 @@ fn update_uses_stored_embedded_template_by_default() {
             .unwrap()
             .contains("embedded:jig-sh")
     );
+}
+
+#[test]
+fn full_update_recovers_missing_and_malformed_contract_manifests() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    let contract_path = repo.join(".agent/jig-contract.json");
+    for damaged_contract in [None, Some("{\n")] {
+        match damaged_contract {
+            Some(contents) => fs::write(&contract_path, contents).unwrap(),
+            None => fs::remove_file(&contract_path).unwrap(),
+        }
+
+        run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: false,
+            launcher_only: false,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap();
+
+        let contract: serde_json::Value =
+            serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+        assert_eq!(contract["contract_version"], CURRENT_CONTRACT_VERSION);
+        RepoContext::load_from_root(repo.clone()).unwrap();
+    }
+}
+
+#[test]
+fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    write_test_crate_guide(&repo);
+
+    let answers_template = template.path().join("templates/project/.jig.toml.jinja");
+    let answers = fs::read_to_string(&answers_template).unwrap().replace(
+        "repo_name =",
+        "jig_version = \"<<[ jig_version ]>>\"\nrepo_name =",
+    );
+    fs::write(&answers_template, answers).unwrap();
+
+    let contract_template = template
+        .path()
+        .join("templates/project/.agent/jig-contract.json.jinja");
+    let contract = fs::read_to_string(&contract_template).unwrap().replace(
+        "\"contract_version\": <<[ _jig.contract_version ]>>,",
+        "\"contract_version\": 3,\n  \"jig_version\": \"<<[ jig_version ]>>\",",
+    );
+    fs::write(&contract_template, contract).unwrap();
+
+    let launcher_template = template.path().join("templates/project/scripts/jig.jinja");
+    let launcher = fs::read_to_string(&launcher_template).unwrap().replace(
+        "CONTRACT_VERSION=\"<<[ _jig.contract_version ]>>\"",
+        "JIG_VERSION=\"<<[ jig_version ]>>\"\nCONTRACT_VERSION=\"3\"",
+    );
+    fs::write(&launcher_template, launcher).unwrap();
+    git(template.path(), ["add", "."]).unwrap();
+    git(template.path(), ["commit", "-m", "pre-v4 template fixture"]).unwrap();
+
+    run_adopt(AdoptOpts {
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            jig_version: Some("0.2.0-beta.1".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: true,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    assert!(
+        fs::read_to_string(repo.join(".jig.toml"))
+            .unwrap()
+            .contains("jig_version = \"0.2.0-beta.1\"")
+    );
+    assert!(
+        fs::read_to_string(repo.join("scripts/jig"))
+            .unwrap()
+            .contains("JIG_VERSION=\"0.2.0-beta.1\"")
+    );
+    let contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(repo.join(".agent/jig-contract.json")).unwrap()).unwrap();
+    assert_eq!(contract["contract_version"], 3);
+    assert_eq!(contract["jig_version"], "0.2.0-beta.1");
+}
+
+#[test]
+fn full_update_upgrades_legacy_contract_and_launcher_together() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    let answers_path = repo.join(".jig.toml");
+    let answers = fs::read_to_string(&answers_path).unwrap().replace(
+        "template_source_url =",
+        "jig_version = \"0.2.0-beta.1\"\ntemplate_source_url =",
+    );
+    fs::write(&answers_path, answers).unwrap();
+    let contract_path = repo.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    contract["contract_version"] = json!(3);
+    contract["jig_version"] = json!("0.2.0-beta.1");
+    fs::write(
+        &contract_path,
+        format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()),
+    )
+    .unwrap();
+
+    run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    let contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    assert_eq!(contract["contract_version"], CURRENT_CONTRACT_VERSION);
+    assert!(contract.get("jig_version").is_none());
+    let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+    assert!(launcher.contains(&format!("CONTRACT_VERSION=\"{CURRENT_CONTRACT_VERSION}\"")));
+    assert!(
+        !fs::read_to_string(answers_path)
+            .unwrap()
+            .contains("jig_version")
+    );
+    RepoContext::load_from_root(repo).unwrap();
+}
+
+#[test]
+fn launcher_only_update_repairs_only_owned_runtime_scripts() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    let answers_path = repo.join(".jig.toml");
+    let answers = fs::read_to_string(&answers_path).unwrap().replace(
+        "template_source_url =",
+        "jig_version = \"0.2.0-beta.1\"\ntemplate_source_url =",
+    );
+    fs::write(&answers_path, answers).unwrap();
+    let mut answers = read_answers_toml(&answers_path).unwrap();
+    answers.insert(
+        "_src_path".into(),
+        TomlValue::String("https://example.invalid/custom-jig.git".into()),
+    );
+    write_answers_toml(&answers_path, &answers).unwrap();
+    let contract_path = repo.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    contract["contract_version"] = json!(3);
+    contract["jig_version"] = json!("0.2.0-beta.1");
+    fs::write(
+        &contract_path,
+        format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()),
+    )
+    .unwrap();
+
+    fs::write(
+        repo.join("scripts/jig"),
+        "#!/bin/sh\nJIG_VERSION=\"0.2.0-beta.1\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("scripts/install-jig.sh"),
+        "#!/usr/bin/env bash\nJIG_VERSION=\"0.2.0-beta.1\"\n",
+    )
+    .unwrap();
+    fs::write(repo.join(".mcp.json"), "{\"locally_modified\":true}\n").unwrap();
+    fs::write(
+        repo.join("AGENTS.md"),
+        "project guidance\n<!-- BEGIN JIG MANAGED BLOCK -->\nmalformed\n",
+    )
+    .unwrap();
+
+    let managed_paths = managed_paths::load_manifest(&repo).unwrap().unwrap();
+    let before = managed_paths
+        .iter()
+        .map(|path| (path.clone(), fs::read(repo.join(path)).unwrap()))
+        .collect::<BTreeMap<_, _>>();
+
+    let output = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    assert_eq!(output["render_mode"], "launcher-only");
+    assert!(
+        output["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("embedded templates")
+                && warning.contains("source-specific launcher customizations"))
+    );
+    for (path, contents) in &before {
+        if LAUNCHER_ONLY_MANAGED_PATHS
+            .iter()
+            .any(|launcher| path == Path::new(launcher))
+        {
+            assert_ne!(&fs::read(repo.join(path)).unwrap(), contents, "{path:?}");
+        } else {
+            assert_eq!(&fs::read(repo.join(path)).unwrap(), contents, "{path:?}");
+        }
+    }
+    let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+    assert!(!launcher.contains("JIG_VERSION="));
+    assert!(launcher.contains("--__launcher-contract-version"));
+    assert!(launcher.contains("CONTRACT_VERSION=\"3\""));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&contract_path).unwrap()).unwrap()["contract_version"],
+        3
+    );
+
+    let after_first_repair = managed_paths
+        .iter()
+        .map(|path| (path.clone(), fs::read(repo.join(path)).unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+    for (path, contents) in after_first_repair {
+        assert_eq!(fs::read(repo.join(&path)).unwrap(), contents, "{path:?}");
+    }
+}
+
+#[test]
+fn launcher_only_update_preserves_every_file_when_force_is_required() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+    fs::write(repo.join("scripts/jig"), "# locally modified launcher\n").unwrap();
+    let before = fs::read(repo.join("scripts/jig")).unwrap();
+
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: false,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("--launcher-only requires --force"),
+        "{error}"
+    );
+    assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), before);
+}
+
+#[test]
+fn launcher_only_update_explains_minimal_footprint_mismatch() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+    let answers_path = repo.join(".jig.toml");
+    let answers = fs::read_to_string(&answers_path).unwrap().replace(
+        "harness_footprint = \"full\"",
+        "harness_footprint = \"minimal\"",
+    );
+    fs::write(&answers_path, answers).unwrap();
+    fs::write(
+        repo.join(managed_paths::MANIFEST_PATH),
+        format!(
+            "{{\n  \"version\": 1,\n  \"paths\": [\n    {:?}\n  ]\n}}\n",
+            managed_paths::MANIFEST_PATH
+        ),
+    )
+    .unwrap();
+
+    let error = run_update(UpdateOpts {
+        path: repo,
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("harness_footprint = \"minimal\""), "{error}");
+    assert!(error.contains("do not manage scripts/jig"), "{error}");
+    assert!(
+        !error.contains("does not own these required managed paths"),
+        "{error}"
+    );
+    assert!(!error.contains("template is missing"), "{error}");
+}
+
+#[test]
+fn launcher_only_update_rejects_missing_source_before_mutating_scripts() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+    let answers_path = repo.join(".jig.toml");
+    let mut answers = read_answers_toml(&answers_path).unwrap();
+    answers.insert("_src_path".into(), TomlValue::String(String::new()));
+    write_answers_toml(&answers_path, &answers).unwrap();
+    let launcher_before = fs::read(repo.join("scripts/jig")).unwrap();
+    let installer_before = fs::read(repo.join("scripts/install-jig.sh")).unwrap();
+
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("non-empty _src_path"), "{error}");
+    assert!(!error.contains("Failed to seed"), "{error}");
+    assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), launcher_before);
+    assert_eq!(
+        fs::read(repo.join("scripts/install-jig.sh")).unwrap(),
+        installer_before
+    );
+}
+
+#[test]
+fn launcher_only_update_rolls_back_scripts_when_runtime_seeding_fails() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+    fs::write(
+        repo.join("scripts/jig"),
+        "#!/bin/sh\nJIG_VERSION=\"0.2.0-beta.1\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("scripts/install-jig.sh"),
+        "#!/usr/bin/env bash\nJIG_VERSION=\"0.2.0-beta.1\"\n",
+    )
+    .unwrap();
+    let launcher_before = fs::read(repo.join("scripts/jig")).unwrap();
+    let installer_before = fs::read(repo.join("scripts/install-jig.sh")).unwrap();
+    let _seed_failure = EnvVarGuard::set(TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV, "1");
+
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("injected launcher repair seed failure"),
+        "{error}"
+    );
+    assert_eq!(fs::read(repo.join("scripts/jig")).unwrap(), launcher_before);
+    assert_eq!(
+        fs::read(repo.join("scripts/install-jig.sh")).unwrap(),
+        installer_before
+    );
+}
+
+#[test]
+fn launcher_only_update_without_manifest_accepts_only_recognizable_legacy_scripts() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    let answers_path = repo.join(".jig.toml");
+    let answers = fs::read_to_string(&answers_path).unwrap().replace(
+        "template_source_url =",
+        "jig_version = \"0.2.0-beta.1\"\ntemplate_source_url =",
+    );
+    fs::write(&answers_path, answers).unwrap();
+    let contract_path = repo.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_slice(&fs::read(&contract_path).unwrap()).unwrap();
+    contract["contract_version"] = json!(3);
+    contract["jig_version"] = json!("0.2.0-beta.1");
+    fs::write(
+        &contract_path,
+        format!("{}\n", serde_json::to_string_pretty(&contract).unwrap()),
+    )
+    .unwrap();
+    let manifest_path = repo.join(managed_paths::MANIFEST_PATH);
+    fs::remove_file(&manifest_path).unwrap();
+
+    fs::write(repo.join("scripts/jig"), "#!/bin/sh\n# project-owned\n").unwrap();
+    fs::write(
+        repo.join("scripts/install-jig.sh"),
+        "#!/usr/bin/env bash\n# project-owned\n",
+    )
+    .unwrap();
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not a recognizable generated Jig launcher/installer pair"));
+    assert_eq!(
+        fs::read_to_string(repo.join("scripts/jig")).unwrap(),
+        "#!/bin/sh\n# project-owned\n"
+    );
+
+    fs::write(
+        repo.join("scripts/jig"),
+        "#!/bin/sh\nINSTALLER=\"$ROOT_DIR/scripts/install-jig.sh\"\nJIG_VERSION=\"0.2.0-beta.1\"\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join("scripts/install-jig.sh"),
+        "#!/usr/bin/env bash\nANSWERS_FILE=\"$ROOT_DIR/.jig.toml\"\nassert_exact_version() { :; }\n",
+    )
+    .unwrap();
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not a recognizable generated Jig launcher/installer pair"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let external_installer = temp.path().join("external-install-jig.sh");
+        fs::write(
+            &external_installer,
+            "#!/usr/bin/env bash\nROOT_DIR=/tmp/repo\nANSWERS_FILE=\"$ROOT_DIR/.jig.toml\"\nassert_exact_version() { :; }\n",
+        )
+        .unwrap();
+        fs::remove_file(repo.join("scripts/install-jig.sh")).unwrap();
+        symlink(&external_installer, repo.join("scripts/install-jig.sh")).unwrap();
+
+        let error = run_update(UpdateOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            recopy: false,
+            launcher_only: true,
+            force: true,
+            vcs_ref: None,
+            defaults: true,
+            no_input: true,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("expected a regular generated file"));
+        assert!(repo.join("scripts/install-jig.sh").is_symlink());
+        assert!(external_installer.exists());
+        fs::remove_file(repo.join("scripts/install-jig.sh")).unwrap();
+    }
+
+    fs::write(
+        repo.join("scripts/jig"),
+        r#"#!/bin/sh
+set -eu
+SCRIPT_DIR="$(dirname "$0")"
+ROOT_DIR="$(CDPATH= cd "$SCRIPT_DIR/.." && pwd -P)"
+INSTALLER="$ROOT_DIR/scripts/install-jig.sh"
+JIG_VERSION="0.2.0-beta.1"
+jig_help_requested_before_separator() { :; }
+jig_subcommand() { :; }
+binary_version() { :; }
+use_matching_binary() { :; }
+resolve_cached_binary() { :; }
+resolve_mcp_binary() { :; }
+actual_version="$(binary_version "$bin_path" || true)"
+exec "$bin_path" "$@"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        repo.join("scripts/install-jig.sh"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ANSWERS_FILE="$ROOT_DIR/.jig.toml"
+JIG_VERSION="0.2.0-beta.1"
+read_field() { :; }
+assert_exact_version() { :; }
+acquire_install_lock() { :; }
+install_from_local_source() { :; }
+install_from_git_source() { :; }
+printf '%s\n' "$BIN_PATH"
+"#,
+    )
+    .unwrap();
+
+    let output = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    assert_eq!(output["render_mode"], "launcher-only");
+    assert!(!manifest_path.exists());
+    assert!(output["next_steps"][0].as_str().is_some_and(
+        |step| step.contains("jig adopt") && step.contains(managed_paths::MANIFEST_PATH)
+    ));
+    let launcher = fs::read_to_string(repo.join("scripts/jig")).unwrap();
+    assert!(launcher.contains("--__launcher-contract-version"));
+    assert!(!launcher.contains("JIG_VERSION="));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&contract_path).unwrap()).unwrap()["contract_version"],
+        3
+    );
+
+    run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: true,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    let error = run_update(UpdateOpts {
+        path: repo.clone(),
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(managed_paths::MANIFEST_PATH), "{error}");
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: true,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    assert!(manifest_path.exists());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&contract_path).unwrap()).unwrap()["contract_version"],
+        4
+    );
+    run_update(UpdateOpts {
+        path: repo,
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
 }
 
 #[test]
@@ -585,6 +1689,7 @@ fn update_rejects_explicit_switch_from_committed_source_to_embedded_source() {
         template: Some(EMBEDDED_TEMPLATE_SOURCE.into()),
         template_mode: None,
         recopy: false,
+        launcher_only: false,
         force: true,
         vcs_ref: None,
         defaults: true,

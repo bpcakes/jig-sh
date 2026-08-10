@@ -67,6 +67,24 @@ pub fn sanitize_text(text: &str) -> String {
         .collect()
 }
 
+/// Formats a bounded percentage without rounding a positive value to zero or
+/// a sub-100 value to 100.
+pub fn format_percent(percent: f64) -> String {
+    let rounded_tenth = (percent * 10.0).round() / 10.0;
+    let displayed = if percent > 0.0 && rounded_tenth <= 0.0 {
+        0.1
+    } else if percent < 100.0 && rounded_tenth >= 100.0 {
+        99.9
+    } else {
+        rounded_tenth
+    };
+    if displayed.round() == displayed {
+        format!("{displayed:.0}%")
+    } else {
+        format!("{displayed:.1}%")
+    }
+}
+
 fn is_unsafe_format_character(character: char) -> bool {
     matches!(
         character,
@@ -266,6 +284,14 @@ mod tests {
             sanitize_text("safe\u{1b}[31m\u{202e}text\u{2069}\u{200c}\u{200d}"),
             "safe\u{fffd}[31m\u{fffd}text\u{fffd}\u{200c}\u{200d}"
         );
+    }
+
+    #[test]
+    fn percentage_formatting_does_not_round_across_bounds() {
+        assert_eq!(format_percent(0.04), "0.1%");
+        assert_eq!(format_percent(99.98), "99.9%");
+        assert_eq!(format_percent(100.0), "100%");
+        assert_eq!(format_percent(42.26), "42.3%");
     }
 
     #[test]

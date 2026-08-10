@@ -9,9 +9,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
+use std::time::{Duration, SystemTime};
 
 use anyhow::anyhow;
 use anyhow::{Context, Result};
@@ -25,11 +25,20 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
+#[cfg(test)]
+use crate::context::{
+    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
+use crate::context::{
+    INSTALLER_CACHE_LAYOUT_MARKER, LAUNCHER_REPAIR_STAGING_PREFIX, RuntimeCacheProfile,
+    runtime_cache_base, runtime_profile_cache_path,
+};
 use crate::context::{RepoContext, find_repo_root_from_or_env};
 #[cfg(test)]
 use crate::tool_defs::tool;
 
 const COMMAND: &str = "doctor";
+const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROXY_LIST_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(120);
@@ -39,6 +48,9 @@ const DOCTOR_SIGNAL_QUIESCENCE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub(crate) fn run() -> Result<Value> {
     let cwd = env::current_dir().context("Failed to resolve current directory")?;
+    // Doctor is capability-only so it can diagnose an invalid generated
+    // launcher contract. Its explicit JIG_REPO_ROOT target therefore remains
+    // authoritative instead of inheriting repository-scoped launcher state.
     let root_result = find_repo_root_from_or_env(&cwd);
     let mut checks = Vec::new();
 
@@ -71,16 +83,41 @@ pub(crate) fn run() -> Result<Value> {
 
     let config_probe = RepoContext::validate_config_file(&root);
     let ctx_result = RepoContext::load_from_root(root.clone());
+    let manifest_contract_version = RepoContext::declared_contract_version_from_root(&root).ok();
     let (config_ok, repo_name, config_jig_version) = match &config_probe {
         Ok(probe) => (
             true,
             Some(probe.repo_name.clone()),
-            Some(probe.jig_version.clone()),
+            probe.jig_version.clone(),
         ),
         Err(_) => (false, None, None),
     };
+    let config_valid_for_launcher_repair =
+        config_ok && crate::bootstrap::launcher_only_repair_answers_are_valid(&root);
     checks.push(config_check(&root, &config_probe));
-    checks.push(runtime_check(&root, config_jig_version.as_deref()));
+    checks.push(runtime_check(
+        &root,
+        manifest_contract_version,
+        config_jig_version.as_deref(),
+        config_valid_for_launcher_repair,
+    ));
+    if let Some(staging_check) = launcher_repair_staging_check(&root) {
+        checks.push(staging_check);
+    }
+    if let Some(legacy_cache_check) = legacy_version_cache_check(&root) {
+        checks.push(legacy_cache_check);
+    }
+    if let Some(contract_version) = manifest_contract_version
+        .filter(|version| launcher_repair_seed_stamp_is_present(&root, *version))
+    {
+        checks.push(launcher_repair_cache_check(&root, contract_version));
+    }
+    if let Some(contract_version) = manifest_contract_version.filter(|version| {
+        crate::context::is_supported_contract_version(*version)
+            && *version < crate::context::CURRENT_CONTRACT_VERSION
+    }) {
+        checks.push(contract_migration_check(&root, contract_version));
+    }
 
     match &ctx_result {
         Ok(ctx) => {
@@ -154,6 +191,8 @@ pub(crate) fn run() -> Result<Value> {
             "root": root.display().to_string(),
             "name": repo_name,
             "jig_version": config_jig_version,
+            "runtime_version": env!("CARGO_PKG_VERSION"),
+            "contract_version": manifest_contract_version,
         })),
         checks,
     ))
@@ -217,10 +256,13 @@ fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -
             true,
             true,
             "valid",
-            format!(
-                "repo_name={}, jig_version={}",
-                probe.repo_name, probe.jig_version
-            ),
+            match &probe.jig_version {
+                Some(version) => format!(
+                    "repo_name={}, legacy jig_version={version}",
+                    probe.repo_name
+                ),
+                None => format!("repo_name={}", probe.repo_name),
+            },
         )
         .with_data(json!({
             "path": root.join(".jig.toml").display().to_string(),
@@ -240,74 +282,454 @@ fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -
     }
 }
 
-fn runtime_check(root: &Path, config_jig_version: Option<&str>) -> DoctorCheck {
+fn runtime_check(
+    root: &Path,
+    contract_version: Option<u32>,
+    config_jig_version: Option<&str>,
+    config_valid: bool,
+) -> DoctorCheck {
     let current_version = env!("CARGO_PKG_VERSION");
+    let runtime_executable = std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
     let script_path = root.join("scripts/jig");
+    let installer_path = root.join("scripts/install-jig.sh");
     let launcher = launcher_version(&script_path);
-    let script_version = launcher.version;
-    let script_ok = script_path.exists();
-    let launcher_ok = launcher.read_error.is_none()
-        && script_version
-            .as_deref()
-            .is_none_or(|version| version == current_version);
-    let config_ok = config_jig_version.is_none_or(|version| version == current_version);
-    let version_ok = launcher_ok && config_ok;
-    let ok = script_ok && version_ok;
-    let detail = match (
-        &script_version,
-        launcher.read_error.as_deref(),
-        config_jig_version,
-    ) {
-        (_, Some(error), Some(config_version)) => {
-            format!(
-                "running {current_version}, scripts/jig is unreadable ({error}), .jig.toml pins {config_version}"
-            )
+    let installer = installer_version(&installer_path);
+    let legacy_version = launcher.version;
+    let launcher_contract_version = launcher.contract_version;
+    let script_ok = script_path.is_file();
+    let installer_present = installer_path.is_file();
+    let installer_ok =
+        installer_present && installer.read_error.is_none() && installer.contract_probe;
+    let contract_matches =
+        contract_version.is_some_and(|expected| launcher_contract_version == Some(expected));
+    let contract_supported =
+        contract_version.is_some_and(crate::context::is_supported_contract_version);
+    let launcher_repair_seeded_cache = contract_version
+        .is_some_and(|version| launcher_repair_seed_stamp_is_present(root, version));
+    let ok = script_ok
+        && installer_ok
+        && launcher.read_error.is_none()
+        && legacy_version.is_none()
+        && launcher.contract_probe
+        && contract_matches
+        && contract_supported;
+    let contract_label = contract_version.map_or_else(|| "unknown".into(), |v| v.to_string());
+    let detail = if let Some(error) = launcher.read_error.as_deref() {
+        format!("running {current_version}, scripts/jig is unreadable ({error})")
+    } else if let Some(version) = &legacy_version {
+        format!(
+            "running {current_version} for contract {contract_label}, but scripts/jig still pins legacy product version {version}"
+        )
+    } else if !script_ok {
+        format!("running {current_version}, but scripts/jig is missing")
+    } else if let Some(error) = installer.read_error.as_deref() {
+        format!("running {current_version}, scripts/install-jig.sh is unreadable ({error})")
+    } else if !installer_present {
+        format!("running {current_version}, but scripts/install-jig.sh is missing")
+    } else if contract_version.is_none() {
+        format!("running {current_version}, but the repository contract version is unreadable")
+    } else if !contract_supported {
+        format!(
+            "running {current_version}, but this Jig runtime does not support repository contract {contract_label}"
+        )
+    } else if !launcher.contract_probe {
+        format!(
+            "running {current_version} for contract {contract_label}, but scripts/jig does not use the repository validation handoff"
+        )
+    } else if !installer.contract_probe {
+        format!(
+            "running {current_version} for contract {contract_label}, but scripts/install-jig.sh is not a recognizable contract-compatible generated installer"
+        )
+    } else if !contract_matches {
+        match launcher_contract_version {
+            Some(actual) => format!(
+                "running {current_version} for contract {contract_label}, but scripts/jig embeds contract {actual}"
+            ),
+            None => format!(
+                "running {current_version} for contract {contract_label}, but scripts/jig has no readable CONTRACT_VERSION"
+            ),
         }
-        (_, Some(error), None) => {
-            format!("running {current_version}, but scripts/jig is unreadable ({error})")
-        }
-        (Some(script_version), None, Some(config_version)) => {
-            format!(
-                "running {current_version}, launcher pins {script_version}, .jig.toml pins {config_version}"
-            )
-        }
-        (Some(script_version), None, None) => {
-            format!("running {current_version}, launcher pins {script_version}")
-        }
-        (None, None, Some(config_version)) if script_ok => format!(
-            "running {current_version}, scripts/jig has no readable JIG_VERSION pin, .jig.toml pins {config_version}"
-        ),
-        (None, None, None) if script_ok => {
-            format!("running {current_version}, but scripts/jig has no readable JIG_VERSION pin")
-        }
-        (None, None, _) => format!("running {current_version}, but scripts/jig is missing"),
-    };
-    let status = if ok && script_version.is_none() {
-        "unverified launcher"
-    } else if ok {
-        "installed"
+    } else if launcher_repair_seeded_cache {
+        format!(
+            "running {current_version}; scripts/jig selects binaries compatible with contract {contract_label}, currently backed by a launcher-repair seeded cache"
+        )
     } else {
-        "mismatch"
+        format!(
+            "running {current_version}; scripts/jig selects binaries compatible with contract {contract_label}"
+        )
     };
-    let fix = if !script_ok || !version_ok {
-        Some("Run `scripts/jig update`, then rerun `scripts/jig doctor`.")
+    let status = if ok {
+        "compatible"
+    } else if legacy_version.is_some() {
+        "migration needed"
+    } else if launcher.read_error.is_some() || installer.read_error.is_some() {
+        "unreadable"
+    } else if !script_ok || !installer_present {
+        "missing"
+    } else if contract_version.is_none() {
+        "unreadable"
+    } else if !contract_supported {
+        "unsupported"
+    } else {
+        "outdated"
+    };
+    let fix = if !ok {
+        let executable = runtime_executable
+            .as_deref()
+            .map(crate::shell::quote)
+            .unwrap_or_else(|| "jig".into());
+        let repository = crate::shell::quote(&root.to_string_lossy());
+        let managed_manifest_exists = root
+            .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+            .is_file();
+        let narrow_repair_recognizable =
+            crate::bootstrap::launcher_only_repair_scripts_are_recognizable(root);
+        if contract_version
+            .is_some_and(|version| !crate::context::is_supported_contract_version(version))
+        {
+            Some(format!(
+                "This Jig runtime does not support the repository's declared contract {contract_label}. Install a newer compatible Jig runtime and rerun its doctor; do not rewrite the repository with this older runtime."
+            ))
+        } else if !config_valid {
+            Some(
+                "Repair `.jig.toml`, then rerun `scripts/jig doctor` before attempting launcher repair; launcher-only repair needs readable render answers to preserve the repository's runtime source configuration."
+                    .into(),
+            )
+        } else if contract_version.is_none() {
+            if managed_manifest_exists {
+                Some(format!(
+                    "The repository contract manifest must be repaired before a narrow launcher repair can preserve its epoch. Bypass the repo wrapper with the currently running binary: `{executable} update {repository} --force`, then rerun `scripts/jig doctor`. If that binary is unavailable, run `cargo install jig-sh` first."
+                ))
+            } else {
+                Some(format!(
+                    "The repository contract manifest and {} cannot establish a safe repair epoch or ownership. Review the repository's current harness footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward. If that binary is unavailable, run `cargo install jig-sh` first.",
+                    crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+                ))
+            }
+        } else if !managed_manifest_exists
+            && (!script_ok || !installer_present || !narrow_repair_recognizable)
+        {
+            Some(format!(
+                "The generated launcher pair and {} cannot establish narrow repair ownership. Review the repository's current harness footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward. If that binary is unavailable, run `cargo install jig-sh` first.",
+                crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+            ))
+        } else if managed_manifest_exists && legacy_version.is_some() && narrow_repair_recognizable
+        {
+            Some(format!(
+                "Bypass the legacy repo wrapper and migrate the full harness with the currently running binary: `{executable} update {repository} --force`, then rerun `scripts/jig doctor`. If the full update cannot start through the legacy wrapper, use `{executable} update {repository} --launcher-only --force` as the narrow recovery step first."
+            ))
+        } else {
+            let ownership_follow_up = if managed_manifest_exists {
+                String::new()
+            } else {
+                format!(
+                    " Because {} is missing, review the current footprint and answer overrides, then run `{executable} adopt {repository} --write --force` before a full update.",
+                    crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH
+                )
+            };
+            Some(format!(
+                "Bypass the repo wrapper with the currently running binary: `{executable} update {repository} --launcher-only --force`, then rerun `scripts/jig doctor`. If that binary is unavailable, run `cargo install jig-sh` first.{ownership_follow_up}"
+            ))
+        }
     } else {
         None
     };
 
-    check("runtime", "Pinned runtime", true, ok, status, detail)
-        .with_optional_fix(fix)
+    // Keep both names in each pair as stable structured-output compatibility
+    // aliases: v4 consumers use runtime_version/legacy_launcher_version while
+    // older clients may still read current_version/launcher_version.
+    check("runtime", "Runtime compatibility", true, ok, status, detail)
+        .with_optional_fix(fix.as_deref())
         .with_data(json!({
+                "runtime_version": current_version,
                 "current_version": current_version,
+                "runtime_executable": runtime_executable,
+                "contract_version": contract_version,
+                "launcher_contract_version": launcher_contract_version,
                 "launcher_path": script_path.display().to_string(),
-                "launcher_version": script_version,
+                "installer_path": installer_path.display().to_string(),
+                "installer_present": installer_present,
+                "installer_uses_contract_probe": installer.contract_probe,
+                "installer_error": installer.read_error,
+                "legacy_launcher_version": legacy_version,
+                "launcher_version": legacy_version,
+                "launcher_uses_contract_probe": launcher.contract_probe,
                 "launcher_error": launcher.read_error,
+                "launcher_repair_seeded_cache": launcher_repair_seeded_cache,
+                "config_valid_for_launcher_repair": config_valid,
                 "config_jig_version": config_jig_version,
         }))
 }
 
+fn launcher_repair_seed_stamp_is_present(root: &Path, contract_version: u32) -> bool {
+    [RuntimeCacheProfile::Default, RuntimeCacheProfile::Runtime]
+        .into_iter()
+        .map(|profile| {
+            runtime_profile_cache_path(root, contract_version, profile).join(".jig-source-stamp")
+        })
+        .any(|stamp| {
+            fs::read_to_string(stamp)
+                .ok()
+                .and_then(|contents| contents.lines().next().map(str::to_owned))
+                .is_some_and(|first_line| first_line == "jig-seeded-runtime-v1")
+        })
+}
+
+fn launcher_repair_cache_check(root: &Path, contract_version: u32) -> DoctorCheck {
+    let executable = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .unwrap_or_else(|| "jig".into());
+    let repository = crate::shell::quote(&root.to_string_lossy());
+    let managed_manifest_exists = root
+        .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+        .is_file();
+    let fix = if managed_manifest_exists {
+        format!(
+            "Replace the repair seed with a cache built from the configured source: `{executable} update {repository} --force`, then rerun `scripts/jig doctor`."
+        )
+    } else {
+        format!(
+            "Establish exact managed-path ownership and replace the repair seed: review the current harness footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward."
+        )
+    };
+    check(
+        "launcher_repair_cache",
+        "Launcher repair cache",
+        false,
+        false,
+        "temporary seed",
+        format!(
+            "contract {contract_version} is currently runnable through a launcher-repair seed, but a full source-built cache is still needed for fresh-clone or cache-cleared startup"
+        ),
+    )
+    .with_fix(&fix)
+    .with_data(json!({
+        "contract_version": contract_version,
+        "managed_paths_manifest_present": managed_manifest_exists,
+        "cache_layout": INSTALLER_CACHE_LAYOUT_MARKER,
+    }))
+}
+
+fn launcher_repair_staging_check(root: &Path) -> Option<DoctorCheck> {
+    launcher_repair_staging_check_at(root, SystemTime::now())
+}
+
+fn launcher_repair_staging_check_at(root: &Path, now: SystemTime) -> Option<DoctorCheck> {
+    let cache_base = runtime_cache_base(root);
+    let entries = match fs::read_dir(&cache_base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            return Some(check(
+                "launcher_repair_staging",
+                "Launcher repair staging",
+                false,
+                false,
+                "inspection failed",
+                format!("could not inspect {}: {error}", cache_base.display()),
+            ));
+        }
+    };
+    let mut leftovers = Vec::new();
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(LAUNCHER_REPAIR_STAGING_PREFIX)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.file_type().is_dir() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age < LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE {
+            continue;
+        }
+        leftovers.push(path);
+    }
+    if leftovers.is_empty() {
+        return None;
+    }
+    leftovers.sort();
+    let detail = leftovers
+        .iter()
+        .take(8)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let overflow = leftovers.len().saturating_sub(8);
+    let detail = if overflow == 0 {
+        detail
+    } else {
+        format!("{detail}, and {overflow} more")
+    };
+    Some(check(
+        "launcher_repair_staging",
+        "Launcher repair staging",
+        false,
+        false,
+        "recovery artifacts",
+        format!(
+            "found {} launcher-repair staging director{}: {detail}",
+            leftovers.len(),
+            if leftovers.len() == 1 { "y" } else { "ies" }
+        ),
+    )
+    .with_fix(
+        "Inspect backup-* and displaced-* entries for recovery data, then remove each reported staging directory after recovery is complete.",
+    )
+    .with_data(json!({
+        "cache_base": cache_base.display().to_string(),
+        "paths": leftovers,
+    })))
+}
+
+fn legacy_version_cache_check(root: &Path) -> Option<DoctorCheck> {
+    let cache_base = runtime_cache_base(root);
+    let entries = match fs::read_dir(&cache_base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            return Some(check(
+                "legacy_runtime_cache",
+                "Legacy runtime cache",
+                false,
+                false,
+                "inspection failed",
+                format!("could not inspect {}: {error}", cache_base.display()),
+            ));
+        }
+    };
+    let mut leftovers = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| is_legacy_version_cache_name(&entry.file_name()))
+        .filter(|entry| {
+            entry
+                .path()
+                .join("bin")
+                .join(format!("jig{}", std::env::consts::EXE_SUFFIX))
+                .is_file()
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    if leftovers.is_empty() {
+        return None;
+    }
+    leftovers.sort();
+    let detail = leftovers
+        .iter()
+        .take(8)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let overflow = leftovers.len().saturating_sub(8);
+    let detail = if overflow == 0 {
+        detail
+    } else {
+        format!("{detail}, and {overflow} more")
+    };
+    Some(
+        check(
+            "legacy_runtime_cache",
+            "Legacy runtime cache",
+            false,
+            false,
+            "cleanup available",
+            format!(
+                "found {} product-version-keyed runtime cache director{} left by the pre-contract layout: {detail}",
+                leftovers.len(),
+                if leftovers.len() == 1 { "y" } else { "ies" }
+            ),
+        )
+        .with_fix(
+            "Complete the full harness update, confirm `scripts/jig doctor` reports a compatible contract-keyed runtime, then remove the reported legacy cache directories.",
+        )
+        .with_data(json!({
+            "cache_base": cache_base.display().to_string(),
+            "paths": leftovers,
+            "cache_layout": INSTALLER_CACHE_LAYOUT_MARKER,
+        })),
+    )
+}
+
+fn is_legacy_version_cache_name(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let version = name.strip_suffix("-runtime").unwrap_or(name);
+    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let mut components = core.split('.');
+    let valid_component = |component: Option<&str>| {
+        component.is_some_and(|value| {
+            !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    };
+    valid_component(components.next())
+        && valid_component(components.next())
+        && valid_component(components.next())
+        && components.next().is_none()
+}
+
+fn contract_migration_check(root: &Path, contract_version: u32) -> DoctorCheck {
+    let executable = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .map(|path| crate::shell::quote(&path.to_string_lossy()))
+        .unwrap_or_else(|| "jig".into());
+    let repository = crate::shell::quote(&root.to_string_lossy());
+    let managed_manifest_exists = root
+        .join(crate::bootstrap::MANAGED_PATHS_MANIFEST_PATH)
+        .is_file();
+    let fix = if managed_manifest_exists {
+        format!(
+            "Migrate while this compatible runtime is available: `{executable} update {repository} --force`, then rerun `scripts/jig doctor`."
+        )
+    } else {
+        format!(
+            "Establish exact ownership and migrate while this compatible runtime is available: review the current footprint and answer overrides, then run `{executable} adopt {repository} --write --force`; rerun `scripts/jig doctor` afterward."
+        )
+    };
+    check(
+        "contract_migration",
+        "Contract migration",
+        false,
+        false,
+        "migration available",
+        format!(
+            "contract {contract_version} remains supported, but its recorded source may predate compatibility-aware runtime installation; current generated repositories use contract {}",
+            crate::context::CURRENT_CONTRACT_VERSION
+        ),
+    )
+    .with_fix(&fix)
+    .with_data(json!({
+        "contract_version": contract_version,
+        "current_contract_version": crate::context::CURRENT_CONTRACT_VERSION,
+        "managed_paths_manifest_present": managed_manifest_exists,
+    }))
+}
+
 struct LauncherVersion {
     version: Option<String>,
+    contract_version: Option<u32>,
+    contract_probe: bool,
     read_error: Option<String>,
 }
 
@@ -317,16 +739,28 @@ fn launcher_version(path: &Path) -> LauncherVersion {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return LauncherVersion {
                 version: None,
+                contract_version: None,
+                contract_probe: false,
                 read_error: None,
             };
         }
         Err(error) => {
             return LauncherVersion {
                 version: None,
+                contract_version: None,
+                contract_probe: false,
                 read_error: Some(error.to_string()),
             };
         }
     };
+    let contract_probe = crate::bootstrap::recognizable_contract_launcher(&text);
+    let contract_version = text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("CONTRACT_VERSION=")
+            .map(str::trim)
+            .map(unquote_shell_value)
+            .and_then(|value| value.parse().ok())
+    });
     for line in text.lines() {
         let line = line.trim();
         let Some(value) = line.strip_prefix("JIG_VERSION=") else {
@@ -334,12 +768,38 @@ fn launcher_version(path: &Path) -> LauncherVersion {
         };
         return LauncherVersion {
             version: Some(unquote_shell_value(value.trim()).to_string()),
+            contract_version,
+            contract_probe,
             read_error: None,
         };
     }
     LauncherVersion {
         version: None,
+        contract_version,
+        contract_probe,
         read_error: None,
+    }
+}
+
+struct InstallerVersion {
+    contract_probe: bool,
+    read_error: Option<String>,
+}
+
+fn installer_version(path: &Path) -> InstallerVersion {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallerVersion {
+            contract_probe: crate::bootstrap::recognizable_contract_installer(&text),
+            read_error: None,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => InstallerVersion {
+            contract_probe: false,
+            read_error: None,
+        },
+        Err(error) => InstallerVersion {
+            contract_probe: false,
+            read_error: Some(error.to_string()),
+        },
     }
 }
 

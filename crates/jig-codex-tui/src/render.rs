@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
-use crate::model::{App, ExitState, Focus, Inspection};
+use crate::model::{App, ExitState, Focus, Inspection, Projection, unix_timestamp_now};
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -17,6 +17,10 @@ const MIN_WIDTH: u16 = 46;
 const MIN_HEIGHT: u16 = 12;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
+    draw_at(frame, app, unix_timestamp_now());
+}
+
+pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
     let area = frame.area();
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         app.set_detail_scroll_limit(0);
@@ -44,21 +48,22 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             }),
         ])
         .split(area);
+    let best = app.best_projection_index_at(now);
     draw_header(frame, outer[0], app);
     if area.width >= 96 {
         let content = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
             .split(outer[1]);
-        draw_list(frame, content[0], app);
-        draw_details(frame, content[1], app);
+        draw_list(frame, content[0], app, now, best);
+        draw_details(frame, content[1], app, now, best);
     } else {
         let content = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
             .split(outer[1]);
-        draw_list(frame, content[0], app);
-        draw_details(frame, content[1], app);
+        draw_list(frame, content[0], app, now, best);
+        draw_details(frame, content[1], app, now, best);
     }
     draw_footer(frame, outer[2], app);
 }
@@ -133,7 +138,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
     let visible = app.visible_indices();
     if visible.is_empty() {
         frame.render_widget(
@@ -145,21 +150,26 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
     if area.width < 60 {
-        draw_compact_list(frame, area, app, &visible);
+        draw_compact_list(frame, area, app, &visible, now, best);
+        return;
+    }
+    if area.width < 104 {
+        draw_projection_list(frame, area, app, &visible, now, best);
         return;
     }
     let rows = visible
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let marker = if row.home.current { "*" } else { " " };
+            let projection = row.projection();
+            let stale = row.projection_is_stale_at(now);
             Row::new([
-                Cell::from(marker),
+                Cell::from(row_marker(*index, row.home.current, best)),
                 Cell::from(row.display_name.clone()),
                 Cell::from(row.account()),
-                Cell::from(row.plan().to_owned()),
                 Cell::from(row.usage()),
-                Cell::from(row.state().to_owned()),
+                Cell::from(stale_projection_label(projection.label(), stale))
+                    .style(stale_projection_style(projection, stale)),
             ])
             .style(match &row.inspection {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
@@ -171,19 +181,18 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect::<Vec<_>>();
     let widths = [
-        Constraint::Length(1),
-        Constraint::Percentage(19),
-        Constraint::Percentage(28),
-        Constraint::Percentage(12),
-        Constraint::Percentage(25),
-        Constraint::Percentage(16),
+        Constraint::Length(2),
+        Constraint::Percentage(21),
+        Constraint::Percentage(24),
+        Constraint::Percentage(22),
+        Constraint::Percentage(33),
     ];
     let table = Table::new(rows, widths)
         .header(
-            Row::new(["", "Home", "Account", "Plan", "Usage", "State"])
+            Row::new(["", "Home", "Account", "Remaining now", "Projection"])
                 .style(Style::default().fg(ACCENT).bold()),
         )
-        .block(panel("Homes  (* current)"))
+        .block(panel(homes_panel_title(best, false)))
         .highlight_style(
             Style::default()
                 .bg(Color::Blue)
@@ -201,17 +210,31 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
     app.set_list_offset(state.offset());
 }
 
-fn draw_compact_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]) {
+fn draw_projection_list(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    visible: &[usize],
+    now: u64,
+    best: Option<usize>,
+) {
     let rows = visible
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
+            let projection = row.projection();
+            let stale = row.projection_is_stale_at(now);
             Row::new([
-                Cell::from(if row.home.current { "*" } else { " " }),
-                Cell::from(row.display_name.clone()),
+                Cell::from(row_marker(*index, row.home.current, best)),
+                Cell::from(format!("{}\n{}", row.display_name, row.account())),
                 Cell::from(row.usage()),
-                Cell::from(row.state().to_owned()),
+                Cell::from(stale_projection_label(
+                    projection.list_outcome_label(),
+                    stale,
+                ))
+                .style(stale_projection_style(projection, stale)),
             ])
+            .height(2)
             .style(match &row.inspection {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
@@ -224,14 +247,17 @@ fn draw_compact_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]
     let table = Table::new(
         rows,
         [
-            Constraint::Length(1),
-            Constraint::Percentage(35),
-            Constraint::Percentage(40),
+            Constraint::Length(2),
+            Constraint::Percentage(33),
             Constraint::Percentage(25),
+            Constraint::Percentage(42),
         ],
     )
-    .header(Row::new(["", "Home", "Usage", "State"]).style(Style::default().fg(ACCENT).bold()))
-    .block(panel("Homes  (* current)"))
+    .header(
+        Row::new(["", "Home / Account", "Remaining now", "Projection"])
+            .style(Style::default().fg(ACCENT).bold()),
+    )
+    .block(panel(homes_panel_title(best, false)))
     .highlight_style(
         Style::default()
             .bg(Color::Blue)
@@ -249,7 +275,63 @@ fn draw_compact_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]
     app.set_list_offset(state.offset());
 }
 
-fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_compact_list(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    visible: &[usize],
+    now: u64,
+    best: Option<usize>,
+) {
+    let rows = visible
+        .iter()
+        .map(|index| {
+            let row = &app.rows[*index];
+            let projection = row.projection();
+            let stale = row.projection_is_stale_at(now);
+            Row::new([
+                Cell::from(row_marker(*index, row.home.current, best)),
+                Cell::from(format!(
+                    "{} · {}\n{}",
+                    row.display_name,
+                    row.account(),
+                    stale_projection_label(projection.label(), stale)
+                ))
+                .style(stale_projection_style(projection, stale)),
+            ])
+            .height(2)
+            .style(match &row.inspection {
+                Inspection::Ready(details) if details.inspection_error.is_some() => {
+                    Style::default().fg(BAD)
+                }
+                Inspection::Loading => Style::default().fg(MUTED),
+                Inspection::Ready(_) | Inspection::Unavailable => Style::default(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let table = Table::new(rows, [Constraint::Length(2), Constraint::Percentage(100)])
+        .header(
+            Row::new(["", "Home · Account / Projection"]).style(Style::default().fg(ACCENT).bold()),
+        )
+        .block(panel(homes_panel_title(best, true)))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("›");
+    let mut state = TableState::default()
+        .with_offset(app.list_offset_for_viewport(area.height))
+        .with_selected(
+            app.selected
+                .and_then(|selected| visible.iter().position(|index| *index == selected)),
+        );
+    frame.render_stateful_widget(table, area, &mut state);
+    app.set_list_offset(state.offset());
+}
+
+fn draw_details(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<usize>) {
     if app.selected_row().is_none() {
         app.set_detail_scroll_limit(0);
         frame.render_widget(
@@ -258,7 +340,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
-    let lines = detail_lines(app);
+    let lines = detail_lines(app, now, best);
     let sizing_paragraph = Paragraph::new(lines.clone())
         .block(panel(detail_title(app)))
         .wrap(Wrap { trim: false });
@@ -276,7 +358,7 @@ fn draw_details(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-fn detail_lines(app: &App) -> Vec<Line<'static>> {
+fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> {
     let Some(row) = app.selected_row() else {
         return Vec::new();
     };
@@ -285,6 +367,11 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         key_value("Path", &row.display_path),
         key_value("Current", if row.home.current { "yes" } else { "no" }),
     ];
+    if app.selected.is_some() && app.selected == best {
+        if let Some(recommendation) = row.recommendation() {
+            lines.push(key_value("Recommendation", recommendation.label));
+        }
+    }
     match &row.inspection {
         Inspection::Loading => {
             lines.push(Line::from(""));
@@ -307,6 +394,10 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
                 key_value("Type", &details.account_type),
                 key_value("Plan", &details.plan),
                 key_value("Status", &details.status),
+                key_value(
+                    "Usage sample",
+                    &format!("{} · reopen to refresh", details.sample_age_label_at(now)),
+                ),
             ]);
             for bucket in &details.buckets {
                 lines.push(Line::from(""));
@@ -323,9 +414,14 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
                 for (index, window) in bucket.windows.iter().enumerate() {
                     let role = bucket.window_role(index);
                     lines.push(Line::from(format!(
-                        "  {role}: {}  {}",
-                        window.compact(),
-                        window.reset_label()
+                        "  {role}: {} · {}",
+                        window.usage_detail(),
+                        window.reset_label_at(now)
+                    )));
+                    let projection = details.window_projection(bucket, index);
+                    lines.push(Line::from(Span::styled(
+                        format!("    At current pace: {}", projection.outcome_label()),
+                        projection_style(projection),
                     )));
                 }
             }
@@ -415,4 +511,61 @@ fn warning_line(label: &str, warning: &str) -> Line<'static> {
         format!("{label} warning: {warning}"),
         Style::default().fg(WARN),
     ))
+}
+
+fn row_marker(index: usize, current: bool, best: Option<usize>) -> &'static str {
+    match (best == Some(index), current) {
+        (true, true) => "+*",
+        (true, false) => "+ ",
+        (false, true) => " *",
+        (false, false) => "  ",
+    }
+}
+
+fn homes_panel_title(best: Option<usize>, compact: bool) -> &'static str {
+    match (best.is_some(), compact) {
+        (true, false) => "Homes  (+ best at current pace, * current)",
+        (true, true) => "Homes  (+ best pace, * current)",
+        (false, false) => "Homes  (* current; no rankable Codex projection)",
+        (false, true) => "Homes  (* current; no rankable projection)",
+    }
+}
+
+fn projection_style(projection: Projection) -> Style {
+    match projection {
+        Projection::Remaining { percent, .. } if percent >= 25.0 => Style::default().fg(GOOD),
+        Projection::Remaining { percent, .. } if percent >= 10.0 => Style::default().fg(WARN),
+        Projection::Remaining { .. }
+        | Projection::ExhaustsEarly { .. }
+        | Projection::Exhausted { .. }
+        | Projection::InspectionError
+        | Projection::UsageError => Style::default().fg(BAD),
+        Projection::SignedOut => Style::default().fg(WARN),
+        Projection::Collecting {
+            remaining_percent, ..
+        } if remaining_percent < 10.0 => Style::default().fg(BAD),
+        Projection::Collecting {
+            remaining_percent, ..
+        } if remaining_percent < 25.0 => Style::default().fg(WARN),
+        Projection::Loading
+        | Projection::InspectionUnavailable
+        | Projection::Unavailable
+        | Projection::Collecting { .. } => Style::default().fg(MUTED),
+    }
+}
+
+fn stale_projection_label(label: String, stale: bool) -> String {
+    if stale {
+        format!("{label} · stale")
+    } else {
+        label
+    }
+}
+
+fn stale_projection_style(projection: Projection, stale: bool) -> Style {
+    if stale {
+        Style::default().fg(MUTED)
+    } else {
+        projection_style(projection)
+    }
 }

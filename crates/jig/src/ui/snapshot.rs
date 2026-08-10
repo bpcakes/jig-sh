@@ -56,7 +56,8 @@ pub(super) fn snapshot_with_query(ctx: &RepoContext, query: UiQuery) -> Result<D
             source_path: Some(ctx.source_path().to_string()),
         },
         harness: HarnessView {
-            jig_version: ctx.jig_version().to_string(),
+            jig_version: ctx.legacy_jig_version().map(str::to_string),
+            runtime_version: env!("CARGO_PKG_VERSION").to_string(),
             contract_version: u64::from(ctx.contract_version()),
         },
         current_session_id: current_session(ctx)?,

@@ -10,7 +10,10 @@ use zeroize::Zeroizing;
 
 use crate::SecretBytes;
 
-use super::{MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_READS_PER_POLL, checked_deadline};
+use super::{
+    ACTIVE_OUTPUT_POLL_INTERVAL, MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_BYTES_PER_POLL,
+    MAX_STREAM_READS_PER_POLL, checked_deadline,
+};
 
 enum ProcessPipe {
     Stdout(ChildStdout),
@@ -133,19 +136,28 @@ impl CappedOutputDrain {
         })
     }
 
-    fn poll(&mut self) -> AnyResult<()> {
+    fn poll(&mut self) -> AnyResult<bool> {
         let Some(reader) = self.reader.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         let mut buffer = Zeroizing::new([0_u8; 8192]);
+        let mut made_progress = false;
+        let mut bytes_read = 0_usize;
         for _ in 0..MAX_STREAM_READS_PER_POLL {
-            match reader.read_available(&mut buffer[..]) {
+            if bytes_read >= MAX_STREAM_BYTES_PER_POLL {
+                return Ok(true);
+            }
+            let remaining_poll_bytes = MAX_STREAM_BYTES_PER_POLL - bytes_read;
+            let read_limit = buffer.len().min(remaining_poll_bytes);
+            debug_assert!(read_limit > 0);
+            match reader.read_available(&mut buffer[..read_limit]) {
                 Ok(0) => {
                     self.complete = true;
                     self.reader = None;
-                    return Ok(());
+                    return Ok(made_progress);
                 }
                 Ok(read) => {
+                    made_progress = true;
                     let Some(new_len) = self.output.len().checked_add(read) else {
                         self.reader = None;
                         bail!("brokered command {} capture length overflowed", self.label);
@@ -161,9 +173,12 @@ impl CappedOutputDrain {
                         );
                     }
                     self.output.extend_from_slice(&buffer[..read])?;
+                    bytes_read += read;
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    return Ok(made_progress);
+                }
                 Err(error) => {
                     self.reader = None;
                     return Err(error).with_context(|| {
@@ -172,7 +187,7 @@ impl CappedOutputDrain {
                 }
             }
         }
-        Ok(())
+        Ok(made_progress)
     }
 
     const fn is_terminal(&self) -> bool {
@@ -211,9 +226,10 @@ impl CappedOutputDrains {
         })
     }
 
-    pub(super) fn poll(&mut self) -> AnyResult<()> {
-        self.stdout.poll()?;
-        self.stderr.poll()
+    pub(super) fn poll(&mut self) -> AnyResult<bool> {
+        let stdout_progress = self.stdout.poll()?;
+        let stderr_progress = self.stderr.poll()?;
+        Ok(stdout_progress || stderr_progress)
     }
 
     pub(super) const fn is_terminal(&self) -> bool {
@@ -223,14 +239,18 @@ impl CappedOutputDrains {
     pub(super) fn finish(mut self, timeout: Duration) -> AnyResult<(SecretBytes, SecretBytes)> {
         let deadline = checked_deadline("brokered output drain", timeout)?;
         while !self.is_terminal() {
-            self.poll()?;
+            let made_progress = self.poll()?;
             if self.is_terminal() {
                 break;
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 bail!("brokered command output drain exceeded its {timeout:?} deadline");
             };
-            thread::sleep(remaining.min(Duration::from_millis(2)));
+            if made_progress {
+                thread::sleep(remaining.min(ACTIVE_OUTPUT_POLL_INTERVAL));
+            } else {
+                thread::sleep(remaining.min(Duration::from_millis(2)));
+            }
         }
         Ok((self.stdout.into_output()?, self.stderr.into_output()?))
     }

@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::process;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{
     Parser,
     error::{ContextKind, ContextValue, ErrorKind},
@@ -27,22 +27,166 @@ pub(crate) fn run() -> Result<()> {
     let cli = parse_cli();
     let json_output = cli.json;
     let report_json_errors = should_report_json_command_errors(json_output, &cli.command);
-    let result = run_command(cli);
+    let result = validate_launcher_repository_scope(&cli).and_then(|()| run_command(cli));
     if report_json_errors {
         return report_json_command_error(result);
     }
     result
 }
 
+fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
+    let (Some(contract_version), Some(profile), Some(repo_root)) = (
+        cli.launcher_contract_version,
+        cli.launcher_profile,
+        cli.launcher_repo_root.as_deref(),
+    ) else {
+        if cli.launcher_contract_version.is_none()
+            && cli.launcher_profile.is_none()
+            && cli.launcher_repo_root.is_none()
+        {
+            return Ok(());
+        }
+        bail!("Incomplete generated-launcher repository validation handoff");
+    };
+    if launcher_capability_only_command(&cli.command) {
+        bail!(
+            "The generated launcher classified `{}` as repository-scoped, but that command must run independently of the launcher's repository. Invoke it as `scripts/jig {} ...` without placing `--` before the command.",
+            top_level_command_name(&cli.command),
+            top_level_command_name(&cli.command),
+        );
+    }
+    let ctx = validate_runtime_compatibility(repo_root, Some(contract_version), profile, false)
+    .with_context(|| {
+        format!(
+            "The repository contract did not validate under Jig profile {}. Run scripts/jig check contract or scripts/jig doctor for repair guidance.",
+            profile.as_str()
+        )
+    })?
+    .context("Strict launcher validation did not produce a repository context")?;
+    if let Some(configured_root) = std::env::var_os(crate::context::JIG_REPO_ROOT_ENV) {
+        let configured_root = std::path::PathBuf::from(configured_root);
+        if !configured_root.as_os_str().is_empty()
+            && std::fs::canonicalize(&configured_root).ok().as_deref() != Some(ctx.root())
+        {
+            eprintln!(
+                "jig ignored {}={} because the generated launcher root {} is authoritative",
+                crate::context::JIG_REPO_ROOT_ENV,
+                configured_root.display(),
+                ctx.root().display()
+            );
+        }
+    }
+    ctx.remember_prevalidated_launcher_context()?;
+    Ok(())
+}
+
+fn launcher_capability_only_command(command: &CommandKind) -> bool {
+    launcher_command_scope(command) == LauncherCommandScope::CapabilityOnly
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherCommandScope {
+    CapabilityOnly,
+    Repository,
+}
+
+const fn launcher_command_scope(command: &CommandKind) -> LauncherCommandScope {
+    use LauncherCommandScope::{CapabilityOnly, Repository};
+
+    match command {
+        CommandKind::Init(_)
+        | CommandKind::Presets
+        | CommandKind::Adopt(_)
+        | CommandKind::Update(_)
+        | CommandKind::Doctor
+        | CommandKind::Codex(_)
+        | CommandKind::Check(CheckCommand::Contract(_))
+        | CommandKind::RuntimeCompatible(_) => CapabilityOnly,
+
+        // Repository-scoped commands must operate exclusively on the
+        // generated launcher's validated root. A command that accepts a
+        // caller-relative repository target belongs in CapabilityOnly instead;
+        // keeping this match exhaustive forces every new top-level command to
+        // make that choice explicitly.
+        CommandKind::Bootstrap(_)
+        | CommandKind::Setup
+        | CommandKind::Info(_)
+        | CommandKind::Dev(_)
+        | CommandKind::Check(_)
+        | CommandKind::Status(_)
+        | CommandKind::Ui(_)
+        | CommandKind::Work(_)
+        | CommandKind::Loop(_)
+        | CommandKind::Sqlx(_)
+        | CommandKind::MigrationAdd(_)
+        | CommandKind::SchemaDump(_)
+        | CommandKind::Vault(_)
+        | CommandKind::GenerateSqlxUncheckedQueriesTodo(_)
+        | CommandKind::Proxy(_)
+        | CommandKind::Prompt(_)
+        | CommandKind::Agent(_)
+        | CommandKind::AgentMap(_)
+        | CommandKind::State(_)
+        | CommandKind::Mcp => Repository,
+    }
+}
+
+#[cfg(test)]
+fn launcher_capability_only_top_level_name(name: &str) -> bool {
+    LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS
+        .split(',')
+        .any(|capability| capability == name)
+}
+
+const fn top_level_command_name(command: &CommandKind) -> &'static str {
+    match command {
+        CommandKind::Init(_) => tool_defs::cli_command::INIT,
+        CommandKind::Presets => tool_defs::cli_command::PRESETS,
+        CommandKind::Adopt(_) => tool_defs::cli_command::ADOPT,
+        CommandKind::Update(_) => tool_defs::cli_command::UPDATE,
+        CommandKind::Bootstrap(_) => tool_defs::cli_command::BOOTSTRAP,
+        CommandKind::Setup => tool_defs::cli_command::SETUP,
+        CommandKind::Doctor => tool_defs::cli_command::DOCTOR,
+        CommandKind::Info(_) => tool_defs::cli_command::INFO,
+        CommandKind::Dev(_) => tool_defs::cli_command::DEV,
+        CommandKind::Check(_) => tool_defs::cli_command::CHECK,
+        CommandKind::Status(_) => tool_defs::cli_command::STATUS,
+        CommandKind::Ui(_) => tool_defs::cli_command::UI,
+        CommandKind::Work(_) => tool_defs::cli_command::WORK,
+        CommandKind::Loop(_) => tool_defs::cli_command::LOOP,
+        CommandKind::Sqlx(_) => root_commands::SQLX.name,
+        CommandKind::MigrationAdd(_) => tool_defs::cli_command::MIGRATION_ADD,
+        CommandKind::SchemaDump(_) => tool_defs::cli_command::SCHEMA_DUMP,
+        CommandKind::Vault(_) => tool_defs::cli_command::VAULT,
+        CommandKind::GenerateSqlxUncheckedQueriesTodo(_) => {
+            tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO
+        }
+        CommandKind::Proxy(_) => tool_defs::cli_command::PROXY,
+        CommandKind::Prompt(_) => "prompt",
+        CommandKind::Agent(_) => tool_defs::cli_command::AGENT,
+        CommandKind::Codex(_) => tool_defs::cli_command::CODEX,
+        CommandKind::AgentMap(_) => tool_defs::cli_command::AGENT_MAP,
+        CommandKind::State(_) => tool_defs::cli_command::STATE,
+        CommandKind::Mcp => tool_defs::cli_command::MCP,
+        CommandKind::RuntimeCompatible(_) => "__runtime-compatible",
+    }
+}
+
 const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
-    // MCP owns stdout as a framed protocol stream. A CLI error envelope is not
-    // a valid MCP message, so its failures continue to use stderr.
-    json_output && !matches!(command, CommandKind::Mcp)
+    // MCP owns stdout as a framed protocol stream, while the hidden runtime
+    // probe is itself a machine protocol. CLI JSON envelopes are invalid for
+    // both, so their failures continue to use stderr.
+    json_output
+        && !matches!(
+            command,
+            CommandKind::Mcp | CommandKind::RuntimeCompatible(_)
+        )
 }
 
 fn run_command(cli: Cli) -> Result<()> {
     let json_output = cli.json;
     match cli.command {
+        CommandKind::RuntimeCompatible(opts) => run_runtime_compatible(opts),
         CommandKind::Init(opts) => run_init_command(opts, json_output),
         CommandKind::Presets => run_presets_command(json_output),
         CommandKind::Adopt(opts) => run_adopt_command(opts, json_output),
@@ -220,6 +364,67 @@ fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
         json_output,
         human_output,
     )
+}
+
+fn run_runtime_compatible(opts: RuntimeCompatibleOpts) -> Result<()> {
+    validate_runtime_compatibility(
+        &opts.repo_root,
+        opts.contract_version,
+        opts.profile,
+        opts.capability_only,
+    )?;
+    Ok(())
+}
+
+fn validate_runtime_compatibility(
+    repo_root: &std::path::Path,
+    contract_version: Option<u32>,
+    profile: RuntimeCompatibilityProfile,
+    capability_only: bool,
+) -> Result<Option<RepoContext>> {
+    let repo_root = std::fs::canonicalize(repo_root).with_context(|| {
+        format!(
+            "Failed to resolve Jig repository root {}",
+            repo_root.display()
+        )
+    })?;
+    if let Some(contract_version) = contract_version
+        && !crate::context::is_supported_contract_version(contract_version)
+    {
+        bail!(
+            "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
+            crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
+            crate::context::CURRENT_CONTRACT_VERSION
+        );
+    }
+    let ctx = if capability_only {
+        if contract_version.is_none() {
+            // Keep direct/manual uses of the private probe useful. Generated
+            // launchers and installers pass their rendered epoch explicitly so
+            // repair paths do not depend on a readable manifest.
+            RepoContext::supported_contract_version_from_root(&repo_root)?;
+        }
+        None
+    } else {
+        if let Some(launcher_contract_version) = contract_version {
+            let repository_contract_version =
+                RepoContext::declared_contract_version_from_root(&repo_root)?;
+            if launcher_contract_version != repository_contract_version {
+                bail!(
+                    "Launcher contract version {launcher_contract_version} does not match repository contract version {repository_contract_version}"
+                );
+            }
+        }
+        let ctx = RepoContext::load_from_root(repo_root)?;
+        crate::policy::validate_contract(&ctx)?;
+        Some(ctx)
+    };
+    if profile == RuntimeCompatibilityProfile::Default && !cfg!(feature = "dev-proxy") {
+        bail!(
+            "This Jig binary is incompatible with the default runtime profile because it was built without the dev-proxy feature"
+        );
+    }
+    Ok(ctx)
 }
 
 fn report_json_command_error(result: Result<()>) -> Result<()> {

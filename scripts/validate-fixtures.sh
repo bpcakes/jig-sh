@@ -49,6 +49,7 @@ for answer_name in backend-only.toml full-stack.toml tooling-only.toml; do
 done
 
 assert_posix_launcher "$ROOT_DIR/scripts/jig"
+bash "$ROOT_DIR/scripts/check-launcher-template.sh"
 
 create_template_snapshot_repo "$TEMPLATE_SNAPSHOT"
 mkdir -p "$EXAMPLE_SMOKE_DIR"
@@ -71,10 +72,6 @@ assert_posix_launcher "$TOOLING_ONLY_DIR/scripts/jig"
 validate_backend_fixture "$BACKEND_DIR"
 validate_full_stack_fixture "$FULL_STACK_DIR"
 validate_tooling_only_fixture "$TOOLING_ONLY_DIR"
-validate_unpushed_commit_stays_local
-validate_explicit_template_source_url_rewrites_src_path
-validate_quoted_local_src_path_installs_jig
-validate_template_source_url_installs_from_git_tag
-validate_quoted_template_source_url_rewrites_src_path
+validate_source_normalization_fixtures
 
 echo "Fixture validation passed."

@@ -55,7 +55,7 @@ Usage:
 
 Commands:
   check     Run the full local release validation and cargo publish dry run.
-  prepare   Update pinned versions and CHANGELOG.md for VERSION.
+  prepare   Update workspace package versions and CHANGELOG.md for VERSION.
   notes     Generate or replace the CHANGELOG.md section for VERSION.
   stage     Stage files updated by release-prepare.
   tag       Run release validation, then create annotated tag vVERSION.
@@ -247,7 +247,7 @@ require_version_consistency() {
   local version="$1"
   local cargo_version
   local contract_version
-  local launcher_version
+  local launcher_contract_version
   local dependency_version
 
   require_publish_manifest_consistency
@@ -293,33 +293,29 @@ import json
 import pathlib
 import sys
 
-print(json.loads(pathlib.Path(sys.argv[1]).read_text())["jig_version"])
+value = json.loads(pathlib.Path(sys.argv[1]).read_text()).get("contract_version")
+if not isinstance(value, int) or isinstance(value, bool):
+    raise SystemExit("contract_version must be an integer")
+print(value)
 PY
 )"
-  if [[ "$contract_version" != "$version" ]]; then
-    echo ".agent/jig-contract.json jig_version is $contract_version, expected $version." >&2
-    exit 1
-  fi
-
-  launcher_version="$(python3 - "$ROOT_DIR/scripts/jig" <<'PY'
+  launcher_contract_version="$(python3 - "$ROOT_DIR/scripts/jig" <<'PY'
 import pathlib
 import re
 import sys
 
-pattern = re.compile(r"""^JIG_VERSION\s*=\s*["']([^"']+)["']\s*$""")
+pattern = re.compile(r'^CONTRACT_VERSION=["\x27]([0-9]+)["\x27]$')
 for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
-    match = pattern.match(line)
+    match = pattern.fullmatch(line.strip())
     if match:
         print(match.group(1))
         break
+else:
+    raise SystemExit("scripts/jig has no readable CONTRACT_VERSION")
 PY
 )"
-  if [[ -z "$launcher_version" ]]; then
-    echo "Could not read JIG_VERSION from scripts/jig." >&2
-    exit 1
-  fi
-  if [[ "$launcher_version" != "$version" ]]; then
-    echo "scripts/jig JIG_VERSION is $launcher_version, expected $version." >&2
+  if [[ "$launcher_contract_version" != "$contract_version" ]]; then
+    echo "scripts/jig contract version is $launcher_contract_version, but .agent/jig-contract.json declares $contract_version." >&2
     exit 1
   fi
 
@@ -336,84 +332,26 @@ PY
     echo "No tracked fixture answer files found." >&2
     exit 1
   fi
-  for fixture_file in "${fixture_files[@]}"; do
-    if ! grep -Eq '^jig_version\s*=' "$ROOT_DIR/$fixture_file"; then
-      echo "$fixture_file is a release-pinned fixture and must include jig_version." >&2
+  local generated_toml
+  for generated_toml in "${answer_files[@]}" "${fixture_files[@]}" templates/project/.jig.toml.jinja; do
+    if grep -Eq '^[[:space:]]*jig_version[[:space:]]*=' "$ROOT_DIR/$generated_toml"; then
+      echo "$generated_toml contains an operational jig_version product pin." >&2
       exit 1
     fi
   done
 
-  local version_files=("${answer_files[@]}" "${fixture_files[@]}")
-
-  local version_file
-  for version_file in "${version_files[@]}"; do
-    if ! git ls-files --error-unmatch "$version_file" >/dev/null 2>&1; then
-      echo "Release-pinned jig answer file is not tracked: $version_file" >&2
+  local generated_contract
+  for generated_contract in .agent/jig-contract.json templates/project/.agent/jig-contract.json.jinja; do
+    if grep -Eq '"jig_version"[[:space:]]*:' "$ROOT_DIR/$generated_contract"; then
+      echo "$generated_contract contains an operational jig_version product pin." >&2
       exit 1
     fi
+  done
 
-    local file_version
-    file_version="$(python3 - "$ROOT_DIR/$version_file" <<'PY'
-import ast
-import pathlib
-import re
-import sys
-
-text = pathlib.Path(sys.argv[1]).read_text()
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    tomllib = None
-
-if tomllib is not None:
-    print(tomllib.loads(text).get("jig_version", ""))
-    raise SystemExit(0)
-
-# Release-pinned answer files keep jig_version at top level. tomllib remains
-# authoritative when available.
-def strip_inline_comment(value):
-    quote = None
-    escaped = False
-    for index, char in enumerate(value):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if quote is not None:
-            if char == quote:
-                quote = None
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            continue
-        if char == "#":
-            return value[:index].rstrip()
-    return value.strip()
-
-pattern = re.compile(r"^\s*jig_version\s*=\s*(.*?)\s*$")
-for line in text.splitlines():
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
-        continue
-    if stripped.startswith("["):
-        break
-    match = pattern.match(line)
-    if match:
-        print(ast.literal_eval(strip_inline_comment(match.group(1))))
-        break
-else:
-    print("")
-PY
-)"
-    if [[ -z "$file_version" ]]; then
-      echo "$version_file is missing jig_version." >&2
-      exit 1
-    fi
-    if [[ "$file_version" != "$version" ]]; then
-      echo "$version_file jig_version is $file_version, expected $version." >&2
+  local generated_launcher
+  for generated_launcher in scripts/jig templates/project/scripts/jig.jinja; do
+    if grep -Eq '^[[:space:]]*JIG_VERSION=' "$ROOT_DIR/$generated_launcher"; then
+      echo "$generated_launcher contains an operational JIG_VERSION product pin." >&2
       exit 1
     fi
   done
@@ -481,12 +419,9 @@ update_version_files() {
     "$version" \
     "$PACKAGE_NAME" \
     "${#PUBLISH_PACKAGE_NAMES[@]}" \
-    "${PUBLISH_PACKAGE_NAMES[@]}" \
-    "${RELEASE_FIXTURE_FILES[@]}" <<'PY'
-import json
+    "${PUBLISH_PACKAGE_NAMES[@]}" <<'PY'
 import pathlib
 import re
-import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -494,17 +429,9 @@ version = sys.argv[2]
 package_name = sys.argv[3]
 publish_package_count = int(sys.argv[4])
 publish_package_names = sys.argv[5:5 + publish_package_count]
-release_fixture_files = sys.argv[5 + publish_package_count:]
 semver_release = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 if not re.fullmatch(semver_release, version):
     raise SystemExit(f"Version must be MAJOR.MINOR.PATCH[-PRERELEASE], got {version!r}.")
-
-def replace_required(path, pattern, replacement, label=None, flags=0):
-    text = path.read_text()
-    next_text, count = re.subn(pattern, replacement, text, flags=flags)
-    if count == 0:
-        raise SystemExit(f"Could not update {label or pattern!r} in {path}.")
-    path.write_text(next_text)
 
 def replace_exactly_once(path, pattern, replacement, label=None, flags=0):
     text = path.read_text()
@@ -512,23 +439,6 @@ def replace_exactly_once(path, pattern, replacement, label=None, flags=0):
     if count != 1:
         raise SystemExit(f"Expected to update {label or pattern!r} exactly once in {path}; updated {count}.")
     path.write_text(next_text)
-
-def update_jig_toml(path):
-    replace_required(
-        path,
-        r'(?m)^jig_version\s*=\s*"[^"]*"\s*$',
-        f'jig_version = "{version}"',
-        "jig_version",
-    )
-
-def has_jig_version(path):
-    return bool(re.search(r'(?m)^jig_version\s*=', path.read_text()))
-
-def git_ls_files(*patterns):
-    return subprocess.check_output(
-        ["git", "-C", str(root), "ls-files", "--", *patterns],
-        text=True,
-    ).splitlines()
 
 replace_exactly_once(
     root / "Cargo.toml",
@@ -553,33 +463,6 @@ for package in publish_package_names:
         rf'\g<1>"{version}"',
         f"Cargo.lock {package} package version",
     )
-replace_exactly_once(
-    root / "scripts" / "jig",
-    r'(?m)^JIG_VERSION="[^"]*"$',
-    f'JIG_VERSION="{version}"',
-    "launcher JIG_VERSION",
-)
-
-contract_path = root / ".agent" / "jig-contract.json"
-contract = json.loads(contract_path.read_text())
-contract["jig_version"] = version
-contract_path.write_text(json.dumps(contract, indent=2) + "\n")
-
-jig_toml_paths = set()
-for relative_path in git_ls_files():
-    if pathlib.Path(relative_path).name != ".jig.toml":
-        continue
-    path = root / relative_path
-    jig_toml_paths.add(path)
-for relative_path in git_ls_files(*release_fixture_files):
-    path = root / relative_path
-    if not has_jig_version(path):
-        raise SystemExit(f"{path.relative_to(root)} is a release-pinned fixture and must include jig_version.")
-    jig_toml_paths.add(path)
-if not jig_toml_paths:
-    raise SystemExit("No .jig.toml or fixture TOML files found to update.")
-for path in sorted(jig_toml_paths):
-    update_jig_toml(path)
 PY
 }
 
@@ -592,27 +475,12 @@ release_stage() {
   local release_path
 
   for release_path in \
-    Cargo.toml Cargo.lock crates/jig/Cargo.toml scripts/jig .agent/jig-contract.json CHANGELOG.md \
-    scripts/fixtures/rendered-repos.sh scripts/fixtures/runtime-smoke.sh
+    Cargo.toml Cargo.lock crates/jig/Cargo.toml CHANGELOG.md
   do
     if [[ -e "$ROOT_DIR/$release_path" ]]; then
       run git add "$release_path"
     fi
   done
-
-  git ls-files -z |
-    while IFS= read -r -d '' release_path; do
-      case "$release_path" in
-        .jig.toml|*/.jig.toml)
-          run git add "$release_path"
-          ;;
-      esac
-    done
-
-  git ls-files -z -- "${RELEASE_FIXTURE_FILES[@]}" |
-    while IFS= read -r -d '' release_path; do
-      run git add "$release_path"
-    done
 }
 
 require_changelog_update_allowed() {
@@ -744,22 +612,7 @@ publish_package_if_missing() {
 }
 
 check_launcher_template() {
-  normalize_launcher() {
-    sed \
-      -e '/^# Keep launcher behavior synchronized /,+1d' \
-      -e '/^\[% if repo_name == "jig-sh" %\]$/d' \
-      -e '/^\[% endif %\]$/d' \
-      -e 's/^JIG_VERSION="[^"]*"$/JIG_VERSION="<<[ jig_version ]>>"/' \
-      "$1"
-  }
-
-  if ! diff -u \
-    <(normalize_launcher "$ROOT_DIR/scripts/jig") \
-    <(normalize_launcher "$ROOT_DIR/templates/project/scripts/jig.jinja")
-  then
-    echo "scripts/jig and templates/project/scripts/jig.jinja drifted." >&2
-    exit 1
-  fi
+  run bash "$ROOT_DIR/scripts/check-launcher-template.sh"
 }
 
 run_ci_checks() {

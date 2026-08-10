@@ -1,7 +1,11 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(not(test))]
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{FeatureContext, ManifestTool};
@@ -24,8 +28,26 @@ pub(crate) use work_config::{
 };
 
 const CURRENT_SESSION_FILE: &str = "jig-current-session.txt";
-const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
+pub(crate) const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
+
+#[cfg(not(test))]
+static PREVALIDATED_LAUNCHER_CONTEXT: OnceLock<RepoContext> = OnceLock::new();
+#[cfg(test)]
+thread_local! {
+    // Unit tests run several synthetic CLI invocations in one process, so they
+    // use a resettable per-test-thread equivalent of the production OnceLock.
+    static PREVALIDATED_LAUNCHER_CONTEXT: RefCell<Option<RepoContext>> = const { RefCell::new(None) };
+}
 pub(crate) const DEFAULT_CODEX_MARKETPLACE_ID: &str = "jig-skills";
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = 2;
+pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
+pub(crate) const GIT_RUNTIME_CACHE_BASE: &str = ".git/jig-tools";
+pub(crate) const FALLBACK_RUNTIME_CACHE_BASE: &str = ".agent/.cache/jig";
+pub(crate) const RUNTIME_CACHE_PROFILE_SUFFIX: &str = "-runtime";
+pub(crate) const LAUNCHER_REPAIR_STAGING_PREFIX: &str = ".jig-launcher-repair-";
+pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
+    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 // jig.sh generated repos default to the shared Jig skills marketplace; forks can
 // override or opt out through agent_tooling.codex.marketplaces in .jig.toml.
 pub(crate) const DEFAULT_CODEX_MARKETPLACE_SOURCE: &str = "bpcakes/jig-skills";
@@ -36,6 +58,49 @@ pub(crate) const DEFAULT_CODEX_MARKETPLACE_PLUGINS: &[&str] = &[
     "jig-exec-plans@jig-skills",
 ];
 pub(crate) const SUPPORTED_WEB_PACKAGE_MANAGERS: &[&str] = &["bun", "npm", "pnpm", "yarn"];
+
+pub(crate) fn runtime_cache_base(root: &Path) -> PathBuf {
+    if root.join(".git").is_dir() {
+        root.join(GIT_RUNTIME_CACHE_BASE)
+    } else {
+        root.join(FALLBACK_RUNTIME_CACHE_BASE)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeCacheProfile {
+    Default,
+    Runtime,
+}
+
+impl RuntimeCacheProfile {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+pub(crate) fn runtime_profile_cache_name(
+    contract_version: u32,
+    profile: RuntimeCacheProfile,
+) -> String {
+    match profile {
+        RuntimeCacheProfile::Default => format!("contract-{contract_version}"),
+        RuntimeCacheProfile::Runtime => {
+            format!("contract-{contract_version}{RUNTIME_CACHE_PROFILE_SUFFIX}")
+        }
+    }
+}
+
+pub(crate) fn runtime_profile_cache_path(
+    root: &Path,
+    contract_version: u32,
+    profile: RuntimeCacheProfile,
+) -> PathBuf {
+    runtime_cache_base(root).join(runtime_profile_cache_name(contract_version, profile))
+}
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 #[derive(Clone, Debug, Deserialize)]
@@ -56,7 +121,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     ci_github_runner: String,
-    jig_version: String,
+    #[serde(default)]
+    jig_version: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     template_source_url: String,
@@ -280,17 +346,23 @@ pub(crate) struct CodexMarketplaceConfig {
 struct ContractManifest {
     contract_version: u32,
     tool_namespace: String,
-    jig_version: String,
+    #[serde(default)]
+    jig_version: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     required_commands: Vec<String>,
     tools: Vec<ManifestTool>,
 }
 
+#[derive(Deserialize)]
+struct ContractVersionProbe {
+    contract_version: u32,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RepoConfigProbe {
     pub(crate) repo_name: String,
-    pub(crate) jig_version: String,
+    pub(crate) jig_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -303,8 +375,49 @@ pub(crate) struct RepoContext {
 
 impl RepoContext {
     pub(crate) fn load() -> Result<Self> {
+        if let Some(ctx) = Self::prevalidated_launcher_context() {
+            return Ok(ctx);
+        }
         let root = find_repo_root_from_or_env(&std::env::current_dir()?)?;
         Self::load_from_root(root)
+    }
+
+    pub(crate) fn remember_prevalidated_launcher_context(self) -> Result<()> {
+        #[cfg(not(test))]
+        {
+            PREVALIDATED_LAUNCHER_CONTEXT
+                .set(self)
+                .map_err(|_| anyhow::anyhow!("Launcher repository context was already initialized"))
+        }
+        #[cfg(test)]
+        {
+            PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if slot.is_some() {
+                    bail!("Launcher repository context was already initialized");
+                }
+                *slot = Some(self);
+                Ok(())
+            })
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_prevalidated_launcher_context() {
+        PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+
+    fn prevalidated_launcher_context() -> Option<Self> {
+        #[cfg(not(test))]
+        {
+            PREVALIDATED_LAUNCHER_CONTEXT.get().cloned()
+        }
+        #[cfg(test)]
+        {
+            PREVALIDATED_LAUNCHER_CONTEXT.with(|slot| slot.borrow().as_ref().cloned())
+        }
     }
 
     pub(crate) fn load_from_root(root: PathBuf) -> Result<Self> {
@@ -317,7 +430,7 @@ impl RepoContext {
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
 
-        if !matches!(manifest.contract_version, 2..=3) {
+        if !is_supported_contract_version(manifest.contract_version) {
             bail!(
                 "Unsupported jig contract version: {}",
                 manifest.contract_version
@@ -326,17 +439,24 @@ impl RepoContext {
         if manifest.tool_namespace != "jig" {
             bail!("Unsupported tool namespace: {}", manifest.tool_namespace);
         }
-        // Versions 2 and 3 share the command-backed manifest schema; v3 changes
-        // the CLI command surface, not the required_commands contract shape.
+        // Supported contract epochs share the command-backed manifest schema.
+        // A contract bump can also cover runtime-owned behavior that is not
+        // represented as an individual manifest field.
         if manifest.required_commands.is_empty() {
             bail!("jig contract manifest does not declare required commands");
         }
-        if config.jig_version != manifest.jig_version {
-            bail!(
-                "jig version mismatch between .jig.toml ({}) and manifest ({})",
-                config.jig_version,
-                manifest.jig_version
-            );
+        if manifest.contract_version <= LAST_VERSION_LOCKED_CONTRACT_VERSION {
+            let config_version =
+                non_empty_legacy_jig_version(config.jig_version.as_deref(), ".jig.toml")?;
+            let manifest_version = non_empty_legacy_jig_version(
+                manifest.jig_version.as_deref(),
+                ".agent/jig-contract.json",
+            )?;
+            if config_version != manifest_version {
+                bail!(
+                    "jig version mismatch between .jig.toml ({config_version}) and manifest ({manifest_version})"
+                );
+            }
         }
 
         let current_session_path = resolve_current_session_path(&root);
@@ -347,6 +467,23 @@ impl RepoContext {
             config,
             manifest,
         })
+    }
+
+    pub(crate) fn supported_contract_version_from_root(root: &Path) -> Result<u32> {
+        let contract_version = Self::declared_contract_version_from_root(root)?;
+        if !is_supported_contract_version(contract_version) {
+            bail!("Unsupported jig contract version: {contract_version}");
+        }
+        Ok(contract_version)
+    }
+
+    pub(crate) fn declared_contract_version_from_root(root: &Path) -> Result<u32> {
+        let manifest_path = root.join(".agent/jig-contract.json");
+        let manifest_text = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let probe: ContractVersionProbe = serde_json::from_str(&manifest_text)
+            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+        Ok(probe.contract_version)
     }
 
     pub(crate) fn validate_config_file(root: &Path) -> Result<RepoConfigProbe> {
@@ -385,8 +522,8 @@ impl RepoContext {
         &self.config.default_branch
     }
 
-    pub(crate) fn jig_version(&self) -> &str {
-        &self.config.jig_version
+    pub(crate) fn legacy_jig_version(&self) -> Option<&str> {
+        self.config.jig_version.as_deref()
     }
 
     pub(crate) fn is_minimal_footprint(&self) -> bool {
@@ -530,6 +667,18 @@ impl RepoContext {
     pub(crate) fn current_session_path(&self) -> PathBuf {
         self.current_session_path.clone()
     }
+}
+
+pub(crate) const fn is_supported_contract_version(version: u32) -> bool {
+    version >= MIN_SUPPORTED_CONTRACT_VERSION && version <= CURRENT_CONTRACT_VERSION
+}
+
+fn non_empty_legacy_jig_version<'a>(value: Option<&'a str>, source: &str) -> Result<&'a str> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("legacy jig contract requires a non-empty jig_version in {source}")
+        })
 }
 
 fn load_config(config_path: &Path) -> Result<RepoConfig> {

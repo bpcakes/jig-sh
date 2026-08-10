@@ -50,6 +50,7 @@ timeout_seconds = 45
         template: Some(template.path().display().to_string()),
         template_mode: None,
         recopy: true,
+        launcher_only: false,
         force: false,
         vcs_ref: None,
         defaults: true,

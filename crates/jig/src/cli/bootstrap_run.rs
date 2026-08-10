@@ -407,6 +407,24 @@ pub(super) fn format_update_human_summary(output: &serde_json::Value) -> String 
         }
     }
 
+    if let Some(warnings) = output["warnings"].as_array() {
+        if !warnings.is_empty() {
+            summary.push_str("  warnings:\n");
+            for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "    - {warning}");
+            }
+        }
+    }
+
+    if let Some(steps) = output["next_steps"].as_array() {
+        if !steps.is_empty() {
+            summary.push_str("  next steps:\n");
+            for step in steps.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "    - {step}");
+            }
+        }
+    }
+
     summary.push_str("  full report: rerun with --json\n");
     summary
 }

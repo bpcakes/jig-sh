@@ -124,9 +124,10 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
     NativeToolOutput {
         exit_status: 0,
         stdout: format!(
-            "jig contract check passed.\n  - manifest: {}\n  - jig version: {}\n  - tool definitions: {}\n",
+            "jig contract check passed.\n  - manifest: {}\n  - contract version: {}\n  - runtime version: {}\n  - tool definitions: {}\n",
             manifest_path.display(),
-            ctx.jig_version(),
+            ctx.contract_version(),
+            env!("CARGO_PKG_VERSION"),
             ctx.tool_specs().len()
         ),
         stderr: String::new(),
@@ -142,9 +143,6 @@ pub(crate) fn validate_contract(
     let jig_script = root.join("scripts/jig");
     let install_script = root.join("scripts/install-jig.sh");
 
-    if ctx.jig_version().is_empty() {
-        errors.push("Missing jig_version in .jig.toml.".to_string());
-    }
     if ctx.tool_specs().iter().any(|tool| tool.kind == "memory") {
         errors.push("Runtime state tools must not be declared in .agent/jig-contract.json.".into());
     }
@@ -162,21 +160,17 @@ pub(crate) fn validate_contract(
     if ctx.sqlx_enabled() && ctx.rust_migration_dir().trim().is_empty() {
         errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
     }
-    match ctx.contract_version() {
-        2 | 3 => {
-            for command_key in ctx.required_commands() {
-                if !ctx.supports_command_key(command_key) {
-                    errors.push(format!(
-                        "Unsupported required command in jig contract: {command_key}."
-                    ));
-                    continue;
-                }
-                if let Err(error) = ctx.command_for_key(command_key) {
-                    errors.push(error.to_string());
-                }
-            }
+    // RepoContext construction has already rejected unsupported contract epochs.
+    for command_key in ctx.required_commands() {
+        if !ctx.supports_command_key(command_key) {
+            errors.push(format!(
+                "Unsupported required command in jig contract: {command_key}."
+            ));
+            continue;
         }
-        other => errors.push(format!("Unsupported contract_version: {other}.")),
+        if let Err(error) = ctx.command_for_key(command_key) {
+            errors.push(error.to_string());
+        }
     }
 
     let tool_names = ctx

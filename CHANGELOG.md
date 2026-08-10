@@ -16,8 +16,26 @@
 
 ### Fixed
 - Keep dev session cleanup signal-responsive
+- Keep runtime installation portable on stock macOS Bash 3.2, source-aware for Git and non-Git checkouts, refreshable for mutable sources, and fail-closed for unpinned remotes or untrusted PATH wrappers.
+- Keep help, `doctor`, contract checks, adoption, and launcher repair reachable when repository configuration is malformed, with traceback-free and directly executable recovery guidance.
+- Keep bare launcher help reachable under a broken repository contract, anchor relative runtime source paths to the repository, and reject non-file launcher paths in Doctor.
+- Make launcher-only repair transactional and self-contained: preflight its recorded source, warn when embedded repair templates replace source-specific launcher customizations, preserve the legacy contract epoch, validate the running repair binary, seed truthfully fingerprinted caches, refresh the cheap identity stamp after a digest fallback, roll back published scripts if real runtime seeding fails, and restore prior caches if the rendered-script transaction cannot commit.
+- Drain noisy owned subprocesses promptly while retaining hard time, memory, capture, cancellation, and cleanup bounds.
+
+### Breaking
+- Generated repositories move from contract v3 to v4 and no longer pin `jig_version`/`JIG_VERSION`. Run a current Jig binary with `jig update <repo> --force` to migrate the full harness. If the legacy wrapper cannot start, first run `jig update <repo> --launcher-only --force`, then perform the full update; `doctor` treats the unmigrated launcher as a required migration and exits nonzero while v2/v3 remain runtime-readable. A repaired legacy launcher depends on its seeded compatible cache until full migration, so fresh clones, cacheless CI, or cache cleanup require a current external Jig binary to repeat the narrow repair.
+- Remote runtime installation now requires the repository's immutable hexadecimal `_commit`; legacy unpinned repositories must explicitly acknowledge default-branch installation with `JIG_INSTALL_ALLOW_UNPINNED_REMOTE=1` before migrating their source metadata.
+- A usable remote `_src_path` is now the authoritative runtime source ahead of `template_source_url`; repositories that intentionally relied on the fallback URL must update `_src_path` before their next cache install.
+- The generated launcher passes its contract epoch, build profile, and repository root to the selected binary, which validates the complete repository contract in-process before ordinary command dispatch and reuses that loaded context process-wide. That launcher-provided root is authoritative over an inherited `JIG_REPO_ROOT`. Contract-invalid repositories cannot run `work`, `dev`, `mcp`, `info`, or ordinary gates such as `check fmt` until repaired; `doctor`, `adopt`, `codex`, `init`, `presets`, `update`, and `check contract` retain a capability-only escape hatch.
+- The published `jig-ui` crate changes `HarnessView::jig_version` from `String` to `Option<String>` and adds `runtime_version` so v4 snapshots distinguish a legacy generated pin from the executing runtime. Both fields have Serde defaults for backward-compatible deserialization of older snapshots, and the public `display_runtime_version` helper implements the legacy fallback.
+- Structured `jig info --json` and `jig doctor --json` output now reports nullable `repo.jig_version`, adds `repo.runtime_version`, and replaces product-version runtime statuses with the contract-oriented `compatible`, `migration needed`, `unreadable`, `missing`, `unsupported`, and `outdated` vocabulary.
 
 ### Changed
+- Replace generated Jig product-version locks with contract-v4 runtime/profile compatibility, contract-keyed caches, explicit PATH-binary trust, and a launcher-only repair path for legacy repositories.
+- Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
+- Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
+- Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
+- Treat `_commit` as an installer source locator rather than a runtime product lock: a proven same-contract runtime, including an explicitly recorded repair seed, may satisfy the cache until the configured source state changes.
 - Plan dev session management
 - Split dev lifecycle modules
 - Close dev session management work

@@ -576,6 +576,57 @@ fn parses_update_recopy_flag() {
 }
 
 #[test]
+fn parses_launcher_only_update_and_rejects_source_overrides() {
+    let cli =
+        Cli::try_parse_from(["jig", "update", "/tmp/repo", "--launcher-only", "--force"]).unwrap();
+    match cli.command {
+        CommandKind::Update(bootstrap::UpdateOpts {
+            path,
+            launcher_only,
+            force,
+            ..
+        }) => {
+            assert_eq!(path, PathBuf::from("/tmp/repo"));
+            assert!(launcher_only);
+            assert!(force);
+        }
+        other => panic!("expected launcher-only update, got {other:?}"),
+    }
+
+    let missing_force =
+        Cli::try_parse_from(["jig", "update", "/tmp/repo", "--launcher-only"]).unwrap_err();
+    assert_eq!(
+        missing_force.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+
+    for conflicting in ["--recopy", "--template=/tmp/template", "--vcs-ref=main"] {
+        let error = Cli::try_parse_from([
+            "jig",
+            "update",
+            "/tmp/repo",
+            "--launcher-only",
+            "--force",
+            conflicting,
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+    for ignored in ["--defaults", "--no-input"] {
+        let error = Cli::try_parse_from([
+            "jig",
+            "update",
+            "/tmp/repo",
+            "--launcher-only",
+            "--force",
+            ignored,
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+}
+
+#[test]
 fn parses_work_receipts_filters() {
     let cli = Cli::try_parse_from([
         "jig",

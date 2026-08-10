@@ -18,8 +18,9 @@ Examples:
 
 pub(super) const CODEX_LAUNCH_AFTER_HELP: &str = "\
 With no HOME, open a searchable terminal picker immediately. Account and usage
-details load in the background; arrows or j/k move, / searches, Enter launches,
-and Esc or q cancels.
+details load in the background, including remaining quota and at-current-pace
+projections; + marks the best projected outcome (most headroom or least overrun).
+Arrows or j/k move, / searches, Enter launches, and Esc or q cancels.
 A bare name such as work resolves as ~/.codex-work; use ./work to select a relative directory.
 The aliases codex and default both select ~/.codex.
 Arguments after -- are forwarded to Codex without shell parsing.
