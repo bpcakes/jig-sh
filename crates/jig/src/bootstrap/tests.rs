@@ -107,6 +107,49 @@ fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
 }
 
 #[test]
+fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
+    let repo = tempdir().unwrap();
+    let cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Default,
+    ));
+    fs::create_dir_all(cache.join("bin")).unwrap();
+    fs::write(cache.join("bin/jig"), "cached runtime").unwrap();
+    fs::write(
+        cache.join(".jig-source-stamp"),
+        format!("{LAUNCHER_REPAIR_SEED_STAMP_HEADER}\nsource:fixture\n"),
+    )
+    .unwrap();
+    let active_runtime = RuntimeCacheLocks::acquire(
+        std::slice::from_ref(&cache),
+        RuntimeCacheLockPolicy::immediate(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        retire_launcher_repair_seeded_caches_best_effort(
+            repo.path(),
+            crate::context::CURRENT_CONTRACT_VERSION,
+        ),
+        0
+    );
+    assert!(
+        cache.join(".jig-source-stamp").exists(),
+        "busy repair cache must remain intact for a later retirement attempt"
+    );
+
+    drop(active_runtime);
+    assert_eq!(
+        retire_launcher_repair_seeded_caches(
+            repo.path(),
+            crate::context::CURRENT_CONTRACT_VERSION,
+        )
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn launcher_repair_cache_publication_rolls_back_after_a_later_transaction_failure() {
     let temp = tempdir().unwrap();
     let cache_base = temp.path().join("cache");

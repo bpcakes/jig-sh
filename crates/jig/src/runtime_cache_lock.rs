@@ -33,7 +33,6 @@ impl RuntimeCacheLockPolicy {
         retry_delay: LOCK_RETRY_DELAY,
     };
 
-    #[cfg(test)]
     pub(crate) const fn immediate() -> Self {
         Self {
             attempts: 1,

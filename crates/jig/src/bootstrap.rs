@@ -816,10 +816,8 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         let contract_version = progress.log_blocked_on_err(
             RepoContext::supported_contract_version_from_root(&destination),
         )?;
-        let retired = progress.log_blocked_on_err(retire_launcher_repair_seeded_caches(
-            &destination,
-            contract_version,
-        ))?;
+        let retired =
+            retire_launcher_repair_seeded_caches_best_effort(&destination, contract_version);
         if retired > 0 {
             progress.info(
                 "runtime cache",
@@ -1114,10 +1112,7 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
     let contract_version = progress.log_blocked_on_err(
         RepoContext::supported_contract_version_from_root(&destination),
     )?;
-    let retired = progress.log_blocked_on_err(retire_launcher_repair_seeded_caches(
-        &destination,
-        contract_version,
-    ))?;
+    let retired = retire_launcher_repair_seeded_caches_best_effort(&destination, contract_version);
     if retired > 0 {
         progress.info(
             "runtime cache",
@@ -1153,7 +1148,7 @@ fn retire_launcher_repair_seeded_caches(
         return Ok(0);
     }
 
-    let _locks = RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::INSTALLER)
+    let _locks = RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::immediate())
         .context("Failed to lock launcher-repair caches for retirement")?;
     let mut retired = 0;
     for cache in cache_paths {
@@ -1183,6 +1178,21 @@ fn retire_launcher_repair_seeded_caches(
         retired += 1;
     }
     Ok(retired)
+}
+
+fn retire_launcher_repair_seeded_caches_best_effort(
+    destination: &Path,
+    contract_version: u32,
+) -> usize {
+    match retire_launcher_repair_seeded_caches(destination, contract_version) {
+        Ok(retired) => retired,
+        Err(error) => {
+            eprintln!(
+                "Warning: harness changes were committed, but launcher-repair cache retirement was skipped: {error:#}"
+            );
+            0
+        }
+    }
 }
 
 fn cache_has_launcher_repair_seed(cache: &Path) -> Result<bool> {
