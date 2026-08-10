@@ -539,7 +539,11 @@ fn launcher_repair_requires_the_complete_render_answer_shape() {
 }
 
 #[test]
-fn launcher_repair_scrubs_language_and_dynamic_loader_injection() {
+fn launcher_repair_scrubs_injection_and_installer_lock_reentry() {
+    assert!(
+        LAUNCHER_REPAIR_ENVIRONMENT_KEYS.contains(&"JIG_INSTALL_LOCK_TOKEN"),
+        "repair helpers must not inherit the installer lock re-entry capability"
+    );
     let mut command = std::process::Command::new("fixture");
     for &key in LAUNCHER_REPAIR_ENVIRONMENT_KEYS {
         command.env(key, "untrusted");

@@ -76,7 +76,14 @@ fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
             );
         }
     }
+    let authoritative_root = ctx.root().to_path_buf();
     ctx.remember_prevalidated_launcher_context()?;
+    // SAFETY: launcher validation runs at CLI startup, before command dispatch
+    // can create worker threads. Descendants must inherit the same canonical
+    // root that this process has already validated as launcher-authoritative.
+    unsafe {
+        std::env::set_var(crate::context::JIG_REPO_ROOT_ENV, authoritative_root);
+    }
     Ok(())
 }
 

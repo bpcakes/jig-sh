@@ -285,6 +285,8 @@ fn generated_launcher_handoff_validates_and_reuses_the_loaded_context() {
     }
     let temp = tempdir().unwrap();
     write_compatible_runtime_repo(temp.path(), 4);
+    let _configured_root =
+        crate::test_env::EnvVarGuard::set("JIG_REPO_ROOT", temp.path().join("wrong-repository"));
     let cli = Cli::try_parse_from([
         "jig",
         "--__launcher-contract-version",
@@ -298,6 +300,11 @@ fn generated_launcher_handoff_validates_and_reuses_the_loaded_context() {
     .unwrap();
 
     validate_launcher_repository_scope(&cli).unwrap();
+    assert_eq!(
+        std::env::var_os(crate::context::JIG_REPO_ROOT_ENV).as_deref(),
+        Some(std::fs::canonicalize(temp.path()).unwrap().as_os_str()),
+        "descendants must inherit the launcher-authoritative repository root"
+    );
     std::fs::write(temp.path().join(".jig.toml"), "[malformed").unwrap();
     let _cwd = CurrentDirGuard::set(temp.path());
 
