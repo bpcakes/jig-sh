@@ -172,6 +172,13 @@ fn json_ok_false_and_reported_command_failures_are_cli_failures() {
 }
 
 #[test]
+fn transparent_vault_child_exit_is_silent_and_preserves_status() {
+    let error = crate::cli::structured_error::vault_exec_child_exit(37);
+    assert!(is_structured_json_failure(&error));
+    assert_eq!(structured_error_exit_code(&error), Some(37));
+}
+
+#[test]
 fn json_error_payload_and_reported_error_preserve_machine_failure_contract() {
     let payload = json_error_payload("command_failed", "configuration is invalid", 7);
     assert_eq!(payload["ok"], false);

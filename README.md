@@ -168,17 +168,18 @@ The printed unguessable namespace contains JSON snapshot and plan endpoints retu
 
 ### Vault
 
-Jig Vault stores selected local secrets outside the repo, unlocks them with a local passphrase, and injects only requested values into a brokered child process. `jig init` and `jig adopt . --write` initialize a repo-scoped local vault by default; pass `--no-vault` to defer that setup.
+Jig Vault stores an encrypted environment bundle outside the repo. `jig init` and `jig adopt . --write` initialize a repo-scoped local vault by default; pass `--no-vault` to defer that setup. References are relative to the selected vault, so `jig://Production/RESTIC_PASSWORD` means item `Production`, field `RESTIC_PASSWORD`, in the current project scope. The project name is intentionally not repeated in the reference.
 
 ```sh
 # Run this only when init/adopt used --no-vault.
 scripts/jig vault init
-scripts/jig vault secret set api_token --value-prompt
-scripts/jig vault run --env TOKEN=api_token -- sh -c 'printf "%s\n" "$TOKEN"'
+scripts/jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
+printf '%s' 'local' | scripts/jig vault field set jig://Production/MODE --text --value-stdin
+scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Terminal use prompts for the passphrase; for non-interactive callers export `JIG_VAULT_PASSPHRASE`. `vault run --env VAR=SECRET` injects values as environment variables; on Unix, `--file VAR=SECRET` writes the secret to a private `0600` temp file and injects its path. Vault output is JSON and child secrets are redacted. See [Configuration](docs/configuration.md#vault-runtime) for scopes, `--global`, and automation details.
+Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, and encrypted backup/absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
 
 ### Prompts
 

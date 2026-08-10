@@ -257,7 +257,37 @@ fn check_help_includes_examples() {
 fn vault_help_includes_quick_start_examples() {
     let vault_help = rendered_help(&["vault"]);
     assert_help_contains(&vault_help, "JIG_VAULT_PASSPHRASE");
+    assert_help_contains(&vault_help, "are project-relative:");
+    assert_help_contains(&vault_help, "project name is never a reference segment");
+    assert_help_contains(&vault_help, "Both concealed and text fields are encrypted");
     assert_help_contains(&vault_help, "jig vault init");
+    assert_help_contains(&vault_help, "jig vault migrate --to 2");
+    assert_help_contains(
+        &vault_help,
+        "jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt",
+    );
+    assert_help_contains(
+        &vault_help,
+        "jig vault read jig://Production/RESTIC_PASSWORD | command",
+    );
+    assert_help_contains(
+        &vault_help,
+        "jig vault inject --in config.template > config",
+    );
+    assert_help_contains(&vault_help, "jig vault exec --env-file .env.jig -- command");
+    assert_help_contains(
+        &vault_help,
+        "jig vault import onepassword --env-file .env.op --item Production --out-env .env.jig",
+    );
+    assert_help_contains(&vault_help, "jig vault passphrase change");
+    assert_help_contains(
+        &vault_help,
+        "jig vault backup create --out ./project-vault.backup",
+    );
+    assert_help_contains(
+        &vault_help,
+        "jig vault backup restore --in ./project-vault.backup --home ./restored-vault",
+    );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
 
     let vault_init_help = rendered_help(&["vault", "init"]);
@@ -272,6 +302,76 @@ fn vault_help_includes_quick_start_examples() {
         &vault_secret_set_help,
         "jig vault secret set api_token --value-stdin",
     );
+
+    let vault_migrate_help = rendered_help(&["vault", "migrate"]);
+    assert_help_contains(&vault_migrate_help, "jig vault migrate --to 2");
+    assert_help_contains(&vault_migrate_help, "--to <TO>");
+    assert_help_contains(&vault_migrate_help, "version 1 vaults");
+    assert_help_contains(&vault_migrate_help, "old Jig rejects");
+
+    let vault_field_set_help = rendered_help(&["vault", "field", "set"]);
+    assert_help_contains(&vault_field_set_help, "--text");
+    assert_help_contains(&vault_field_set_help, "jig://Production/RESTIC_PASSWORD");
+    assert_help_contains(&vault_field_set_help, "use printf instead");
+
+    let vault_read_help = rendered_help(&["vault", "read"]);
+    assert_help_contains(&vault_read_help, "without an added newline");
+    assert_help_contains(&vault_read_help, "--out-file <PATH>");
+    assert_help_contains(&vault_read_help, "--reveal");
+    assert_help_contains(&vault_read_help, "currently Unix-only");
+
+    let vault_inject_help = rendered_help(&["vault", "inject"]);
+    assert_help_contains(&vault_inject_help, "--in <PATH|->");
+    assert_help_contains(&vault_inject_help, "{{ jig://ITEM/FIELD }}");
+    assert_help_contains(&vault_inject_help, "--overwrite");
+
+    let vault_exec_help = rendered_help(&["vault", "exec"]);
+    assert_help_contains(&vault_exec_help, "transparent developer-process wrapper");
+    assert_help_contains(&vault_exec_help, "--env-file <FILE>");
+    assert_help_contains(&vault_exec_help, "NAME=VALUE");
+    assert_help_contains(&vault_exec_help, "Single quotes preserve");
+    assert_help_contains(&vault_exec_help, "Within env-file values");
+    assert_help_contains(&vault_exec_help, "older vault run command");
+    assert_help_contains(&vault_exec_help, "Exec is transparent, not a sandbox");
+    assert_help_contains(&vault_exec_help, "must follow --");
+
+    let vault_import_help = rendered_help(&["vault", "import", "onepassword"]);
+    assert_help_contains(&vault_import_help, "op read --no-newline");
+    assert_help_contains(&vault_import_help, "op://VAULT/ITEM/FIELD");
+    assert_help_contains(&vault_import_help, "--item <ITEM>");
+    assert_help_contains(&vault_import_help, "--out-env <DESTINATION>");
+    assert_help_contains(&vault_import_help, "never invokes `op`");
+    assert_help_contains(&vault_import_help, "--replace --overwrite");
+    assert_help_contains(&vault_import_help, "does not synchronize with");
+    assert_help_contains(&vault_import_help, "currently Unix-only");
+
+    let vault_passphrase_help = rendered_help(&["vault", "passphrase", "change"]);
+    assert_help_contains(&vault_passphrase_help, "JIG_VAULT_PASSPHRASE");
+    assert_help_contains(&vault_passphrase_help, "JIG_VAULT_NEW_PASSPHRASE");
+    assert_help_contains(
+        &vault_passphrase_help,
+        "never accepted as command-line arguments",
+    );
+
+    let vault_backup_create_help = rendered_help(&["vault", "backup", "create"]);
+    assert_help_contains(&vault_backup_create_help, "--out <FILE>");
+    assert_help_contains(&vault_backup_create_help, "--overwrite");
+    assert_help_contains(&vault_backup_create_help, "vault's current");
+    assert_help_contains(
+        &vault_backup_create_help,
+        "passphrase and remains decryptable",
+    );
+    assert_help_contains(&vault_backup_create_help, "currently Unix-only");
+
+    let vault_backup_restore_help = rendered_help(&["vault", "backup", "restore"]);
+    assert_help_contains(&vault_backup_restore_help, "--in <FILE>");
+    assert_help_contains(&vault_backup_restore_help, "complete target");
+    assert_help_contains(&vault_backup_restore_help, "home must be absent");
+    assert_help_contains(&vault_backup_restore_help, "--in -");
+    assert_help_contains(&vault_backup_restore_help, "currently Linux-only");
+
+    let vault_field_list_help = rendered_help(&["vault", "field", "list"]);
+    assert_help_contains(&vault_field_list_help, "jig://ITEM");
 
     let vault_run_help = rendered_help(&["vault", "run"]);
     assert_help_contains(&vault_run_help, "--file");

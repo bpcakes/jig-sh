@@ -66,6 +66,23 @@ pub(crate) fn derive_wrap_key(
     salt: &[u8],
     params: &KdfParams,
 ) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    validate_kdf_params(params)?;
+    let argon_params = Params::new(
+        params.memory_kib,
+        params.iterations,
+        params.parallelism,
+        Some(KEY_LEN),
+    )
+    .map_err(|error| anyhow!("invalid Argon2id vault parameters: {error}"))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
+    let mut key = Zeroizing::new([0_u8; KEY_LEN]);
+    argon2
+        .hash_password_into(passphrase.expose_secret().as_bytes(), salt, key.as_mut())
+        .map_err(|error| anyhow!("failed to derive vault wrap key: {error}"))?;
+    Ok(key)
+}
+
+pub(crate) fn validate_kdf_params(params: &KdfParams) -> Result<()> {
     if params.algorithm != "argon2id" {
         return Err(anyhow!("unsupported vault KDF '{}'", params.algorithm));
     }
@@ -93,19 +110,14 @@ pub(crate) fn derive_wrap_key(
             params.parallelism
         ));
     }
-    let argon_params = Params::new(
+    Params::new(
         params.memory_kib,
         params.iterations,
         params.parallelism,
         Some(KEY_LEN),
     )
     .map_err(|error| anyhow!("invalid Argon2id vault parameters: {error}"))?;
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
-    let mut key = Zeroizing::new([0_u8; KEY_LEN]);
-    argon2
-        .hash_password_into(passphrase.expose_secret().as_bytes(), salt, key.as_mut())
-        .map_err(|error| anyhow!("failed to derive vault wrap key: {error}"))?;
-    Ok(key)
+    Ok(())
 }
 
 pub(crate) fn seal(

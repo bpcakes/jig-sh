@@ -1,0 +1,21 @@
+{
+  "header": {
+    "magic": "jig-vault",
+    "version": 1,
+    "vault_id": "01KZKY9QJT5ZCZBRJ490A3TFF6",
+    "created_at_ms": 1786301963866,
+    "kdf": {
+      "algorithm": "argon2id",
+      "memory_kib": 131072,
+      "iterations": 3,
+      "parallelism": 4,
+      "output_len": 32
+    },
+    "salt_b64": "NmxL0zVqr7bbGuTLOKkRAg==",
+    "aead": "xchacha20poly1305"
+  },
+  "wrapped_dek_nonce_b64": "5LmDluNQkawe/8ZSPoP9z9VFzUutB/F+",
+  "wrapped_dek_b64": "oGssoN5JvZgF/k5LBb5+CiVw8kpBHTAPBpoREV2wnSqJVSRvRW49dCcYQrU5Ra1M",
+  "state_nonce_b64": "AyXKTVNqYKJjKEZOvPy+mBfNg3AqCUI/",
+  "state_b64": "WRmD8m/TV1mPENtlNmWpTi4zlYwOc/AKLsiuzYQ5gMmKSbLUDsuRfDZMrQyH6WHLUzwzFFL0WSQiQaVXdqgbFH8004IFMVoZEcMwdWjsaq6heyYo6QOppyoPgvYt4aEP/BLnNL+HN3btfsPOx3m1YBNVeW2h04EmElZow0BeViYC8XB8DwsLcT1KE/RLBa7hX7Ym4X/PQbO6XWA/nfguqBbn52+yX/d4icA0zDFSTvawNiNQIEGGLLKeQMOJUsRaC+w="
+}

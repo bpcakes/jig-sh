@@ -46,9 +46,12 @@ pub(crate) use state::{
 };
 pub(crate) use status_opts::StatusOpts;
 pub(crate) use vault::{
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
-    VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
-    VaultSecretSetOpts, VaultStatusOpts,
+    VaultAuditCommand, VaultAuditVerifyOpts, VaultBackupCommand, VaultBackupCreateOpts,
+    VaultBackupRestoreOpts, VaultCommand, VaultExecOpts, VaultFieldCommand, VaultFieldListOpts,
+    VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand, VaultImportOnePasswordOpts,
+    VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultPassphraseChangeOpts,
+    VaultPassphraseCommand, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
+    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
 };
 pub(crate) use work::{
     WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
@@ -178,12 +181,28 @@ Examples:
   jig ui --json          # print the URL as JSON, then serve";
 
 const VAULT_AFTER_HELP: &str = "\
-Jig Vault stores local secrets outside the repository. Terminal use prompts for
-the vault passphrase; scripts can set JIG_VAULT_PASSPHRASE. Command-line
-passphrases are not accepted.
+Jig Vault stores encrypted project fields outside the repository. References
+are project-relative: jig://Production/TOKEN selects the current repo-scoped,
+global, or explicit-home vault; the project name is never a reference segment.
+Both concealed and text fields are encrypted. Concealed fields are redaction
+needles, while text fields remain visible when deliberately passed to a command.
+Terminal use prompts for the vault passphrase; scripts can set
+JIG_VAULT_PASSPHRASE. Command-line passphrases are not accepted.
 
 Quick start:
   jig vault init
+  jig vault migrate --to 2
+  jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
+  printf '%s' 'local' | jig vault field set jig://Production/MODE --text --value-stdin
+  jig vault read jig://Production/RESTIC_PASSWORD | command
+  jig vault inject --in config.template > config
+  jig vault exec --env-file .env.jig -- command
+  jig vault import onepassword --env-file .env.op --item Production --out-env .env.jig
+  jig vault passphrase change
+  jig vault backup create --out ./project-vault.backup
+  jig vault backup restore --in ./project-vault.backup --home ./restored-vault
+
+Compatibility commands (concealed fields and constrained execution):
   jig vault secret set api_token --value-prompt
   jig vault run --env TOKEN=api_token -- sh -c 'printf \"%s\" \"$TOKEN\"'
   jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat \"$TOKEN_FILE\"'";
@@ -450,3 +469,6 @@ mod preset_tests;
 mod status_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "cli/tests/vault_lifecycle.rs"]
+mod vault_lifecycle_tests;

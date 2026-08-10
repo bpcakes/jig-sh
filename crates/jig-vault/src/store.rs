@@ -3,13 +3,21 @@ use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result as AnyResult, anyhow, bail};
 use fs4::fs_std::FileExt;
+use zeroize::Zeroizing;
 
 use crate::crypto::KdfParams;
 use crate::{Result, VaultError, VaultErrorKind};
+
+mod existing;
 
 const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE: &str = "vault.json";
@@ -17,13 +25,15 @@ const LOCK_FILE: &str = "vault.lock";
 const AUDIT_FILE: &str = "audit.jsonl";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const VAULT_TEXT_READ_LIMIT: u64 = 16 * 1024 * 1024;
-const AUDIT_TEXT_READ_LIMIT: u64 = 256 * 1024 * 1024;
+pub(crate) const VAULT_TEXT_READ_LIMIT: u64 = 16 * 1024 * 1024;
+pub(crate) const AUDIT_TEXT_READ_LIMIT: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct VaultStore {
     root: PathBuf,
     initialization_kdf: KdfParams,
+    #[cfg(test)]
+    fail_next_vault_write: Arc<AtomicBool>,
 }
 
 impl VaultStore {
@@ -95,13 +105,37 @@ impl VaultStore {
         read_text_no_follow(&self.vault_path(), VAULT_TEXT_READ_LIMIT)
     }
 
+    pub(crate) fn read_vault_bytes(&self) -> AnyResult<Option<Zeroizing<Vec<u8>>>> {
+        read_bytes_no_follow(&self.vault_path(), VAULT_TEXT_READ_LIMIT, "vault state")
+    }
+
     #[cfg(test)]
     pub(crate) fn write_vault_text(&self, contents: &str) -> AnyResult<()> {
         self.with_lock(|| self.write_vault_text_unlocked(contents))
     }
 
     pub(crate) fn write_vault_text_unlocked(&self, contents: &str) -> AnyResult<()> {
+        self.validate_vault_text_len(contents)?;
+        #[cfg(test)]
+        if self.fail_next_vault_write.swap(false, Ordering::SeqCst) {
+            bail!("injected vault state write failure");
+        }
         write_atomic_text(&self.vault_path(), contents)
+    }
+
+    pub(crate) fn validate_vault_text_len(&self, contents: &str) -> AnyResult<()> {
+        if contents.len() > VAULT_TEXT_READ_LIMIT as usize {
+            bail!(
+                "vault state is {} bytes, exceeding the {VAULT_TEXT_READ_LIMIT} byte persistent vault limit",
+                contents.len()
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_vault_write_for_test(&self) {
+        self.fail_next_vault_write.store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn append_audit_line_unlocked(&self, line: &str) -> AnyResult<()> {
@@ -173,6 +207,18 @@ impl VaultStore {
 
     pub(crate) fn read_audit_text(&self) -> AnyResult<Option<String>> {
         read_text_no_follow(&self.audit_path(), AUDIT_TEXT_READ_LIMIT)
+    }
+
+    pub(crate) fn read_audit_bytes_bounded(
+        &self,
+        max_len: usize,
+    ) -> AnyResult<Option<Zeroizing<Vec<u8>>>> {
+        let max_len = u64::try_from(max_len).context("vault audit read limit overflow")?;
+        read_bytes_no_follow(&self.audit_path(), max_len, "vault audit log")
+    }
+
+    pub(crate) fn audit_len(&self) -> AnyResult<Option<u64>> {
+        regular_file_len_no_follow(&self.audit_path())
     }
 
     fn lock_path(&self) -> PathBuf {
@@ -261,6 +307,8 @@ fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResul
     Ok(VaultStore {
         root,
         initialization_kdf,
+        #[cfg(test)]
+        fail_next_vault_write: Arc::new(AtomicBool::new(false)),
     })
 }
 
@@ -315,6 +363,64 @@ fn read_text_no_follow(path: &Path, max_len: u64) -> AnyResult<Option<String>> {
     file.read_to_string(&mut text)
         .with_context(|| format!("failed to read {}", path.display()))?;
     Ok(Some(text))
+}
+
+fn read_bytes_no_follow(
+    path: &Path,
+    max_len: u64,
+    label: &str,
+) -> AnyResult<Option<Zeroizing<Vec<u8>>>> {
+    let mut file = match private_open_options().read(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to open {label} {}", path.display()));
+        }
+    };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to stat {label} {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("{label} is not a regular file: {}", path.display());
+    }
+    let len = metadata.len();
+    if len > max_len {
+        bail!(
+            "{label} is {len} bytes, exceeding the {max_len} byte read limit at {}",
+            path.display()
+        );
+    }
+    let capacity = usize::try_from(len).context("protected file length exceeds address space")?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
+    Read::by_ref(&mut file)
+        .take(max_len.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {label} {}", path.display()))?;
+    if bytes.len() as u64 > max_len {
+        bail!(
+            "{label} grew beyond the {max_len} byte read limit while reading {}",
+            path.display()
+        );
+    }
+    Ok(Some(bytes))
+}
+
+fn regular_file_len_no_follow(path: &Path) -> AnyResult<Option<u64>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "refusing to inspect symlinked protected file {}",
+                path.display()
+            )
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            bail!("protected path is not a regular file: {}", path.display())
+        }
+        Ok(metadata) => Ok(Some(metadata.len())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
 }
 
 fn write_atomic_text(path: &Path, contents: &str) -> AnyResult<()> {

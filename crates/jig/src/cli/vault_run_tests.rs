@@ -1,7 +1,8 @@
 use crate::command::{
-    VaultRepoScope, VaultRuntimeOptions, VaultScopeSelection, VaultStatusRequest,
+    VaultInjectRequest, VaultReadRequest, VaultRepoScope, VaultRuntimeOptions, VaultScopeSelection,
+    VaultStatusRequest,
 };
-use crate::test_env::{CurrentDirGuard, TestRepoBuilder, lock_env};
+use crate::test_env::{CurrentDirGuard, EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
@@ -169,4 +170,419 @@ fn vault_options_mut_reaches_nested_status_command() {
         }
         other => panic!("expected status command, got {other:?}"),
     }
+}
+
+fn read_request() -> crate::command::VaultCommand {
+    crate::command::VaultCommand::Read(VaultReadRequest {
+        reference: "jig://Production/PASSWORD".parse().unwrap(),
+        reveal: false,
+        out_file: None,
+        overwrite: false,
+        vault: VaultRuntimeOptions::default(),
+    })
+}
+
+fn inject_request(input: impl Into<std::path::PathBuf>) -> crate::command::VaultCommand {
+    crate::command::VaultCommand::Inject(VaultInjectRequest {
+        input: input.into(),
+        template: None,
+        reveal: false,
+        out_file: None,
+        overwrite: false,
+        vault: VaultRuntimeOptions::default(),
+    })
+}
+
+#[test]
+fn raw_vault_commands_reject_json_before_runtime_dispatch() {
+    for command in [read_request(), inject_request("template")] {
+        let error = validate_raw_vault_command(&command, true, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("--json is not supported"));
+        assert!(!error.contains("PASSWORD"));
+    }
+}
+
+#[test]
+fn json_and_terminal_refusals_precede_passphrase_capture_and_vault_access() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for (json_output, stdout_is_terminal) in [(true, false), (false, true)] {
+        let vault_home = temp.path().join(format!(
+            "absent-vault-{}-{}",
+            u8::from(json_output),
+            u8::from(stdout_is_terminal)
+        ));
+        let command = VaultCommand::Read(super::super::vault::VaultReadOpts {
+            reference: "jig://Production/PASSWORD".parse().unwrap(),
+            reveal: false,
+            out_file: None,
+            overwrite: false,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        });
+
+        let error =
+            run_vault_command_with_stdout_terminal(command, json_output, stdout_is_terminal)
+                .unwrap_err()
+                .to_string();
+        if json_output {
+            assert!(error.contains("--json is not supported"));
+        } else {
+            assert!(error.contains("without --reveal"));
+        }
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+    }
+}
+
+#[test]
+fn exec_json_refusal_precedes_env_file_and_passphrase_access() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault");
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+    let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+        env_file: temp.path().join("missing.env"),
+        vault: super::super::vault::VaultRuntimeOpts {
+            home: Some(vault_home.clone()),
+            global: false,
+        },
+        command: vec![std::ffi::OsString::from("command")],
+    });
+
+    let error = run_vault_command_with_stdout_terminal(command, true, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("--json is not supported by vault exec"));
+    assert_eq!(
+        std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+        Ok(passphrase)
+    );
+    assert!(!vault_home.exists());
+}
+
+#[test]
+fn raw_vault_commands_require_explicit_terminal_reveal() {
+    for mut command in [read_request(), inject_request("template")] {
+        let error = validate_raw_vault_command(&command, false, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("without --reveal"));
+
+        match &mut command {
+            crate::command::VaultCommand::Read(request) => request.reveal = true,
+            crate::command::VaultCommand::Inject(request) => request.reveal = true,
+            other => panic!("expected raw command, got {other:?}"),
+        }
+        validate_raw_vault_command(&command, false, true).unwrap();
+    }
+}
+
+#[test]
+fn output_file_avoids_terminal_reveal_and_requires_overwrite_for_same_input() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("template");
+    std::fs::write(&input, b"template").unwrap();
+
+    let mut read = read_request();
+    let crate::command::VaultCommand::Read(read) = &mut read else {
+        unreachable!();
+    };
+    read.out_file = Some(temp.path().join("read-output"));
+    validate_raw_vault_command(
+        &crate::command::VaultCommand::Read(VaultReadRequest {
+            reference: read.reference.clone(),
+            reveal: read.reveal,
+            out_file: read.out_file.clone(),
+            overwrite: read.overwrite,
+            vault: read.vault.clone(),
+        }),
+        false,
+        true,
+    )
+    .unwrap();
+
+    let mut inject = inject_request(&input);
+    let crate::command::VaultCommand::Inject(request) = &mut inject else {
+        unreachable!();
+    };
+    request.out_file = Some(input);
+    let error = validate_raw_vault_command(&inject, false, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("same file"));
+    let crate::command::VaultCommand::Inject(request) = &mut inject else {
+        unreachable!();
+    };
+    request.overwrite = true;
+    validate_raw_vault_command(&inject, false, false).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn inject_same_file_check_detects_relative_aliases_and_hard_links() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("template"), b"template").unwrap();
+    std::fs::hard_link(
+        temp.path().join("template"),
+        temp.path().join("template-link"),
+    )
+    .unwrap();
+    let _cwd = CurrentDirGuard::set(temp.path());
+
+    assert!(
+        input_and_output_are_same_file(
+            std::path::Path::new("template"),
+            std::path::Path::new("./template")
+        )
+        .unwrap()
+    );
+    assert!(
+        input_and_output_are_same_file(
+            std::path::Path::new("template"),
+            std::path::Path::new("template-link")
+        )
+        .unwrap()
+    );
+    assert!(
+        !input_and_output_are_same_file(std::path::Path::new("-"), std::path::Path::new("-"))
+            .unwrap()
+    );
+}
+
+#[test]
+fn invalid_injection_input_fails_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let output = temp.path().join("rendered-output");
+    let missing = temp.path().join("missing-template");
+    let malformed = temp.path().join("malformed-template");
+    let oversized = temp.path().join("oversized-template");
+    std::fs::write(&malformed, b"{{ jig://Production }}").unwrap();
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(u64::try_from(jig_vault::MAX_TEMPLATE_INPUT_LEN + 1).unwrap())
+        .unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for input in [missing, malformed, oversized] {
+        let command = VaultCommand::Inject(super::super::vault::VaultInjectOpts {
+            input,
+            reveal: false,
+            out_file: Some(output.clone()),
+            overwrite: false,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        });
+
+        let error = run_vault_command(command, false).unwrap_err().to_string();
+        assert!(!error.contains(passphrase));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+        assert!(!output.exists());
+    }
+}
+
+#[test]
+fn invalid_exec_env_fails_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let invalid = temp.path().join("invalid.env");
+    std::fs::write(&invalid, b"TOKEN=$AMBIENT_VALUE\n").unwrap();
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for env_file in [invalid, std::path::PathBuf::from("-")] {
+        let command = VaultCommand::Exec(super::super::vault::VaultExecOpts {
+            env_file,
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+            command: vec![std::ffi::OsString::from("command")],
+        });
+
+        let error = run_vault_command_with_stdout_terminal(command, false, false)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("AMBIENT_VALUE"));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+    }
+}
+
+#[test]
+fn invalid_import_input_and_destination_fail_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let malformed = temp.path().join("malformed.env");
+    let empty = temp.path().join("empty.env");
+    let valid = temp.path().join("valid.env");
+    std::fs::write(&malformed, b"TOKEN=OP://value-do-not-print/item/field\n").unwrap();
+    std::fs::write(&empty, b"# no assignments\n").unwrap();
+    std::fs::write(&valid, b"TOKEN=op://Vault/Item/Field\n").unwrap();
+    let missing_parent_destination = temp.path().join("missing-parent/out.env");
+    let passphrase = "correct horse battery staple";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    for (env_file, out_env) in [
+        (malformed, temp.path().join("malformed.out")),
+        (empty, temp.path().join("empty.out")),
+        (std::path::PathBuf::from("-"), temp.path().join("stdin.out")),
+        (valid, missing_parent_destination),
+    ] {
+        let command = VaultCommand::Import(super::super::vault::VaultImportCommand::OnePassword(
+            super::super::vault::VaultImportOnePasswordOpts {
+                env_file,
+                item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+                out_env,
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        ));
+
+        let error = run_vault_command(command, false).unwrap_err().to_string();
+        assert!(!error.contains("value-do-not-print"));
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(passphrase)
+        );
+        assert!(!vault_home.exists());
+    }
+}
+
+#[test]
+fn invalid_lifecycle_paths_fail_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let backup_output = temp.path().join("must-not-be-created.backup");
+    let malformed_backup = temp.path().join("malformed.backup");
+    std::fs::write(&malformed_backup, b"not-a-vault-backup").unwrap();
+    let current = "correct horse battery staple";
+    let new = "new correct horse battery staple";
+    let _current = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", current);
+    let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", new);
+
+    let commands = [
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
+            super::super::vault::VaultBackupCreateOpts {
+                out: std::path::PathBuf::from("-"),
+                overwrite: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
+            super::super::vault::VaultBackupCreateOpts {
+                out: backup_output.clone(),
+                overwrite: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
+            super::super::vault::VaultBackupRestoreOpts {
+                input: std::path::PathBuf::from("-"),
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
+            super::super::vault::VaultBackupRestoreOpts {
+                input: malformed_backup,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Passphrase(super::super::vault::VaultPassphraseCommand::Change(
+            super::super::vault::VaultPassphraseChangeOpts {
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+    ];
+
+    for command in commands {
+        assert!(run_vault_command(command, false).is_err());
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(current)
+        );
+        assert_eq!(
+            std::env::var("JIG_VAULT_NEW_PASSPHRASE").as_deref(),
+            Ok(new)
+        );
+        assert!(!vault_home.exists());
+        assert!(!backup_output.exists());
+    }
+}
+
+#[test]
+fn passphrase_free_vault_invocations_strip_both_reserved_environment_values() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-status-vault");
+    let _current = EnvVarGuard::set(
+        "JIG_VAULT_PASSPHRASE",
+        "test-only-current-passphrase-must-be-stripped",
+    );
+    let _new = EnvVarGuard::set(
+        "JIG_VAULT_NEW_PASSPHRASE",
+        "test-only-new-passphrase-must-be-stripped",
+    );
+
+    run_vault_command(
+        VaultCommand::Status(super::super::vault::VaultStatusOpts {
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        }),
+        false,
+    )
+    .unwrap();
+
+    assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+    assert!(std::env::var_os("JIG_VAULT_NEW_PASSPHRASE").is_none());
+    assert!(!vault_home.exists());
 }

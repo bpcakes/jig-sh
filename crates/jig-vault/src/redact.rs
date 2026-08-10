@@ -166,6 +166,53 @@ impl Redactor {
         }
     }
 
+    pub(crate) fn append_streaming_patterns(
+        &self,
+        patterns: &mut Vec<zeroize::Zeroizing<Vec<u8>>>,
+        total_bytes: &mut usize,
+        max_patterns: usize,
+        max_total_bytes: usize,
+        max_pattern_len: usize,
+    ) -> crate::Result<()> {
+        for value in self
+            .raw_needles
+            .iter()
+            .map(|needle| needle.value.as_slice())
+            .chain(
+                self.text_needles
+                    .iter()
+                    .map(|needle| needle.value.as_bytes()),
+            )
+        {
+            if value.len() > max_pattern_len {
+                return Err(crate::VaultError::new(
+                    crate::VaultErrorKind::InvalidInput,
+                    "concealed field generates an output-redaction pattern above the supported length limit",
+                ));
+            }
+            *total_bytes = total_bytes.checked_add(value.len()).ok_or_else(|| {
+                crate::VaultError::new(
+                    crate::VaultErrorKind::InvalidInput,
+                    "concealed fields generate too much output-redaction pattern data",
+                )
+            })?;
+            if *total_bytes > max_total_bytes {
+                return Err(crate::VaultError::new(
+                    crate::VaultErrorKind::InvalidInput,
+                    "concealed fields generate too much output-redaction pattern data",
+                ));
+            }
+            if patterns.len() >= max_patterns {
+                return Err(crate::VaultError::new(
+                    crate::VaultErrorKind::InvalidInput,
+                    "concealed fields generate too many output-redaction patterns",
+                ));
+            }
+            patterns.push(zeroize::Zeroizing::new(value.to_vec()));
+        }
+        Ok(())
+    }
+
     pub fn redact_str(&self, input: &str) -> String {
         // The v1 broker applies redaction once to capped 1 MiB streams. This
         // straightforward scan-per-needle approach is intentionally bounded by

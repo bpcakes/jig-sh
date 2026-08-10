@@ -195,27 +195,50 @@ Those constraints keep the normal path smooth while making machine-wide or netwo
 
 ## Vault
 
-The vault handles a narrow but common developer problem: a local command needs a secret, but the repo should not store it and command receipts should not capture it.
+The vault handles a common developer problem: a project needs a complete local environment bundle, but the repository and command receipts should contain references rather than protected values.
 
-The basic flow is:
+References are project-relative. `jig://Production/RESTIC_PASSWORD` selects the `Production` item in whichever vault the current repository, `--global`, or `--home` chooses. There is no repository-name segment and no cross-project reference syntax. A project moves its encrypted state with backup and restore, not by adding a project qualifier to references.
+
+A field is either concealed or text. Both are encrypted at rest. Concealed is the default for credentials and participates in streamed output redaction; `--text` is for contextual values such as modes, URLs, and identifiers that should remain visible in ordinary output.
+
+One everyday flow is:
 
 ```sh
 scripts/jig vault init
-scripts/jig vault secret set api_token --value-prompt
-scripts/jig vault run --env TOKEN=api_token -- sh -c 'printf "%s\n" "$TOKEN"'
-scripts/jig vault run --file TOKEN_FILE=api_token -- sh -c 'cat "$TOKEN_FILE"'
+scripts/jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
+printf '%s' 'local' | scripts/jig vault field set jig://Production/MODE --text --value-stdin
+printf '%s\n' \
+  'RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD' \
+  'MODE=jig://Production/MODE' > .env.jig
+scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Vault state is machine-local, encrypted, and stored outside `.agent/state`. Secret listing returns names and metadata, never values. `vault run` resolves requested secrets into a cleaned child-process environment or private temporary files, captures stdout and stderr, redacts known secret forms, returns JSON, and mirrors the child exit status.
+`vault exec` invokes the command directly, inherits stdin and the ordinary environment, streams stdout and stderr without a Jig timeout or output cap, redacts concealed values, and preserves the child status. It is the developer-facing analogue of `op run --env-file`. The older `vault run` remains intentionally different: it uses an allowlisted environment, closes stdin, caps and buffers output, applies a timeout, and owns child-tree cleanup. That constrained behavior remains useful for agent-controlled execution, and `vault secret` remains the compatible concealed-field vocabulary.
+
+`vault read` is the exact-byte analogue of `op read`; terminal stdout requires `--reveal`, while pipelines are accepted and private file output requires an explicit overwrite opt-in. `vault inject` replaces only `{{ jig://ITEM/FIELD }}` placeholders under the same output rules. Raw reveal commands reject `--json` so values cannot enter structured results.
+
+For a one-time 1Password cutover, `vault import onepassword` parses the restricted dotenv grammar, resolves whole `op://...` values with direct `op read --no-newline` calls, stores them as concealed, stores literals as encrypted text, and writes a reference-only dotenv file. `--dry-run` invokes no `op` process and makes no mutation. A post-commit destination-install failure says that the vault import succeeded; rerun the emitted command with `--replace --overwrite` to converge. The importer does not provide ongoing synchronization.
+
+For example, importing an IdentityPro-shaped source into item `Production` produces project-local assignments like these; IdentityPro is source context, not another Jig reference segment:
+
+```dotenv
+RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD
+RESTIC_REPOSITORY=jig://Production/RESTIC_REPOSITORY
+RESTIC_COMPRESSION=jig://Production/RESTIC_COMPRESSION
+```
+
+This documents a later operational cutover; Jig does not inspect or modify an existing IdentityPro checkout automatically.
+
+Passphrase rotation reseals a version 2 vault without changing its fields or identity. Encrypted backup captures the vault and audit log; restore only installs into an entirely absent vault home. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
 
 The friendliness here is in the workflow shape: developers get an auditable secret handoff without adding new project-specific secret scripts. The important limits are also clear:
 
 - Vault reduces accidental exposure; it is not a sandbox.
 - Once a child process receives a secret, that child can use or disclose it.
-- Output is buffered so redaction can happen before display.
+- Redaction is a backup control; transformed values and side channels are outside its guarantee.
 - Non-interactive unlocks use `JIG_VAULT_PASSPHRASE`; command-line passphrases are intentionally unsupported.
-- Audit metadata, including secret names and run IDs, is plaintext local operational metadata.
+- Audit metadata, including field names and run IDs, is plaintext local operational metadata. The local HMAC chain detects edits and broken links, but deletion, rollback, or compromise by someone with the vault and passphrase requires an external checkpoint or backup to detect.
 
 ## Agent And MCP Friendliness
 

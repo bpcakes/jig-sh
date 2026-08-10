@@ -17,8 +17,16 @@ mod prompt;
 mod sqlx;
 mod tool_execution;
 mod vault;
+mod vault_env;
+mod vault_import;
 mod work;
 mod worker_runner;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum VaultRawOutcome {
+    Complete,
+    ChildExit(i32),
+}
 
 pub(crate) type CodexSupportProbeResult = std::result::Result<bool, String>;
 
@@ -130,6 +138,20 @@ pub(crate) fn dispatch_vault(command: crate::command::VaultCommand) -> Result<Va
     vault::dispatch(command)
 }
 
+pub(crate) fn dispatch_vault_raw(command: crate::command::VaultCommand) -> Result<VaultRawOutcome> {
+    vault::dispatch_raw(command)
+}
+
+pub(crate) fn prepare_vault_raw_input(command: &mut crate::command::VaultCommand) -> Result<()> {
+    vault::prepare_raw_input(command)
+}
+
+pub(crate) fn preflight_scoped_vault_command(
+    command: &mut crate::command::VaultCommand,
+) -> Result<()> {
+    vault::preflight_scoped_command(command)
+}
+
 pub(crate) fn dispatch_prompt(
     ctx: Option<&RepoContext>,
     command: crate::command::PromptCommand,
@@ -147,6 +169,16 @@ pub(crate) fn capture_new_vault_passphrase() -> Result<()> {
     // SAFETY: Callers must invoke this before starting background threads in the
     // process; `runtime::vault` clears the captured environment variable.
     vault::capture_new_passphrase()
+}
+
+pub(crate) fn capture_vault_passphrase_change() -> Result<()> {
+    // SAFETY: Callers must invoke this before starting background threads in the
+    // process; `runtime::vault` clears both captured environment variables.
+    vault::capture_passphrase_change()
+}
+
+pub(crate) fn strip_vault_passphrase_environment() {
+    vault::strip_passphrase_environment();
 }
 
 pub(crate) fn vault_passphrase_prompt_available() -> bool {

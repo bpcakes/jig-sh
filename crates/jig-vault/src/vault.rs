@@ -1,4 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    ffi::OsString,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result as AnyResult;
 use base64::Engine;
@@ -9,25 +14,42 @@ use zeroize::Zeroizing;
 
 use crate::audit::{AuditAction, AuditEvent, AuditVerification, verify_chain_unlocked};
 use crate::broker::BrokeredRun;
-use crate::crypto::{
-    KEY_LEN, NONCE_LEN, SALT_LEN, decode_array, derive_audit_key, derive_wrap_key, open,
-    random_array, seal,
-};
+use crate::crypto::KEY_LEN;
+#[cfg(test)]
+use crate::crypto::{NONCE_LEN, SALT_LEN, derive_wrap_key, open};
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
-use crate::format::{
-    AEAD_ALGORITHM, AeadRole, FORMAT_VERSION, MAGIC, SecretEntry, VaultFile, VaultHeader,
-    VaultState, decode_b64_array, payload_aad, validate_header,
+use crate::exec::{
+    ExecEnvValue, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN, VaultExec,
+    redactor_from_concealed_values,
 };
+use crate::exec_output::StreamingRedactor;
+use crate::exec_process::{
+    ResolvedExecEnv as ProcessExecEnv, ResolvedExecProcess, run_exec_process,
+};
+#[cfg(test)]
+use crate::format::{AeadRole, decode_b64_array, payload_aad};
+use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
+use crate::output::{OutputInstallFailure, install_private_bytes};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::RunOutput;
 use crate::store::VaultStore;
-use crate::types::SecretName;
+use crate::template::InjectionTemplate;
+use crate::types::{EnvVarName, FieldKind, SecretName, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
+
+mod envelope;
+mod lifecycle;
+use envelope::{
+    MigratedVaultEnvelope, NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope,
+    UnlockedVaultEnvelope,
+};
 
 pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
+const MAX_IMPORT_FIELDS: usize = 1_024;
+const MAX_IMPORT_VALUE_BYTES: usize = 16 * 1024 * 1024;
 
 mod brokered;
 
@@ -144,6 +166,228 @@ impl Vault {
         self.store.list(passphrase)
     }
 
+    /// Explicitly upgrades a version 1 vault envelope to the current format.
+    ///
+    /// Version 1 vaults remain readable for compatibility, but field-oriented
+    /// mutations require this deliberate one-way upgrade so older binaries do
+    /// not silently discard field kinds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target is unsupported, the vault cannot be
+    /// opened and audit-verified, or the audit/state transition cannot be
+    /// written atomically.
+    pub fn migrate(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> Result<VaultMigration> {
+        self.store.migrate(passphrase, target_version)
+    }
+
+    /// Lists canonical field metadata without returning encrypted values.
+    ///
+    /// Legacy secret names that cannot be represented as `jig://ITEM/FIELD`
+    /// remain available through [`Vault::list`] and are intentionally omitted
+    /// from this field-oriented view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault cannot be opened safely.
+    pub fn list_fields(&self, passphrase: &SecretString) -> Result<Vec<FieldRecord>> {
+        self.store.list_fields(passphrase)
+    }
+
+    /// Creates or updates one canonical encrypted field.
+    ///
+    /// Fields can be set only after an explicit v1-to-v2 migration. Text
+    /// fields remain encrypted and may be empty; concealed fields retain the
+    /// existing minimum length required for reliable redaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when the field is invalid, the vault
+    /// needs migration, audit verification fails, or persistence fails.
+    pub fn set_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .apply_field_batch(passphrase, vec![FieldMutation::set(reference, kind, value)])
+    }
+
+    /// Removes one canonical field when it exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when the vault needs migration or
+    /// cannot be opened, audit-verified, and saved safely.
+    pub fn remove_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .apply_field_batch(passphrase, vec![FieldMutation::remove(reference)])
+    }
+
+    /// Applies validated field changes as one audited vault-state transition.
+    ///
+    /// Set mutations create or replace fields. Duplicate references within a
+    /// batch are rejected before any audit append or state save.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before mutation when validation, migration, unlock,
+    /// or audit verification fails. A state-save failure can leave the audit
+    /// intent ahead of state, matching the vault's existing mutation invariant.
+    pub fn apply_field_batch(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+    ) -> Result<FieldBatchResult> {
+        self.store.apply_field_batch(passphrase, mutations)
+    }
+
+    /// Reports which proposed import references already exist in a writable
+    /// version-two vault, without appending audit state or mutating fields.
+    ///
+    /// Returned booleans preserve the input order. The vault and its audit
+    /// chain are verified together under one lock so dry-run collision reports
+    /// are based on one consistent snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, duplicate, or oversized reference set,
+    /// a version-one vault, failed unlock, or invalid audit chain.
+    pub fn preview_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<Vec<bool>> {
+        self.store.preview_import_fields(passphrase, references)
+    }
+
+    /// Atomically imports one batch of canonical encrypted fields.
+    ///
+    /// Imports accept only set mutations. With `replace == false`, any field
+    /// collision aborts the whole batch. Collision checks, audit verification,
+    /// the single `onepassword_import` intent, and state preparation all occur
+    /// under one vault lock; the exact serialized envelope is bounded before
+    /// that intent is appended and atomically saved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without mutation for invalid input, a version-one
+    /// vault, an existing field without replacement permission, audit failure,
+    /// or an oversized final state. A save failure may leave the import intent
+    /// ahead of state, matching the vault's mutation invariant.
+    pub fn import_fields(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.store.import_fields(passphrase, mutations, replace)
+    }
+
+    /// Writes one canonical field to a caller-selected stream as exact bytes.
+    ///
+    /// Start and resolution happen under the vault lock. The lock is released
+    /// before writing and flushing, then a matching finish or failure event is
+    /// recorded before this method returns. No newline is appended. Version 1
+    /// canonical `ITEM/FIELD` entries remain readable as concealed fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without revealing bytes when preparation fails. A
+    /// writer error can occur after a partial external write; its text is
+    /// sanitized and a terminal failure event is recorded when possible.
+    pub fn read_field_to<W: Write>(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        writer: &mut W,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_field_read(passphrase, reference)?
+            .write_to(writer)
+    }
+
+    /// Atomically writes one canonical field to a hardened private file.
+    ///
+    /// Preparation happens under the vault lock, file I/O happens after lock
+    /// release, and a matching finish or failure event is recorded before this
+    /// method returns. Unix provides owner-only, fsynced, symlink-refusing,
+    /// atomic no-clobber or regular-file replacement semantics. Other
+    /// platforms reject this sink until equivalent guarantees exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns a preparation, preflight, I/O, already-exists, or audit error
+    /// without including field bytes in its message.
+    pub fn read_field_to_file(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        path: &Path,
+        overwrite: bool,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_field_read(passphrase, reference)?
+            .write_to_file(path, overwrite)
+    }
+
+    /// Resolves, renders, and writes a validated template as exact bytes.
+    ///
+    /// Call [`InjectionTemplate::parse`] before passphrase capture when CLI
+    /// ordering matters. Start, complete reference resolution, and bounded
+    /// rendering happen under the vault lock. The lock is released before
+    /// writing and flushing, then a terminal event is recorded before return.
+    /// No newline is appended.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without output when preparation fails. A writer error
+    /// can occur after a partial external write; its text is sanitized and a
+    /// terminal failure event is recorded when possible.
+    pub fn inject_template_to<W: Write>(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+        writer: &mut W,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_template_injection(passphrase, template)?
+            .write_to(writer)
+    }
+
+    /// Resolves, renders, and atomically writes a validated template to a
+    /// hardened private file.
+    ///
+    /// Preparation and rendering happen under the vault lock, file I/O happens
+    /// after lock release, and a terminal event is recorded before return.
+    /// File hardening matches [`Vault::read_field_to_file`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a preparation, preflight, I/O, already-exists, or audit error
+    /// without including rendered bytes in its message.
+    pub fn inject_template_to_file(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+        path: &Path,
+        overwrite: bool,
+    ) -> Result<RevealResult> {
+        self.store
+            .prepare_template_injection(passphrase, template)?
+            .write_to_file(path, overwrite)
+    }
+
     /// Verifies the vault's tamper-evident audit chain.
     ///
     /// # Errors
@@ -168,6 +412,25 @@ impl Vault {
     ) -> Result<RunOutput> {
         self.store.run_brokered(passphrase, request)
     }
+
+    /// Runs an ordinary command with vault-aware environment assignments and
+    /// streaming concealed-value redaction.
+    ///
+    /// This transparent execution inherits stdin and the ordinary environment,
+    /// has no Jig timeout or output cap, and does not own a separate process
+    /// tree. Nonzero and signal exits are returned as successful outcomes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when preparation, child supervision, output streaming,
+    /// or lifecycle audit recording fails.
+    pub fn exec(
+        &self,
+        passphrase: &SecretString,
+        request: VaultExec,
+    ) -> Result<crate::ExecOutcome> {
+        self.store.exec(passphrase, request)
+    }
 }
 
 #[non_exhaustive]
@@ -179,11 +442,376 @@ pub struct SecretRecord {
     pub value_len: usize,
 }
 
+/// Metadata for one canonical vault field, without its encrypted value.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FieldRecord {
+    pub reference: VaultReference,
+    pub kind: FieldKind,
+    pub created_at_ms: i128,
+    pub updated_at_ms: i128,
+    pub value_len: usize,
+}
+
+/// Metadata-only result of a completed controlled reveal operation.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RevealResult {
+    pub bytes_written: usize,
+}
+
+/// One atomic field change.
+///
+/// `SecretBytes` owns and zeroizes the supplied value when this mutation is
+/// consumed or dropped. Its `Debug` implementation intentionally hides bytes.
+#[derive(Debug)]
+pub enum FieldMutation {
+    Set {
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+    },
+    Remove {
+        reference: VaultReference,
+    },
+}
+
+impl FieldMutation {
+    /// Creates a field set mutation.
+    pub fn set(reference: VaultReference, kind: FieldKind, value: SecretBytes) -> Self {
+        Self::Set {
+            reference,
+            kind,
+            value,
+        }
+    }
+
+    /// Creates a field removal mutation.
+    pub fn remove(reference: VaultReference) -> Self {
+        Self::Remove { reference }
+    }
+
+    fn reference(&self) -> &VaultReference {
+        match self {
+            Self::Set { reference, .. } | Self::Remove { reference } => reference,
+        }
+    }
+}
+
+/// Metadata-only outcome of an atomic field change.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FieldBatchResult {
+    /// References created or updated by set mutations.
+    pub changed: Vec<VaultReference>,
+    /// References that existed and were removed by remove mutations.
+    pub removed: Vec<VaultReference>,
+}
+
+/// Outcome of an explicit vault envelope migration.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultMigration {
+    pub from_version: u32,
+    pub to_version: u32,
+    pub changed: bool,
+}
+
 pub(crate) struct OpenVault {
     file: VaultFile,
     state: VaultState,
     dek: Zeroizing<[u8; KEY_LEN]>,
     audit_key: Zeroizing<[u8; KEY_LEN]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RevealOperation {
+    FieldRead,
+    TemplateInject,
+}
+
+impl RevealOperation {
+    const fn start_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadStart,
+            Self::TemplateInject => AuditAction::TemplateInjectStart,
+        }
+    }
+
+    const fn finish_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadFinish,
+            Self::TemplateInject => AuditAction::TemplateInjectFinish,
+        }
+    }
+
+    const fn failed_action(self) -> AuditAction {
+        match self {
+            Self::FieldRead => AuditAction::FieldReadFailed,
+            Self::TemplateInject => AuditAction::TemplateInjectFailed,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::FieldRead => "field read",
+            Self::TemplateInject => "template injection",
+        }
+    }
+}
+
+struct RevealLifecycle {
+    store: VaultStore,
+    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    operation_id: String,
+    operation: RevealOperation,
+}
+
+impl RevealLifecycle {
+    fn record_finish(&self, sink: &str, bytes_written: usize) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            self.operation.finish_action(),
+            serde_json::json!({
+                "operation_id": self.operation_id,
+                "sink": sink,
+                "bytes_written": bytes_written,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn record_failure(&self, stage: &str) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            self.operation.failed_action(),
+            reveal_failure_details(&self.operation_id, stage),
+        )?;
+        Ok(())
+    }
+
+    fn output_error(&self, stage: &str, kind: VaultErrorKind, error: anyhow::Error) -> VaultError {
+        match self.record_failure(stage) {
+            Ok(()) => VaultError::from_anyhow(kind, error),
+            Err(audit_error) => VaultError::from_anyhow(
+                kind,
+                error.context(format!(
+                    "{} output failed; additionally failed to append terminal audit event: {audit_error}",
+                    self.operation.label()
+                )),
+            ),
+        }
+    }
+
+    fn finish_error(&self, error: anyhow::Error) -> VaultError {
+        match self.record_failure("audit_finish") {
+            Ok(()) => VaultError::from_anyhow(
+                VaultErrorKind::AuditTampered,
+                error.context(format!(
+                    "{} output completed, but its finish audit event failed",
+                    self.operation.label()
+                )),
+            ),
+            Err(failure_error) => VaultError::from_anyhow(
+                VaultErrorKind::AuditTampered,
+                error.context(format!(
+                    "{} output completed, but both finish and failure audit events failed: {failure_error}",
+                    self.operation.label()
+                )),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Debug for RevealLifecycle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RevealLifecycle")
+            .field("operation_id", &self.operation_id)
+            .field("operation", &self.operation)
+            .field("audit_key", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
+}
+
+struct PreparedReveal {
+    lifecycle: RevealLifecycle,
+    value: SecretBytes,
+}
+
+impl PreparedReveal {
+    fn write_to<W: Write>(self, writer: &mut W) -> Result<RevealResult> {
+        let Self { lifecycle, value } = self;
+        let bytes_written = value.len();
+        if let Err(error) = writer
+            .write_all(value.as_slice())
+            .and_then(|()| writer.flush())
+        {
+            let error_kind = error.kind();
+            return Err(lifecycle.output_error(
+                "sink",
+                VaultErrorKind::Io,
+                anyhow::anyhow!(
+                    "failed to write {} bytes to the selected output stream ({error_kind:?})",
+                    lifecycle.operation.label()
+                ),
+            ));
+        }
+        lifecycle
+            .record_finish("stream", bytes_written)
+            .map_err(|error| lifecycle.finish_error(error))?;
+        Ok(RevealResult { bytes_written })
+    }
+
+    fn write_to_file(self, path: &Path, overwrite: bool) -> Result<RevealResult> {
+        let Self { lifecycle, value } = self;
+        let bytes_written = value.len();
+        if let Err(OutputInstallFailure { stage, kind, error }) =
+            install_private_bytes(path, value.as_slice(), overwrite)
+        {
+            return Err(lifecycle.output_error(stage.as_str(), kind, error));
+        }
+        lifecycle
+            .record_finish("file", bytes_written)
+            .map_err(|error| lifecycle.finish_error(error))?;
+        Ok(RevealResult { bytes_written })
+    }
+}
+
+impl std::fmt::Debug for PreparedReveal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedReveal")
+            .field("lifecycle", &self.lifecycle)
+            .field("value_len", &self.value.len())
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+struct PreparedExec {
+    store: VaultStore,
+    audit_key: Zeroizing<[u8; KEY_LEN]>,
+    operation_id: String,
+    command: Vec<OsString>,
+    env: Vec<ResolvedExecEnv>,
+    redactor: StreamingRedactor,
+}
+
+struct ResolvedExecEnv {
+    var: EnvVarName,
+    value: Zeroizing<String>,
+    field_kind: Option<FieldKind>,
+}
+
+impl PreparedExec {
+    #[cfg(test)]
+    fn record_finish(&self, exit_status: i32, exit_signal: Option<i32>) -> AnyResult<()> {
+        AuditEvent::append(
+            &self.store,
+            self.audit_key.as_ref(),
+            AuditAction::ExecFinish,
+            serde_json::json!({
+                "operation_id": self.operation_id,
+                "exit_status": exit_status,
+                "exit_signal": exit_signal,
+            }),
+        )?;
+        Ok(())
+    }
+
+    fn execute(self) -> Result<crate::ExecOutcome> {
+        let Self {
+            store,
+            audit_key,
+            operation_id,
+            command,
+            env,
+            redactor,
+        } = self;
+        let env = env
+            .into_iter()
+            .map(|entry| ProcessExecEnv::new(entry.var, entry.value))
+            .collect();
+        let request = ResolvedExecProcess::new(command, env, redactor);
+        match run_exec_process(request) {
+            Ok(outcome) => {
+                if let Err(error) =
+                    record_exec_finish(&store, audit_key.as_ref(), &operation_id, &outcome)
+                {
+                    let finish_error = anyhow::anyhow!(
+                        "vault exec child completed, but its finish audit event failed"
+                    )
+                    .context(error);
+                    return match record_exec_failure(
+                        &store,
+                        audit_key.as_ref(),
+                        &operation_id,
+                        "audit_finish",
+                    ) {
+                        Ok(()) => Err(VaultError::from_anyhow(
+                            VaultErrorKind::AuditTampered,
+                            finish_error,
+                        )),
+                        Err(failure_error) => Err(VaultError::from_anyhow(
+                            VaultErrorKind::AuditTampered,
+                            finish_error.context(format!(
+                                "additionally failed to append vault exec failure event: {failure_error}"
+                            )),
+                        )),
+                    };
+                }
+                Ok(outcome)
+            }
+            Err(failure) => {
+                let stage = failure.stage();
+                let process_error = failure.into_error();
+                if let Err(audit_error) =
+                    record_exec_failure(&store, audit_key.as_ref(), &operation_id, stage)
+                {
+                    return Err(VaultError::from_anyhow(
+                        VaultErrorKind::Process,
+                        process_error.context(format!(
+                            "additionally failed to append vault exec failure event: {audit_error}"
+                        )),
+                    ));
+                }
+                Err(VaultError::from_anyhow(
+                    VaultErrorKind::Process,
+                    process_error,
+                ))
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for PreparedExec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedExec")
+            .field("operation_id", &self.operation_id)
+            .field("argument_count", &self.command.len())
+            .field("arguments", &"[REDACTED]")
+            .field("environment_count", &self.env.len())
+            .field("environment_values", &"[REDACTED]")
+            .field("audit_key", &"[REDACTED]")
+            .field("redactor", &self.redactor)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ResolvedExecEnv {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedExecEnv")
+            .field("var", &self.var)
+            .field("value_len", &self.value.len())
+            .field("value", &"[REDACTED]")
+            .field("field_kind", &self.field_kind)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for OpenVault {
@@ -195,6 +823,23 @@ impl std::fmt::Debug for OpenVault {
             .field("dek", &"[REDACTED]")
             .field("audit_key", &"[REDACTED]")
             .finish()
+    }
+}
+
+impl OpenVault {
+    fn from_unlocked(envelope: UnlockedVaultEnvelope) -> Self {
+        let UnlockedVaultEnvelope {
+            file,
+            state,
+            dek,
+            audit_key,
+        } = envelope;
+        Self {
+            file,
+            state,
+            dek,
+            audit_key,
+        }
     }
 }
 
@@ -222,53 +867,14 @@ impl VaultStore {
         }
         validate_new_vault_passphrase_inner(passphrase)?;
 
-        let now = now_ms();
-        let salt = random_array::<SALT_LEN>()?;
-        let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
-        let header = VaultHeader {
-            magic: MAGIC.into(),
-            version: FORMAT_VERSION,
-            vault_id: ulid::Ulid::new().to_string(),
-            created_at_ms: now,
-            kdf: self.initialization_kdf().clone(),
-            salt_b64: B64.encode(salt),
-            aead: AEAD_ALGORITHM.into(),
-        };
-        validate_header(&header).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Internal,
-                "constructed vault header is invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_aad = payload_aad(&header, AeadRole::WrappedDek);
-        let state_aad = payload_aad(&header, AeadRole::State);
-        let wrap_key = derive_wrap_key(passphrase, &salt, &header.kdf)?;
-        let wrapped_dek_nonce = random_array::<NONCE_LEN>()?;
-        let wrapped_dek = seal(
-            &wrap_key,
-            &wrapped_dek_nonce,
-            &wrapped_dek_aad,
-            dek.as_ref(),
-        )?;
-        let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(&VaultState::default())?);
-        let state = seal(&dek, &state_nonce, &state_aad, &state_plaintext)?;
-        let file = VaultFile {
-            header,
-            wrapped_dek_nonce_b64: B64.encode(wrapped_dek_nonce),
-            wrapped_dek_b64: B64.encode(wrapped_dek),
-            state_nonce_b64: B64.encode(state_nonce),
-            state_b64: B64.encode(state),
-        };
-        let file_text = serde_json::to_string_pretty(&file)?;
-        let audit_key = derive_audit_key(&dek)?;
+        let envelope =
+            NewVaultEnvelope::seal(passphrase, now_ms(), self.initialization_kdf().clone())?;
         if let Err(error) = AuditEvent::append_unlocked(
             self,
-            audit_key.as_ref(),
+            envelope.audit_key.as_ref(),
             AuditAction::VaultInitialized,
             serde_json::json!({
-                "vault_id": file.header.vault_id,
+                "vault_id": envelope.file.header.vault_id,
             }),
         ) {
             let cleanup_error = rollback_failed_init(self);
@@ -278,7 +884,7 @@ impl VaultStore {
                 None => Err(error),
             };
         }
-        if let Err(error) = self.write_vault_text_unlocked(&file_text) {
+        if let Err(error) = self.write_vault_text_unlocked(&envelope.file_text) {
             let cleanup_error = rollback_failed_init(self);
             let error = error.context("failed to write initialized vault file");
             return match cleanup_error {
@@ -310,6 +916,15 @@ impl VaultStore {
                 )
             })?;
             let result = edit(&mut vault)?;
+            let envelope = vault.prepare_save_unlocked()?;
+            let file_text = envelope.serialize_pretty()?;
+            self.validate_vault_text_len(&file_text).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::InvalidInput,
+                    "vault state is too large to save safely",
+                    error,
+                )
+            })?;
             AuditEvent::append_unlocked(self, vault.audit_key.as_ref(), action, details(&result))
                 .map_err(|error| {
                 classify_source(
@@ -318,13 +933,14 @@ impl VaultStore {
                     error,
                 )
             })?;
-            vault.save_unlocked(self).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Io,
-                    "vault audit was appended, but state save failed",
-                    error,
-                )
-            })?;
+            self.write_vault_text_unlocked(&file_text)
+                .map_err(|error| {
+                    classify_source(
+                        VaultErrorKind::Io,
+                        "vault audit was appended, but state save failed",
+                        error,
+                    )
+                })?;
             Ok(result)
         })
     }
@@ -386,6 +1002,358 @@ impl VaultStore {
             .map_err(|error| self.map_open_error(error))
     }
 
+    pub(crate) fn migrate(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> Result<VaultMigration> {
+        if target_version != FORMAT_VERSION {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "unsupported vault migration target {target_version}; run `jig vault migrate --to {FORMAT_VERSION}`"
+                ),
+            ));
+        }
+        self.with_lock(|| self.migrate_unlocked(passphrase, target_version))
+            .map_err(|error| self.map_open_error(error))
+    }
+
+    fn migrate_unlocked(
+        &self,
+        passphrase: &SecretString,
+        target_version: u32,
+    ) -> AnyResult<VaultMigration> {
+        let vault = self.open_unlocked(passphrase)?;
+        vault.verify_audit_unlocked(self).map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit chain verification failed",
+                error,
+            )
+        })?;
+        let from_version = vault.format_version();
+        if from_version == target_version {
+            return Ok(VaultMigration {
+                from_version,
+                to_version: target_version,
+                changed: false,
+            });
+        }
+        if from_version != V1_FORMAT_VERSION {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("vault format {from_version} cannot be migrated to {target_version}"),
+            ));
+        }
+
+        let envelope =
+            MigratedVaultEnvelope::v1_to_v2(&vault.file, passphrase, &vault.dek, &vault.state)?;
+        let file_text = envelope.serialize_pretty()?;
+        self.validate_vault_text_len(&file_text).map_err(|error| {
+            classify_source(
+                VaultErrorKind::InvalidInput,
+                "vault format migration would exceed the persistent vault size limit",
+                error,
+            )
+        })?;
+        AuditEvent::append_unlocked(
+            self,
+            vault.audit_key.as_ref(),
+            AuditAction::VaultFormatMigrate,
+            serde_json::json!({
+                "from_version": from_version,
+                "to_version": target_version,
+            }),
+        )
+        .map_err(|error| {
+            classify_source(
+                VaultErrorKind::AuditTampered,
+                "vault audit append failed before format migration save",
+                error,
+            )
+        })?;
+        self.write_vault_text_unlocked(&file_text)
+            .map_err(|error| {
+                classify_source(
+                    VaultErrorKind::Io,
+                    "vault format migration audit was appended, but state save failed",
+                    error,
+                )
+            })?;
+        Ok(VaultMigration {
+            from_version,
+            to_version: target_version,
+            changed: true,
+        })
+    }
+
+    pub(crate) fn list_fields(&self, passphrase: &SecretString) -> Result<Vec<FieldRecord>> {
+        self.with_lock(|| {
+            self.open_unlocked(passphrase)
+                .map(|vault| vault.list_fields())
+        })
+        .map_err(|error| self.map_open_error(error))
+    }
+
+    pub(crate) fn apply_field_batch(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+    ) -> Result<FieldBatchResult> {
+        validate_field_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let audit_sets = field_batch_set_audit_metadata(&mutations);
+        let audit_removes = field_batch_remove_audit_metadata(&mutations);
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| field_batch_audit_details(&audit_sets, &audit_removes, result),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn preview_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<Vec<bool>> {
+        validate_import_references(references)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault.verify_audit_unlocked(self).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit chain verification failed",
+                    error,
+                )
+            })?;
+            vault.ensure_field_format_v2()?;
+            Ok(references
+                .iter()
+                .map(|reference| vault.contains_field(reference))
+                .collect())
+        })
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn import_fields(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        validate_import_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let fields = field_batch_set_audit_metadata(&mutations);
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::OnePasswordImport,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                if !replace {
+                    reject_import_collisions(vault, &fields)?;
+                }
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |_| onepassword_import_audit_details(&fields),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    fn prepare_field_read(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<PreparedReveal> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    RevealOperation::FieldRead.start_action(),
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "reference": reference.to_string(),
+                    }),
+                )
+                .map_err(reveal_start_audit_error)?;
+            let value = match vault.secret_value(&reference.to_secret_name()) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(reveal_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        RevealOperation::FieldRead,
+                        &operation_id,
+                        "resolve",
+                        error,
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedReveal {
+                lifecycle: RevealLifecycle {
+                    store: self.clone(),
+                    audit_key,
+                    operation_id,
+                    operation: RevealOperation::FieldRead,
+                },
+                value,
+            })
+        })
+        .map_err(|error| self.map_reveal_prepare_error(error))
+    }
+
+    fn prepare_template_injection(
+        &self,
+        passphrase: &SecretString,
+        template: InjectionTemplate,
+    ) -> Result<PreparedReveal> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    RevealOperation::TemplateInject.start_action(),
+                    serde_json::json!({
+                        "operation_id": operation_id,
+                        "references": template.references().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                        "reference_count": template.references().len(),
+                    }),
+                )
+                .map_err(reveal_start_audit_error)?;
+
+            let mut values = Vec::with_capacity(template.references().len());
+            for reference in template.references() {
+                match vault.secret_value(&reference.to_secret_name()) {
+                    Ok(value) => values.push(value),
+                    Err(error) => {
+                        return Err(reveal_prepare_failure_unlocked(
+                            self,
+                            &vault,
+                            RevealOperation::TemplateInject,
+                            &operation_id,
+                            "resolve",
+                            error,
+                        ));
+                    }
+                }
+            }
+            let value = match template.render(&values) {
+                Ok(value) => value,
+                Err(error) => {
+                    let error = classified(error.kind(), error.message());
+                    return Err(reveal_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        RevealOperation::TemplateInject,
+                        &operation_id,
+                        "render",
+                        error,
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedReveal {
+                lifecycle: RevealLifecycle {
+                    store: self.clone(),
+                    audit_key,
+                    operation_id,
+                    operation: RevealOperation::TemplateInject,
+                },
+                value,
+            })
+        })
+        .map_err(|error| self.map_reveal_prepare_error(error))
+    }
+
+    fn map_reveal_prepare_error(&self, error: anyhow::Error) -> VaultError {
+        if error.is::<ClassifiedVaultError>() {
+            vault_error_from_anyhow(VaultErrorKind::Internal, error)
+        } else {
+            self.map_open_error(error)
+        }
+    }
+
+    fn prepare_exec(&self, passphrase: &SecretString, request: VaultExec) -> Result<PreparedExec> {
+        let operation_id = ulid::Ulid::new().to_string();
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            vault
+                .append_audit_unlocked(
+                    self,
+                    AuditAction::ExecStart,
+                    exec_start_details(&request, &operation_id),
+                )
+                .map_err(exec_start_audit_error)?;
+
+            let (command, env) = match resolve_exec_environment(&vault, request) {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    return Err(exec_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        &operation_id,
+                        "resolve",
+                        error,
+                    ));
+                }
+            };
+            let concealed_values = env
+                .iter()
+                .filter(|entry| entry.field_kind == Some(FieldKind::Concealed))
+                .map(|entry| entry.value.as_bytes())
+                .collect::<Vec<_>>();
+            let redactor = match redactor_from_concealed_values(&concealed_values) {
+                Ok(redactor) => redactor,
+                Err(error) => {
+                    return Err(exec_prepare_failure_unlocked(
+                        self,
+                        &vault,
+                        &operation_id,
+                        "redaction",
+                        classified(error.kind(), error.message()),
+                    ));
+                }
+            };
+            let OpenVault { audit_key, .. } = vault;
+            Ok(PreparedExec {
+                store: self.clone(),
+                audit_key,
+                operation_id,
+                command,
+                env,
+                redactor,
+            })
+        })
+        .map_err(|error| {
+            if error.is::<ClassifiedVaultError>() {
+                vault_error_from_anyhow(VaultErrorKind::Internal, error)
+            } else {
+                self.map_open_error(error)
+            }
+        })
+    }
+
+    pub(crate) fn exec(
+        &self,
+        passphrase: &SecretString,
+        request: VaultExec,
+    ) -> Result<crate::ExecOutcome> {
+        // Preparation returns only after releasing the vault lock. The direct
+        // execute call owns every normal terminal audit attempt; an abort may
+        // intentionally leave an unmatched start event.
+        self.prepare_exec(passphrase, request)?.execute()
+    }
+
     pub(crate) fn verify_audit(&self, passphrase: &SecretString) -> Result<AuditVerification> {
         self.with_lock(|| {
             let vault = self.open_unlocked(passphrase)?;
@@ -424,119 +1392,10 @@ impl VaultStore {
                 format!("vault does not exist at {}", self.vault_path().display()),
             )
         })?;
-        let file: VaultFile = serde_json::from_str(&text).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault file",
-                error.into(),
-            )
-        })?;
-        validate_header(&file.header).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault header is invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_aad = payload_aad(&file.header, AeadRole::WrappedDek);
-        let state_aad = payload_aad(&file.header, AeadRole::State);
-        let salt =
-            decode_b64_array::<SALT_LEN>("vault salt", &file.header.salt_b64).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault salt is invalid",
-                    error,
-                )
-            })?;
-        let wrap_key = derive_wrap_key(passphrase, &salt, &file.header.kdf).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault KDF parameters are invalid",
-                error,
-            )
-        })?;
-        let wrapped_dek_nonce =
-            decode_b64_array::<NONCE_LEN>("wrapped vault key nonce", &file.wrapped_dek_nonce_b64)
-                .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "wrapped vault key nonce is invalid",
-                    error,
-                )
-            })?;
-        let wrapped_dek = B64.decode(&file.wrapped_dek_b64).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "wrapped vault key is not valid base64",
-                error.into(),
-            )
-        })?;
-        let dek_plaintext = open(
-            &wrap_key,
-            &wrapped_dek_nonce,
-            &wrapped_dek_aad,
-            &wrapped_dek,
-        )
-        .map_err(|error| {
-            classify_source(
-                VaultErrorKind::Authentication,
-                "failed to unlock vault key",
-                error,
-            )
-        })?;
-        let dek = Zeroizing::new(
-            decode_array::<KEY_LEN>("vault key", &dek_plaintext).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault key has invalid length",
-                    error,
-                )
-            })?,
-        );
-        let state_nonce = decode_b64_array::<NONCE_LEN>("vault state nonce", &file.state_nonce_b64)
-            .map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Serialization,
-                    "vault state nonce is invalid",
-                    error,
-                )
-            })?;
-        let state_ciphertext = B64.decode(&file.state_b64).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "vault state is not valid base64",
-                error.into(),
-            )
-        })?;
-        let state_plaintext =
-            open(&dek, &state_nonce, &state_aad, &state_ciphertext).map_err(|error| {
-                classify_source(
-                    VaultErrorKind::Authentication,
-                    "failed to decrypt vault state",
-                    error,
-                )
-            })?;
-        let state = serde_json::from_slice(&state_plaintext).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Serialization,
-                "failed to parse vault state",
-                error.into(),
-            )
-        })?;
-        let audit_key = derive_audit_key(&dek).map_err(|error| {
-            classify_source(
-                VaultErrorKind::Internal,
-                "failed to derive vault audit key",
-                error,
-            )
-        })?;
-
-        Ok(OpenVault {
-            file,
-            state,
-            dek,
-            audit_key,
-        })
+        let parsed = ParsedVaultEnvelope::parse(&text)?;
+        let validated = parsed.validate()?;
+        let unlocked = validated.unlock(passphrase)?;
+        Ok(OpenVault::from_unlocked(unlocked))
     }
 }
 
@@ -569,12 +1428,83 @@ impl OpenVault {
             .collect()
     }
 
-    pub(crate) fn set_secret(
+    pub(crate) fn list_fields(&self) -> Vec<FieldRecord> {
+        self.state
+            .secrets
+            .iter()
+            .filter_map(|(name, entry)| {
+                let name = SecretName::parse(name).ok()?;
+                let reference = VaultReference::from_secret_name(&name)?;
+                Some(FieldRecord {
+                    reference,
+                    kind: entry.kind,
+                    created_at_ms: entry.created_at_ms,
+                    updated_at_ms: entry.updated_at_ms,
+                    value_len: entry.value_len,
+                })
+            })
+            .collect()
+    }
+
+    fn format_version(&self) -> u32 {
+        self.file.header.version
+    }
+
+    fn ensure_field_format_v2(&self) -> AnyResult<()> {
+        if self.format_version() != FORMAT_VERSION {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault format {} does not support field mutations; run `jig vault migrate --to {FORMAT_VERSION}`",
+                    self.format_version()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn contains_field(&self, reference: &VaultReference) -> bool {
+        self.state
+            .secrets
+            .contains_key(reference.to_secret_name().as_str())
+    }
+
+    pub(crate) fn set_secret(&mut self, name: &SecretName, value: SecretBytes) -> AnyResult<()> {
+        validate_secret_value_len(value.len())?;
+        self.set_field_value_unchecked(name, FieldKind::Concealed, value);
+        Ok(())
+    }
+
+    fn apply_validated_field_batch(&mut self, mutations: Vec<FieldMutation>) -> FieldBatchResult {
+        let mut result = FieldBatchResult::default();
+        for mutation in mutations {
+            match mutation {
+                FieldMutation::Set {
+                    reference,
+                    kind,
+                    value,
+                } => {
+                    let name = reference.to_secret_name();
+                    self.set_field_value_unchecked(&name, kind, value);
+                    result.changed.push(reference);
+                }
+                FieldMutation::Remove { reference } => {
+                    let name = reference.to_secret_name();
+                    if self.remove_secret(&name) {
+                        result.removed.push(reference);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn set_field_value_unchecked(
         &mut self,
         name: &SecretName,
+        kind: FieldKind,
         mut value: SecretBytes,
-    ) -> AnyResult<()> {
-        validate_secret_value_len(value.len())?;
+    ) {
         let now = now_ms();
         let created_at_ms = self
             .state
@@ -590,12 +1520,12 @@ impl OpenVault {
             value_len: value.len(),
             created_at_ms,
             updated_at_ms: now,
+            kind,
         };
         value.zeroize();
         // Replaced entries are dropped here; `SecretEntry::drop` zeroizes the
         // displaced base64 value.
         self.state.secrets.insert(name.as_str().to_string(), entry);
-        Ok(())
     }
 
     pub(crate) fn remove_secret(&mut self, name: &SecretName) -> bool {
@@ -603,13 +1533,17 @@ impl OpenVault {
     }
 
     pub(crate) fn secret_value(&self, name: &SecretName) -> AnyResult<SecretBytes> {
+        self.field_value(name).map(|(_, value)| value)
+    }
+
+    fn field_value(&self, name: &SecretName) -> AnyResult<(FieldKind, SecretBytes)> {
         let entry = self.state.secrets.get(name.as_str()).ok_or_else(|| {
             classified(
                 VaultErrorKind::NotFound,
                 format!("vault secret '{}' does not exist", name.as_str()),
             )
         })?;
-        validate_serialized_secret_value_len(name, entry)?;
+        validate_serialized_field_value_len(name, entry)?;
         // `decoded_len_estimate` may overestimate by a couple of bytes; the
         // buffer starts zeroed and is truncated to the decoded length below.
         let mut value = SecretBytes::zeroed(base64::decoded_len_estimate(entry.value_b64.len()));
@@ -632,26 +1566,11 @@ impl OpenVault {
                 ),
             ));
         }
-        Ok(value)
+        Ok((entry.kind, value))
     }
 
-    fn save_unlocked(&self, store: &VaultStore) -> AnyResult<()> {
-        // Keep the state AAD derived from the immutable, validated header that
-        // was parsed at open/init time. Header-changing migrations must update
-        // wrapped key and state encryption together.
-        let aad = payload_aad(&self.file.header, AeadRole::State);
-        let state_nonce = random_array::<NONCE_LEN>()?;
-        let state_plaintext = Zeroizing::new(serde_json::to_vec(&self.state)?);
-        let encrypted_state = seal(&self.dek, &state_nonce, &aad, &state_plaintext)?;
-        let file = VaultFile {
-            header: self.file.header.clone(),
-            wrapped_dek_nonce_b64: self.file.wrapped_dek_nonce_b64.clone(),
-            wrapped_dek_b64: self.file.wrapped_dek_b64.clone(),
-            state_nonce_b64: B64.encode(state_nonce),
-            state_b64: B64.encode(encrypted_state),
-        };
-        store.write_vault_text_unlocked(&serde_json::to_string_pretty(&file)?)?;
-        Ok(())
+    fn prepare_save_unlocked(&self) -> AnyResult<ResealedVaultEnvelope> {
+        ResealedVaultEnvelope::seal(&self.file, &self.dek, &self.state)
     }
 
     pub(crate) fn append_audit(
@@ -677,8 +1596,392 @@ impl OpenVault {
     }
 }
 
+fn exec_start_details(request: &VaultExec, operation_id: &str) -> serde_json::Value {
+    let variables = request
+        .bindings()
+        .iter()
+        .map(|binding| binding.var().as_str())
+        .collect::<Vec<_>>();
+    let field_bindings = request
+        .bindings()
+        .iter()
+        .filter_map(|binding| match binding.value() {
+            ExecEnvValue::Literal(_) => None,
+            ExecEnvValue::Field(reference) => Some(serde_json::json!({
+                "var": binding.var().as_str(),
+                "reference": reference.to_string(),
+            })),
+        })
+        .collect::<Vec<_>>();
+    let field_binding_count = field_bindings.len();
+    serde_json::json!({
+        "operation_id": operation_id,
+        "argument_count": request.command_len(),
+        "binding_count": request.bindings().len(),
+        "literal_binding_count": request.bindings().len() - field_binding_count,
+        "field_binding_count": field_binding_count,
+        "variables": variables,
+        "field_bindings": field_bindings,
+    })
+}
+
+fn exec_start_audit_error(error: anyhow::Error) -> anyhow::Error {
+    classify_source(
+        VaultErrorKind::AuditTampered,
+        "failed to append vault exec start audit event",
+        error,
+    )
+}
+
+fn exec_prepare_failure_unlocked(
+    store: &VaultStore,
+    vault: &OpenVault,
+    operation_id: &str,
+    stage: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let kind = classified_kind(&error).unwrap_or(VaultErrorKind::Internal);
+    match vault.append_audit_unlocked(
+        store,
+        AuditAction::ExecFailed,
+        exec_failure_details(operation_id, stage),
+    ) {
+        Ok(_) => error,
+        Err(audit_error) => classify_source(
+            kind,
+            "vault exec preparation failed; additionally failed to append failure audit event",
+            error.context(format!(
+                "additional audit failure while recording vault exec failure: {audit_error}"
+            )),
+        ),
+    }
+}
+
+fn exec_failure_details(operation_id: &str, stage: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation_id": operation_id,
+        "stage": stage,
+        // Values, argv, and raw errors never belong in the local audit chain.
+        "error": "vault exec failed",
+    })
+}
+
+fn record_exec_finish(
+    store: &VaultStore,
+    audit_key: &[u8],
+    operation_id: &str,
+    outcome: &crate::ExecOutcome,
+) -> AnyResult<()> {
+    AuditEvent::append(
+        store,
+        audit_key,
+        AuditAction::ExecFinish,
+        serde_json::json!({
+            "operation_id": operation_id,
+            "exit_status": outcome.exit_status,
+            "exit_signal": outcome.exit_signal,
+        }),
+    )?;
+    Ok(())
+}
+
+fn record_exec_failure(
+    store: &VaultStore,
+    audit_key: &[u8],
+    operation_id: &str,
+    stage: &str,
+) -> AnyResult<()> {
+    AuditEvent::append(
+        store,
+        audit_key,
+        AuditAction::ExecFailed,
+        exec_failure_details(operation_id, stage),
+    )?;
+    Ok(())
+}
+
+fn resolve_exec_environment(
+    vault: &OpenVault,
+    request: VaultExec,
+) -> AnyResult<(Vec<OsString>, Vec<ResolvedExecEnv>)> {
+    let (command, bindings) = request.into_parts();
+    let mut env = Vec::with_capacity(bindings.len());
+    let mut total_bytes = 0_usize;
+    for binding in bindings {
+        let (var, source) = binding.into_parts();
+        let (field_kind, value, reference) = match source {
+            ExecEnvValue::Literal(value) => (None, value, None),
+            ExecEnvValue::Field(reference) => {
+                let (kind, value) = vault.field_value(&reference.to_secret_name())?;
+                (Some(kind), value, Some(reference))
+            }
+        };
+        if value.len() > MAX_EXEC_ENV_VALUE_LEN {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault exec environment value for {} exceeds the {MAX_EXEC_ENV_VALUE_LEN} byte limit",
+                    var.as_str()
+                ),
+            ));
+        }
+        total_bytes = total_bytes.checked_add(value.len()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                "vault exec resolved environment data exceeds supported bounds",
+            )
+        })?;
+        if total_bytes > MAX_EXEC_ENV_TOTAL_BYTES {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault exec resolved environment data exceeds the {MAX_EXEC_ENV_TOTAL_BYTES} byte total limit"
+                ),
+            ));
+        }
+        let value = value.into_zeroizing_string().map_err(|_| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                invalid_exec_field_value_message(&var, reference.as_ref(), "must be valid UTF-8"),
+            )
+        })?;
+        if value.as_bytes().contains(&0) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                invalid_exec_field_value_message(&var, reference.as_ref(), "must not contain NUL"),
+            ));
+        }
+        env.push(ResolvedExecEnv {
+            var,
+            value,
+            field_kind,
+        });
+    }
+    Ok((command, env))
+}
+
+fn invalid_exec_field_value_message(
+    var: &EnvVarName,
+    reference: Option<&VaultReference>,
+    requirement: &str,
+) -> String {
+    match reference {
+        Some(reference) => format!(
+            "vault exec field {reference} for {} {requirement}",
+            var.as_str()
+        ),
+        None => format!(
+            "vault exec literal environment value for {} {requirement}",
+            var.as_str()
+        ),
+    }
+}
+
+fn reveal_start_audit_error(error: anyhow::Error) -> anyhow::Error {
+    classify_source(
+        VaultErrorKind::AuditTampered,
+        "failed to append reveal start audit event",
+        error,
+    )
+}
+
+fn reveal_prepare_failure_unlocked(
+    store: &VaultStore,
+    vault: &OpenVault,
+    operation: RevealOperation,
+    operation_id: &str,
+    stage: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let kind = classified_kind(&error).unwrap_or(VaultErrorKind::Internal);
+    match vault.append_audit_unlocked(
+        store,
+        operation.failed_action(),
+        reveal_failure_details(operation_id, stage),
+    ) {
+        Ok(_) => error,
+        Err(audit_error) => classify_source(
+            kind,
+            format!(
+                "{} preparation failed; additionally failed to append failure audit event",
+                operation.label()
+            ),
+            error.context(format!(
+                "additional audit failure while recording reveal failure: {audit_error}"
+            )),
+        ),
+    }
+}
+
+fn reveal_failure_details(operation_id: &str, stage: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation_id": operation_id,
+        "stage": stage,
+        // Values and raw errors never belong in the local audit chain.
+        "error": "vault reveal operation failed",
+    })
+}
+
 fn now_ms() -> i128 {
     OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+}
+
+fn validate_field_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
+    if mutations.is_empty() {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "field batch must contain at least one mutation",
+        ));
+    }
+    let mut references = BTreeSet::new();
+    for mutation in mutations {
+        let reference = mutation.reference();
+        if !references.insert(reference) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("field batch contains duplicate reference '{reference}'"),
+            ));
+        }
+        if let FieldMutation::Set { kind, value, .. } = mutation {
+            validate_field_value_len(*kind, value.len())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_import_references(references: &[VaultReference]) -> AnyResult<()> {
+    if references.is_empty() {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "onepassword import must contain at least one field reference",
+        ));
+    }
+    if references.len() > MAX_IMPORT_FIELDS {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("onepassword import exceeds the {MAX_IMPORT_FIELDS} field limit"),
+        ));
+    }
+    let mut unique = BTreeSet::new();
+    for reference in references {
+        if !unique.insert(reference) {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!("onepassword import contains duplicate reference '{reference}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_import_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
+    validate_field_mutations(mutations)?;
+    if mutations.len() > MAX_IMPORT_FIELDS {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("onepassword import exceeds the {MAX_IMPORT_FIELDS} field limit"),
+        ));
+    }
+    let mut total_value_bytes = 0_usize;
+    for mutation in mutations {
+        let FieldMutation::Set { value, .. } = mutation else {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                "onepassword import accepts only field set mutations",
+            ));
+        };
+        total_value_bytes = total_value_bytes.checked_add(value.len()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::InvalidInput,
+                "onepassword import value bytes exceed supported bounds",
+            )
+        })?;
+        if total_value_bytes > MAX_IMPORT_VALUE_BYTES {
+            return Err(classified(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "onepassword import exceeds the {MAX_IMPORT_VALUE_BYTES} byte decoded value limit"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_import_collisions(
+    vault: &OpenVault,
+    fields: &[(VaultReference, FieldKind)],
+) -> AnyResult<()> {
+    let collisions = fields
+        .iter()
+        .filter(|(reference, _)| vault.contains_field(reference))
+        .map(|(reference, _)| reference.to_string())
+        .collect::<Vec<_>>();
+    if collisions.is_empty() {
+        return Ok(());
+    }
+    Err(classified(
+        VaultErrorKind::AlreadyExists,
+        format!(
+            "onepassword import would replace existing fields without --replace: {}",
+            collisions.join(", ")
+        ),
+    ))
+}
+
+fn field_batch_set_audit_metadata(mutations: &[FieldMutation]) -> Vec<(VaultReference, FieldKind)> {
+    mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            FieldMutation::Set {
+                reference, kind, ..
+            } => Some((reference.clone(), *kind)),
+            FieldMutation::Remove { .. } => None,
+        })
+        .collect()
+}
+
+fn field_batch_remove_audit_metadata(mutations: &[FieldMutation]) -> Vec<VaultReference> {
+    mutations
+        .iter()
+        .filter_map(|mutation| match mutation {
+            FieldMutation::Set { .. } => None,
+            FieldMutation::Remove { reference } => Some(reference.clone()),
+        })
+        .collect()
+}
+
+fn field_batch_audit_details(
+    sets: &[(VaultReference, FieldKind)],
+    removes: &[VaultReference],
+    result: &FieldBatchResult,
+) -> serde_json::Value {
+    serde_json::json!({
+        "set": sets.iter().map(|(reference, kind)| serde_json::json!({
+            "reference": reference.to_string(),
+            "kind": kind.as_str(),
+        })).collect::<Vec<_>>(),
+        "remove": removes.iter().map(|reference| serde_json::json!({
+            "reference": reference.to_string(),
+            "removed": result.removed.contains(reference),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn onepassword_import_audit_details(fields: &[(VaultReference, FieldKind)]) -> serde_json::Value {
+    let concealed_count = fields
+        .iter()
+        .filter(|(_, kind)| *kind == FieldKind::Concealed)
+        .count();
+    serde_json::json!({
+        "field_count": fields.len(),
+        "concealed_count": concealed_count,
+        "text_count": fields.len() - concealed_count,
+        "fields": fields.iter().map(|(reference, kind)| serde_json::json!({
+            "reference": reference.to_string(),
+            "kind": kind.as_str(),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 const fn padded_base64_len(len: usize) -> usize {
@@ -701,8 +2004,22 @@ fn validate_secret_value_len(len: usize) -> AnyResult<()> {
     Ok(())
 }
 
-fn validate_serialized_secret_value_len(name: &SecretName, entry: &SecretEntry) -> AnyResult<()> {
-    if entry.value_len < MIN_REDACTABLE_LEN || entry.value_len > MAX_SECRET_VALUE_LEN {
+fn validate_field_value_len(kind: FieldKind, len: usize) -> AnyResult<()> {
+    if kind == FieldKind::Concealed {
+        return validate_secret_value_len(len);
+    }
+    if len > MAX_SECRET_VALUE_LEN {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            format!("field value must be at most {MAX_SECRET_VALUE_LEN} bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_serialized_field_value_len(name: &SecretName, entry: &SecretEntry) -> AnyResult<()> {
+    let too_short = entry.kind == FieldKind::Concealed && entry.value_len < MIN_REDACTABLE_LEN;
+    if too_short || entry.value_len > MAX_SECRET_VALUE_LEN {
         return Err(classified(
             VaultErrorKind::Serialization,
             format!(

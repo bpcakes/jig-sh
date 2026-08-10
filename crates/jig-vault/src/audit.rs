@@ -12,22 +12,56 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuditAction {
+    BackupFailed,
+    BackupFinish,
+    BackupRestore,
+    BackupStart,
     BrokeredRunFailed,
     BrokeredRunFinish,
     BrokeredRunStart,
+    ExecFailed,
+    ExecFinish,
+    ExecStart,
+    FieldBatchApply,
+    FieldReadFailed,
+    FieldReadFinish,
+    FieldReadStart,
+    OnePasswordImport,
+    PassphraseChange,
     SecretRemove,
     SecretSet,
+    TemplateInjectFailed,
+    TemplateInjectFinish,
+    TemplateInjectStart,
+    VaultFormatMigrate,
     VaultInitialized,
 }
 
 impl AuditAction {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::BackupFailed => "backup_failed",
+            Self::BackupFinish => "backup_finish",
+            Self::BackupRestore => "backup_restore",
+            Self::BackupStart => "backup_start",
             Self::BrokeredRunFailed => "brokered_run_failed",
             Self::BrokeredRunFinish => "brokered_run_finish",
             Self::BrokeredRunStart => "brokered_run_start",
+            Self::ExecFailed => "exec_failed",
+            Self::ExecFinish => "exec_finish",
+            Self::ExecStart => "exec_start",
+            Self::FieldBatchApply => "field_batch_apply",
+            Self::FieldReadFailed => "field_read_failed",
+            Self::FieldReadFinish => "field_read_finish",
+            Self::FieldReadStart => "field_read_start",
+            Self::OnePasswordImport => "onepassword_import",
+            Self::PassphraseChange => "passphrase_change",
             Self::SecretRemove => "secret_remove",
             Self::SecretSet => "secret_set",
+            Self::TemplateInjectFailed => "template_inject_failed",
+            Self::TemplateInjectFinish => "template_inject_finish",
+            Self::TemplateInjectStart => "template_inject_start",
+            Self::VaultFormatMigrate => "vault_format_migrate",
             Self::VaultInitialized => "vault_initialized",
         }
     }

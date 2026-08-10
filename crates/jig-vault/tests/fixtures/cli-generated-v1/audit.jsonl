@@ -1,0 +1,2 @@
+{"version":1,"event_id":"01KZKY9XC7ABRSZR2K07DJP8SC","timestamp_ms":1786301969799,"action":"vault_initialized","previous_mac":null,"details":{"vault_id":"01KZKY9QJT5ZCZBRJ490A3TFF6"},"mac":"2cdd332851cf6246ab183fae1cb6b68a0f33d242e6099a1786c85c74af9c491d"}
+{"version":1,"event_id":"01KZKYA375Q17AM1Z95X5KJ7RF","timestamp_ms":1786301975781,"action":"secret_set","previous_mac":"2cdd332851cf6246ab183fae1cb6b68a0f33d242e6099a1786c85c74af9c491d","details":{"secret_name":"Production/RESTIC_PASSWORD"},"mac":"3dc428c1d662dca49f7a872b4089ff51ed94f7183e937bb263230b3b2e567ce1"}

@@ -10,12 +10,12 @@ use super::{
     ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
     ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
-    VaultAuditCommand, VaultAuditVerifyOpts, VaultCommand, VaultInitOpts, VaultRunOpts,
-    VaultRuntimeOpts, VaultSecretCommand, VaultSecretListOpts, VaultSecretRemoveOpts,
-    VaultSecretSetOpts, VaultStatusOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand,
-    WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts,
-    WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
+    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
+    WorkStartOpts,
 };
+
+mod vault;
 
 impl From<ToolOpts> for command::ToolRequest {
     fn from(opts: ToolOpts) -> Self {
@@ -85,118 +85,6 @@ impl From<GenerateSqlxUncheckedQueriesTodoOpts> for command::SqlxTodoRequest {
     fn from(opts: GenerateSqlxUncheckedQueriesTodoOpts) -> Self {
         Self {
             output: opts.output,
-        }
-    }
-}
-
-impl From<VaultCommand> for command::VaultCommand {
-    fn from(command: VaultCommand) -> Self {
-        match command {
-            VaultCommand::Audit(command) => Self::Audit(command.into()),
-            VaultCommand::Init(opts) => Self::Init(opts.into()),
-            VaultCommand::Status(opts) => Self::Status(opts.into()),
-            VaultCommand::Secret(command) => Self::Secret(command.into()),
-            VaultCommand::Run(opts) => Self::Run(opts.into()),
-        }
-    }
-}
-
-impl From<VaultAuditCommand> for command::VaultAuditCommand {
-    fn from(command: VaultAuditCommand) -> Self {
-        match command {
-            VaultAuditCommand::Verify(opts) => Self::Verify(opts.into()),
-        }
-    }
-}
-
-impl From<VaultSecretCommand> for command::VaultSecretCommand {
-    fn from(command: VaultSecretCommand) -> Self {
-        match command {
-            VaultSecretCommand::List(opts) => Self::List(opts.into()),
-            VaultSecretCommand::Set(opts) => Self::Set(opts.into()),
-            VaultSecretCommand::Remove(opts) => Self::Remove(opts.into()),
-        }
-    }
-}
-
-impl From<VaultRuntimeOpts> for command::VaultRuntimeOptions {
-    fn from(opts: VaultRuntimeOpts) -> Self {
-        Self {
-            home: opts.home,
-            scope: if opts.global {
-                command::VaultScopeSelection::Global
-            } else {
-                command::VaultScopeSelection::Auto
-            },
-        }
-    }
-}
-
-impl From<VaultInitOpts> for command::VaultInitRequest {
-    fn from(opts: VaultInitOpts) -> Self {
-        Self {
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultStatusOpts> for command::VaultStatusRequest {
-    fn from(opts: VaultStatusOpts) -> Self {
-        Self {
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultAuditVerifyOpts> for command::VaultAuditVerifyRequest {
-    fn from(opts: VaultAuditVerifyOpts) -> Self {
-        Self {
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultSecretListOpts> for command::VaultSecretListRequest {
-    fn from(opts: VaultSecretListOpts) -> Self {
-        Self {
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultSecretSetOpts> for command::VaultSecretSetRequest {
-    fn from(opts: VaultSecretSetOpts) -> Self {
-        let value_source = if opts.value_prompt {
-            command::VaultSecretValueSource::Prompt
-        } else if opts.value_stdin {
-            command::VaultSecretValueSource::Stdin
-        } else {
-            command::VaultSecretValueSource::Auto
-        };
-        Self {
-            name: opts.name,
-            value_source,
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultSecretRemoveOpts> for command::VaultSecretRemoveRequest {
-    fn from(opts: VaultSecretRemoveOpts) -> Self {
-        Self {
-            name: opts.name,
-            vault: opts.vault.into(),
-        }
-    }
-}
-
-impl From<VaultRunOpts> for command::VaultRunRequest {
-    fn from(opts: VaultRunOpts) -> Self {
-        Self {
-            env: opts.env,
-            files: opts.files,
-            command: opts.command,
-            vault: opts.vault.into(),
         }
     }
 }
@@ -829,18 +717,5 @@ mod tests {
                 panic!("expected state export receipts request, got {other:?}")
             }
         }
-    }
-
-    #[test]
-    fn vault_secret_set_defaults_to_auto_value_source() {
-        let request: command::VaultSecretSetRequest = VaultSecretSetOpts {
-            name: "api_token".into(),
-            value_stdin: false,
-            value_prompt: false,
-            vault: VaultRuntimeOpts::default(),
-        }
-        .into();
-
-        assert_eq!(request.value_source, command::VaultSecretValueSource::Auto);
     }
 }

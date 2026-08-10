@@ -1415,6 +1415,7 @@ dependencies = [
 name = "jig-vault"
 version = "0.2.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "argon2",
  "base64",
