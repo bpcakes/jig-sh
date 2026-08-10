@@ -1628,12 +1628,6 @@ if [[ -z "$INSTALL_ROOT_ARG" ]] && is_jig_source_checkout "$ROOT_DIR"; then
     exit 1
   fi
 
-  if [[ "$REFRESH_CACHE" == "0" ]] \
-    && local_source_install_is_current "$ROOT_DIR" "$INSTALL_ROOT" "$BIN_PATH"; then
-    printf '%s\n' "$BIN_PATH"
-    exit 0
-  fi
-
   install_from_local_source "$ROOT_DIR"
   printf '%s\n' "$BIN_PATH"
   exit 0

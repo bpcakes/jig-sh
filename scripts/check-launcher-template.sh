@@ -234,6 +234,13 @@ forward "${INSTALLER_ORIGINAL_ARGS[@]+"${INSTALLER_ORIGINAL_ARGS[@]}"}"
   echo "Stock /bin/bash could not forward an empty installer argument array under nounset." >&2
   exit 1
 fi
+installer_source_checkout_cache_checks="$(
+  grep -c '&& local_source_install_is_current' "$ROOT_DIR/scripts/install-jig.sh"
+)"
+if [[ "$installer_source_checkout_cache_checks" != "2" ]]; then
+  echo "Source-checkout installer flow must validate only the full-profile candidate and the requested-profile candidate once each; found $installer_source_checkout_cache_checks checks." >&2
+  exit 1
+fi
 for contract_template in \
   "$ROOT_DIR/templates/project/.agent/jig-contract.json.jinja" \
   "$ROOT_DIR/crates/jig/src/bootstrap/embedded_template_snapshots/.agent/jig-contract.json.jinja"
