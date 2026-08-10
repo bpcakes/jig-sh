@@ -1,25 +1,32 @@
+#[cfg(target_os = "linux")]
 use std::fs::{self, File};
 #[cfg(target_os = "linux")]
 use std::os::unix::fs::PermissionsExt;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(target_os = "linux")]
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
 use crate::crypto::{KEY_LEN, KdfParams, NONCE_LEN, SALT_LEN};
 use crate::format::{AEAD_ALGORITHM, FORMAT_VERSION, MAGIC, V1_FORMAT_VERSION};
+#[cfg(target_os = "linux")]
 use crate::{FieldKind, FieldMutation, SecretBytes, Vault, VaultReference};
 
+#[cfg(target_os = "linux")]
+use super::codec::seal_archive;
 use super::codec::{
-    BACKUP_AAD_DOMAIN, BACKUP_MAGIC, BackupEnvelope, backup_aad, parse_archive_bytes, seal_archive,
+    BACKUP_AAD_DOMAIN, BACKUP_MAGIC, BackupEnvelope, backup_aad, parse_archive_bytes,
 };
 use super::*;
 
+#[cfg(target_os = "linux")]
 fn test_passphrase() -> SecretString {
     SecretString::from("backup-test-passphrase".to_owned())
 }
 
+#[cfg(target_os = "linux")]
 fn reference() -> VaultReference {
     VaultReference::parse("jig://Production/TOKEN").unwrap()
 }

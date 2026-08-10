@@ -26,6 +26,7 @@ pub(crate) fn is_trusted_root_alias(path: &Path, metadata: &fs::Metadata) -> boo
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::is_trusted_root_alias;
 
     #[cfg(unix)]

@@ -1,5 +1,7 @@
 use super::*;
-use crate::{BrokeredEnv, ExecEnvBinding, VaultExec};
+#[cfg(unix)]
+use crate::BrokeredEnv;
+use crate::{ExecEnvBinding, VaultExec};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use secrecy::SecretString;
