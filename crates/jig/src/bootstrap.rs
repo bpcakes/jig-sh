@@ -17,10 +17,9 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
-#[cfg(not(test))]
-use crate::context::runtime_cache_base;
 use crate::context::{
-    LAUNCHER_REPAIR_STAGING_PREFIX, RepoContext, RuntimeCacheProfile, runtime_profile_cache_name,
+    LAUNCHER_REPAIR_STAGING_PREFIX, RepoContext, RuntimeCacheProfile, runtime_cache_base,
+    runtime_profile_cache_name,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::progress::CliProgress;
@@ -96,6 +95,7 @@ const ANSWERS_FILE: &str = ".jig.toml";
 pub(crate) const MANAGED_PATHS_MANIFEST_PATH: &str = managed_paths::MANIFEST_PATH;
 const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scripts/jig"];
 const STALE_LAUNCHER_REPAIR_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+pub(crate) const LAUNCHER_REPAIR_SEED_STAMP_HEADER: &str = "jig-seeded-runtime-v1";
 const LAUNCHER_REPAIR_ENVIRONMENT_KEYS: &[&str] = &[
     "LD_AUDIT",
     "LD_DEBUG",
@@ -812,6 +812,19 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
                 format!("adopt write completed but undo receipt could not be recorded: {error:#}"),
             );
         }
+        let contract_version = progress.log_blocked_on_err(
+            RepoContext::supported_contract_version_from_root(&destination),
+        )?;
+        let retired = progress.log_blocked_on_err(retire_launcher_repair_seeded_caches(
+            &destination,
+            contract_version,
+        ))?;
+        if retired > 0 {
+            progress.info(
+                "runtime cache",
+                format!("retired {retired} launcher-repair seed(s)"),
+            );
+        }
         progress.done("adopt complete");
     } else {
         progress.done("adopt preview complete");
@@ -1097,6 +1110,19 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
             init_transaction: None,
         },
     )?;
+    let contract_version = progress.log_blocked_on_err(
+        RepoContext::supported_contract_version_from_root(&destination),
+    )?;
+    let retired = progress.log_blocked_on_err(retire_launcher_repair_seeded_caches(
+        &destination,
+        contract_version,
+    ))?;
+    if retired > 0 {
+        progress.info(
+            "runtime cache",
+            format!("retired {retired} launcher-repair seed(s)"),
+        );
+    }
     progress.done("update complete");
 
     Ok(json!({
@@ -1108,6 +1134,70 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         "git_initialized": false,
         "render_report": render_report,
     }))
+}
+
+fn retire_launcher_repair_seeded_caches(
+    destination: &Path,
+    contract_version: u32,
+) -> Result<usize> {
+    let cache_base = runtime_cache_base(destination);
+    let mut cache_paths = Vec::new();
+    for profile in [RuntimeCacheProfile::Default, RuntimeCacheProfile::Runtime] {
+        let cache = cache_base.join(runtime_profile_cache_name(contract_version, profile));
+        if cache_has_launcher_repair_seed(&cache)? {
+            cache_paths.push(cache);
+        }
+    }
+    if cache_paths.is_empty() {
+        return Ok(0);
+    }
+
+    let _locks = RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::INSTALLER)
+        .context("Failed to lock launcher-repair caches for retirement")?;
+    let mut retired = 0;
+    for cache in cache_paths {
+        if !cache_has_launcher_repair_seed(&cache)? {
+            continue;
+        }
+        let stamp = cache.join(".jig-source-stamp");
+        fs::remove_file(&stamp).with_context(|| {
+            format!(
+                "Failed to retire launcher-repair provenance {}",
+                stamp.display()
+            )
+        })?;
+        let metadata = cache.join(".jig-source-metadata-stamp");
+        match fs::remove_file(&metadata) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to retire launcher-repair metadata {}",
+                        metadata.display()
+                    )
+                });
+            }
+        }
+        retired += 1;
+    }
+    Ok(retired)
+}
+
+fn cache_has_launcher_repair_seed(cache: &Path) -> Result<bool> {
+    let stamp = cache.join(".jig-source-stamp");
+    let contents = match fs::read(&stamp) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read runtime provenance {}", stamp.display()));
+        }
+    };
+    Ok(contents
+        .split(|byte| *byte == b'\n')
+        .next()
+        .is_some_and(|header| header == LAUNCHER_REPAIR_SEED_STAMP_HEADER.as_bytes()))
 }
 
 #[cfg(test)]

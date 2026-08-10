@@ -61,6 +61,52 @@ fn launcher_repair_cache_publication_restores_all_prior_caches_on_late_failure()
 }
 
 #[test]
+fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
+    let repo = tempdir().unwrap();
+    let default_cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Default,
+    ));
+    let runtime_cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Runtime,
+    ));
+    for cache in [&default_cache, &runtime_cache] {
+        fs::create_dir_all(cache.join("bin")).unwrap();
+        fs::write(cache.join("bin/jig"), "cached runtime").unwrap();
+        fs::write(cache.join(".jig-source-metadata-stamp"), "metadata\n").unwrap();
+    }
+    fs::write(
+        default_cache.join(".jig-source-stamp"),
+        format!("{LAUNCHER_REPAIR_SEED_STAMP_HEADER}\nsource:fixture\n"),
+    )
+    .unwrap();
+    fs::write(
+        runtime_cache.join(".jig-source-stamp"),
+        "source-v1\nordinary\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        retire_launcher_repair_seeded_caches(
+            repo.path(),
+            crate::context::CURRENT_CONTRACT_VERSION,
+        )
+        .unwrap(),
+        1
+    );
+
+    assert!(!default_cache.join(".jig-source-stamp").exists());
+    assert!(!default_cache.join(".jig-source-metadata-stamp").exists());
+    assert!(default_cache.join("bin/jig").exists());
+    assert_eq!(
+        fs::read_to_string(runtime_cache.join(".jig-source-stamp")).unwrap(),
+        "source-v1\nordinary\n"
+    );
+    assert!(runtime_cache.join(".jig-source-metadata-stamp").exists());
+}
+
+#[test]
 fn launcher_repair_cache_publication_rolls_back_after_a_later_transaction_failure() {
     let temp = tempdir().unwrap();
     let cache_base = temp.path().join("cache");

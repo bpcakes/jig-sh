@@ -911,6 +911,108 @@ fn full_update_upgrades_legacy_contract_and_launcher_together() {
 }
 
 #[test]
+fn full_update_retires_current_contract_repair_seed() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo.clone(),
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    let cache = runtime_cache_base(&repo).join(runtime_profile_cache_name(
+        CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Default,
+    ));
+    fs::create_dir_all(cache.join("bin")).unwrap();
+    fs::write(cache.join("bin/jig"), "repair runtime").unwrap();
+    fs::write(
+        cache.join(".jig-source-stamp"),
+        format!("{LAUNCHER_REPAIR_SEED_STAMP_HEADER}\nsource:fixture\n"),
+    )
+    .unwrap();
+    fs::write(cache.join(".jig-source-metadata-stamp"), "metadata\n").unwrap();
+
+    run_update(UpdateOpts {
+        path: repo,
+        template: None,
+        template_mode: None,
+        recopy: false,
+        launcher_only: false,
+        force: true,
+        vcs_ref: None,
+        defaults: true,
+        no_input: true,
+    })
+    .unwrap();
+
+    assert!(!cache.join(".jig-source-stamp").exists());
+    assert!(!cache.join(".jig-source-metadata-stamp").exists());
+    assert!(cache.join("bin/jig").exists());
+}
+
+#[test]
+fn adopt_write_retires_current_contract_repair_seed() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    write_test_crate_guide(&repo);
+    let cache = runtime_cache_base(&repo).join(runtime_profile_cache_name(
+        CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Runtime,
+    ));
+    fs::create_dir_all(cache.join("bin")).unwrap();
+    fs::write(cache.join("bin/jig"), "repair runtime").unwrap();
+    fs::write(
+        cache.join(".jig-source-stamp"),
+        format!("{LAUNCHER_REPAIR_SEED_STAMP_HEADER}\nsource:fixture\n"),
+    )
+    .unwrap();
+
+    with_test_build_template_pin_policy(BuildTemplatePinPolicy::Unreleased, || {
+        run_adopt(AdoptOpts {
+            path: repo,
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            write: true,
+            minimal: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                sqlx_enabled: Some(false),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap()
+    });
+
+    assert!(!cache.join(".jig-source-stamp").exists());
+    assert!(cache.join("bin/jig").exists());
+}
+
+#[test]
 fn launcher_only_update_repairs_only_owned_runtime_scripts() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

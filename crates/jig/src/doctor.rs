@@ -473,7 +473,9 @@ fn launcher_repair_seed_stamp_is_present(root: &Path, contract_version: u32) -> 
             fs::read_to_string(stamp)
                 .ok()
                 .and_then(|contents| contents.lines().next().map(str::to_owned))
-                .is_some_and(|first_line| first_line == "jig-seeded-runtime-v1")
+                .is_some_and(|first_line| {
+                    first_line == crate::bootstrap::LAUNCHER_REPAIR_SEED_STAMP_HEADER
+                })
         })
 }
 
