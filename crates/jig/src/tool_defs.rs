@@ -66,6 +66,7 @@ pub(crate) mod cli_command {
     pub(crate) const CODEX: &str = "codex";
     pub(crate) const CODEX_HOMES: &str = "homes";
     pub(crate) const CODEX_LAUNCH: &str = "launch";
+    pub(crate) const CODEX_RESUME: &str = "resume";
     pub(crate) const DEV: &str = "dev";
     pub(crate) const DEV_STATUS: &str = "status";
     pub(crate) const DEV_STOP: &str = "stop";

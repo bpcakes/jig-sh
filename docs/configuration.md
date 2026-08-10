@@ -194,6 +194,8 @@ Use `scripts/jig codex homes` to list `~/.codex`, `~/.codex-*`, and a configured
 
 Use `scripts/jig codex launch [HOME]` to launch Codex with the selected directory as `CODEX_HOME`. A home can be a discovered name such as `codex-1`, an absolute path, or a relative path. Bare names are home names, not relative paths: `work` resolves as `~/.codex-work` or an exact discovered home name, and never as `./work`. Spell a relative directory explicitly as `./work`. The aliases `codex` and `default` both select `~/.codex`. Explicit absolute, relative, and `~/...` paths are resolved directly without scanning discovered homes.
 
+Use `scripts/jig codex resume SESSION_ID` when the session's home is unknown. Jig validates the UUID, queries every discovered home concurrently with Codex app-server `thread/read` without loading turns, reports lookup progress on an interactive terminal, and launches `codex resume SESSION_ID` with the single matching directory as `CODEX_HOME`. A missing session reports every checked home and any inspection or discovery failures. A session found in multiple homes—possible after copying a home—is ambiguous and requires `--home HOME`. Jig also requires `--home` when one home matches but another discovered home could not be inspected or home enumeration was incomplete, because automatic lookup cannot prove the match is unique. A candidate that disappeared or was already a dangling symlink cannot contain the session and therefore remains a warning without blocking a unique match. The `--home` option bypasses app-server lookup for a non-conventional home or one whose app-server is currently unavailable; the directory itself must exist. Arguments after `--` are forwarded to `codex resume` without shell parsing. Add `--dry-run` to inspect the resolved launch; `--json` is accepted only with `--dry-run` and suppresses terminal progress.
+
 With no home, Jig opens a full-screen picker immediately after directory discovery. Every home is usable at once while account and usage details load through `codex app-server` in a four-worker background pool. Use arrows or `j`/`k` to move, `/` to search names, paths, account emails, plans, and states, Ctrl-U to clear the search, Home/End or Page Up/Page Down for larger lists, and Enter to launch the highlighted exact path—even if its usage is still loading. Search results prioritize home-name matches before account metadata and shared absolute-path prefixes. Tab focuses the selected-home pane so the same movement and page keys scroll long, wrapped usage details; Tab returns to the home list. Escape leaves search first and cancels on the next press; `q` or Ctrl-C also cancels. The detail pane shows the exact display path, account, plan, all returned usage buckets and windows, reset timing, and inspection errors. A single current Codex usage window is labeled weekly; if the five-hour limit returns alongside it, both windows are shown. Non-interactive callers must provide a home. Use `--dry-run` to inspect the resolved launch, and place Codex arguments after `--` so Jig forwards them without shell parsing. Human dry-run output replaces terminal-control characters and warns when that makes its displayed shell command differ from the exact launch; use `--json` when exact values are required:
 
 ```sh
@@ -201,9 +203,11 @@ scripts/jig codex homes --usage
 scripts/jig codex launch codex-1
 scripts/jig codex launch codex-work -- --profile deep-review --search
 scripts/jig codex launch ~/.codex-2 --dry-run -- --search
+scripts/jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 -- --search
+scripts/jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --home codex-work
 ```
 
-Codex `--profile` selects a configuration profile inside the chosen home; it does not select a separately authenticated account. Separate accounts require separate `CODEX_HOME` directories, which is why this command calls them homes rather than profiles. `CODEX_HOME` marks the current home and is replaced for the launched process. Set `JIG_CODEX_BIN` to override the `codex` executable during local testing or when it is installed at a nonstandard path. A real launch cannot be combined with `--json`; `--json` is supported for `codex homes` and launch dry runs.
+Codex `--profile` selects a configuration profile inside the chosen home; it does not select a separately authenticated account. Separate accounts require separate `CODEX_HOME` directories, which is why this command calls them homes rather than profiles. `CODEX_HOME` marks the current home and is replaced for the launched process. Set `JIG_CODEX_BIN` to override the `codex` executable during local testing or when it is installed at a nonstandard path. A real launch or resume cannot be combined with `--json`; `--json` is supported for `codex homes` and launch or resume dry runs.
 
 In both picker and `codex homes` human output, the only returned Codex rate-limit window is labeled `weekly`; Codex currently returns no separate five-hour window. If another window returns, Jig labels windows whose reported durations are five hours and one week as `5h` and `weekly`; unexpected additional durations remain unlabeled rather than receiving a contradictory role. Other rate-limit buckets show their server-reported durations without imposing Codex-specific labels.
 
@@ -643,6 +647,8 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig codex homes --usage --json`
 - `scripts/jig codex launch [HOME]`
 - `scripts/jig codex launch HOME --dry-run --json -- [CODEX_ARGS...]`
+- `scripts/jig codex resume SESSION_ID [--home HOME] -- [CODEX_ARGS...]`
+- `scripts/jig codex resume SESSION_ID [--home HOME] --dry-run --json -- [CODEX_ARGS...]`
 - `scripts/jig work start --title ...`
 - `scripts/jig work start --title ... --print-plan-id`
 - `scripts/jig work append --plan-id ... --body "Progress update"`

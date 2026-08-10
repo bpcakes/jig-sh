@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::process::CommandExt;

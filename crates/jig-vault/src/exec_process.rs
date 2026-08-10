@@ -435,10 +435,11 @@ impl StreamPump {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn request(command: Vec<OsString>) -> ResolvedExecProcess {
         ResolvedExecProcess::new(
             command,

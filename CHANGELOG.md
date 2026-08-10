@@ -10,12 +10,16 @@
 - Add cancellable status collection
 - Standardize JSON errors and work validation
 - Add interactive Codex home launcher
+- Add home-aware Codex session resume
 - Configure Codex home for loop workers
 - Add command availability inventory
 - Namespace SQLx project commands
 
 ### Fixed
 - Keep dev session cleanup signal-responsive
+- Keep stale missing Codex-home candidates from blocking a unique session resume
+- Recognize supported Codex app-server missing-thread response variants during resume lookup
+- Preserve session-lookup cancellation even when Codex app-server emits stderr
 
 ### Changed
 - Plan dev session management

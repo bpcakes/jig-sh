@@ -1,77 +1,19 @@
-use std::io::{BufReader, Cursor, Read};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs;
+use std::io;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-#[cfg(unix)]
-use super::app_server::app_server_account_with_timeout;
-use super::app_server::{
-    APP_SERVER_INSPECTION_CANCELLED, APP_SERVER_PROTOCOL_MESSAGE_LIMIT, app_server_protocol,
-    protocol_message_too_large, read_next_response, read_response,
-};
+use super::app_server::AppServerAccountResponse;
+use super::home::*;
+use super::inspection::*;
+use super::resume::select_resume_home;
 use super::*;
 
-struct FragmentedNonblockingReader {
-    bytes: &'static [u8],
-    offset: usize,
-    would_block: bool,
-}
-
-impl Read for FragmentedNonblockingReader {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        if self.would_block {
-            self.would_block = false;
-            return Err(std::io::ErrorKind::WouldBlock.into());
-        }
-        if self.offset == self.bytes.len() {
-            return Ok(0);
-        }
-        let read = buffer
-            .len()
-            .min(3)
-            .min(self.bytes.len().saturating_sub(self.offset));
-        buffer[..read].copy_from_slice(&self.bytes[self.offset..self.offset + read]);
-        self.offset += read;
-        self.would_block = true;
-        Ok(read)
-    }
-}
-
-struct RepeatingReader {
-    bytes: &'static [u8],
-    offset: usize,
-}
-
-struct CancelAfterEofReader {
-    bytes: &'static [u8],
-    offset: usize,
-    cancelled: Arc<AtomicBool>,
-}
-
-impl Read for CancelAfterEofReader {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        if self.offset == self.bytes.len() {
-            self.cancelled.store(true, Ordering::Release);
-            return Err(std::io::ErrorKind::WouldBlock.into());
-        }
-        let read = buffer
-            .len()
-            .min(self.bytes.len().saturating_sub(self.offset));
-        buffer[..read].copy_from_slice(&self.bytes[self.offset..self.offset + read]);
-        self.offset += read;
-        Ok(read)
-    }
-}
-
-impl Read for RepeatingReader {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        for byte in buffer.iter_mut() {
-            *byte = self.bytes[self.offset];
-            self.offset = (self.offset + 1) % self.bytes.len();
-        }
-        Ok(buffer.len())
-    }
-}
+#[path = "tests/app_server.rs"]
+mod app_server;
+#[path = "tests/resume.rs"]
+mod resume;
 
 #[test]
 fn normalizes_all_rate_limit_buckets_and_dynamic_windows() {
@@ -461,7 +403,7 @@ fn assembled_home_report(
         include_usage,
         DiscoveredHomes {
             paths: vec![home],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         current,
@@ -490,7 +432,7 @@ fn homes_report_envelope_maps_complete_and_partial_outcomes() {
         true,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         &home,
@@ -512,7 +454,10 @@ fn homes_report_envelope_maps_complete_and_partial_outcomes() {
         true,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: vec!["could not inspect one directory entry".into()],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::EntryUnreadable,
+                "could not inspect one directory entry".into(),
+            )],
             representation_lossy: false,
         },
         &home,
@@ -533,7 +478,10 @@ fn picker_inspection_retains_nonfatal_discovery_warnings() {
     let inspection = CodexHomeInspection {
         discovered: DiscoveredHomes {
             paths: vec![PathBuf::from("/tmp/.codex")],
-            errors: vec!["could not inspect one directory entry".into()],
+            issues: vec![DiscoveryIssue::new(
+                DiscoveryIssueKind::EntryUnreadable,
+                "could not inspect one directory entry".into(),
+            )],
             representation_lossy: false,
         },
         current: PathBuf::from("/tmp/.codex"),
@@ -564,9 +512,63 @@ fn discovery_retains_candidate_metadata_errors() {
     });
 
     assert_eq!(discovered.paths, vec![default]);
-    assert_eq!(discovered.errors.len(), 1);
-    assert!(discovered.errors[0].contains(&inaccessible.display().to_string()));
-    assert!(discovered.errors[0].contains("denied"));
+    assert_eq!(discovered.issues.len(), 1);
+    assert_eq!(
+        discovered.issues[0].kind,
+        DiscoveryIssueKind::CandidateUnreadable
+    );
+    assert!(
+        discovered.issues[0]
+            .message
+            .contains(&inaccessible.display().to_string())
+    );
+    assert!(discovered.issues[0].message.contains("denied"));
+}
+
+#[test]
+fn missing_candidate_warning_does_not_block_a_unique_resume_match() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_home = temp.path();
+    let default = user_home.join(".codex");
+    let work = user_home.join(".codex-work");
+    let stale = user_home.join(".codex-stale");
+    for directory in [&default, &work] {
+        fs::create_dir(directory).unwrap();
+    }
+
+    let discovered = discover_homes_from_with_sources(
+        user_home,
+        &default,
+        |path| {
+            if path == stale {
+                Err(io::ErrorKind::NotFound.into())
+            } else {
+                fs::metadata(path)
+            }
+        },
+        |_, inspect_entry| {
+            inspect_entry(Ok((OsString::from(".codex-work"), work.clone())));
+            inspect_entry(Ok((OsString::from(".codex-stale"), stale.clone())));
+            Ok(())
+        },
+    );
+
+    assert_eq!(discovered.paths, vec![default, work.clone()]);
+    assert_eq!(discovered.issues.len(), 1);
+    assert_eq!(
+        discovered.issues[0].kind,
+        DiscoveryIssueKind::CandidateMissing
+    );
+    assert!(discovered.resume_coverage_complete());
+    assert_eq!(
+        select_resume_home(
+            "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+            discovered,
+            vec![ThreadHomeProbe::Missing, ThreadHomeProbe::Found],
+        )
+        .unwrap(),
+        work.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -590,11 +592,12 @@ fn discovery_retains_current_home_when_user_home_scan_fails() {
     );
     assert_eq!(discovered.paths, vec![current]);
     assert!(
-        discovered.errors.iter().any(|error| {
-            error.contains(&user_home.display().to_string()) && error.contains("for Codex homes")
+        discovered.issues.iter().any(|issue| {
+            issue.message.contains(&user_home.display().to_string())
+                && issue.message.contains("for Codex homes")
         }),
         "{:?}",
-        discovered.errors
+        discovered.issues
     );
 }
 
@@ -629,7 +632,7 @@ fn discovery_processes_directory_entries_as_the_source_yields_them() {
     );
 
     assert_eq!(discovered.paths, vec![work, current]);
-    assert!(discovered.errors.is_empty());
+    assert!(discovered.issues.is_empty());
 }
 
 #[cfg(unix)]
@@ -642,7 +645,7 @@ fn homes_report_marks_lossy_non_utf8_paths() {
         false,
         DiscoveredHomes {
             paths: vec![home.clone()],
-            errors: Vec::new(),
+            issues: Vec::new(),
             representation_lossy: false,
         },
         &home,
@@ -740,6 +743,16 @@ fn dry_run_report_is_schema_versioned() {
 
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["representation_lossy"], false);
+
+    let resume = resume_dry_run_report(
+        Path::new("/tmp/.codex-work"),
+        &[
+            OsString::from("resume"),
+            OsString::from("019fe6e4-972f-7392-aaf3-58cb652a4e20"),
+        ],
+    );
+    assert_eq!(resume["command"], "codex resume");
+    assert_eq!(resume["args"][0], "resume");
 }
 
 #[cfg(unix)]
@@ -799,6 +812,94 @@ fn parallel_inspection_starts_new_work_before_a_slow_home_finishes() {
 }
 
 #[test]
+fn parallel_inspection_reports_completions_before_slow_work_finishes() {
+    let homes = vec![PathBuf::from("0"), PathBuf::from("1")];
+    let first_completion = Arc::new((Mutex::new(false), Condvar::new()));
+    let mut completion_order = Vec::new();
+
+    let inspected = inspect_homes_parallel(
+        &homes,
+        |home| {
+            let index = home
+                .to_string_lossy()
+                .parse::<usize>()
+                .expect("test home should contain its index");
+            if index == 0 {
+                let (completed, wake) = &*first_completion;
+                let completed = completed.lock().unwrap();
+                let (completed, _) = wake
+                    .wait_timeout_while(completed, Duration::from_secs(1), |completed| !*completed)
+                    .unwrap();
+                assert!(
+                    *completed,
+                    "a completed home was not reported while another worker was still running"
+                );
+            }
+            json!({ "index": index })
+        },
+        |index, _| {
+            completion_order.push(index);
+            if index == 1 {
+                let (completed, wake) = &*first_completion;
+                *completed.lock().unwrap() = true;
+                wake.notify_all();
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(completion_order, vec![1, 0]);
+    assert_eq!(inspected[0]["index"], 0);
+    assert_eq!(inspected[1]["index"], 1);
+}
+
+#[test]
+fn parallel_inspection_drains_workers_after_progress_error() {
+    let homes = (0..5)
+        .map(|index| PathBuf::from(index.to_string()))
+        .collect::<Vec<_>>();
+    let progress_failed = Arc::new((Mutex::new(false), Condvar::new()));
+    let completed = Arc::new(AtomicUsize::new(0));
+    let mut callbacks = Vec::new();
+
+    let error = inspect_homes_parallel(
+        &homes,
+        |home| {
+            let index = home
+                .to_string_lossy()
+                .parse::<usize>()
+                .expect("test home should contain its index");
+            if index != 0 {
+                let (failed, wake) = &*progress_failed;
+                let failed = failed.lock().unwrap();
+                let (failed, _) = wake
+                    .wait_timeout_while(failed, Duration::from_secs(1), |failed| !*failed)
+                    .unwrap();
+                assert!(
+                    *failed,
+                    "workers were not released after the progress callback failed"
+                );
+            }
+            completed.fetch_add(1, Ordering::SeqCst);
+            json!({ "index": index })
+        },
+        |index, _| {
+            callbacks.push(index);
+            let (failed, wake) = &*progress_failed;
+            *failed.lock().unwrap() = true;
+            wake.notify_all();
+            Err(anyhow::anyhow!("simulated progress failure"))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "simulated progress failure");
+    assert_eq!(callbacks, vec![0]);
+    assert_eq!(completed.load(Ordering::SeqCst), homes.len());
+}
+
+#[test]
 fn panicking_inspection_is_enriched_before_progress_is_reported() {
     let homes = vec![PathBuf::from("/tmp/.codex-work")];
     let mut completed = Vec::new();
@@ -839,7 +940,7 @@ fn discovery_finds_conventional_and_current_homes_and_ignores_other_directories(
     let discovered = discover_homes_from(&user_home, &current);
 
     assert_eq!(discovered.paths, vec![default, work, current]);
-    assert!(discovered.errors.is_empty());
+    assert!(discovered.issues.is_empty());
 }
 
 #[test]
@@ -891,329 +992,4 @@ fn discovered_non_utf8_names_do_not_collide_through_lossy_display() {
 
     assert!(!home_name_matches(&first, &second_name));
     assert!(home_name_matches(&second, &second_name));
-}
-
-#[test]
-fn app_server_protocol_completes_handshake_before_account_requests() {
-    let responses = concat!(
-        "{\"id\":0,\"result\":{}}\n",
-        "{\"method\":\"account/updated\",\"params\":{}}\n",
-        "{\"id\":1,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"person@example.com\",\"planType\":\"pro\"}}}\n",
-        "{\"id\":2,\"result\":{\"rateLimitsByLimitId\":{}}}\n"
-    );
-    let mut reader = Cursor::new(responses.as_bytes());
-    let mut requests = Vec::new();
-
-    let response = app_server_protocol(&mut requests, &mut reader, true, None, &|| false).unwrap();
-
-    assert_eq!(response.account["account"]["email"], "person@example.com");
-    assert!(response.rate_limits.is_some());
-    let messages = String::from_utf8(requests)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<JsonValue>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(messages[0]["method"], "initialize");
-    assert_eq!(messages[1]["method"], "initialized");
-    assert_eq!(messages[2]["method"], "account/read");
-    assert_eq!(messages[3]["method"], "account/rateLimits/read");
-    assert_eq!(messages[2]["params"]["refreshToken"], false);
-}
-
-#[test]
-fn app_server_protocol_stops_before_writing_when_cancelled() {
-    let mut reader = Cursor::new(Vec::<u8>::new());
-    let mut requests = Vec::new();
-
-    let error = app_server_protocol(&mut requests, &mut reader, true, None, &|| true).unwrap_err();
-
-    assert_eq!(error, "Codex app-server inspection was cancelled");
-    assert!(requests.is_empty());
-}
-
-#[test]
-fn app_server_protocol_keeps_account_when_usage_is_unavailable() {
-    let responses = concat!(
-        "{\"id\":0,\"result\":{}}\n",
-        "{\"id\":1,\"result\":{\"account\":{\"type\":\"apiKey\"}}}\n",
-        "{\"id\":2,\"error\":{\"message\":\"rate limits require ChatGPT auth\"}}\n"
-    );
-    let mut reader = Cursor::new(responses.as_bytes());
-    let mut requests = Vec::new();
-
-    let response = app_server_protocol(&mut requests, &mut reader, true, None, &|| false).unwrap();
-
-    assert_eq!(response.account["account"]["type"], "apiKey");
-    assert!(response.rate_limits.is_none());
-    assert_eq!(
-        response.usage_error.as_deref(),
-        Some("account/rateLimits/read failed: rate limits require ChatGPT auth")
-    );
-}
-
-#[test]
-fn app_server_protocol_keeps_account_when_usage_response_never_arrives() {
-    let responses = concat!(
-        "{\"id\":0,\"result\":{}}\n",
-        "{\"id\":1,\"result\":{\"account\":{\"type\":\"chatgpt\",\"email\":\"person@example.com\"}}}\n"
-    );
-    let mut reader = Cursor::new(responses.as_bytes());
-    let mut requests = Vec::new();
-
-    let response = app_server_protocol(&mut requests, &mut reader, true, None, &|| false).unwrap();
-
-    assert_eq!(response.account["account"]["email"], "person@example.com");
-    assert!(response.rate_limits.is_none());
-    assert!(
-        response
-            .usage_error
-            .as_deref()
-            .is_some_and(|error| error.contains("closed before returning"))
-    );
-}
-
-#[test]
-fn app_server_protocol_propagates_cancellation_after_account_response() {
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let source = CancelAfterEofReader {
-        bytes: concat!(
-            "{\"id\":0,\"result\":{}}\n",
-            "{\"id\":1,\"result\":{\"account\":{\"type\":\"chatgpt\"}}}\n"
-        )
-        .as_bytes(),
-        offset: 0,
-        cancelled: Arc::clone(&cancelled),
-    };
-    let mut reader = BufReader::new(source);
-    let mut requests = Vec::new();
-
-    let error = app_server_protocol(&mut requests, &mut reader, true, None, &|| {
-        cancelled.load(Ordering::Acquire)
-    })
-    .unwrap_err();
-
-    assert_eq!(error, APP_SERVER_INSPECTION_CANCELLED);
-}
-
-#[test]
-fn app_server_protocol_does_not_wait_for_usage_after_logged_out_account() {
-    let responses = concat!(
-        "{\"id\":0,\"result\":{}}\n",
-        "{\"id\":1,\"result\":{\"account\":null}}\n"
-    );
-    let mut reader = Cursor::new(responses.as_bytes());
-    let mut requests = Vec::new();
-
-    let response = app_server_protocol(&mut requests, &mut reader, true, None, &|| false).unwrap();
-
-    assert!(response.account["account"].is_null());
-    assert!(response.rate_limits.is_none());
-    assert!(response.usage_error.is_none());
-}
-
-#[test]
-fn app_server_protocol_rejects_a_newline_free_oversized_message() {
-    let oversized = vec![b'x'; APP_SERVER_PROTOCOL_MESSAGE_LIMIT + 1];
-    let mut reader = Cursor::new(oversized);
-
-    let error = read_next_response(&mut reader, None, &|| false).unwrap_err();
-
-    assert_eq!(error, protocol_message_too_large());
-}
-
-#[test]
-fn app_server_protocol_accepts_an_exact_limit_payload_plus_newline() {
-    let mut message = br#"{"id":1}"#.to_vec();
-    message.resize(APP_SERVER_PROTOCOL_MESSAGE_LIMIT, b' ');
-    message.push(b'\n');
-    let mut reader = Cursor::new(message);
-
-    let response = read_next_response(&mut reader, None, &|| false).unwrap();
-
-    assert_eq!(response["id"], 1);
-}
-
-#[test]
-fn app_server_protocol_reports_eof_in_a_partial_protocol_line() {
-    let mut reader = Cursor::new(br#"{\"id\":1"#.to_vec());
-
-    let error = read_next_response(&mut reader, None, &|| false).unwrap_err();
-
-    assert_eq!(error, "app-server closed before completing a protocol line");
-}
-
-#[test]
-fn app_server_protocol_preserves_fragmented_nonblocking_utf8_lines() {
-    let source = FragmentedNonblockingReader {
-        bytes: "{\"id\":1,\"result\":\"é\"}\n".as_bytes(),
-        offset: 0,
-        would_block: false,
-    };
-    let mut reader = BufReader::with_capacity(4, source);
-
-    let response = read_next_response(
-        &mut reader,
-        Instant::now().checked_add(Duration::from_secs(1)),
-        &|| false,
-    )
-    .unwrap();
-
-    assert_eq!(response["result"], "é");
-}
-
-#[test]
-fn app_server_protocol_deadline_survives_continuous_irrelevant_messages() {
-    let source = RepeatingReader {
-        bytes: b"{\"method\":\"tick\"}\n",
-        offset: 0,
-    };
-    let mut reader = BufReader::with_capacity(128, source);
-    let started = Instant::now();
-
-    let error = read_response(
-        &mut reader,
-        99,
-        Instant::now().checked_add(Duration::from_millis(20)),
-        &|| false,
-    )
-    .unwrap_err();
-
-    assert_eq!(error, "Codex app-server protocol timed out");
-    assert!(started.elapsed() < Duration::from_secs(1));
-}
-
-#[cfg(unix)]
-#[test]
-fn app_server_client_interacts_with_and_cleans_up_a_long_lived_process_tree() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("codex-home");
-    fs::create_dir(&home).unwrap();
-    let stub = temp.path().join("codex-stub.sh");
-    fs::write(
-        &stub,
-        r#"#!/bin/sh
-read -r initialize
-printf '%s\n' '{"id":0,"result":{}}'
-read -r initialized
-read -r account
-read -r limits
-printf '%s\n' '{"id":1,"result":{"account":{"type":"chatgpt","email":"stub@example.com","planType":"plus"}}}'
-printf '%s\n' '{"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":300}}}}'
-sleep 30
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-
-    let response = app_server_account_with_timeout(
-        &home,
-        stub.as_os_str(),
-        true,
-        Duration::from_secs(2),
-        &|| false,
-    )
-    .unwrap();
-
-    assert_eq!(response.account["account"]["email"], "stub@example.com");
-    assert_eq!(
-        response.rate_limits.unwrap()["rateLimits"]["limitId"],
-        "codex"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn app_server_client_surfaces_bounded_stderr_from_startup_failures() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("codex-home");
-    fs::create_dir(&home).unwrap();
-    let stub = temp.path().join("codex-stub.sh");
-    fs::write(
-        &stub,
-        r#"#!/bin/sh
-printf '%s\n' 'unsupported app-server subcommand' >&2
-dd if=/dev/zero bs=1024 count=128 2>/dev/null | tr '\000' x >&2
-exit 64
-"#,
-    )
-    .unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-    let started = Instant::now();
-
-    let error = app_server_account_with_timeout(
-        &home,
-        stub.as_os_str(),
-        false,
-        Duration::from_secs(2),
-        &|| false,
-    )
-    .unwrap_err();
-
-    assert!(
-        error.contains("unsupported app-server subcommand"),
-        "{error}"
-    );
-    assert!(error.len() < 512, "stderr preview was not bounded: {error}");
-    assert!(started.elapsed() < Duration::from_secs(1));
-}
-#[cfg(unix)]
-#[test]
-fn app_server_client_bounds_an_unresponsive_child() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("codex-home");
-    fs::create_dir(&home).unwrap();
-    let stub = temp.path().join("codex-stub.sh");
-    fs::write(&stub, "#!/bin/sh\nsleep 30\n").unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-
-    let error = app_server_account_with_timeout(
-        &home,
-        stub.as_os_str(),
-        false,
-        Duration::from_millis(50),
-        &|| false,
-    )
-    .unwrap_err();
-
-    assert!(error.contains("timed out"), "{error}");
-}
-
-#[cfg(unix)]
-#[test]
-fn app_server_client_cancels_during_a_live_inspection() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("codex-home");
-    fs::create_dir(&home).unwrap();
-    let stub = temp.path().join("codex-stub.sh");
-    fs::write(&stub, "#!/bin/sh\nsleep 30\n").unwrap();
-    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let started = Instant::now();
-
-    let error = std::thread::scope(|scope| {
-        let cancellation = Arc::clone(&cancelled);
-        scope.spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            cancellation.store(true, Ordering::Release);
-        });
-        app_server_account_with_timeout(
-            &home,
-            stub.as_os_str(),
-            false,
-            Duration::from_secs(2),
-            &|| cancelled.load(Ordering::Acquire),
-        )
-        .unwrap_err()
-    });
-
-    assert!(error.contains("cancelled"), "{error}");
-    assert!(started.elapsed() < Duration::from_secs(1));
 }

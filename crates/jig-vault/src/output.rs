@@ -76,6 +76,7 @@ impl fmt::Debug for PreparedPrivateFile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputFailureStage {
     Preflight,
+    #[cfg(unix)]
     Sink,
 }
 
@@ -83,6 +84,7 @@ impl OutputFailureStage {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Preflight => "sink_preflight",
+            #[cfg(unix)]
             Self::Sink => "sink",
         }
     }
@@ -196,6 +198,7 @@ mod unix {
 
     use super::{OutputFailureStage, OutputInstallFailure};
     use crate::VaultErrorKind;
+    use crate::path_security::is_trusted_root_alias;
 
     pub(super) fn preflight_private_destination(
         path: &Path,
@@ -496,7 +499,7 @@ mod unix {
                     ancestor.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
                 bail!(
                     "refusing private vault output through symlinked parent {}",
                     ancestor.display()

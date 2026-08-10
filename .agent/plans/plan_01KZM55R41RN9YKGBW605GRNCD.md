@@ -1,0 +1,5 @@
+Replace lossy discovery/probe state with typed evidence, distinguish harmless missing candidates from incomplete coverage, model cancellation explicitly, support known Codex missing-thread response variants, add lookup progress and safe remediation text, expand focused coverage, and preserve process cleanup/CLI/JSON contracts.
+
+Implemented typed discovery issues and resume probe failures, fail-closed uniqueness based on lookup coverage, cancellation dominance, exact UUID-bound app-server compatibility variants, terminal lookup progress with silent JSON, safer remediation text, and focused unit/PTY/documentation coverage. Focused tests, fmt, library Clippy, and diff checks pass.
+
+Final audit found and fixed cancellation stderr decoration: app-server cancellation remains an exact control-flow sentinel even if the child emitted diagnostics, so resume classification cannot downgrade cancellation into an inspection failure. Added a live process regression test; Codex unit suite now passes 78 tests and scoped Clippy remains clean.

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_vault::{SecretBytes, Vault, validate_new_vault_passphrase};
+#[cfg(unix)]
+use jig_vault::SecretBytes;
+use jig_vault::{Vault, validate_new_vault_passphrase};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use zeroize::Zeroizing;

@@ -425,21 +425,27 @@ fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
     let valid_destination = temp.path().join("valid-output.env");
     std::fs::write(&valid_source, b"TOKEN=op://Test/Login/TOKEN\n").unwrap();
 
-    let non_utf8_source = temp
-        .path()
-        .join(std::ffi::OsString::from_vec(b"source-\xff.env".to_vec()));
-    std::fs::write(&non_utf8_source, b"TOKEN=op://Test/Login/TOKEN\n").unwrap();
-    let source_error = import_output(
-        temp.path(),
-        &home,
-        &fake_bin,
-        &log,
-        &non_utf8_source,
-        &valid_destination,
-        &[],
-    );
-    assert!(!source_error.status.success());
-    assert!(combined_output(&source_error).contains("source path is not valid UTF-8"));
+    // macOS rejects non-UTF-8 path components at the filesystem boundary, so
+    // it cannot materialize the source or vault home needed to reach the
+    // recovery-metadata validation exercised by these two cases.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let non_utf8_source = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"source-\xff.env".to_vec()));
+        std::fs::write(&non_utf8_source, b"TOKEN=op://Test/Login/TOKEN\n").unwrap();
+        let source_error = import_output(
+            temp.path(),
+            &home,
+            &fake_bin,
+            &log,
+            &non_utf8_source,
+            &valid_destination,
+            &[],
+        );
+        assert!(!source_error.status.success());
+        assert!(combined_output(&source_error).contains("source path is not valid UTF-8"));
+    }
 
     let non_utf8_destination = temp.path().join(std::ffi::OsString::from_vec(
         b"destination-\xff.env".to_vec(),
@@ -456,24 +462,28 @@ fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
     assert!(!destination_error.status.success());
     assert!(combined_output(&destination_error).contains("destination path is not valid UTF-8"));
 
-    let non_utf8_home = temp
-        .path()
-        .join(std::ffi::OsString::from_vec(b"vault-\xff-home".to_vec()));
-    let non_utf8_vault = Vault::resolve(Some(non_utf8_home.clone())).unwrap();
-    non_utf8_vault
-        .init(&SecretString::from(PASSPHRASE.to_owned()))
-        .unwrap();
-    let home_error = import_output(
-        temp.path(),
-        &non_utf8_home,
-        &fake_bin,
-        &log,
-        &valid_source,
-        &valid_destination,
-        &[],
-    );
-    assert!(!home_error.status.success());
-    assert!(combined_output(&home_error).contains("vault home path is not valid UTF-8"));
+    #[cfg(not(target_os = "macos"))]
+    let non_utf8_vault = {
+        let non_utf8_home = temp
+            .path()
+            .join(std::ffi::OsString::from_vec(b"vault-\xff-home".to_vec()));
+        let non_utf8_vault = Vault::resolve(Some(non_utf8_home.clone())).unwrap();
+        non_utf8_vault
+            .init(&SecretString::from(PASSPHRASE.to_owned()))
+            .unwrap();
+        let home_error = import_output(
+            temp.path(),
+            &non_utf8_home,
+            &fake_bin,
+            &log,
+            &valid_source,
+            &valid_destination,
+            &[],
+        );
+        assert!(!home_error.status.success());
+        assert!(combined_output(&home_error).contains("vault home path is not valid UTF-8"));
+        non_utf8_vault
+    };
 
     assert!(
         !log.exists(),
@@ -483,6 +493,7 @@ fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
     assert!(!non_utf8_destination.exists());
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     assert!(vault.list_fields(&passphrase).unwrap().is_empty());
+    #[cfg(not(target_os = "macos"))]
     assert!(non_utf8_vault.list_fields(&passphrase).unwrap().is_empty());
 }
 

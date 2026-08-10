@@ -52,6 +52,10 @@ fn top_level_help_describes_common_commands() {
     assert_help_contains(&help, "Summarize repo Jig configuration");
     assert_help_contains(&help, "Manage structured work plans");
     assert_help_contains(&help, "Inspect or bootstrap local agent tooling");
+    assert_help_contains(
+        &help,
+        "Inspect Codex homes, launch Codex, or resume a session from its owning home",
+    );
     assert_help_contains(&help, "Manage user, repo, and prompt-pack prompt libraries");
     assert_help_omits(&help, "generate-sqlx-unchecked-queries-todo");
 }
@@ -397,6 +401,16 @@ fn codex_help_distinguishes_homes_from_configuration_profiles() {
     assert_help_contains(
         &launch_help,
         "jig codex launch codex-1 --dry-run -- --search",
+    );
+
+    let resume_help = rendered_help(&["codex", "resume"]);
+    assert_help_contains(&resume_help, "queries every discovered Codex home");
+    assert_help_contains(&resume_help, "--home");
+    assert_help_contains(&resume_help, "show lookup progress");
+    assert_help_contains(&resume_help, "forwarded to `codex resume`");
+    assert_help_contains(
+        &resume_help,
+        "jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --dry-run -- --search",
     );
 }
 
