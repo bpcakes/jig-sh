@@ -318,7 +318,7 @@ fn generated_launcher_handoff_validates_and_reuses_the_loaded_context() {
 }
 
 #[test]
-fn generated_launcher_handoff_rejects_caller_relative_capability_commands() {
+fn generated_launcher_handoff_rejects_misclassified_capability_commands() {
     let cli = Cli::try_parse_from([
         "jig",
         "--__launcher-contract-version",
@@ -327,16 +327,8 @@ fn generated_launcher_handoff_rejects_caller_relative_capability_commands() {
         "runtime",
         "--__launcher-repo-root",
         "/tmp/wrong-repository",
-        "init",
-        "relative-destination",
-        "--preset",
-        "harness-only",
-        "--repo-name",
-        "fixture",
-        "--sqlx-enabled",
-        "false",
-        "--no-input",
-        "--no-vault",
+        "check",
+        "contract",
     ])
     .unwrap();
 
@@ -344,7 +336,7 @@ fn generated_launcher_handoff_rejects_caller_relative_capability_commands() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("must run independently of the launcher's repository"));
-    assert!(error.contains("without placing `--` before the command"));
+    assert!(error.contains("do not place `--` between `check` and `contract`"));
 }
 
 #[test]

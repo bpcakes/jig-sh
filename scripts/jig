@@ -114,48 +114,44 @@ jig_capability_only_requested() {
           ;;
       esac
     fi
-    case "$arg" in
-      *)
+    case "$capability_command" in
+      '')
+        capability_command="$arg"
         case "$capability_command" in
-          '')
-            capability_command="$arg"
-            case "$capability_command" in
-              # jig-capability-only-subcommands-begin
-              adopt | codex | doctor | init | presets | update)
-                # jig-capability-only-subcommands-end
-                return 0
-                ;;
-              check)
-                ;;
-              # jig-repository-scope-subcommands-begin
-              agent | agent-map | bootstrap | dev | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
-                # jig-repository-scope-subcommands-end
-                return 1
-                ;;
-              *)
-                # Unknown top-level commands only need a capable parser. Let
-                # Clap report the typo even when this repository is broken.
-                return 0
-                ;;
-            esac
+          # jig-capability-only-subcommands-begin
+          adopt | codex | doctor | init | presets | update)
+            # jig-capability-only-subcommands-end
+            return 0
             ;;
           check)
-            case "$arg" in
-              -*)
-                return 1
-                ;;
-              contract)
-                return 0
-                ;;
-              # jig-strict-check-subcommands-begin
-              fmt | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
-                # jig-strict-check-subcommands-end
-                return 1
-                ;;
-              *)
-                return 0
-                ;;
-            esac
+            ;;
+          # jig-repository-scope-subcommands-begin
+          agent | agent-map | bootstrap | dev | generate-sqlx-unchecked-queries-todo | info | loop | mcp | migration-add | prompt | proxy | schema-dump | setup | sqlx | state | status | ui | vault | work)
+            # jig-repository-scope-subcommands-end
+            return 1
+            ;;
+          *)
+            # Unknown top-level commands only need a capable parser. Let
+            # Clap report the typo even when this repository is broken.
+            return 0
+            ;;
+        esac
+        ;;
+      check)
+        case "$arg" in
+          -*)
+            return 1
+            ;;
+          contract)
+            return 0
+            ;;
+          # jig-strict-check-subcommands-begin
+          fmt | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
+            # jig-strict-check-subcommands-end
+            return 1
+            ;;
+          *)
+            return 0
             ;;
         esac
         ;;
