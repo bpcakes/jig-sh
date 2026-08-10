@@ -50,9 +50,11 @@ Examples:
   printf '%s' 'false' | jig vault field set jig://Production/RESTIC_COMPRESSION --text --value-stdin";
 
 const VAULT_MIGRATE_AFTER_HELP: &str = "\
-Upgrade an existing version 1 vault explicitly before changing fields with the
-field-oriented commands. The migration is one-way and retains existing values
-as concealed fields.
+New Jig can read, reveal, inject, and execute from version 1 vaults, treating
+every value as concealed. Upgrade explicitly before field mutation, import,
+passphrase rotation, or backup. The migration is one-way, retains existing
+values as concealed fields, and produces version 2 state that old Jig rejects
+instead of misreading.
 
 Example:
   jig vault migrate --to 2";
@@ -61,7 +63,8 @@ const VAULT_READ_AFTER_HELP: &str = "\
 Read one encrypted field through a controlled byte-oriented output path. When
 stdout is a terminal, --reveal is required. Piped or redirected stdout receives
 the exact field bytes without an added newline. --out-file writes a private file
-and refuses an existing destination unless --overwrite is explicit.
+and refuses an existing destination unless --overwrite is explicit. Exact stdout
+is portable; private file sinks are currently Unix-only.
 
 Examples:
   jig vault read jig://Production/RESTIC_PASSWORD | command
@@ -73,7 +76,7 @@ Replace only {{ jig://ITEM/FIELD }} placeholders in a bounded template. Pass
 --in - explicitly to read the template from stdin. When stdout is a terminal,
 --reveal is required. Piped or redirected stdout receives the exact rendered
 bytes without an added newline. --out-file uses the same private-file and
-explicit-overwrite rules as vault read.
+explicit-overwrite rules as vault read and is currently Unix-only.
 
 Examples:
   jig vault inject --in config.template > config
@@ -99,7 +102,8 @@ bind a vault field.
 
 Unlike exec, the older vault run command injects selected legacy secret names
 into a cleaned, closed-stdin child with buffered/capped output, a timeout, and
-owned process-tree cleanup.
+owned process-tree cleanup. Exec is transparent, not a sandbox or a substitute
+for run's constrained agent boundary.
 
 Example:
   jig vault exec --env-file .env.jig -- sh -c 'printf \"%s\" \"$TOKEN\"'";
@@ -118,13 +122,51 @@ Dry-run parses and validates the source, unlocks the vault to report whether
 each field would be created or replaced, and never invokes `op` or mutates data.
 
 If destination installation fails after the atomic vault commit, rerun the same
-command with --replace --overwrite to converge without resolving ambiguity.";
+command with --replace --overwrite to converge without resolving ambiguity.
+The importer is a one-time local conversion tool; it does not synchronize with
+1Password after a successful import. Private destination installation is
+currently Unix-only.";
+
+const VAULT_PASSPHRASE_CHANGE_AFTER_HELP: &str = "\
+Reseals the complete version 2 vault under a new passphrase without changing
+its fields, identity, or timestamps. Interactive use prompts once for the
+current passphrase and twice for the new passphrase. Non-interactive use must
+set both JIG_VAULT_PASSPHRASE and JIG_VAULT_NEW_PASSPHRASE. Passphrases are
+never accepted as command-line arguments.
+
+Example:
+  jig vault passphrase change";
+
+const VAULT_BACKUP_CREATE_AFTER_HELP: &str = "\
+Creates a separate owner-only encrypted backup containing the exact version 2
+vault state and audit log. The backup is encrypted with the vault's current
+passphrase and remains decryptable with that passphrase after a later
+passphrase change. The destination is installed atomically and is never sent
+to stdout; an existing file requires --overwrite. Private backup creation is
+currently Unix-only.
+
+Example:
+  jig vault backup create --out ./project-vault.backup";
+
+const VAULT_BACKUP_RESTORE_AFTER_HELP: &str = "\
+Restores an encrypted backup into the selected vault home. The complete target
+home must be absent; an existing directory, even an empty one, is never
+overwritten. Use --home to restore into a distinct explicit location. The
+backup is read from a bounded regular file; --in - and symbolic links are
+rejected. Restore is currently Linux-only because other platforms do not yet
+provide the required atomic absent-directory installation path.
+
+Example:
+  jig vault backup restore --in ./project-vault.backup --home ./restored-vault";
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
     #[command(name = tool_defs::cli_command::VAULT_AUDIT, subcommand)]
     Audit(VaultAuditCommand),
+    /// Create or restore an encrypted vault backup.
+    #[command(name = tool_defs::cli_command::VAULT_BACKUP, subcommand)]
+    Backup(VaultBackupCommand),
     /// Create a local encrypted vault.
     #[command(
         name = tool_defs::cli_command::VAULT_INIT,
@@ -140,6 +182,9 @@ pub(crate) enum VaultCommand {
         after_help = VAULT_MIGRATE_AFTER_HELP
     )]
     Migrate(VaultMigrateOpts),
+    /// Change the selected vault's passphrase.
+    #[command(name = tool_defs::cli_command::VAULT_PASSPHRASE, subcommand)]
+    Passphrase(VaultPassphraseCommand),
     /// Add, list, or remove encrypted vault fields.
     #[command(name = tool_defs::cli_command::VAULT_FIELD, subcommand)]
     Field(VaultFieldCommand),
@@ -177,6 +222,68 @@ pub(crate) enum VaultAuditCommand {
     /// Verify the local tamper-evident audit chain.
     #[command(name = tool_defs::cli_command::VAULT_AUDIT_VERIFY)]
     Verify(VaultAuditVerifyOpts),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum VaultBackupCommand {
+    /// Create an encrypted backup of the selected vault and audit log.
+    #[command(
+        name = tool_defs::cli_command::VAULT_BACKUP_CREATE,
+        after_help = VAULT_BACKUP_CREATE_AFTER_HELP
+    )]
+    Create(VaultBackupCreateOpts),
+    /// Restore an encrypted backup into an entirely absent vault home.
+    #[command(
+        name = tool_defs::cli_command::VAULT_BACKUP_RESTORE,
+        after_help = VAULT_BACKUP_RESTORE_AFTER_HELP
+    )]
+    Restore(VaultBackupRestoreOpts),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum VaultPassphraseCommand {
+    /// Reseal the selected vault under a new passphrase.
+    #[command(
+        name = tool_defs::cli_command::VAULT_PASSPHRASE_CHANGE,
+        after_help = VAULT_PASSPHRASE_CHANGE_AFTER_HELP
+    )]
+    Change(VaultPassphraseChangeOpts),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultBackupCreateOpts {
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Owner-only encrypted backup destination; - is rejected"
+    )]
+    pub(crate) out: PathBuf,
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Atomically replace an existing regular backup file"
+    )]
+    pub(crate) overwrite: bool,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct VaultBackupRestoreOpts {
+    #[arg(
+        long = "in",
+        value_name = "FILE",
+        help = "Bounded encrypted backup file; - and symbolic links are rejected"
+    )]
+    pub(crate) input: PathBuf,
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct VaultPassphraseChangeOpts {
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
 }
 
 #[derive(Debug, Subcommand)]

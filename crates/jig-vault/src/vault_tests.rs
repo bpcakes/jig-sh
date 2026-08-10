@@ -6,6 +6,8 @@ use secrecy::SecretString;
 use std::io::{self, Write};
 use zeroize::Zeroizing;
 
+#[path = "vault_tests/lifecycle.rs"]
+mod lifecycle;
 fn passphrase() -> SecretString {
     SecretString::from("correct horse battery staple".to_string())
 }
@@ -1564,47 +1566,6 @@ fn tampered_audit_rejects_reveal_start_before_any_value_is_prepared() {
     assert!(output.is_empty());
     assert!(!format!("{error:#}").contains("audit-failure-sentinel"));
     assert_eq!(vault.store.read_audit_text().unwrap().unwrap(), tampered);
-}
-
-#[cfg(unix)]
-#[test]
-fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
-    vault.init(&passphrase()).unwrap();
-    let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
-    let value = b"private-file-sentinel";
-    vault
-        .set_field(
-            &passphrase(),
-            reference.clone(),
-            FieldKind::Concealed,
-            SecretBytes::new(value.to_vec()),
-        )
-        .unwrap();
-    let output = temp.path().join("rendered.bin");
-
-    let result = vault
-        .read_field_to_file(&passphrase(), reference.clone(), &output, false)
-        .unwrap();
-    assert_eq!(result.bytes_written, value.len());
-    assert_eq!(std::fs::read(&output).unwrap(), value);
-    assert_eq!(
-        std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-
-    let error = vault
-        .read_field_to_file(&passphrase(), reference, &output, false)
-        .unwrap_err();
-    assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
-    assert_eq!(std::fs::read(&output).unwrap(), value);
-    let events = audit_events(&vault.store);
-    assert_eq!(events[events.len() - 2].action, "field_read_start");
-    assert_eq!(events.last().unwrap().action, "field_read_failed");
-    assert_eq!(events.last().unwrap().details["stage"], "sink_preflight");
 }
 
 #[test]

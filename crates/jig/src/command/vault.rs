@@ -3,14 +3,19 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use jig_vault::{InjectionTemplate, SecretBytes, VaultItem, VaultReference};
+use jig_vault::{
+    BackupCreateRequest, BackupRestoreRequest, InjectionTemplate, SecretBytes, VaultItem,
+    VaultReference,
+};
 
 #[derive(Debug)]
 pub(crate) enum VaultCommand {
     Audit(VaultAuditCommand),
+    Backup(VaultBackupCommand),
     Init(VaultInitRequest),
     Status(VaultStatusRequest),
     Migrate(VaultMigrateRequest),
+    Passphrase(VaultPassphraseCommand),
     Exec(VaultExecRequest),
     Import(VaultImportCommand),
     Field(VaultFieldCommand),
@@ -23,6 +28,17 @@ pub(crate) enum VaultCommand {
 #[derive(Debug)]
 pub(crate) enum VaultAuditCommand {
     Verify(VaultAuditVerifyRequest),
+}
+
+#[derive(Debug)]
+pub(crate) enum VaultBackupCommand {
+    Create(VaultBackupCreateRequest),
+    Restore(Box<VaultBackupRestoreRequest>),
+}
+
+#[derive(Debug)]
+pub(crate) enum VaultPassphraseCommand {
+    Change(VaultPassphraseChangeRequest),
 }
 
 #[derive(Debug)]
@@ -109,6 +125,47 @@ pub(crate) struct VaultMigrateRequest {
 #[derive(Debug)]
 pub(crate) struct VaultAuditVerifyRequest {
     pub(crate) vault: VaultRuntimeOptions,
+}
+
+pub(crate) struct VaultBackupCreateRequest {
+    pub(crate) output: PathBuf,
+    pub(crate) overwrite: bool,
+    pub(crate) prepared: Option<BackupCreateRequest>,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+pub(crate) struct VaultBackupRestoreRequest {
+    pub(crate) input: PathBuf,
+    pub(crate) prepared: Option<BackupRestoreRequest>,
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultPassphraseChangeRequest {
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+impl std::fmt::Debug for VaultBackupCreateRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultBackupCreateRequest")
+            .field("output", &self.output)
+            .field("overwrite", &self.overwrite)
+            .field("prepared", &self.prepared.as_ref().map(|_| "[REDACTED]"))
+            .field("vault", &self.vault)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for VaultBackupRestoreRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultBackupRestoreRequest")
+            .field("input", &self.input)
+            .field("prepared", &self.prepared.as_ref().map(|_| "[REDACTED]"))
+            .field("vault", &self.vault)
+            .finish()
+    }
 }
 
 #[derive(Debug)]

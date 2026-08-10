@@ -12,6 +12,10 @@ type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuditAction {
+    BackupFailed,
+    BackupFinish,
+    BackupRestore,
+    BackupStart,
     BrokeredRunFailed,
     BrokeredRunFinish,
     BrokeredRunStart,
@@ -23,6 +27,7 @@ pub(crate) enum AuditAction {
     FieldReadFinish,
     FieldReadStart,
     OnePasswordImport,
+    PassphraseChange,
     SecretRemove,
     SecretSet,
     TemplateInjectFailed,
@@ -35,6 +40,10 @@ pub(crate) enum AuditAction {
 impl AuditAction {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
+            Self::BackupFailed => "backup_failed",
+            Self::BackupFinish => "backup_finish",
+            Self::BackupRestore => "backup_restore",
+            Self::BackupStart => "backup_start",
             Self::BrokeredRunFailed => "brokered_run_failed",
             Self::BrokeredRunFinish => "brokered_run_finish",
             Self::BrokeredRunStart => "brokered_run_start",
@@ -46,6 +55,7 @@ impl AuditAction {
             Self::FieldReadFinish => "field_read_finish",
             Self::FieldReadStart => "field_read_start",
             Self::OnePasswordImport => "onepassword_import",
+            Self::PassphraseChange => "passphrase_change",
             Self::SecretRemove => "secret_remove",
             Self::SecretSet => "secret_set",
             Self::TemplateInjectFailed => "template_inject_failed",

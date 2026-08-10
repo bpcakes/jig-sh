@@ -47,6 +47,36 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
                 .unwrap_or(false);
             lines.push(format!("  Exists: {}", if exists { "yes" } else { "no" }));
         }
+        "vault passphrase change" => {
+            if let Some(changed) = value_bool(value, "changed") {
+                lines.push(format!("  Changed: {}", if changed { "yes" } else { "no" }));
+            }
+        }
+        "vault backup create" => {
+            if let Some(backup) = value_str(value, "backup") {
+                lines.push(format!("  Backup: {backup}"));
+            }
+            if let Some(version) = value_u64(value, "backup_version") {
+                lines.push(format!("  Backup version: {version}"));
+            }
+            if let Some(bytes) = value_u64(value, "bytes_written") {
+                lines.push(format!("  Bytes written: {bytes}"));
+            }
+        }
+        "vault backup restore" => {
+            if let Some(backup) = value_str(value, "backup") {
+                lines.push(format!("  Backup: {backup}"));
+            }
+            if let Some(restored) = value_bool(value, "restored") {
+                lines.push(format!(
+                    "  Restored: {}",
+                    if restored { "yes" } else { "no" }
+                ));
+            }
+            if let Some(version) = value_u64(value, "format_version") {
+                lines.push(format!("  Vault format: {version}"));
+            }
+        }
         "vault migrate" => {
             if let Some(from_version) = value_u64(value, "from_version") {
                 lines.push(format!("  From version: {from_version}"));
@@ -206,5 +236,51 @@ mod tests {
         assert!(summary.contains("From version: 2"));
         assert!(summary.contains("To version: 2"));
         assert!(summary.contains("Changed: no"));
+    }
+
+    #[test]
+    fn lifecycle_summaries_report_only_public_metadata() {
+        let passphrase = "do-not-print-current-or-new-passphrase";
+        let changed = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault passphrase change",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "changed": true,
+            "unexpected_sensitive_field": passphrase,
+        }));
+        assert!(changed.contains("Changed: yes"));
+
+        let created = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault backup create",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/jig-vault",
+            "backup": "/tmp/jig-vault.backup",
+            "bytes_written": 4096,
+            "backup_version": 1,
+            "created_at_ms": 1,
+        }));
+        assert!(created.contains("Backup version: 1"));
+        assert!(created.contains("Bytes written: 4096"));
+        assert!(!created.contains("created_at_ms"));
+
+        let restored = format_vault_generic_summary(&json!({
+            "ok": true,
+            "command": "vault backup restore",
+            "vault_scope": "explicit-home",
+            "vault_home": "/tmp/restored-vault",
+            "backup": "/tmp/jig-vault.backup",
+            "restored": true,
+            "vault_id": "public-vault-id",
+            "format_version": 2,
+        }));
+        assert!(restored.contains("Restored: yes"));
+        assert!(restored.contains("Vault format: 2"));
+        assert!(!restored.contains("public-vault-id"));
+
+        for summary in [changed, created, restored] {
+            assert!(!summary.contains(passphrase));
+        }
     }
 }

@@ -23,6 +23,12 @@ fn reference(value: &str) -> VaultReference {
 
 fn initialized_vault() -> (tempfile::TempDir, PathBuf, Vault) {
     let temp = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let home = temp.path().join("vault-home");
     let vault = Vault::resolve(Some(home.clone())).unwrap();
     let passphrase = SecretString::from(PASSPHRASE.to_owned());

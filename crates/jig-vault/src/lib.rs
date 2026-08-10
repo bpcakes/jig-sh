@@ -1,4 +1,5 @@
 mod audit;
+mod backup;
 mod broker;
 mod crypto;
 mod env_policy;
@@ -17,6 +18,10 @@ mod types;
 mod vault;
 
 pub use audit::AuditVerification;
+pub use backup::{
+    BACKUP_FORMAT_VERSION, BackupCreateRequest, BackupCreateResult, BackupRestoreRequest,
+    BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES,
+};
 pub use broker::{BrokeredEnv, BrokeredFile, BrokeredRun};
 pub use error::{Result, VaultError, VaultErrorKind};
 pub use exec::{

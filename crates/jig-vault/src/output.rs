@@ -189,7 +189,7 @@ mod unix {
     use std::ffi::OsString;
     use std::fs::{self, File, OpenOptions};
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
     use anyhow::{Context, anyhow, bail};
@@ -215,19 +215,24 @@ mod unix {
         bytes: &[u8],
         overwrite: bool,
     ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
-        let path = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
+        let mut path = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
             stage: OutputFailureStage::Preflight,
             kind: preflight_error_kind(&error),
             error,
         })?;
-        if let Err(error) = write_temporary(&path, bytes) {
-            let _ = fs::remove_file(&path.temporary);
-            return Err(OutputInstallFailure {
-                stage: OutputFailureStage::Sink,
-                kind: install_error_kind(&error),
-                error,
-            });
-        }
+        path.temporary_identity = match write_temporary(&path, bytes) {
+            Ok(identity) => Some(identity),
+            Err(error) => {
+                // The create-new file is still owned by this operation here;
+                // no path-based handoff has occurred yet.
+                let _ = fs::remove_file(&path.temporary);
+                return Err(OutputInstallFailure {
+                    stage: OutputFailureStage::Sink,
+                    kind: install_error_kind(&error),
+                    error,
+                });
+            }
+        };
         Ok(PreparedPrivateOutput {
             path: Some(path),
             overwrite,
@@ -256,7 +261,7 @@ mod unix {
     impl Drop for PreparedPrivateOutput {
         fn drop(&mut self) {
             if let Some(path) = self.path.take() {
-                let _ = fs::remove_file(path.temporary);
+                let _ = remove_temporary_if_identity_matches(&path);
             }
         }
     }
@@ -265,6 +270,14 @@ mod unix {
         destination: PathBuf,
         parent: PathBuf,
         temporary: PathBuf,
+        temporary_identity: Option<FileIdentity>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct FileIdentity {
+        device: u64,
+        inode: u64,
+        owner: u32,
     }
 
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
@@ -284,6 +297,13 @@ mod unix {
                 parent.display()
             );
         }
+        let parent_mode = parent_metadata.permissions().mode();
+        if parent_mode & 0o022 != 0 && parent_mode & 0o1000 == 0 {
+            bail!(
+                "refusing private vault output in shared-writable non-sticky parent {}",
+                parent.display()
+            );
+        }
         inspect_destination(path, overwrite)?;
 
         let mut temporary_name = OsString::from(".");
@@ -297,10 +317,11 @@ mod unix {
             destination: path.to_path_buf(),
             temporary: parent.join(temporary_name),
             parent,
+            temporary_identity: None,
         })
     }
 
-    fn write_temporary(prepared: &PreparedPath, bytes: &[u8]) -> anyhow::Result<()> {
+    fn write_temporary(prepared: &PreparedPath, bytes: &[u8]) -> anyhow::Result<FileIdentity> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -332,7 +353,10 @@ mod unix {
                 prepared.destination.display()
             )
         })?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        if !metadata.is_file()
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.uid() != unsafe { libc::geteuid() }
+        {
             bail!(
                 "private vault output temporary file is not an owner-only regular file for {}",
                 prepared.destination.display()
@@ -344,7 +368,11 @@ mod unix {
                 prepared.destination.display()
             )
         })?;
-        Ok(())
+        Ok(FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            owner: metadata.uid(),
+        })
     }
 
     fn install(prepared: PreparedPath, overwrite: bool) -> anyhow::Result<()> {
@@ -352,13 +380,17 @@ mod unix {
             destination,
             parent,
             temporary,
+            temporary_identity,
         } = prepared;
+        let temporary_identity = temporary_identity
+            .expect("prepared private output records its temporary file identity");
         let result = (|| -> anyhow::Result<()> {
             // Recheck immediately before the atomic namespace operation. This
             // narrows same-user directory-entry races without claiming an OS
             // isolation boundary stronger than the containing directory.
             reject_symlinked_ancestors(&parent)?;
             inspect_destination(&destination, overwrite)?;
+            validate_temporary_identity(&temporary, temporary_identity)?;
             if overwrite {
                 fs::rename(&temporary, &destination).with_context(|| {
                     format!(
@@ -387,12 +419,64 @@ mod unix {
         })();
 
         if result.is_err() {
-            // The path is an exact same-directory name generated above. This
-            // cleanup never follows links and never targets user-selected
-            // directories. Preserve the primary failure if cleanup also fails.
-            let _ = fs::remove_file(&temporary);
+            // Remove only the exact inode this operation created. A replaced
+            // directory entry is never deleted during error cleanup.
+            let cleanup_path = PreparedPath {
+                destination,
+                parent,
+                temporary,
+                temporary_identity: Some(temporary_identity),
+            };
+            let _ = remove_temporary_if_identity_matches(&cleanup_path);
         }
         result
+    }
+
+    fn validate_temporary_identity(path: &Path, expected: FileIdentity) -> anyhow::Result<()> {
+        let metadata = fs::symlink_metadata(path).with_context(|| {
+            format!(
+                "failed to revalidate private output temporary file {}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.dev() != expected.device
+            || metadata.ino() != expected.inode
+            || metadata.uid() != expected.owner
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            bail!(
+                "private output temporary file identity changed before installation for {}",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn remove_temporary_if_identity_matches(prepared: &PreparedPath) -> anyhow::Result<()> {
+        let Some(identity) = prepared.temporary_identity else {
+            return Ok(());
+        };
+        match fs::symlink_metadata(&prepared.temporary) {
+            Ok(_) => validate_temporary_identity(&prepared.temporary, identity)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect private output temporary file {} during cleanup",
+                        prepared.temporary.display()
+                    )
+                });
+            }
+        }
+        fs::remove_file(&prepared.temporary).with_context(|| {
+            format!(
+                "failed to remove private output temporary file {}",
+                prepared.temporary.display()
+            )
+        })
     }
 
     fn reject_symlinked_ancestors(path: &Path) -> anyhow::Result<()> {
@@ -479,6 +563,12 @@ mod unix {
         use super::*;
         use std::os::unix::fs::{PermissionsExt, symlink};
 
+        fn private_tempdir() -> tempfile::TempDir {
+            let temp = tempfile::tempdir().unwrap();
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            temp
+        }
+
         fn install_private_bytes(
             path: &Path,
             bytes: &[u8],
@@ -489,7 +579,7 @@ mod unix {
 
         #[test]
         fn installs_owner_only_bytes_without_clobbering() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let output = temp.path().join("result.bin");
             install_private_bytes(&output, b"first\0bytes", false).unwrap();
             assert_eq!(fs::read(&output).unwrap(), b"first\0bytes");
@@ -512,7 +602,7 @@ mod unix {
 
         #[test]
         fn public_prepared_file_is_private_redacted_and_installs_only_when_consumed() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let output = temp.path().join("import.env");
             let contents = b"TOKEN=jig://Production/TOKEN\n";
             let prepared = crate::PreparedPrivateFile::prepare(
@@ -548,7 +638,7 @@ mod unix {
 
         #[test]
         fn public_preflight_is_non_writing_and_applies_overwrite_policy() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let output = temp.path().join("import.env");
             crate::PreparedPrivateFile::preflight(&output, false).unwrap();
             assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
@@ -563,7 +653,7 @@ mod unix {
 
         #[test]
         fn prepared_no_clobber_rechecks_destination_and_cleans_its_temporary() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let output = temp.path().join("import.env");
             let prepared = crate::PreparedPrivateFile::prepare(
                 &output,
@@ -580,10 +670,62 @@ mod unix {
         }
 
         #[test]
+        fn prepared_install_refuses_replaced_temporary_identity_for_both_policies() {
+            for overwrite in [false, true] {
+                let temp = private_tempdir();
+                let output = temp.path().join("result.bin");
+                if overwrite {
+                    fs::write(&output, b"original").unwrap();
+                }
+                let attacker = temp.path().join("attacker");
+                fs::write(&attacker, b"attacker-bytes").unwrap();
+                let prepared = prepare_private_bytes(&output, b"protected", overwrite).unwrap();
+                let temporary = prepared.path.as_ref().unwrap().temporary.clone();
+                fs::remove_file(&temporary).unwrap();
+                symlink(&attacker, &temporary).unwrap();
+
+                let error = prepared.install().unwrap_err();
+                assert!(error.error.to_string().contains("identity changed"));
+                assert_eq!(fs::read(&attacker).unwrap(), b"attacker-bytes");
+                if overwrite {
+                    assert_eq!(fs::read(&output).unwrap(), b"original");
+                } else {
+                    assert!(!output.exists());
+                }
+                // Identity-safe cleanup deliberately leaves the replacement.
+                assert!(
+                    fs::symlink_metadata(&temporary)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink()
+                );
+                fs::remove_file(temporary).unwrap();
+            }
+        }
+
+        #[test]
+        fn rejects_shared_writable_non_sticky_output_parent() {
+            let temp = private_tempdir();
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777)).unwrap();
+            let output = temp.path().join("result.bin");
+
+            let error = preflight_private_destination(&output, false).unwrap_err();
+            assert!(
+                error
+                    .error
+                    .to_string()
+                    .contains("shared-writable non-sticky")
+            );
+            assert!(!output.exists());
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+        }
+
+        #[test]
         fn refuses_symlinked_parent_and_leaf() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let real = temp.path().join("real");
             fs::create_dir(&real).unwrap();
+            fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
             let linked_parent = temp.path().join("linked");
             symlink(&real, &linked_parent).unwrap();
             let error =
@@ -602,7 +744,7 @@ mod unix {
 
         #[test]
         fn overwrite_refuses_non_regular_leaf() {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = private_tempdir();
             let output = temp.path().join("directory");
             fs::create_dir(&output).unwrap();
             let error = install_private_bytes(&output, b"secret", true).unwrap_err();

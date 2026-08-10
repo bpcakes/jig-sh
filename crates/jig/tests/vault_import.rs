@@ -13,6 +13,12 @@ use secrecy::SecretString;
 const PASSPHRASE: &str = "correct horse battery staple";
 const STDERR_SECRET: &str = "op-stderr-value-must-not-leak";
 
+fn private_tempdir() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    temp
+}
+
 fn initialized_vault(root: &Path) -> (PathBuf, Vault) {
     let home = root.join("vault-home");
     let vault = Vault::resolve(Some(home.clone())).unwrap();
@@ -31,6 +37,10 @@ fn install_fake_op(root: &Path) -> PathBuf {
         format!(
             r#"#!/bin/sh
 set -eu
+if [ "${{JIG_VAULT_PASSPHRASE+set}}" = set ] || [ "${{JIG_VAULT_NEW_PASSPHRASE+set}}" = set ]; then
+  printf '%s\n' 'reserved-passphrase-env-was-inherited' >> "$OP_TEST_LOG"
+  exit 87
+fi
 if IFS= read -r unexpected; then
   printf '%s\n' 'stdin-was-not-null' >> "$OP_TEST_LOG"
   exit 88
@@ -89,6 +99,10 @@ fn import_output(
         .arg(home)
         .args(extra)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .env(
+            "JIG_VAULT_NEW_PASSPHRASE",
+            "test-only-new-passphrase-must-not-reach-op",
+        )
         .env("OP_TEST_LOG", log)
         .env("OP_DESCENDANT_PID", log.with_extension("descendant-pid"))
         .env("PATH", path);
@@ -136,7 +150,7 @@ fn process_disappears(pid: libc::pid_t) -> bool {
 
 #[test]
 fn imports_literals_and_exact_op_references_and_reruns_convergently() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let (home, vault) = initialized_vault(temp.path());
     let fake_bin = install_fake_op(temp.path());
     let log = temp.path().join("op.log");
@@ -158,11 +172,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
         &destination,
         &["--dry-run"],
     );
-    assert!(
-        dry_run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&dry_run.stderr)
-    );
+    assert!(dry_run.status.success(), "{}", combined_output(&dry_run));
     let dry_run_json = json(&dry_run);
     assert_eq!(dry_run_json["dry_run"], true);
     assert_eq!(dry_run_json["fields"][0]["kind"], "concealed");
@@ -206,6 +216,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
     assert!(op_log.contains("arg=<op://Test/Login/TOKEN>"));
     assert!(op_log.contains("arg=<op://Test/Login/value;touch shell-injection-ran>"));
     assert!(!op_log.contains("stdin-was-not-null"));
+    assert!(!op_log.contains("reserved-passphrase-env-was-inherited"));
 
     let passphrase = SecretString::from(PASSPHRASE.to_owned());
     let fields = vault.list_fields(&passphrase).unwrap();
@@ -280,7 +291,7 @@ fn imports_literals_and_exact_op_references_and_reruns_convergently() {
 
 #[test]
 fn last_resolution_failure_and_oversized_output_leave_vault_and_destination_unchanged() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let (home, vault) = initialized_vault(temp.path());
     let fake_bin = install_fake_op(temp.path());
     let log = temp.path().join("op.log");
@@ -346,7 +357,7 @@ fn last_resolution_failure_and_oversized_output_leave_vault_and_destination_unch
 
 #[test]
 fn op_descendants_cannot_hold_pipes_or_survive_after_leader_exit() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let (home, vault) = initialized_vault(temp.path());
     let fake_bin = install_fake_op(temp.path());
     let log = temp.path().join("op.log");
@@ -406,7 +417,7 @@ fn op_descendants_cannot_hold_pipes_or_survive_after_leader_exit() {
 
 #[test]
 fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let (home, vault) = initialized_vault(temp.path());
     let fake_bin = install_fake_op(temp.path());
     let log = temp.path().join("op.log");
@@ -477,7 +488,7 @@ fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
 
 #[test]
 fn post_prepare_destination_collision_reports_committed_import_and_reruns_safely() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = private_tempdir();
     let (home, vault) = initialized_vault(temp.path());
     let fake_bin = install_fake_op(temp.path());
     let log = temp.path().join("op.log");

@@ -59,6 +59,16 @@ pub(super) struct MigratedVaultEnvelope {
     _wrap_key: Zeroizing<[u8; KEY_LEN]>,
 }
 
+pub(super) struct RekeyedVaultEnvelope {
+    file: VaultFile,
+    // Passphrase rotation keeps the DEK and logical state unchanged, but both
+    // encrypted payloads are freshly sealed under a header containing the new
+    // salt. Retain plaintext and the derived wrap key in zeroizing storage
+    // until the serialized envelope has been atomically written.
+    _state_plaintext: Zeroizing<Vec<u8>>,
+    _wrap_key: Zeroizing<[u8; KEY_LEN]>,
+}
+
 impl ParsedVaultEnvelope {
     pub(super) fn parse(text: &str) -> AnyResult<Self> {
         let file = serde_json::from_str(text).map_err(|error| {
@@ -339,6 +349,76 @@ impl MigratedVaultEnvelope {
             &payload_aad(&header, AeadRole::WrappedDek),
             dek,
         )?;
+        let state_nonce = random_array::<NONCE_LEN>()?;
+        let state_plaintext = Zeroizing::new(state.serialize_for_version(FORMAT_VERSION)?);
+        let state = seal(
+            dek,
+            &state_nonce,
+            &payload_aad(&header, AeadRole::State),
+            &state_plaintext,
+        )?;
+        Ok(Self {
+            file: VaultFile {
+                header,
+                wrapped_dek_nonce_b64: B64.encode(wrapped_dek_nonce),
+                wrapped_dek_b64: B64.encode(wrapped_dek),
+                state_nonce_b64: B64.encode(state_nonce),
+                state_b64: B64.encode(state),
+            },
+            _state_plaintext: state_plaintext,
+            _wrap_key: wrap_key,
+        })
+    }
+
+    pub(super) fn serialize_pretty(&self) -> AnyResult<String> {
+        Ok(serde_json::to_string_pretty(&self.file)?)
+    }
+}
+
+impl RekeyedVaultEnvelope {
+    pub(super) fn seal(
+        previous: &VaultFile,
+        new_passphrase: &SecretString,
+        dek: &[u8; KEY_LEN],
+        state: &VaultState,
+    ) -> AnyResult<Self> {
+        if previous.header.version != FORMAT_VERSION {
+            anyhow::bail!(
+                "vault format {} does not support passphrase change; run `jig vault migrate --to {FORMAT_VERSION}` first",
+                previous.header.version
+            );
+        }
+
+        let salt = random_array::<SALT_LEN>()?;
+        let mut header = previous.header.clone();
+        // A passphrase change is the deliberate point where an older valid
+        // envelope adopts the current KDF policy. Identity and creation time
+        // stay stable; cost parameters do not remain pinned to legacy values.
+        header.kdf = KdfParams::default();
+        header.salt_b64 = B64.encode(salt);
+        validate_header(&header).map_err(|error| {
+            classify_source(
+                VaultErrorKind::Internal,
+                "constructed rekeyed vault header is invalid",
+                error,
+            )
+        })?;
+
+        let wrap_key = derive_wrap_key(new_passphrase, &salt, &header.kdf).map_err(|error| {
+            classify_source(
+                VaultErrorKind::InvalidInput,
+                "new vault passphrase could not be derived safely",
+                error,
+            )
+        })?;
+        let wrapped_dek_nonce = random_array::<NONCE_LEN>()?;
+        let wrapped_dek = seal(
+            &wrap_key,
+            &wrapped_dek_nonce,
+            &payload_aad(&header, AeadRole::WrappedDek),
+            dek,
+        )?;
+
         let state_nonce = random_array::<NONCE_LEN>()?;
         let state_plaintext = Zeroizing::new(state.serialize_for_version(FORMAT_VERSION)?);
         let state = seal(

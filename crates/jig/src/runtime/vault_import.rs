@@ -14,6 +14,8 @@ use zeroize::Zeroizing;
 use crate::command::{VaultImportEnvironment, VaultImportValueSource};
 
 const MAX_OP_STDERR_LEN: usize = 64 * 1024;
+const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
+const NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 const MAX_IMPORT_TOTAL_VALUE_LEN: usize = 16 * 1024 * 1024;
 const OP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const OP_FINAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -148,7 +150,9 @@ fn resolve_onepassword_value(variable: &str, reference: SecretBytes) -> Result<S
         .arg(reference_text)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env_remove(PASSPHRASE_ENV)
+        .env_remove(NEW_PASSPHRASE_ENV);
     isolate_op_process(&mut command);
     let mut child = command.spawn().map_err(|error| {
         anyhow!(
@@ -558,4 +562,55 @@ fn status_label(status: ExitStatus) -> String {
         }
     }
     "unknown process status".to_owned()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::test_env::{EnvVarGuard, lock_env};
+
+    use super::*;
+
+    #[test]
+    fn op_spawn_strips_both_reserved_passphrase_variables() {
+        let _env = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let op = bin.join("op");
+        std::fs::write(
+            &op,
+            r#"#!/bin/sh
+set -eu
+if [ "${JIG_VAULT_PASSPHRASE+set}" = set ] || [ "${JIG_VAULT_NEW_PASSPHRASE+set}" = set ]; then
+  exit 87
+fi
+printf '%s' 'resolved-with-clean-environment'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut path_parts = vec![bin];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_parts.extend(std::env::split_paths(&path));
+        }
+        let _path = EnvVarGuard::set("PATH", std::env::join_paths(path_parts).unwrap());
+        let _current = EnvVarGuard::set(PASSPHRASE_ENV, "current-must-not-reach-op");
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "new-must-not-reach-op");
+
+        let resolved =
+            resolve_onepassword_value("TOKEN", SecretBytes::new(b"op://Test/Login/TOKEN".to_vec()))
+                .unwrap();
+
+        assert_eq!(resolved.as_slice(), b"resolved-with-clean-environment");
+        assert_eq!(
+            std::env::var(PASSPHRASE_ENV).as_deref(),
+            Ok("current-must-not-reach-op")
+        );
+        assert_eq!(
+            std::env::var(NEW_PASSPHRASE_ENV).as_deref(),
+            Ok("new-must-not-reach-op")
+        );
+    }
 }

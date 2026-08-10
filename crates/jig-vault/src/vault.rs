@@ -42,7 +42,7 @@ use crate::types::{EnvVarName, FieldKind, SecretName, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
 mod envelope;
-
+mod lifecycle;
 use envelope::{
     MigratedVaultEnvelope, NewVaultEnvelope, ParsedVaultEnvelope, ResealedVaultEnvelope,
     UnlockedVaultEnvelope,

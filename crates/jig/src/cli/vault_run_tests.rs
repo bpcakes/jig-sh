@@ -479,3 +479,110 @@ fn invalid_import_input_and_destination_fail_before_passphrase_capture_or_vault_
         assert!(!vault_home.exists());
     }
 }
+
+#[test]
+fn invalid_lifecycle_paths_fail_before_passphrase_capture_or_vault_creation() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-vault-home");
+    let backup_output = temp.path().join("must-not-be-created.backup");
+    let malformed_backup = temp.path().join("malformed.backup");
+    std::fs::write(&malformed_backup, b"not-a-vault-backup").unwrap();
+    let current = "correct horse battery staple";
+    let new = "new correct horse battery staple";
+    let _current = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", current);
+    let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", new);
+
+    let commands = [
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
+            super::super::vault::VaultBackupCreateOpts {
+                out: std::path::PathBuf::from("-"),
+                overwrite: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Create(
+            super::super::vault::VaultBackupCreateOpts {
+                out: backup_output.clone(),
+                overwrite: false,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
+            super::super::vault::VaultBackupRestoreOpts {
+                input: std::path::PathBuf::from("-"),
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Backup(super::super::vault::VaultBackupCommand::Restore(
+            super::super::vault::VaultBackupRestoreOpts {
+                input: malformed_backup,
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+        VaultCommand::Passphrase(super::super::vault::VaultPassphraseCommand::Change(
+            super::super::vault::VaultPassphraseChangeOpts {
+                vault: super::super::vault::VaultRuntimeOpts {
+                    home: Some(vault_home.clone()),
+                    global: false,
+                },
+            },
+        )),
+    ];
+
+    for command in commands {
+        assert!(run_vault_command(command, false).is_err());
+        assert_eq!(
+            std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+            Ok(current)
+        );
+        assert_eq!(
+            std::env::var("JIG_VAULT_NEW_PASSPHRASE").as_deref(),
+            Ok(new)
+        );
+        assert!(!vault_home.exists());
+        assert!(!backup_output.exists());
+    }
+}
+
+#[test]
+fn passphrase_free_vault_invocations_strip_both_reserved_environment_values() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("absent-status-vault");
+    let _current = EnvVarGuard::set(
+        "JIG_VAULT_PASSPHRASE",
+        "test-only-current-passphrase-must-be-stripped",
+    );
+    let _new = EnvVarGuard::set(
+        "JIG_VAULT_NEW_PASSPHRASE",
+        "test-only-new-passphrase-must-be-stripped",
+    );
+
+    run_vault_command(
+        VaultCommand::Status(super::super::vault::VaultStatusOpts {
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        }),
+        false,
+    )
+    .unwrap();
+
+    assert!(std::env::var_os("JIG_VAULT_PASSPHRASE").is_none());
+    assert!(std::env::var_os("JIG_VAULT_NEW_PASSPHRASE").is_none());
+    assert!(!vault_home.exists());
+}

@@ -30,16 +30,23 @@ fn run_vault_command_with_stdout_terminal(
         runtime::prepare_vault_raw_input(&mut runtime_command)?;
     }
     apply_repo_vault_scope(&mut runtime_command)?;
+    runtime::preflight_scoped_vault_command(&mut runtime_command)?;
     let is_run = matches!(runtime_command, crate::command::VaultCommand::Run(_));
     if vault_command_requires_passphrase(&runtime_command) {
         // Invariant: capture and clear the process environment copy before vault
         // runtime code can start background threads.
-        if matches!(runtime_command, crate::command::VaultCommand::Init(_)) {
-            runtime::capture_new_vault_passphrase()?;
-        } else {
-            runtime::capture_vault_passphrase()?;
+        match &runtime_command {
+            crate::command::VaultCommand::Init(_) => runtime::capture_new_vault_passphrase()?,
+            crate::command::VaultCommand::Passphrase(
+                crate::command::VaultPassphraseCommand::Change(_),
+            ) => runtime::capture_vault_passphrase_change()?,
+            _ => runtime::capture_vault_passphrase()?,
         }
     }
+    // Status and any future passphrase-free vault commands still cross the
+    // same reserved-environment boundary. Successful capture modes already do
+    // this themselves; repeat it here so every dispatched invocation is safe.
+    runtime::strip_vault_passphrase_environment();
     if is_raw {
         return match runtime::dispatch_vault_raw(runtime_command)? {
             runtime::VaultRawOutcome::Complete => Ok(()),
@@ -252,9 +259,16 @@ pub(super) const fn vault_options_mut(
         crate::command::VaultCommand::Audit(command) => match command {
             crate::command::VaultAuditCommand::Verify(request) => &mut request.vault,
         },
+        crate::command::VaultCommand::Backup(command) => match command {
+            crate::command::VaultBackupCommand::Create(request) => &mut request.vault,
+            crate::command::VaultBackupCommand::Restore(request) => &mut request.vault,
+        },
         crate::command::VaultCommand::Init(request) => &mut request.vault,
         crate::command::VaultCommand::Status(request) => &mut request.vault,
         crate::command::VaultCommand::Migrate(request) => &mut request.vault,
+        crate::command::VaultCommand::Passphrase(command) => match command {
+            crate::command::VaultPassphraseCommand::Change(request) => &mut request.vault,
+        },
         crate::command::VaultCommand::Exec(request) => &mut request.vault,
         crate::command::VaultCommand::Import(command) => match command {
             crate::command::VaultImportCommand::OnePassword(request) => &mut request.vault,
