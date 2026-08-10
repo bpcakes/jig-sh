@@ -124,7 +124,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
                 destination.display()
             )
         })?;
-    validate_staged_launcher_contract(&destination, staged_context.contract_version())?;
+    validate_staged_runtime_contract(&destination, staged_context.contract_version())?;
     crate::policy::validate_contract(&staged_context).with_context(|| {
         format!(
             "Staged render produced an invalid Jig config or contract in {}",
@@ -140,50 +140,87 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     })
 }
 
-pub(super) fn validate_staged_launcher_contract(
+pub(super) fn validate_staged_runtime_contract(
     destination: &Path,
     manifest_contract_version: u32,
 ) -> Result<()> {
+    let requires_repository_scoped_runtime =
+        manifest_contract_version > crate::context::LAST_VERSION_LOCKED_CONTRACT_VERSION;
     let launcher_path = destination.join("scripts/jig");
     let launcher = match fs::read_to_string(&launcher_path) {
-        Ok(launcher) => launcher,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Ok(launcher) => Some(launcher),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("Failed to read {}", launcher_path.display()));
         }
     };
-    let Some(raw_contract_version) = launcher
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("CONTRACT_VERSION=").map(str::trim))
-    else {
-        // Pre-v4 committed templates use JIG_VERSION instead. Their staged
-        // RepoContext validation remains the authoritative compatibility check.
-        return Ok(());
-    };
-    let launcher_contract_version = raw_contract_version
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            raw_contract_version
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(raw_contract_version)
-        .parse::<u32>()
-        .with_context(|| {
-            format!(
-                "Staged launcher {} has an unreadable CONTRACT_VERSION",
+
+    if let Some(launcher) = launcher {
+        let raw_contract_version = launcher
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("CONTRACT_VERSION=").map(str::trim));
+        if let Some(raw_contract_version) = raw_contract_version {
+            let launcher_contract_version = raw_contract_version
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    raw_contract_version
+                        .strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(raw_contract_version)
+                .parse::<u32>()
+                .with_context(|| {
+                    format!(
+                        "Staged launcher {} has an unreadable CONTRACT_VERSION",
+                        launcher_path.display()
+                    )
+                })?;
+            if launcher_contract_version != manifest_contract_version {
+                bail!(
+                    "Staged launcher {} declares contract {}, but the staged manifest declares contract {}",
+                    launcher_path.display(),
+                    launcher_contract_version,
+                    manifest_contract_version
+                );
+            }
+        } else if requires_repository_scoped_runtime {
+            bail!(
+                "Staged contract-v{} launcher {} does not declare CONTRACT_VERSION",
+                manifest_contract_version,
                 launcher_path.display()
-            )
-        })?;
-    if launcher_contract_version != manifest_contract_version {
-        bail!(
-            "Staged launcher {} declares contract {}, but the staged manifest declares contract {}",
-            launcher_path.display(),
-            launcher_contract_version,
-            manifest_contract_version
-        );
+            );
+        }
+
+        if requires_repository_scoped_runtime && !super::recognizable_contract_launcher(&launcher) {
+            bail!(
+                "Staged contract-v{} launcher {} does not implement the repository-scoped runtime protocol",
+                manifest_contract_version,
+                launcher_path.display()
+            );
+        }
+    }
+
+    if requires_repository_scoped_runtime {
+        let installer_path = destination.join("scripts/install-jig.sh");
+        let installer = match fs::read_to_string(&installer_path) {
+            Ok(installer) => Some(installer),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to read {}", installer_path.display()));
+            }
+        };
+        if let Some(installer) = installer
+            && !super::recognizable_contract_installer(&installer)
+        {
+            bail!(
+                "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
+                manifest_contract_version,
+                installer_path.display()
+            );
+        }
     }
     Ok(())
 }
@@ -217,7 +254,7 @@ pub(super) fn stage_selected_render(
         );
     }
     progress.log_blocked_on_err(set_scripts_executable(&destination))?;
-    progress.log_blocked_on_err(validate_staged_launcher_contract(
+    progress.log_blocked_on_err(validate_staged_runtime_contract(
         &destination,
         contract_version,
     ))?;

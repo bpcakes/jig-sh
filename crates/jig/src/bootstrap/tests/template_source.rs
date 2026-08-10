@@ -785,6 +785,60 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
 }
 
 #[test]
+fn adopt_rejects_current_contract_template_with_legacy_launcher_protocol() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    write_test_crate_guide(&repo);
+
+    let launcher_template = template.path().join("templates/project/scripts/jig.jinja");
+    let launcher = fs::read_to_string(&launcher_template)
+        .unwrap()
+        .replace(
+            "# jig-generated-runtime-launcher:v1",
+            "# legacy-runtime-launcher",
+        )
+        .replace(
+            "# jig-runtime-repository-scope:v1",
+            "# legacy-runtime-scope",
+        );
+    fs::write(&launcher_template, launcher).unwrap();
+    git(template.path(), ["add", "."]).unwrap();
+    git(
+        template.path(),
+        ["commit", "-m", "legacy launcher protocol fixture"],
+    )
+    .unwrap();
+
+    let error = run_adopt(AdoptOpts {
+        path: repo,
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(false),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("launcher"), "{error}");
+    assert!(
+        error.contains("repository-scoped runtime protocol"),
+        "{error}"
+    );
+}
+
+#[test]
 fn full_update_upgrades_legacy_contract_and_launcher_together() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

@@ -389,8 +389,8 @@ fn staged_launcher_contract_must_match_the_staged_manifest_epoch() {
     )
     .unwrap();
 
-    renderer::validate_staged_launcher_contract(repo.path(), 3).unwrap();
-    let error = renderer::validate_staged_launcher_contract(repo.path(), 4)
+    renderer::validate_staged_runtime_contract(repo.path(), 3).unwrap();
+    let error = renderer::validate_staged_runtime_contract(repo.path(), 4)
         .unwrap_err()
         .to_string();
     assert!(error.contains("launcher"), "{error}");
@@ -402,7 +402,71 @@ fn staged_launcher_contract_must_match_the_staged_manifest_epoch() {
         "#!/bin/sh\nJIG_VERSION=\"0.2.0-beta.1\"\n",
     )
     .unwrap();
-    renderer::validate_staged_launcher_contract(repo.path(), 3).unwrap();
+    renderer::validate_staged_runtime_contract(repo.path(), 3).unwrap();
+}
+
+#[test]
+fn staged_current_contract_requires_repository_scoped_runtime_scripts() {
+    let repo = tempdir().unwrap();
+    fs::create_dir_all(repo.path().join("scripts")).unwrap();
+    fs::write(
+        repo.path().join("scripts/jig"),
+        format!(
+            "#!/bin/sh\nCONTRACT_VERSION=\"{}\"\n",
+            crate::context::CURRENT_CONTRACT_VERSION
+        ),
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("scripts/install-jig.sh"),
+        CURRENT_GENERATED_INSTALLER,
+    )
+    .unwrap();
+
+    let error = renderer::validate_staged_runtime_contract(
+        repo.path(),
+        crate::context::CURRENT_CONTRACT_VERSION,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("launcher"), "{error}");
+    assert!(
+        error.contains("repository-scoped runtime protocol"),
+        "{error}"
+    );
+
+    fs::write(
+        repo.path().join("scripts/jig"),
+        current_generated_launcher(),
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join("scripts/install-jig.sh"),
+        "#!/usr/bin/env bash\nset -euo pipefail\n",
+    )
+    .unwrap();
+    let error = renderer::validate_staged_runtime_contract(
+        repo.path(),
+        crate::context::CURRENT_CONTRACT_VERSION,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("installer"), "{error}");
+    assert!(
+        error.contains("repository-scoped runtime protocol"),
+        "{error}"
+    );
+
+    fs::write(
+        repo.path().join("scripts/install-jig.sh"),
+        CURRENT_GENERATED_INSTALLER,
+    )
+    .unwrap();
+    renderer::validate_staged_runtime_contract(
+        repo.path(),
+        crate::context::CURRENT_CONTRACT_VERSION,
+    )
+    .unwrap();
 }
 
 #[test]
