@@ -16,6 +16,19 @@ fn reference(value: &str) -> VaultReference {
     value.parse().unwrap()
 }
 
+fn private_tempdir() -> tempfile::TempDir {
+    // macOS exposes its temporary directory through /var, which is a symlink
+    // to /private/var. Vault output correctly rejects symlinked ancestors, so
+    // build fixtures beneath the canonical temporary root.
+    let temp_root = std::env::temp_dir().canonicalize().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-lifecycle-")
+        .tempdir_in(temp_root)
+        .unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    temp
+}
+
 fn initialized_vault(root: &Path) -> (std::path::PathBuf, Vault) {
     let home = root.join("vault-home");
     let vault = Vault::resolve(Some(home.clone())).unwrap();
@@ -89,8 +102,7 @@ fn assert_contains_no_lifecycle_secrets(bytes: &[u8]) {
 
 #[test]
 fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
-    let temp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let temp = private_tempdir();
     let (home, source) = initialized_vault(temp.path());
     let old = SecretString::from(OLD_PASSPHRASE.to_owned());
     let backup_passphrase = SecretString::from(BACKUP_PASSPHRASE.to_owned());
