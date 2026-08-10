@@ -336,7 +336,7 @@ fn generated_launcher_handoff_rejects_misclassified_capability_commands() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("launcher and this Jig runtime disagree"));
-    assert!(error.contains("current external Jig binary"));
+    assert!(error.contains("jig update <repo> --launcher-only --force"));
 }
 
 #[test]
