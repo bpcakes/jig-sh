@@ -157,27 +157,11 @@ pub(super) fn validate_staged_runtime_contract(
     };
 
     if let Some(launcher) = launcher {
-        let raw_contract_version = launcher
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("CONTRACT_VERSION=").map(str::trim));
-        if let Some(raw_contract_version) = raw_contract_version {
-            let launcher_contract_version = raw_contract_version
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .or_else(|| {
-                    raw_contract_version
-                        .strip_prefix('\'')
-                        .and_then(|value| value.strip_suffix('\''))
-                })
-                .unwrap_or(raw_contract_version)
-                .parse::<u32>()
-                .with_context(|| {
-                    format!(
-                        "Staged launcher {} has an unreadable CONTRACT_VERSION",
-                        launcher_path.display()
-                    )
-                })?;
-            if launcher_contract_version != manifest_contract_version {
+        let inspection = crate::runtime_artifacts::inspect_launcher(&launcher);
+        match inspection.declared_contract_version() {
+            crate::runtime_artifacts::ParsedField::Value(launcher_contract_version)
+                if launcher_contract_version != manifest_contract_version =>
+            {
                 bail!(
                     "Staged launcher {} declares contract {}, but the staged manifest declares contract {}",
                     launcher_path.display(),
@@ -185,15 +169,26 @@ pub(super) fn validate_staged_runtime_contract(
                     manifest_contract_version
                 );
             }
-        } else if requires_repository_scoped_runtime {
-            bail!(
-                "Staged contract-v{} launcher {} does not declare CONTRACT_VERSION",
-                manifest_contract_version,
-                launcher_path.display()
-            );
+            crate::runtime_artifacts::ParsedField::Malformed => {
+                bail!(
+                    "Staged launcher {} has an unreadable CONTRACT_VERSION",
+                    launcher_path.display()
+                );
+            }
+            crate::runtime_artifacts::ParsedField::Missing
+                if requires_repository_scoped_runtime =>
+            {
+                bail!(
+                    "Staged contract-v{} launcher {} does not declare CONTRACT_VERSION",
+                    manifest_contract_version,
+                    launcher_path.display()
+                );
+            }
+            crate::runtime_artifacts::ParsedField::Missing
+            | crate::runtime_artifacts::ParsedField::Value(_) => {}
         }
 
-        if requires_repository_scoped_runtime && !super::recognizable_contract_launcher(&launcher) {
+        if requires_repository_scoped_runtime && !inspection.uses_repository_scope_protocol() {
             bail!(
                 "Staged contract-v{} launcher {} does not implement the repository-scoped runtime protocol",
                 manifest_contract_version,
@@ -213,7 +208,8 @@ pub(super) fn validate_staged_runtime_contract(
             }
         };
         if let Some(installer) = installer
-            && !super::recognizable_contract_installer(&installer)
+            && !crate::runtime_artifacts::inspect_installer(&installer)
+                .uses_repository_scope_protocol()
         {
             bail!(
                 "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",

@@ -755,30 +755,11 @@ fn launcher_version(path: &Path) -> LauncherVersion {
             };
         }
     };
-    let contract_probe = crate::bootstrap::recognizable_contract_launcher(&text);
-    let contract_version = text.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("CONTRACT_VERSION=")
-            .map(str::trim)
-            .map(unquote_shell_value)
-            .and_then(|value| value.parse().ok())
-    });
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(value) = line.strip_prefix("JIG_VERSION=") else {
-            continue;
-        };
-        return LauncherVersion {
-            version: Some(unquote_shell_value(value.trim()).to_string()),
-            contract_version,
-            contract_probe,
-            read_error: None,
-        };
-    }
+    let inspection = crate::runtime_artifacts::inspect_launcher(&text);
     LauncherVersion {
-        version: None,
-        contract_version,
-        contract_probe,
+        version: inspection.legacy_version().map(str::to_string),
+        contract_version: inspection.readable_contract_version(),
+        contract_probe: inspection.uses_repository_scope_protocol(),
         read_error: None,
     }
 }
@@ -791,7 +772,8 @@ struct InstallerVersion {
 fn installer_version(path: &Path) -> InstallerVersion {
     match fs::read_to_string(path) {
         Ok(text) => InstallerVersion {
-            contract_probe: crate::bootstrap::recognizable_contract_installer(&text),
+            contract_probe: crate::runtime_artifacts::inspect_installer(&text)
+                .uses_repository_scope_protocol(),
             read_error: None,
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => InstallerVersion {
@@ -803,18 +785,6 @@ fn installer_version(path: &Path) -> InstallerVersion {
             read_error: Some(error.to_string()),
         },
     }
-}
-
-fn unquote_shell_value(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(value)
 }
 
 fn contract_check(ctx: &RepoContext) -> DoctorCheck {

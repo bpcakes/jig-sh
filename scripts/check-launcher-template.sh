@@ -151,9 +151,9 @@ launcher_generated_marker="$(sed -n '/^# jig-generated-runtime-launcher:v[0-9][0
 installer_generated_marker="$(sed -n '/^# jig-generated-runtime-installer:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
 launcher_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/jig")"
 installer_scope_marker="$(sed -n '/^# jig-runtime-repository-scope:v[0-9][0-9]*$/p' "$ROOT_DIR/scripts/install-jig.sh")"
-rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/bootstrap.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
-rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/bootstrap.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
-rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/bootstrap.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
+rust_launcher_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_LAUNCHER_MARKER)"
+rust_installer_generated_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" GENERATED_RUNTIME_INSTALLER_MARKER)"
+rust_scope_marker="$(rust_string_const "$ROOT_DIR/crates/jig/src/runtime_artifacts.rs" RUNTIME_REPOSITORY_SCOPE_MARKER)"
 if [[ -z "$launcher_generated_marker" \
   || "$launcher_generated_marker" != "$rust_launcher_generated_marker" ]]; then
   echo "Launcher protocol marker '${launcher_generated_marker:-<unreadable>}' does not match Rust recognition marker '${rust_launcher_generated_marker:-<unreadable>}'." >&2

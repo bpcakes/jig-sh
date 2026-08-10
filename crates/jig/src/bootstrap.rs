@@ -117,9 +117,6 @@ const LAUNCHER_REPAIR_ENVIRONMENT_KEYS: &[&str] = &[
     "PYTHONSTARTUP",
     "PYTHONWARNINGS",
 ];
-const GENERATED_RUNTIME_LAUNCHER_MARKER: &str = "# jig-generated-runtime-launcher:v1";
-const GENERATED_RUNTIME_INSTALLER_MARKER: &str = "# jig-generated-runtime-installer:v1";
-const RUNTIME_REPOSITORY_SCOPE_MARKER: &str = "# jig-runtime-repository-scope:v1";
 #[cfg(test)]
 const TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV: &str = "JIG_TEST_FAIL_LAUNCHER_REPAIR_SEED";
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
@@ -1797,84 +1794,22 @@ pub(crate) fn launcher_only_repair_answers_are_valid(destination: &Path) -> bool
     RenderAnswers::from_answers_file(&destination.join(ANSWERS_FILE)).is_ok()
 }
 
-fn contains_all(text: &str, markers: &[&str]) -> bool {
-    markers.iter().all(|marker| text.contains(marker))
-}
-
 fn recognizable_generated_launcher(text: &str) -> bool {
-    text.contains(GENERATED_RUNTIME_LAUNCHER_MARKER)
-        || (recognizable_posix_launcher_core(text) && recognizable_legacy_launcher_body(text))
-        || (recognizable_beta_bash_launcher_core(text) && recognizable_legacy_launcher_body(text))
+    crate::runtime_artifacts::inspect_launcher(text).is_generated()
 }
 
+#[cfg(test)]
 pub(crate) fn recognizable_contract_launcher(text: &str) -> bool {
-    text.contains(GENERATED_RUNTIME_LAUNCHER_MARKER)
-        && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER)
-}
-
-fn recognizable_posix_launcher_core(text: &str) -> bool {
-    contains_all(
-        text,
-        &[
-            "#!/bin/sh\nset -eu\n",
-            "ROOT_DIR=\"$(CDPATH= cd \"$SCRIPT_DIR/..\" && pwd -P)\"",
-            "INSTALLER=\"$ROOT_DIR/scripts/install-jig.sh\"",
-            "exec \"$bin_path\" \"$@\"",
-        ],
-    )
-}
-
-fn recognizable_beta_bash_launcher_core(text: &str) -> bool {
-    contains_all(
-        text,
-        &[
-            "#!/usr/bin/env bash\nset -euo pipefail\n",
-            "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd -P)\"",
-            "INSTALLER=\"$ROOT_DIR/scripts/install-jig.sh\"",
-            "exec \"$bin_path\" \"$@\"",
-        ],
-    )
-}
-
-fn recognizable_legacy_launcher_body(text: &str) -> bool {
-    contains_all(
-        text,
-        &[
-            "JIG_VERSION=",
-            "binary_version() {",
-            "use_matching_binary() {",
-            "actual_version=\"$(binary_version \"$bin_path\" || true)\"",
-        ],
-    )
+    crate::runtime_artifacts::inspect_launcher(text).uses_repository_scope_protocol()
 }
 
 fn recognizable_generated_installer(text: &str) -> bool {
-    text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
-        || (recognizable_generated_installer_core(text) && recognizable_legacy_installer_body(text))
+    crate::runtime_artifacts::inspect_installer(text).is_generated()
 }
 
+#[cfg(test)]
 pub(crate) fn recognizable_contract_installer(text: &str) -> bool {
-    text.contains(GENERATED_RUNTIME_INSTALLER_MARKER)
-        && text.contains(RUNTIME_REPOSITORY_SCOPE_MARKER)
-}
-
-fn recognizable_generated_installer_core(text: &str) -> bool {
-    contains_all(
-        text,
-        &[
-            "#!/usr/bin/env bash\nset -euo pipefail\n",
-            "ROOT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/..\" && pwd -P)\"",
-            "ANSWERS_FILE=\"$ROOT_DIR/.jig.toml\"",
-            "acquire_install_lock() {",
-            "install_from_local_source() {",
-            "install_from_git_source() {",
-            "printf '%s\\n' \"$BIN_PATH\"",
-        ],
-    )
-}
-
-fn recognizable_legacy_installer_body(text: &str) -> bool {
-    contains_all(text, &["JIG_VERSION=", "assert_exact_version() {"])
+    crate::runtime_artifacts::inspect_installer(text).uses_repository_scope_protocol()
 }
 
 fn recognized_prior_answers(destination: &Path) -> Option<RenderAnswers> {
