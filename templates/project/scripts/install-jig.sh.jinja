@@ -1645,8 +1645,9 @@ if [[ "$INSTALL_PROFILE" != "default" && -z "$INSTALL_ROOT_ARG" ]]; then
   FULL_INSTALL_ROOT="$DEFAULT_INSTALL_BASE/$CONTRACT_CACHE_KEY"
   FULL_BIN_PATH="$FULL_INSTALL_ROOT/bin/jig"
   if cached_install_is_current "$FULL_INSTALL_ROOT" "$FULL_BIN_PATH"; then
-    # Rate-limit this cross-cache warning under the profile cache lock that is
-    # actually held, leaving the reused full cache read-only.
+    # Rate-limit this cross-cache warning once per active profile under the
+    # profile cache lock that is actually held, leaving the reused full cache
+    # read-only.
     warn_for_mutable_source_cache_if_due "$FULL_INSTALL_ROOT" "$INSTALL_ROOT"
     printf '%s\n' "$FULL_BIN_PATH"
     exit 0

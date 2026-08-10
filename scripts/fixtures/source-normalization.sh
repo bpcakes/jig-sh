@@ -87,9 +87,9 @@ validate_mutable_source_reminder_requires_matching_cache_lock() {
 
   mkdir -p "$source_cache" "$active_cache"
   function_source="$(awk '
-    /^mark_mutable_source_refresh_reminder\(\) \{/ { capture = 1 }
-    /^warn_for_mutable_source_cache_if_due\(\) \{/ { exit }
+    /^(mark_mutable_source_refresh_reminder|record_mutable_source_refresh_reminder|warn_for_mutable_source_cache_if_due)\(\) \{/ { capture = 1 }
     capture { print }
+    capture && /^}$/ { capture = 0 }
   ' "$ROOT_DIR/scripts/install-jig.sh")"
 
   INSTALL_LOCK_HELD=0 INSTALL_LOCK_PATH="$source_cache.lock" \
@@ -114,6 +114,21 @@ validate_mutable_source_reminder_requires_matching_cache_lock() {
     /bin/bash -c 'eval "$REMINDER_FUNCTIONS"; record_mutable_source_refresh_reminder "$SOURCE_CACHE"' \
     2>"$stderr_file"
   grep -Fxq "Could not record the mutable-source reminder under $source_cache; this warning may repeat until that cache directory is writable." "$stderr_file"
+  [[ "$(wc -l <"$stderr_file" | tr -d ' ')" == "1" ]]
+
+  rmdir "$source_cache/.jig-mutable-source-reminder"
+  rm -f "$active_cache/.jig-mutable-source-reminder"
+  INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$active_cache.lock" RESOLVE_ONLY=0 \
+    REMINDER_FUNCTIONS="$function_source" WARNED_CACHE="$source_cache" \
+    REMINDER_CACHE="$active_cache" /bin/bash -c '
+      eval "$REMINDER_FUNCTIONS"
+      configured_source_is_mutable() { return 0; }
+      warn_for_mutable_source_cache_if_due "$WARNED_CACHE" "$REMINDER_CACHE"
+      warn_for_mutable_source_cache_if_due "$WARNED_CACHE" "$REMINDER_CACHE"
+    ' 2>"$stderr_file"
+  [[ ! -e "$source_cache/.jig-mutable-source-reminder" ]]
+  [[ -f "$active_cache/.jig-mutable-source-reminder" ]]
+  grep -Fq "Using a cached Jig runtime from a mutable source" "$stderr_file"
   [[ "$(wc -l <"$stderr_file" | tr -d ' ')" == "1" ]]
 }
 
