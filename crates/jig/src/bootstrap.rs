@@ -96,6 +96,7 @@ pub(crate) const MANAGED_PATHS_MANIFEST_PATH: &str = managed_paths::MANIFEST_PAT
 const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scripts/jig"];
 const STALE_LAUNCHER_REPAIR_STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const LAUNCHER_REPAIR_SEED_STAMP_HEADER: &str = "jig-seeded-runtime-v1";
+const LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE: &str = "Launcher-repair cache retirement can be retried by rerunning adopt or update after resolving the cache-lock error";
 const LAUNCHER_REPAIR_ENVIRONMENT_KEYS: &[&str] = &[
     "LD_AUDIT",
     "LD_DEBUG",
@@ -1152,7 +1153,7 @@ fn retire_launcher_repair_seeded_caches(
     }
 
     let _locks = match RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::immediate())
-        .context("Failed to acquire launcher-repair cache locks; retirement was deferred")
+        .context(LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE)
     {
         Ok(locks) => locks,
         Err(error) => {

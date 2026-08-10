@@ -122,12 +122,13 @@ fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
     )
     .unwrap();
 
+    let blocked =
+        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+    assert_eq!(blocked.retired, 0);
+    assert_eq!(blocked.errors.len(), 1);
     assert_eq!(
-        retire_launcher_repair_seeded_caches_best_effort(
-            repo.path(),
-            crate::context::CURRENT_CONTRACT_VERSION,
-        ),
-        0
+        blocked.errors[0].to_string(),
+        LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE
     );
     assert!(
         cache.join(".jig-source-stamp").exists(),

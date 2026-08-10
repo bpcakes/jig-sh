@@ -130,6 +130,17 @@ validate_mutable_source_reminder_requires_matching_cache_lock() {
   [[ -f "$active_cache/.jig-mutable-source-reminder" ]]
   grep -Fq "Using a cached Jig runtime from a mutable source" "$stderr_file"
   [[ "$(wc -l <"$stderr_file" | tr -d ' ')" == "1" ]]
+
+  touch -t 200001010000 "$active_cache/.jig-mutable-source-reminder"
+  INSTALL_LOCK_HELD=1 INSTALL_LOCK_PATH="$active_cache.lock" RESOLVE_ONLY=0 \
+    REMINDER_FUNCTIONS="$function_source" WARNED_CACHE="$source_cache" \
+    REMINDER_CACHE="$active_cache" /bin/bash -c '
+      eval "$REMINDER_FUNCTIONS"
+      configured_source_is_mutable() { return 0; }
+      warn_for_mutable_source_cache_if_due "$WARNED_CACHE" "$REMINDER_CACHE"
+    ' 2>"$stderr_file"
+  grep -Fq "Using a cached Jig runtime from a mutable source" "$stderr_file"
+  [[ "$(wc -l <"$stderr_file" | tr -d ' ')" == "1" ]]
 }
 
 validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_links() {
