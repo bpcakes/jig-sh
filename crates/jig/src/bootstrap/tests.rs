@@ -126,9 +126,13 @@ fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
         retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
     assert_eq!(blocked.retired, 0);
     assert_eq!(blocked.errors.len(), 1);
-    assert_eq!(
-        blocked.errors[0].to_string(),
-        LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE
+    let warning = launcher_repair_retirement_warning(&blocked.errors[0]);
+    assert!(warning.starts_with("Warning: harness changes were committed"));
+    assert!(warning.contains(LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE));
+    assert!(warning.contains("Timed out waiting for Jig installer lock"));
+    assert!(
+        warning.contains(&cache.display().to_string()),
+        "warning must identify the cache whose lock blocked retirement: {warning}"
     );
     assert!(
         cache.join(".jig-source-stamp").exists(),

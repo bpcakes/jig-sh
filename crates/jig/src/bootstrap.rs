@@ -1212,11 +1212,15 @@ fn retire_launcher_repair_seeded_caches_best_effort(
 ) -> usize {
     let outcome = retire_launcher_repair_seeded_caches(destination, contract_version);
     for error in outcome.errors {
-        eprintln!(
-            "Warning: harness changes were committed, but launcher-repair cache retirement could not complete: {error:#}"
-        );
+        eprintln!("{}", launcher_repair_retirement_warning(&error));
     }
     outcome.retired
+}
+
+fn launcher_repair_retirement_warning(error: &anyhow::Error) -> String {
+    format!(
+        "Warning: harness changes were committed, but launcher-repair cache retirement could not complete: {error:#}"
+    )
 }
 
 fn cache_has_launcher_repair_seed(cache: &Path) -> Result<bool> {
