@@ -126,7 +126,7 @@ fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
 #[test]
 fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     store.init(&old).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
@@ -156,14 +156,14 @@ fn rejected_passphrase_changes_leave_vault_and_audit_bytes_unchanged() {
 #[test]
 fn passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
     let old = passphrase();
     let new = SecretString::from("replacement passphrase after fault".to_owned());
     store.init(&old).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     store.fail_next_vault_write_for_test();
 
-    let error = store.change_passphrase(&old, &new).unwrap_err();
+    let error = store.change_passphrase_for_test(&old, &new).unwrap_err();
     assert_eq!(error.kind(), VaultErrorKind::Io);
     assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
     assert!(store.open_unlocked(&old).is_ok());
@@ -174,7 +174,7 @@ fn passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
         "passphrase_change"
     );
 
-    store.change_passphrase(&old, &new).unwrap();
+    store.change_passphrase_for_test(&old, &new).unwrap();
     assert!(store.open_unlocked(&old).is_err());
     assert!(store.open_unlocked(&new).is_ok());
 }
@@ -188,7 +188,7 @@ fn passphrase_preflight_is_noncreating_and_rejects_version_one() {
     assert!(!missing.exists());
 
     let home = root.join("legacy-vault");
-    let store = VaultStore::resolve(Some(home.clone())).unwrap();
+    let store = VaultStore::resolve_for_test(Some(home.clone())).unwrap();
     init_v1(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
@@ -207,7 +207,7 @@ fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
     let temp = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(temp.path()).unwrap();
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let vault = Vault::resolve(Some(root.join("vault"))).unwrap();
+    let vault = Vault::resolve_for_test(Some(root.join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
     let value = b"private-file-sentinel";
