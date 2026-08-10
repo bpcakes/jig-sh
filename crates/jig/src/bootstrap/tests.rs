@@ -1,3 +1,4 @@
+// agentic-loc-exception: bootstrap integration coverage shares repository-wide fixture helpers.
 use tempfile::{TempDir, tempdir};
 
 use super::path;

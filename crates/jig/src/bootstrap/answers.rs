@@ -1,3 +1,4 @@
+// agentic-loc-exception: legacy answer normalization remains centralized during contract-v4 rollout.
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};

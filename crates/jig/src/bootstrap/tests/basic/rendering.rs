@@ -13,7 +13,6 @@ fn parses_frontend_app_flag() {
             role: "spa".into(),
         }
     );
-
     let app = parse_frontend_app("frontend:web:40:env-port").unwrap();
     assert_eq!(app.kind, "env-port");
     assert_eq!(app.role, "astro");

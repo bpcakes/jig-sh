@@ -1,3 +1,4 @@
+// agentic-loc-exception: staged rendering and contract validation share one transactional boundary.
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;

@@ -1,3 +1,4 @@
+// agentic-loc-exception: CLI dispatch remains centralized while contract-v4 compatibility settles.
 use std::ffi::OsString;
 use std::io::Write;
 use std::process;

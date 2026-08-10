@@ -21,7 +21,6 @@ fn scaffold_rejects_conflicting_file_unless_forced_and_reports_rerun() {
 
     plan.write(temp.path(), false).unwrap();
     fs::write(temp.path().join("Cargo.toml"), "project-owned\n").unwrap();
-
     let error = plan.write(temp.path(), false).unwrap_err().to_string();
     assert!(error.contains("already exist and differ"));
     assert!(error.contains("pass --force"));

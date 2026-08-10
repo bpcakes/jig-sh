@@ -1,3 +1,4 @@
+// agentic-loc-exception: JSON CLI integration coverage shares process-level fixture setup.
 mod support;
 
 use std::fs;
