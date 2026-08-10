@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -256,122 +258,127 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
     );
     assert!(changed_again.status.success());
 
-    let symlinked_backup = temp.path().join("vault-link.backup");
-    symlink(&backup_one, &symlinked_backup).unwrap();
-    let symlink_target = temp.path().join("symlink-restore-home");
-    let refused_symlink = jig_with_passphrases(
-        [
-            "--json".as_ref(),
-            "vault".as_ref(),
-            "backup".as_ref(),
-            "restore".as_ref(),
-            "--in".as_ref(),
-            symlinked_backup.as_os_str(),
-            "--home".as_ref(),
-            symlink_target.as_os_str(),
-        ],
-        BACKUP_PASSPHRASE,
-        None,
-    );
-    assert!(!refused_symlink.status.success());
-    assert!(!symlink_target.exists());
-
-    let existing_target = temp.path().join("existing-restore-home");
-    std::fs::create_dir(&existing_target).unwrap();
-    let refused_existing = jig_with_passphrases(
-        [
-            "--json".as_ref(),
-            "vault".as_ref(),
-            "backup".as_ref(),
-            "restore".as_ref(),
-            "--in".as_ref(),
-            backup_one.as_os_str(),
-            "--home".as_ref(),
-            existing_target.as_os_str(),
-        ],
-        BACKUP_PASSPHRASE,
-        None,
-    );
-    assert!(!refused_existing.status.success());
-    assert!(existing_target.read_dir().unwrap().next().is_none());
-
-    let restored_home = temp.path().join("restored-vault-home");
-    let wrong_passphrase = jig_with_passphrases(
-        [
-            "--json".as_ref(),
-            "vault".as_ref(),
-            "backup".as_ref(),
-            "restore".as_ref(),
-            "--in".as_ref(),
-            backup_one.as_os_str(),
-            "--home".as_ref(),
-            restored_home.as_os_str(),
-        ],
-        LATEST_PASSPHRASE,
-        None,
-    );
-    assert!(!wrong_passphrase.status.success());
-    assert!(!restored_home.exists());
-    let wrong_passphrase_output = combined_output(&wrong_passphrase);
-    assert!(
-        String::from_utf8_lossy(&wrong_passphrase_output).contains("authenticate backup archive")
-    );
-    assert_contains_no_lifecycle_secrets(&wrong_passphrase_output);
-
-    let restored = jig_with_passphrases(
-        [
-            "--json".as_ref(),
-            "vault".as_ref(),
-            "backup".as_ref(),
-            "restore".as_ref(),
-            "--in".as_ref(),
-            backup_one.as_os_str(),
-            "--home".as_ref(),
-            restored_home.as_os_str(),
-        ],
-        BACKUP_PASSPHRASE,
-        None,
-    );
-    let restored_output = combined_output(&restored);
-    assert!(
-        restored.status.success(),
-        "{}",
-        String::from_utf8_lossy(&restored_output)
-    );
-    let restored_json = output_json(&restored);
-    assert_eq!(restored_json["command"], "vault backup restore");
-    assert_eq!(restored_json["restored"], true);
-    assert_eq!(restored_json["format_version"], 2);
-    assert_contains_no_lifecycle_secrets(&restored_output);
-
-    let restored_vault = Vault::resolve(Some(restored_home)).unwrap();
-    assert_eq!(
-        restored_vault.list_fields(&backup_passphrase).unwrap(),
-        fields_before
-    );
-    let mut restored_value = Vec::new();
-    restored_vault
-        .read_field_to(
-            &backup_passphrase,
-            reference("jig://Production/TOKEN"),
-            &mut restored_value,
-        )
-        .unwrap();
-    assert_eq!(restored_value, FIELD_VALUE);
-    restored_vault.verify_audit(&backup_passphrase).unwrap();
     source.verify_audit(&latest).unwrap();
     let source_audit = std::fs::read(source.root().join("audit.jsonl")).unwrap();
-    let restored_audit = std::fs::read(restored_vault.root().join("audit.jsonl")).unwrap();
     assert!(
         source_audit
             .windows(b"passphrase_change".len())
             .any(|part| part == b"passphrase_change")
     );
-    assert!(
-        restored_audit
-            .windows(b"backup_restore".len())
-            .any(|part| part == b"backup_restore")
-    );
     assert_contains_no_lifecycle_secrets(&source_audit);
-    assert_contains_no_lifecycle_secrets(&restored_audit);
+
+    #[cfg(target_os = "linux")]
+    {
+        let symlinked_backup = temp.path().join("vault-link.backup");
+        symlink(&backup_one, &symlinked_backup).unwrap();
+        let symlink_target = temp.path().join("symlink-restore-home");
+        let refused_symlink = jig_with_passphrases(
+            [
+                "--json".as_ref(),
+                "vault".as_ref(),
+                "backup".as_ref(),
+                "restore".as_ref(),
+                "--in".as_ref(),
+                symlinked_backup.as_os_str(),
+                "--home".as_ref(),
+                symlink_target.as_os_str(),
+            ],
+            BACKUP_PASSPHRASE,
+            None,
+        );
+        assert!(!refused_symlink.status.success());
+        assert!(!symlink_target.exists());
+
+        let existing_target = temp.path().join("existing-restore-home");
+        std::fs::create_dir(&existing_target).unwrap();
+        let refused_existing = jig_with_passphrases(
+            [
+                "--json".as_ref(),
+                "vault".as_ref(),
+                "backup".as_ref(),
+                "restore".as_ref(),
+                "--in".as_ref(),
+                backup_one.as_os_str(),
+                "--home".as_ref(),
+                existing_target.as_os_str(),
+            ],
+            BACKUP_PASSPHRASE,
+            None,
+        );
+        assert!(!refused_existing.status.success());
+        assert!(existing_target.read_dir().unwrap().next().is_none());
+
+        let restored_home = temp.path().join("restored-vault-home");
+        let wrong_passphrase = jig_with_passphrases(
+            [
+                "--json".as_ref(),
+                "vault".as_ref(),
+                "backup".as_ref(),
+                "restore".as_ref(),
+                "--in".as_ref(),
+                backup_one.as_os_str(),
+                "--home".as_ref(),
+                restored_home.as_os_str(),
+            ],
+            LATEST_PASSPHRASE,
+            None,
+        );
+        assert!(!wrong_passphrase.status.success());
+        assert!(!restored_home.exists());
+        let wrong_passphrase_output = combined_output(&wrong_passphrase);
+        assert!(
+            String::from_utf8_lossy(&wrong_passphrase_output)
+                .contains("authenticate backup archive")
+        );
+        assert_contains_no_lifecycle_secrets(&wrong_passphrase_output);
+
+        let restored = jig_with_passphrases(
+            [
+                "--json".as_ref(),
+                "vault".as_ref(),
+                "backup".as_ref(),
+                "restore".as_ref(),
+                "--in".as_ref(),
+                backup_one.as_os_str(),
+                "--home".as_ref(),
+                restored_home.as_os_str(),
+            ],
+            BACKUP_PASSPHRASE,
+            None,
+        );
+        let restored_output = combined_output(&restored);
+        assert!(
+            restored.status.success(),
+            "{}",
+            String::from_utf8_lossy(&restored_output)
+        );
+        let restored_json = output_json(&restored);
+        assert_eq!(restored_json["command"], "vault backup restore");
+        assert_eq!(restored_json["restored"], true);
+        assert_eq!(restored_json["format_version"], 2);
+        assert_contains_no_lifecycle_secrets(&restored_output);
+
+        let restored_vault = Vault::resolve(Some(restored_home)).unwrap();
+        assert_eq!(
+            restored_vault.list_fields(&backup_passphrase).unwrap(),
+            fields_before
+        );
+        let mut restored_value = Vec::new();
+        restored_vault
+            .read_field_to(
+                &backup_passphrase,
+                reference("jig://Production/TOKEN"),
+                &mut restored_value,
+            )
+            .unwrap();
+        assert_eq!(restored_value, FIELD_VALUE);
+        restored_vault.verify_audit(&backup_passphrase).unwrap();
+        let restored_audit = std::fs::read(restored_vault.root().join("audit.jsonl")).unwrap();
+        assert!(
+            restored_audit
+                .windows(b"backup_restore".len())
+                .any(|part| part == b"backup_restore")
+        );
+        assert_contains_no_lifecycle_secrets(&restored_audit);
+    }
 }
