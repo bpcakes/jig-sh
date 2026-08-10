@@ -76,6 +76,7 @@ impl fmt::Debug for PreparedPrivateFile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputFailureStage {
     Preflight,
+    #[cfg(unix)]
     Sink,
 }
 
@@ -83,6 +84,7 @@ impl OutputFailureStage {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Preflight => "sink_preflight",
+            #[cfg(unix)]
             Self::Sink => "sink",
         }
     }
@@ -563,10 +565,11 @@ mod unix {
         use super::*;
         use std::os::unix::fs::{PermissionsExt, symlink};
 
-        fn private_tempdir() -> tempfile::TempDir {
+        fn private_tempdir() -> (tempfile::TempDir, PathBuf) {
             let temp = tempfile::tempdir().unwrap();
             fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-            temp
+            let root = fs::canonicalize(temp.path()).unwrap();
+            (temp, root)
         }
 
         fn install_private_bytes(
@@ -579,8 +582,8 @@ mod unix {
 
         #[test]
         fn installs_owner_only_bytes_without_clobbering() {
-            let temp = private_tempdir();
-            let output = temp.path().join("result.bin");
+            let (_temp, root) = private_tempdir();
+            let output = root.join("result.bin");
             install_private_bytes(&output, b"first\0bytes", false).unwrap();
             assert_eq!(fs::read(&output).unwrap(), b"first\0bytes");
             assert_eq!(
@@ -602,8 +605,8 @@ mod unix {
 
         #[test]
         fn public_prepared_file_is_private_redacted_and_installs_only_when_consumed() {
-            let temp = private_tempdir();
-            let output = temp.path().join("import.env");
+            let (_temp, root) = private_tempdir();
+            let output = root.join("import.env");
             let contents = b"TOKEN=jig://Production/TOKEN\n";
             let prepared = crate::PreparedPrivateFile::prepare(
                 &output,
@@ -616,7 +619,7 @@ mod unix {
             assert!(debug.contains("[REDACTED]"));
             assert!(!debug.contains("jig://Production/TOKEN"));
 
-            let temporary = fs::read_dir(temp.path())
+            let temporary = fs::read_dir(&root)
                 .unwrap()
                 .map(|entry| entry.unwrap().path())
                 .next()
@@ -633,28 +636,28 @@ mod unix {
                 fs::metadata(&output).unwrap().permissions().mode() & 0o777,
                 0o600
             );
-            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         }
 
         #[test]
         fn public_preflight_is_non_writing_and_applies_overwrite_policy() {
-            let temp = private_tempdir();
-            let output = temp.path().join("import.env");
+            let (_temp, root) = private_tempdir();
+            let output = root.join("import.env");
             crate::PreparedPrivateFile::preflight(&output, false).unwrap();
-            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
 
             fs::write(&output, b"existing").unwrap();
             let collision = crate::PreparedPrivateFile::preflight(&output, false).unwrap_err();
             assert_eq!(collision.kind(), VaultErrorKind::AlreadyExists);
             crate::PreparedPrivateFile::preflight(&output, true).unwrap();
             assert_eq!(fs::read(&output).unwrap(), b"existing");
-            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         }
 
         #[test]
         fn prepared_no_clobber_rechecks_destination_and_cleans_its_temporary() {
-            let temp = private_tempdir();
-            let output = temp.path().join("import.env");
+            let (_temp, root) = private_tempdir();
+            let output = root.join("import.env");
             let prepared = crate::PreparedPrivateFile::prepare(
                 &output,
                 crate::SecretBytes::new(b"prepared".to_vec()),
@@ -666,18 +669,18 @@ mod unix {
             let error = prepared.install().unwrap_err();
             assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
             assert_eq!(fs::read(&output).unwrap(), b"raced-existing");
-            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
         }
 
         #[test]
         fn prepared_install_refuses_replaced_temporary_identity_for_both_policies() {
             for overwrite in [false, true] {
-                let temp = private_tempdir();
-                let output = temp.path().join("result.bin");
+                let (_temp, root) = private_tempdir();
+                let output = root.join("result.bin");
                 if overwrite {
                     fs::write(&output, b"original").unwrap();
                 }
-                let attacker = temp.path().join("attacker");
+                let attacker = root.join("attacker");
                 fs::write(&attacker, b"attacker-bytes").unwrap();
                 let prepared = prepare_private_bytes(&output, b"protected", overwrite).unwrap();
                 let temporary = prepared.path.as_ref().unwrap().temporary.clone();
@@ -705,9 +708,9 @@ mod unix {
 
         #[test]
         fn rejects_shared_writable_non_sticky_output_parent() {
-            let temp = private_tempdir();
-            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777)).unwrap();
-            let output = temp.path().join("result.bin");
+            let (_temp, root) = private_tempdir();
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o777)).unwrap();
+            let output = root.join("result.bin");
 
             let error = preflight_private_destination(&output, false).unwrap_err();
             assert!(
@@ -717,16 +720,16 @@ mod unix {
                     .contains("shared-writable non-sticky")
             );
             assert!(!output.exists());
-            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+            assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         }
 
         #[test]
         fn refuses_symlinked_parent_and_leaf() {
-            let temp = private_tempdir();
-            let real = temp.path().join("real");
+            let (_temp, root) = private_tempdir();
+            let real = root.join("real");
             fs::create_dir(&real).unwrap();
             fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
-            let linked_parent = temp.path().join("linked");
+            let linked_parent = root.join("linked");
             symlink(&real, &linked_parent).unwrap();
             let error =
                 install_private_bytes(&linked_parent.join("value"), b"secret", false).unwrap_err();
@@ -744,8 +747,8 @@ mod unix {
 
         #[test]
         fn overwrite_refuses_non_regular_leaf() {
-            let temp = private_tempdir();
-            let output = temp.path().join("directory");
+            let (_temp, root) = private_tempdir();
+            let output = root.join("directory");
             fs::create_dir(&output).unwrap();
             let error = install_private_bytes(&output, b"secret", true).unwrap_err();
             assert!(error.error.to_string().contains("non-regular"));

@@ -23,7 +23,9 @@ mod restore_linux;
 #[cfg(test)]
 mod tests;
 
-use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes, seal_archive};
+use codec::seal_archive;
+#[cfg(target_os = "linux")]
+use codec::{ParsedBackupArchive, decrypt_archive, parse_archive_bytes};
 pub(crate) use payload::{inspect_embedded_vault, max_backup_audit_bytes};
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
@@ -65,18 +67,21 @@ pub struct BackupCreateResult {
 ///
 /// The request is opaque and consumed by [`crate::Vault::restore_backup`].
 pub struct BackupRestoreRequest {
+    #[cfg(target_os = "linux")]
     archive: ParsedBackupArchive,
+    #[cfg(target_os = "linux")]
     target: RestoreTarget,
 }
 
 impl fmt::Debug for BackupRestoreRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BackupRestoreRequest")
+        let mut debug = formatter.debug_struct("BackupRestoreRequest");
+        #[cfg(target_os = "linux")]
+        debug
             .field("archive", &"[REDACTED]")
             .field("archive_len", &self.archive.serialized_len)
-            .field("target_home", &self.target.home)
-            .finish_non_exhaustive()
+            .field("target_home", &self.target.home);
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -89,15 +94,15 @@ pub struct BackupRestoreResult {
     pub format_version: u32,
 }
 
+#[cfg(target_os = "linux")]
 struct RestoreTarget {
     home: PathBuf,
     parent: PathBuf,
-    #[cfg(unix)]
     parent_device: u64,
-    #[cfg(unix)]
     parent_inode: u64,
 }
 
+#[cfg(target_os = "linux")]
 impl fmt::Debug for RestoreTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

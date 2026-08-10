@@ -14,6 +14,7 @@ type HmacSha256 = Hmac<Sha256>;
 pub(crate) enum AuditAction {
     BackupFailed,
     BackupFinish,
+    #[cfg(target_os = "linux")]
     BackupRestore,
     BackupStart,
     BrokeredRunFailed,
@@ -42,6 +43,7 @@ impl AuditAction {
         match self {
             Self::BackupFailed => "backup_failed",
             Self::BackupFinish => "backup_finish",
+            #[cfg(target_os = "linux")]
             Self::BackupRestore => "backup_restore",
             Self::BackupStart => "backup_start",
             Self::BrokeredRunFailed => "brokered_run_failed",

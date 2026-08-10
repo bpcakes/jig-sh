@@ -182,11 +182,12 @@ fn passphrase_change_save_failure_leaves_old_envelope_and_leading_intent() {
 #[test]
 fn passphrase_preflight_is_noncreating_and_rejects_version_one() {
     let temp = tempfile::tempdir().unwrap();
-    let missing = temp.path().join("missing-vault");
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let missing = root.join("missing-vault");
     assert!(Vault::preflight_passphrase_change(missing.clone()).is_err());
     assert!(!missing.exists());
 
-    let home = temp.path().join("legacy-vault");
+    let home = root.join("legacy-vault");
     let store = VaultStore::resolve(Some(home.clone())).unwrap();
     init_v1(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
@@ -204,8 +205,9 @@ fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = Vault::resolve(Some(root.join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
     let value = b"private-file-sentinel";
@@ -217,7 +219,7 @@ fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
             SecretBytes::new(value.to_vec()),
         )
         .unwrap();
-    let output = temp.path().join("rendered.bin");
+    let output = root.join("rendered.bin");
 
     let result = vault
         .read_field_to_file(&passphrase(), reference.clone(), &output, false)
