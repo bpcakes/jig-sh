@@ -1,4 +1,4 @@
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
