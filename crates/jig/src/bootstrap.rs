@@ -1135,64 +1135,89 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
 fn retire_launcher_repair_seeded_caches(
     destination: &Path,
     contract_version: u32,
-) -> Result<usize> {
+) -> LauncherRepairSeedRetirement {
     let cache_base = runtime_cache_base(destination);
     let mut cache_paths = Vec::new();
+    let mut outcome = LauncherRepairSeedRetirement::default();
     for profile in [RuntimeCacheProfile::Default, RuntimeCacheProfile::Runtime] {
         let cache = cache_base.join(runtime_profile_cache_name(contract_version, profile));
-        if cache_has_launcher_repair_seed(&cache)? {
-            cache_paths.push(cache);
+        match cache_has_launcher_repair_seed(&cache) {
+            Ok(true) => cache_paths.push(cache),
+            Ok(false) => {}
+            Err(error) => outcome.errors.push(error),
         }
     }
     if cache_paths.is_empty() {
-        return Ok(0);
+        return outcome;
     }
 
-    let _locks = RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::immediate())
-        .context("Failed to lock launcher-repair caches for retirement")?;
-    let mut retired = 0;
-    for cache in cache_paths {
-        if !cache_has_launcher_repair_seed(&cache)? {
-            continue;
+    let _locks = match RuntimeCacheLocks::acquire(
+        &cache_paths,
+        RuntimeCacheLockPolicy::immediate(),
+    )
+    .context(
+        "Launcher-repair caches are busy; retirement was deferred. Rerun adopt or update after active Jig operations finish",
+    ) {
+        Ok(locks) => locks,
+        Err(error) => {
+            outcome.errors.push(error);
+            return outcome;
         }
-        let stamp = cache.join(".jig-source-stamp");
-        fs::remove_file(&stamp).with_context(|| {
-            format!(
-                "Failed to retire launcher-repair provenance {}",
-                stamp.display()
-            )
-        })?;
+    };
+    for cache in cache_paths {
+        match cache_has_launcher_repair_seed(&cache) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => {
+                outcome.errors.push(error);
+                continue;
+            }
+        }
         let metadata = cache.join(".jig-source-metadata-stamp");
         match fs::remove_file(&metadata) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
+                outcome
+                    .errors
+                    .push(anyhow::Error::new(error).context(format!(
                         "Failed to retire launcher-repair metadata {}",
                         metadata.display()
-                    )
-                });
+                    )));
+                continue;
             }
         }
-        retired += 1;
+        let stamp = cache.join(".jig-source-stamp");
+        match fs::remove_file(&stamp).with_context(|| {
+            format!(
+                "Failed to retire launcher-repair provenance {}",
+                stamp.display()
+            )
+        }) {
+            Ok(()) => outcome.retired += 1,
+            Err(error) => outcome.errors.push(error),
+        }
     }
-    Ok(retired)
+    outcome
+}
+
+#[derive(Default)]
+struct LauncherRepairSeedRetirement {
+    retired: usize,
+    errors: Vec<anyhow::Error>,
 }
 
 fn retire_launcher_repair_seeded_caches_best_effort(
     destination: &Path,
     contract_version: u32,
 ) -> usize {
-    match retire_launcher_repair_seeded_caches(destination, contract_version) {
-        Ok(retired) => retired,
-        Err(error) => {
-            eprintln!(
-                "Warning: harness changes were committed, but launcher-repair cache retirement was skipped: {error:#}"
-            );
-            0
-        }
+    let outcome = retire_launcher_repair_seeded_caches(destination, contract_version);
+    for error in outcome.errors {
+        eprintln!(
+            "Warning: harness changes were committed, but launcher-repair cache retirement could not complete: {error:#}"
+        );
     }
+    outcome.retired
 }
 
 fn cache_has_launcher_repair_seed(cache: &Path) -> Result<bool> {

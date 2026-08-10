@@ -87,14 +87,10 @@ fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
     )
     .unwrap();
 
-    assert_eq!(
-        retire_launcher_repair_seeded_caches(
-            repo.path(),
-            crate::context::CURRENT_CONTRACT_VERSION,
-        )
-        .unwrap(),
-        1
-    );
+    let outcome =
+        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+    assert_eq!(outcome.retired, 1);
+    assert!(outcome.errors.is_empty());
 
     assert!(!default_cache.join(".jig-source-stamp").exists());
     assert!(!default_cache.join(".jig-source-metadata-stamp").exists());
@@ -139,14 +135,42 @@ fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
     );
 
     drop(active_runtime);
-    assert_eq!(
-        retire_launcher_repair_seeded_caches(
-            repo.path(),
-            crate::context::CURRENT_CONTRACT_VERSION,
+    let outcome =
+        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+    assert_eq!(outcome.retired, 1);
+    assert!(outcome.errors.is_empty());
+}
+
+#[test]
+fn repair_seed_retirement_reports_completed_work_before_a_later_cache_error() {
+    let repo = tempdir().unwrap();
+    let cache_base = runtime_cache_base(repo.path());
+    let default_cache = cache_base.join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Default,
+    ));
+    let runtime_cache = cache_base.join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Runtime,
+    ));
+    for cache in [&default_cache, &runtime_cache] {
+        fs::create_dir_all(cache.join("bin")).unwrap();
+        fs::write(cache.join("bin/jig"), "cached runtime").unwrap();
+        fs::write(
+            cache.join(".jig-source-stamp"),
+            format!("{LAUNCHER_REPAIR_SEED_STAMP_HEADER}\nsource:fixture\n"),
         )
-        .unwrap(),
-        1
-    );
+        .unwrap();
+    }
+    fs::create_dir(runtime_cache.join(".jig-source-metadata-stamp")).unwrap();
+
+    let outcome =
+        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+
+    assert_eq!(outcome.retired, 1);
+    assert_eq!(outcome.errors.len(), 1);
+    assert!(!default_cache.join(".jig-source-stamp").exists());
+    assert!(runtime_cache.join(".jig-source-stamp").exists());
 }
 
 #[test]
