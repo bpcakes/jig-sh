@@ -335,8 +335,8 @@ fn generated_launcher_handoff_rejects_misclassified_capability_commands() {
     let error = validate_launcher_repository_scope(&cli)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("must run independently of the launcher's repository"));
-    assert!(error.contains("do not place `--` between `check` and `contract`"));
+    assert!(error.contains("launcher and this Jig runtime disagree"));
+    assert!(error.contains("current external Jig binary"));
 }
 
 #[test]

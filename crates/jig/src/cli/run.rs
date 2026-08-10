@@ -50,7 +50,7 @@ fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     };
     if launcher_capability_only_command(&cli.command) {
         bail!(
-            "The generated launcher classified `{}` as repository-scoped, but that command must run independently of the launcher's repository. Invoke it as `scripts/jig {} ...`; for `check contract`, do not place `--` between `check` and `contract`.",
+            "The generated launcher and this Jig runtime disagree about whether `{}` is repository-scoped. Refresh the generated launcher with a current external Jig binary (`jig update <repo> --force`) before retrying `{}`.",
             top_level_command_name(&cli.command),
             top_level_command_name(&cli.command),
         );
