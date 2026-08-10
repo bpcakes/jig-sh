@@ -1151,13 +1151,9 @@ fn retire_launcher_repair_seeded_caches(
         return outcome;
     }
 
-    let _locks = match RuntimeCacheLocks::acquire(
-        &cache_paths,
-        RuntimeCacheLockPolicy::immediate(),
-    )
-    .context(
-        "Launcher-repair caches are busy; retirement was deferred. Rerun adopt or update after active Jig operations finish",
-    ) {
+    let _locks = match RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::immediate())
+        .context("Failed to acquire launcher-repair cache locks; retirement was deferred")
+    {
         Ok(locks) => locks,
         Err(error) => {
             outcome.errors.push(error);
@@ -1173,6 +1169,8 @@ fn retire_launcher_repair_seeded_caches(
                 continue;
             }
         }
+        // Keep the provenance stamp until last: it is the retry marker that
+        // lets a later update recognize an incompletely retired seed.
         let metadata = cache.join(".jig-source-metadata-stamp");
         match fs::remove_file(&metadata) {
             Ok(()) => {}
