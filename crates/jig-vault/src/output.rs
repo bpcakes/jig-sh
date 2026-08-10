@@ -76,6 +76,7 @@ impl fmt::Debug for PreparedPrivateFile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OutputFailureStage {
     Preflight,
+    #[cfg(unix)]
     Sink,
 }
 
@@ -83,6 +84,7 @@ impl OutputFailureStage {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Preflight => "sink_preflight",
+            #[cfg(unix)]
             Self::Sink => "sink",
         }
     }

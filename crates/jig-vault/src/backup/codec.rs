@@ -1,21 +1,28 @@
 use std::fmt;
 
-use anyhow::{Context, Result as AnyResult, bail};
+#[cfg(any(target_os = "linux", test))]
+use anyhow::Context;
+use anyhow::{Result as AnyResult, bail};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use secrecy::SecretString;
 use zeroize::Zeroizing;
 
+use crate::SecretBytes;
+#[cfg(any(target_os = "linux", test))]
+use crate::VaultErrorKind;
+#[cfg(target_os = "linux")]
+use crate::crypto::open;
 use crate::crypto::{
-    KdfParams, NONCE_LEN, SALT_LEN, derive_wrap_key, open, random_array, seal, validate_kdf_params,
+    KdfParams, NONCE_LEN, SALT_LEN, derive_wrap_key, random_array, seal, validate_kdf_params,
 };
+#[cfg(any(target_os = "linux", test))]
 use crate::error::{classified, classify_source};
 use crate::format::{AEAD_ALGORITHM, decode_b64_array};
-use crate::{SecretBytes, VaultErrorKind};
 
-use super::payload::{
-    DecodedBackupArchive, MAX_BACKUP_PAYLOAD_BYTES, decode_backup_payload, encode_backup_payload,
-};
+#[cfg(target_os = "linux")]
+use super::payload::{DecodedBackupArchive, decode_backup_payload};
+use super::payload::{MAX_BACKUP_PAYLOAD_BYTES, encode_backup_payload};
 use super::{BACKUP_FORMAT_VERSION, MAX_BACKUP_ARCHIVE_BYTES};
 
 const MAX_BACKUP_CIPHERTEXT_BYTES: usize = MAX_BACKUP_PAYLOAD_BYTES + 16;
@@ -75,6 +82,7 @@ pub(super) struct BackupEnvelope {
     pub(super) ciphertext_b64: String,
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) struct ParsedBackupArchive {
     header: BackupHeader,
     salt: [u8; SALT_LEN],
@@ -103,12 +111,16 @@ impl fmt::Debug for BackupHeader {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl fmt::Debug for ParsedBackupArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ParsedBackupArchive")
             .field("header", &self.header)
+            .field("salt_len", &self.salt.len())
+            .field("nonce_len", &self.nonce.len())
             .field("serialized_len", &self.serialized_len)
+            .field("ciphertext_len", &self.ciphertext.len())
             .field("ciphertext", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -162,6 +174,7 @@ pub(super) fn seal_archive(
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<ParsedBackupArchive> {
     if bytes.len() > MAX_BACKUP_ARCHIVE_BYTES {
         return Err(classified(
@@ -215,6 +228,7 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
     })
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn decrypt_archive(
     passphrase: &SecretString,
     archive: ParsedBackupArchive,
@@ -318,6 +332,7 @@ fn push_aad_field(output: &mut String, name: &str, value: &str) {
     writeln!(output, "{name}:{}:{value}", value.len()).expect("writing to String cannot fail");
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn padded_base64_len(len: usize) -> AnyResult<usize> {
     len.checked_add(2)
         .and_then(|len| len.checked_div(3))

@@ -1,4 +1,6 @@
+#[cfg(target_os = "linux")]
 use std::fmt;
+#[cfg(target_os = "linux")]
 use std::ops::Range;
 
 use anyhow::{Context, Result as AnyResult, bail};
@@ -21,6 +23,7 @@ const MAX_SOURCE_VAULT_ID_BYTES: usize = 128;
 const BACKUP_PAYLOAD_MAGIC: &[u8] = b"jig-vault-backup-payload\n";
 const BACKUP_PAYLOAD_VERSION: u32 = 1;
 
+#[cfg(target_os = "linux")]
 pub(super) struct DecodedBackupArchive {
     plaintext: Zeroizing<Vec<u8>>,
     vault_range: Range<usize>,
@@ -30,6 +33,7 @@ pub(super) struct DecodedBackupArchive {
     pub(super) backup_created_at_ms: i128,
 }
 
+#[cfg(target_os = "linux")]
 impl DecodedBackupArchive {
     pub(super) fn vault_bytes(&self) -> &[u8] {
         &self.plaintext[self.vault_range.clone()]
@@ -40,6 +44,7 @@ impl DecodedBackupArchive {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl fmt::Debug for DecodedBackupArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -110,6 +115,7 @@ fn backup_payload_fixed_len(source_vault_id_len: usize) -> AnyResult<usize> {
         .context("backup payload length overflow")
 }
 
+#[cfg(target_os = "linux")]
 pub(super) fn decode_backup_payload(
     plaintext: Zeroizing<Vec<u8>>,
     backup_created_at_ms: i128,
@@ -378,11 +384,13 @@ fn push_len_prefixed_u64(output: &mut Vec<u8>, bytes: &[u8]) -> AnyResult<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 struct PayloadReader<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
 
+#[cfg(target_os = "linux")]
 impl<'a> PayloadReader<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }

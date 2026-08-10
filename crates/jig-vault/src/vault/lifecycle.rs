@@ -12,7 +12,9 @@ use crate::backup::{
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
-use crate::format::{FORMAT_VERSION, V1_FORMAT_VERSION, VaultFile, validate_header};
+#[cfg(target_os = "linux")]
+use crate::format::V1_FORMAT_VERSION;
+use crate::format::{FORMAT_VERSION, VaultFile, validate_header};
 use crate::store::VaultStore;
 use crate::{Result, VaultError, VaultErrorKind};
 
@@ -323,6 +325,7 @@ impl VaultStore {
         })
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn finalize_backup_restore(
         &self,
         passphrase: &SecretString,
