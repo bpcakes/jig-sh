@@ -992,4 +992,5 @@ fn default_template_resolution_error_for_explicit_ref_does_not_blame_release_tag
 }
 
 mod runtime_repair;
+#[cfg(unix)]
 mod source_stamp;

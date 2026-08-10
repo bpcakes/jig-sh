@@ -299,7 +299,9 @@ mod tests {
     use std::ffi::OsString;
     #[cfg(unix)]
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    #[cfg(unix)]
     use std::process::{Child, Command};
+    #[cfg(unix)]
     use std::time::Instant;
 
     use tempfile::tempdir;
@@ -459,6 +461,7 @@ mod tests {
         assert_python_owner_blocks_and_recovers(&cache, &ready);
     }
 
+    #[cfg(unix)]
     fn assert_python_owner_blocks_and_recovers(cache: &Path, ready: &Path) {
         let cache = cache.to_path_buf();
         let mut owner = spawn_python_lock_owner(&cache, ready);
@@ -479,6 +482,7 @@ mod tests {
         RuntimeCacheLocks::acquire(&[cache], RuntimeCacheLockPolicy::immediate()).unwrap();
     }
 
+    #[cfg(unix)]
     fn spawn_python_lock_owner(cache: &Path, ready: &Path) -> Child {
         Command::new("python3")
             .args([
