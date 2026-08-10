@@ -36,7 +36,7 @@ fn dispatch_vault_run_injects_redacts_and_verifies_audit() {
         },
     ))
     .unwrap();
-    let vault = Vault::resolve(Some(vault_home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(vault_home.clone())).unwrap();
     let passphrase = SecretString::from(passphrase.to_string());
     vault
         .set_secret(
@@ -97,7 +97,7 @@ fn dispatch_vault_run_delivers_secret_file() {
     let passphrase = "correct horse battery staple";
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
     capture_vault_passphrase().unwrap();
-    let vault = Vault::resolve(Some(vault_home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(vault_home.clone())).unwrap();
     let passphrase = SecretString::from(passphrase.to_string());
     vault.init(&passphrase).unwrap();
     vault
@@ -140,7 +140,7 @@ fn dispatch_vault_run_records_failure_audit_event() {
     let passphrase = "correct horse battery staple";
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
     capture_vault_passphrase().unwrap();
-    let vault = Vault::resolve(Some(vault_home.clone())).unwrap();
+    let vault = Vault::resolve_for_test(Some(vault_home.clone())).unwrap();
     let passphrase = SecretString::from(passphrase.to_string());
     vault.init(&passphrase).unwrap();
     vault

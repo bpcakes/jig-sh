@@ -315,6 +315,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
     let full = tempdir().unwrap();
     write_info_commands_repo(full.path());
     write_test_launcher(full.path());
+    let full_root = full.path().canonicalize().unwrap();
     let nested = full.path().join("nested/directory");
     fs::create_dir_all(&nested).unwrap();
 
@@ -331,7 +332,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
         .as_str()
         .unwrap();
     assert!(next_step.contains(&full.path().join("scripts/jig").display().to_string()));
-    assert!(next_step.contains(&format!("adopt {}", full.path().display())));
+    assert!(next_step.contains(&format!("adopt {}", full_root.display())));
     assert!(!next_step.contains("adopt ."));
 
     let minimal = tempdir().unwrap();
@@ -346,6 +347,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
         ),
     )
     .unwrap();
+    let minimal_root = minimal.path().canonicalize().unwrap();
     let outside = tempdir().unwrap();
     let output = jig()
         .current_dir(outside.path())
@@ -358,7 +360,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
     let next_step = command_by_name(&output, "sqlx")["next_step"]
         .as_str()
         .unwrap();
-    assert!(next_step.contains(&format!("`jig adopt {}", minimal.path().display())));
+    assert!(next_step.contains(&format!("`jig adopt {}", minimal_root.display())));
     assert!(!next_step.contains("adopt ."));
 }
 
@@ -457,7 +459,8 @@ marketplaces = []
     let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(preview["render_mode"], "preview");
     assert_eq!(preview["harness_footprint"], "minimal");
-    assert_eq!(preview["template"], template.display().to_string());
+    let canonical_template = template.canonicalize().unwrap().display().to_string();
+    assert_eq!(preview["template"], canonical_template);
 
     let apply = Command::new("/bin/sh")
         .current_dir(repo.path())
@@ -475,14 +478,11 @@ marketplaces = []
     let apply: Value = serde_json::from_slice(&apply.stdout).unwrap();
     assert_eq!(apply["render_mode"], "copy");
     assert_eq!(apply["harness_footprint"], "minimal");
-    assert_eq!(apply["template"], template.display().to_string());
+    assert_eq!(apply["template"], canonical_template);
     let config = fs::read_to_string(repo.path().join(".jig.toml")).unwrap();
     assert!(config.contains("harness_footprint = \"minimal\""));
     assert!(config.contains(&format!("_src_path = {portable_source:?}")));
-    assert!(config.contains(&format!(
-        "_template_local_path = {:?}",
-        template.display().to_string()
-    )));
+    assert!(config.contains(&format!("_template_local_path = {:?}", canonical_template)));
 }
 
 #[test]
@@ -745,7 +745,7 @@ fn info_commands_keeps_json_quiet_while_probing_configured_codex_marketplaces() 
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn info_commands_reports_terminal_progress_for_a_configured_codex_probe() {
     let repo = tempdir().unwrap();
@@ -844,7 +844,7 @@ plugins = []"#,
     fs::write(config_path, config).unwrap();
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn write_registered_codex_marketplace(codex_home: &Path) {
     fs::write(
         codex_home.join("config.toml"),

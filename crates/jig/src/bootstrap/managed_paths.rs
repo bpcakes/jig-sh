@@ -221,10 +221,21 @@ fn validate_manifest_path(entry: &str, manifest_path: &Path) -> Result<()> {
 
 fn manifest_path_string(path: &Path) -> Result<String> {
     let value = path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Managed path {} is not UTF-8", path.display()))?;
-    validate_manifest_path(value, Path::new(MANIFEST_PATH))?;
-    Ok(value.to_string())
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => value
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("Managed path {} is not UTF-8", path.display())),
+            _ => Err(anyhow::anyhow!(
+                "Managed path {} is not repository-relative",
+                path.display()
+            )),
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("/");
+    validate_manifest_path(&value, Path::new(MANIFEST_PATH))?;
+    Ok(value)
 }
 
 pub(super) fn should_omit_unmanaged_rendered_path(

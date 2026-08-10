@@ -1,5 +1,7 @@
 use std::fs;
-use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
+use std::io::Write;
+use std::io::{ErrorKind, Read};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -926,7 +928,7 @@ fn certificate_paths(store: &StateStore) -> Value {
         "trust_warning": GLOBAL_CA_TRUST_WARNING,
     })
 }
-
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn write_trusted_ca_marker(store: &StateStore) -> Result<()> {
     let record = TrustedCaRecord {
         version: TRUSTED_CA_VERSION,
@@ -1034,7 +1036,7 @@ fn private_key_matches_certificate(key_path: &Path, cert_path: &Path) -> Result<
         .map_err(|error| anyhow!("Failed to parse certificate DER: {error}"))?;
     Ok(cert.public_key().subject_public_key.data.as_ref() == key_pair.public_key_raw())
 }
-
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn remove_trusted_ca_marker(store: &StateStore) {
     match fs::remove_file(store.trusted_ca_path()) {
         Ok(()) => {}
@@ -1073,7 +1075,7 @@ fn trusted_ca_marker_owned_by_current_platform(store: &StateStore) -> Result<boo
     };
     Ok(record.version == TRUSTED_CA_VERSION && record.platform == std::env::consts::OS)
 }
-
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn trusted_ca_marker_fingerprint_for_current_platform(
     store: &StateStore,
 ) -> Result<Option<String>> {
@@ -1087,15 +1089,13 @@ fn trusted_ca_marker_fingerprint_for_current_platform(
         Ok(None)
     }
 }
-
 #[cfg(target_os = "macos")]
 fn trusted_ca_marker_sha256_fingerprint_for_current_platform(
     store: &StateStore,
 ) -> Result<Option<String>> {
     Ok(Some(ca_sha256_hex(&store.ca_path())?))
 }
-
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn trusted_ca_marker_sha256_fingerprint_for_current_platform(
     store: &StateStore,
 ) -> Result<Option<String>> {

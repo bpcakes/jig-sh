@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::Child;
 #[cfg(target_os = "macos")]
@@ -11,7 +12,9 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{Result, bail};
 
 use crate::ports::{is_port_free, is_tcp_listening};
 use crate::state::{process_start_token, process_start_tokens_supported};
@@ -24,7 +27,9 @@ use super::interruption_error;
 use crate::unix_pid;
 
 const APP_READY_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(unix)]
 const LISTENER_OWNER_RECHECK_ATTEMPTS: usize = 3;
+#[cfg(unix)]
 const LISTENER_OWNER_RECHECK_DELAY: Duration = Duration::from_millis(50);
 
 struct ReadinessProbes<Listens, PortFree, Interrupted> {
@@ -324,6 +329,7 @@ fn process_group_id(pid: u32) -> Option<i32> {
     (pgid != -1).then_some(pgid)
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn listener_target_addrs(target_host: &str, port: u16) -> Result<Vec<SocketAddr>> {
     let addrs = (target_host, port)
         .to_socket_addrs()

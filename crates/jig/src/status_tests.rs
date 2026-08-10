@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::fs;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
 use std::{

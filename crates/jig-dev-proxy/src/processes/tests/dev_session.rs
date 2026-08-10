@@ -2,13 +2,17 @@
 use crate::test_tempdir as tempdir;
 
 use crate::DevPreflightError;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::dev_sessions::DevSessionRuntime;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::state::StateStore;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::types::{AppRunSpec, CommandSpec};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::super::finish_preflight_cleanup;
 use super::super::{
-    TerminationReason, finish_preflight_cleanup, interruption_reason, is_interruption,
-    normalize_preflight_result,
+    TerminationReason, interruption_reason, is_interruption, normalize_preflight_result,
 };
 
 #[test]

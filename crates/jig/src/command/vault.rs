@@ -32,7 +32,7 @@ pub(crate) enum VaultAuditCommand {
 
 #[derive(Debug)]
 pub(crate) enum VaultBackupCommand {
-    Create(VaultBackupCreateRequest),
+    Create(Box<VaultBackupCreateRequest>),
     Restore(Box<VaultBackupRestoreRequest>),
 }
 

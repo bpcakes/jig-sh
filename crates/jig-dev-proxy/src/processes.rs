@@ -34,11 +34,13 @@ use self::cleanup::{
     termination_requested,
 };
 pub(crate) use self::cleanup::{TerminationReason, force_cleanup_requested};
-pub(crate) use self::dev_session::run_apps_with_preflight;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+use self::dev_session::finish_preflight_cleanup;
 #[cfg(test)]
-use self::dev_session::{
-    finish_preflight_cleanup, normalize_preflight_result, run_apps_with_interrupt_probe,
-};
+use self::dev_session::normalize_preflight_result;
+#[cfg(all(test, not(windows)))]
+use self::dev_session::run_apps_with_interrupt_probe;
+pub(crate) use self::dev_session::run_apps_with_preflight;
 use self::frameworks::*;
 use self::listener_owner::*;
 use self::output::*;
@@ -1182,7 +1184,6 @@ fn app_origin_interruptible(
         spec.hostname
     )))
 }
-
 fn proxy_origin_interruptible(
     settings: &ProxySettings,
     store: &StateStore,
@@ -1215,7 +1216,6 @@ fn print_dev_table(rows: &[AppDisplay]) {
         eprintln!("{note}");
     }
 }
-
 fn format_dev_table(rows: &[AppDisplay]) -> Vec<String> {
     if rows.is_empty() {
         return Vec::new();

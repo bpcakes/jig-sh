@@ -32,7 +32,7 @@ impl From<VaultCommand> for command::VaultCommand {
 impl From<VaultBackupCommand> for command::VaultBackupCommand {
     fn from(command: VaultBackupCommand) -> Self {
         match command {
-            VaultBackupCommand::Create(opts) => Self::Create(opts.into()),
+            VaultBackupCommand::Create(opts) => Self::Create(Box::new(opts.into())),
             VaultBackupCommand::Restore(opts) => Self::Restore(Box::new(opts.into())),
         }
     }

@@ -208,19 +208,29 @@ impl ValidatedVaultEnvelope {
 }
 
 impl NewVaultEnvelope {
-    pub(super) fn seal(passphrase: &SecretString, created_at_ms: i128) -> AnyResult<Self> {
-        Self::seal_for_version(passphrase, created_at_ms, FORMAT_VERSION)
+    pub(super) fn seal(
+        passphrase: &SecretString,
+        created_at_ms: i128,
+        kdf: KdfParams,
+    ) -> AnyResult<Self> {
+        Self::seal_for_version(passphrase, created_at_ms, FORMAT_VERSION, kdf)
     }
 
     #[cfg(test)]
     pub(super) fn seal_v1(passphrase: &SecretString, created_at_ms: i128) -> AnyResult<Self> {
-        Self::seal_for_version(passphrase, created_at_ms, V1_FORMAT_VERSION)
+        Self::seal_for_version(
+            passphrase,
+            created_at_ms,
+            V1_FORMAT_VERSION,
+            KdfParams::default(),
+        )
     }
 
     fn seal_for_version(
         passphrase: &SecretString,
         created_at_ms: i128,
         version: u32,
+        kdf: KdfParams,
     ) -> AnyResult<Self> {
         let salt = random_array::<SALT_LEN>()?;
         let dek = Zeroizing::new(random_array::<KEY_LEN>()?);
@@ -229,7 +239,7 @@ impl NewVaultEnvelope {
             version,
             vault_id: ulid::Ulid::new().to_string(),
             created_at_ms,
-            kdf: KdfParams::default(),
+            kdf,
             salt_b64: B64.encode(salt),
             aead: AEAD_ALGORITHM.into(),
         };

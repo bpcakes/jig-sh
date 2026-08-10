@@ -1731,8 +1731,7 @@ pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathB
     Ok(resolved)
 }
 
-// The shared publication boundary is fallible on platforms without a hardened
-// no-replace primitive even though supported targets return immediately.
+// The shared publication boundary stays fallible for unsupported platforms.
 #[allow(clippy::unnecessary_wraps)]
 const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<()> {
     #[cfg(any(
@@ -1908,7 +1907,8 @@ fn ensure_atomic_noreplace_publication_supported_with(
             preserved.display()
         );
     }
-
+    // Windows blocks ancestor renames while verified descendant handles remain open.
+    drop((source_identity, occupied_identity));
     let cleanup_parent = probe_path.parent().unwrap_or(parent);
     let mut cleanup_path = None;
     for attempt in 0_u64..128 {

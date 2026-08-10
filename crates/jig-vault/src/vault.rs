@@ -33,9 +33,7 @@ use crate::format::{AeadRole, decode_b64_array, payload_aad};
 use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
 use crate::output::{OutputInstallFailure, install_private_bytes};
 use crate::redact::MIN_REDACTABLE_LEN;
-use crate::run::{
-    ResolvedBrokeredEnv, ResolvedBrokeredFile, ResolvedBrokeredRun, RunOutput, run_brokered,
-};
+use crate::run::RunOutput;
 use crate::store::VaultStore;
 use crate::template::InjectionTemplate;
 use crate::types::{EnvVarName, FieldKind, SecretName, VaultReference};
@@ -52,6 +50,8 @@ pub const MAX_SECRET_VALUE_LEN: usize = 1024 * 1024;
 pub const MIN_MASTER_PASSPHRASE_LEN: usize = 12;
 const MAX_IMPORT_FIELDS: usize = 1_024;
 const MAX_IMPORT_VALUE_BYTES: usize = 16 * 1024 * 1024;
+
+mod brokered;
 
 #[derive(Clone, Debug)]
 pub struct Vault {
@@ -75,6 +75,21 @@ impl Vault {
     pub fn resolve(explicit_home: Option<PathBuf>) -> Result<Self> {
         Ok(Self {
             store: VaultStore::resolve(explicit_home)?,
+        })
+    }
+
+    /// Resolves a vault handle that creates new test fixtures with the minimum
+    /// accepted Argon2 cost. Existing vaults continue to use the parameters in
+    /// their authenticated headers.
+    ///
+    /// This constructor is available only to this crate's tests and consumers
+    /// that explicitly enable the `test-utils` feature. Production code must
+    /// use [`Vault::resolve`].
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub fn resolve_for_test(explicit_home: Option<PathBuf>) -> Result<Self> {
+        Ok(Self {
+            store: VaultStore::resolve_for_test(explicit_home)?,
         })
     }
 
@@ -799,145 +814,6 @@ impl std::fmt::Debug for ResolvedExecEnv {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BrokeredRunStage {
-    Resolve,
-    Process,
-}
-
-impl BrokeredRunStage {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Resolve => "resolve",
-            Self::Process => "process",
-        }
-    }
-}
-
-struct StartedBrokeredRun {
-    // Holds the opened vault, including DEK/audit key material, until the
-    // brokered child finishes or fails so the matching audit event can be
-    // appended after the vault lock is released for the child lifetime.
-    vault: OpenVault,
-    run_id: String,
-}
-
-struct PreparedBrokeredRun {
-    started: StartedBrokeredRun,
-    resolved: ResolvedBrokeredRun,
-}
-
-impl StartedBrokeredRun {
-    fn resolve_unlocked(
-        self,
-        store: &VaultStore,
-        request: BrokeredRun,
-    ) -> AnyResult<PreparedBrokeredRun> {
-        let resolved = match resolve_brokered_run(&self.vault, request) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                return Err(self.failure_error_unlocked(store, BrokeredRunStage::Resolve, error));
-            }
-        };
-        Ok(PreparedBrokeredRun {
-            started: self,
-            resolved,
-        })
-    }
-
-    fn record_finish(&self, store: &VaultStore, output: &RunOutput) -> AnyResult<()> {
-        self.vault.append_audit(
-            store,
-            AuditAction::BrokeredRunFinish,
-            serde_json::json!({
-                "run_id": self.run_id,
-                "exit_status": output.exit_status,
-                "exit_signal": output.exit_signal,
-            }),
-        )?;
-        Ok(())
-    }
-
-    fn failure_error(
-        &self,
-        store: &VaultStore,
-        stage: BrokeredRunStage,
-        kind: VaultErrorKind,
-        error: anyhow::Error,
-    ) -> VaultError {
-        if let Err(audit_error) = self.record_failure(store, stage) {
-            return VaultError::from_anyhow(
-                kind,
-                error.context(format!(
-                    "brokered run failed; additionally failed to append failure audit event: {audit_error}"
-                )),
-            );
-        }
-        VaultError::from_anyhow(kind, error)
-    }
-
-    fn record_failure(&self, store: &VaultStore, stage: BrokeredRunStage) -> AnyResult<()> {
-        self.vault.append_audit(
-            store,
-            AuditAction::BrokeredRunFailed,
-            brokered_run_failure_details(&self.run_id, stage),
-        )?;
-        Ok(())
-    }
-
-    fn failure_error_unlocked(
-        &self,
-        store: &VaultStore,
-        stage: BrokeredRunStage,
-        error: anyhow::Error,
-    ) -> anyhow::Error {
-        let kind = classified_kind(&error).unwrap_or(VaultErrorKind::Internal);
-        if let Err(audit_error) = self.record_failure_unlocked(store, stage) {
-            return classify_source(
-                kind,
-                "brokered run failed; additionally failed to append failure audit event",
-                error.context(format!(
-                    "additional audit failure while recording brokered run failure: {audit_error}"
-                )),
-            );
-        }
-        error
-    }
-
-    fn record_failure_unlocked(
-        &self,
-        store: &VaultStore,
-        stage: BrokeredRunStage,
-    ) -> AnyResult<()> {
-        self.vault.append_audit_unlocked(
-            store,
-            AuditAction::BrokeredRunFailed,
-            brokered_run_failure_details(&self.run_id, stage),
-        )?;
-        Ok(())
-    }
-}
-
-impl PreparedBrokeredRun {
-    fn execute(self, store: &VaultStore) -> Result<RunOutput> {
-        let Self { started, resolved } = self;
-        match run_brokered(resolved) {
-            Ok(output) => {
-                started.record_finish(store, &output).map_err(|error| {
-                    VaultError::from_anyhow(VaultErrorKind::AuditTampered, error)
-                })?;
-                Ok(output)
-            }
-            Err(error) => Err(started.failure_error(
-                store,
-                BrokeredRunStage::Process,
-                VaultErrorKind::Process,
-                error,
-            )),
-        }
-    }
-}
-
 impl std::fmt::Debug for OpenVault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -991,7 +867,8 @@ impl VaultStore {
         }
         validate_new_vault_passphrase_inner(passphrase)?;
 
-        let envelope = NewVaultEnvelope::seal(passphrase, now_ms())?;
+        let envelope =
+            NewVaultEnvelope::seal(passphrase, now_ms(), self.initialization_kdf().clone())?;
         if let Err(error) = AuditEvent::append_unlocked(
             self,
             envelope.audit_key.as_ref(),
@@ -1508,50 +1385,6 @@ impl VaultStore {
         VaultError::from_anyhow(default, error)
     }
 
-    fn prepare_brokered_run(
-        &self,
-        passphrase: &SecretString,
-        request: BrokeredRun,
-    ) -> AnyResult<PreparedBrokeredRun> {
-        let run_id = ulid::Ulid::new().to_string();
-        self.with_lock(|| {
-            let vault = self.open_unlocked(passphrase)?;
-            let start_details = brokered_run_start_details(&request, &run_id);
-            vault
-                .append_audit_unlocked(self, AuditAction::BrokeredRunStart, start_details)
-                .map_err(|error| {
-                    classify_source(
-                        VaultErrorKind::AuditTampered,
-                        "failed to append brokered run start audit event",
-                        error,
-                    )
-                })?;
-            StartedBrokeredRun { vault, run_id }.resolve_unlocked(self, request)
-        })
-    }
-
-    pub(crate) fn run_brokered(
-        &self,
-        passphrase: &SecretString,
-        request: BrokeredRun,
-    ) -> Result<RunOutput> {
-        let prepared = self
-            .prepare_brokered_run(passphrase, request)
-            .map_err(|error| {
-                if error.is::<ClassifiedVaultError>() {
-                    // Classified errors already carry their public kind; the default
-                    // only applies if a future classified source omits one.
-                    vault_error_from_anyhow(VaultErrorKind::Internal, error)
-                } else {
-                    self.map_open_error(error)
-                }
-            })?;
-        // Preparation returns only after the vault lock is released. The
-        // prepared state owns normal terminal audit recording, while abrupt
-        // process termination intentionally may leave its start unmatched.
-        prepared.execute(self)
-    }
-
     fn open_unlocked(&self, passphrase: &SecretString) -> AnyResult<OpenVault> {
         let text = self.read_vault_text()?.ok_or_else(|| {
             classified(
@@ -1761,20 +1594,6 @@ impl OpenVault {
     pub(crate) fn verify_audit_unlocked(&self, store: &VaultStore) -> AnyResult<AuditVerification> {
         verify_chain_unlocked(store, self.audit_key.as_ref())
     }
-}
-
-fn brokered_run_start_details(request: &BrokeredRun, run_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "run_id": run_id,
-        "env": request.env().iter().map(|mapping| serde_json::json!({
-            "var": mapping.var().as_str(),
-            "secret_name": mapping.secret_name().as_str(),
-        })).collect::<Vec<_>>(),
-        "files": request.files().iter().map(|mapping| serde_json::json!({
-            "var": mapping.var().as_str(),
-            "secret_name": mapping.secret_name().as_str(),
-        })).collect::<Vec<_>>(),
-    })
 }
 
 fn exec_start_details(request: &VaultExec, operation_id: &str) -> serde_json::Value {
@@ -2000,45 +1819,6 @@ fn reveal_failure_details(operation_id: &str, stage: &str) -> serde_json::Value 
         "stage": stage,
         // Values and raw errors never belong in the local audit chain.
         "error": "vault reveal operation failed",
-    })
-}
-
-fn brokered_run_failure_details(run_id: &str, stage: BrokeredRunStage) -> serde_json::Value {
-    serde_json::json!({
-        "run_id": run_id,
-        "stage": stage.as_str(),
-        // Do not record the original error text here. Spawn/process errors can
-        // include argv or paths, and audit logs are value-free metadata.
-        "error": "brokered run failed",
-    })
-}
-
-fn resolve_brokered_run(vault: &OpenVault, request: BrokeredRun) -> AnyResult<ResolvedBrokeredRun> {
-    let (command, env_mappings, file_mappings) = request.into_parts();
-    let mut env = Vec::with_capacity(env_mappings.len());
-    for mapping in env_mappings {
-        let (var, secret_name) = mapping.into_parts();
-        let value = vault.secret_value(&secret_name)?;
-        env.push(ResolvedBrokeredEnv {
-            var,
-            secret_name,
-            value,
-        });
-    }
-    let mut files = Vec::with_capacity(file_mappings.len());
-    for mapping in file_mappings {
-        let (var, secret_name) = mapping.into_parts();
-        let value = vault.secret_value(&secret_name)?;
-        files.push(ResolvedBrokeredFile {
-            var,
-            secret_name,
-            value,
-        });
-    }
-    Ok(ResolvedBrokeredRun {
-        command,
-        env,
-        files,
     })
 }
 

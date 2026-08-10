@@ -416,7 +416,7 @@ fn run_provider(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn run_provider_inner(
     root: &Path,
     provider: &StatusProviderConfig,
@@ -438,7 +438,7 @@ fn run_provider_inner_with_cancellation(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn run_provider_inner_with_limits(
     root: &Path,
     provider: &StatusProviderConfig,

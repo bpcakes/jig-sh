@@ -7,6 +7,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::{Context, Result as AnyResult, bail};
 
+use crate::crypto::KdfParams;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::{AUDIT_FILE, VAULT_FILE, VaultStore, ensure_tree_has_no_symlinks};
@@ -31,6 +32,7 @@ fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
     validate_existing_private_dir(&root)?;
     Ok(VaultStore {
         root,
+        initialization_kdf: KdfParams::production(),
         #[cfg(test)]
         fail_next_vault_write: Arc::new(AtomicBool::new(false)),
     })
