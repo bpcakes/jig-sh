@@ -35,34 +35,23 @@ pub(crate) fn run() -> Result<()> {
 }
 
 fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
-    let (Some(contract_version), Some(profile), Some(repo_root)) = (
-        cli.launcher_contract_version,
-        cli.launcher_profile,
-        cli.launcher_repo_root.as_deref(),
-    ) else {
-        if cli.launcher_contract_version.is_none()
-            && cli.launcher_profile.is_none()
-            && cli.launcher_repo_root.is_none()
-        {
-            return Ok(());
-        }
-        bail!("Incomplete generated-launcher repository validation handoff");
+    let LauncherHandoff::Repository(request) = LauncherHandoff::from_cli(cli)? else {
+        return Ok(());
     };
-    if launcher_capability_only_command(&cli.command) {
+    let descriptor = cli.command.launcher_descriptor();
+    if descriptor.scope == LauncherCommandScope::CapabilityOnly {
         bail!(
             "The generated launcher and this Jig runtime disagree about whether `{}` is repository-scoped. Repair the launcher/runtime pair with a current external Jig binary (`jig update <repo> --launcher-only --force`) before retrying `{}`.",
-            top_level_command_name(&cli.command),
-            top_level_command_name(&cli.command),
+            descriptor.name,
+            descriptor.name,
         );
     }
-    let ctx = validate_runtime_compatibility(repo_root, Some(contract_version), profile, false)
-    .with_context(|| {
+    let ctx = validate_repository_runtime_compatibility(request).with_context(|| {
         format!(
             "The repository contract did not validate under Jig profile {}. Run scripts/jig check contract or scripts/jig doctor for repair guidance.",
-            profile.as_str()
+            request.profile.as_str()
         )
-    })?
-    .context("Strict launcher validation did not produce a repository context")?;
+    })?;
     if let Some(configured_root) = std::env::var_os(crate::context::JIG_REPO_ROOT_ENV) {
         let configured_root = std::path::PathBuf::from(configured_root);
         if !configured_root.as_os_str().is_empty()
@@ -87,8 +76,35 @@ fn validate_launcher_repository_scope(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum LauncherHandoff<'a> {
+    Direct,
+    Repository(RuntimeCompatibilityRequest<'a>),
+}
+
+impl<'a> LauncherHandoff<'a> {
+    fn from_cli(cli: &'a Cli) -> Result<Self> {
+        match (
+            cli.launcher_contract_version,
+            cli.launcher_profile,
+            cli.launcher_repo_root.as_deref(),
+        ) {
+            (None, None, None) => Ok(Self::Direct),
+            (Some(contract_version), Some(profile), Some(repo_root)) => {
+                Ok(Self::Repository(RuntimeCompatibilityRequest {
+                    repo_root,
+                    contract_version: Some(contract_version),
+                    profile,
+                }))
+            }
+            _ => bail!("Incomplete generated-launcher repository validation handoff"),
+        }
+    }
+}
+
+#[cfg(test)]
 fn launcher_capability_only_command(command: &CommandKind) -> bool {
-    launcher_command_scope(command) == LauncherCommandScope::CapabilityOnly
+    command.launcher_descriptor().scope == LauncherCommandScope::CapabilityOnly
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,44 +113,64 @@ enum LauncherCommandScope {
     Repository,
 }
 
-const fn launcher_command_scope(command: &CommandKind) -> LauncherCommandScope {
-    use LauncherCommandScope::{CapabilityOnly, Repository};
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LauncherCommandDescriptor {
+    name: &'static str,
+    scope: LauncherCommandScope,
+}
 
-    match command {
-        CommandKind::Init(_)
-        | CommandKind::Presets
-        | CommandKind::Adopt(_)
-        | CommandKind::Update(_)
-        | CommandKind::Doctor
-        | CommandKind::Codex(_)
-        | CommandKind::Check(CheckCommand::Contract(_))
-        | CommandKind::RuntimeCompatible(_) => CapabilityOnly,
+impl LauncherCommandDescriptor {
+    const fn new(name: &'static str, scope: LauncherCommandScope) -> Self {
+        Self { name, scope }
+    }
+}
+
+impl CommandKind {
+    const fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
+        use LauncherCommandScope::{CapabilityOnly, Repository};
+
+        let (name, scope) = match self {
+            Self::Init(_) => (tool_defs::cli_command::INIT, CapabilityOnly),
+            Self::Presets => (tool_defs::cli_command::PRESETS, CapabilityOnly),
+            Self::Adopt(_) => (tool_defs::cli_command::ADOPT, CapabilityOnly),
+            Self::Update(_) => (tool_defs::cli_command::UPDATE, CapabilityOnly),
+            Self::Bootstrap(_) => (tool_defs::cli_command::BOOTSTRAP, Repository),
+            Self::Setup => (tool_defs::cli_command::SETUP, Repository),
+            Self::Doctor => (tool_defs::cli_command::DOCTOR, CapabilityOnly),
+            Self::Info(_) => (tool_defs::cli_command::INFO, Repository),
+            Self::Dev(_) => (tool_defs::cli_command::DEV, Repository),
+            Self::Check(CheckCommand::Contract(_)) => {
+                (tool_defs::cli_command::CHECK, CapabilityOnly)
+            }
+            Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
+            Self::Status(_) => (tool_defs::cli_command::STATUS, Repository),
+            Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
+            Self::Work(_) => (tool_defs::cli_command::WORK, Repository),
+            Self::Loop(_) => (tool_defs::cli_command::LOOP, Repository),
+            Self::Sqlx(_) => (root_commands::SQLX.name, Repository),
+            Self::MigrationAdd(_) => (tool_defs::cli_command::MIGRATION_ADD, Repository),
+            Self::SchemaDump(_) => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
+            Self::Vault(_) => (tool_defs::cli_command::VAULT, Repository),
+            Self::GenerateSqlxUncheckedQueriesTodo(_) => (
+                tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO,
+                Repository,
+            ),
+            Self::Proxy(_) => (tool_defs::cli_command::PROXY, Repository),
+            Self::Prompt(_) => ("prompt", Repository),
+            Self::Agent(_) => (tool_defs::cli_command::AGENT, Repository),
+            Self::Codex(_) => (tool_defs::cli_command::CODEX, CapabilityOnly),
+            Self::AgentMap(_) => (tool_defs::cli_command::AGENT_MAP, Repository),
+            Self::State(_) => (tool_defs::cli_command::STATE, Repository),
+            Self::Mcp => (tool_defs::cli_command::MCP, Repository),
+            Self::RuntimeCompatible(_) => ("__runtime-compatible", CapabilityOnly),
+        };
 
         // Repository-scoped commands must operate exclusively on the
         // generated launcher's validated root. A command that accepts a
         // caller-relative repository target belongs in CapabilityOnly instead;
         // keeping this match exhaustive forces every new top-level command to
         // make that choice explicitly.
-        CommandKind::Bootstrap(_)
-        | CommandKind::Setup
-        | CommandKind::Info(_)
-        | CommandKind::Dev(_)
-        | CommandKind::Check(_)
-        | CommandKind::Status(_)
-        | CommandKind::Ui(_)
-        | CommandKind::Work(_)
-        | CommandKind::Loop(_)
-        | CommandKind::Sqlx(_)
-        | CommandKind::MigrationAdd(_)
-        | CommandKind::SchemaDump(_)
-        | CommandKind::Vault(_)
-        | CommandKind::GenerateSqlxUncheckedQueriesTodo(_)
-        | CommandKind::Proxy(_)
-        | CommandKind::Prompt(_)
-        | CommandKind::Agent(_)
-        | CommandKind::AgentMap(_)
-        | CommandKind::State(_)
-        | CommandKind::Mcp => Repository,
+        LauncherCommandDescriptor::new(name, scope)
     }
 }
 
@@ -143,40 +179,6 @@ fn launcher_capability_only_top_level_name(name: &str) -> bool {
     LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS
         .split(',')
         .any(|capability| capability == name)
-}
-
-const fn top_level_command_name(command: &CommandKind) -> &'static str {
-    match command {
-        CommandKind::Init(_) => tool_defs::cli_command::INIT,
-        CommandKind::Presets => tool_defs::cli_command::PRESETS,
-        CommandKind::Adopt(_) => tool_defs::cli_command::ADOPT,
-        CommandKind::Update(_) => tool_defs::cli_command::UPDATE,
-        CommandKind::Bootstrap(_) => tool_defs::cli_command::BOOTSTRAP,
-        CommandKind::Setup => tool_defs::cli_command::SETUP,
-        CommandKind::Doctor => tool_defs::cli_command::DOCTOR,
-        CommandKind::Info(_) => tool_defs::cli_command::INFO,
-        CommandKind::Dev(_) => tool_defs::cli_command::DEV,
-        CommandKind::Check(_) => tool_defs::cli_command::CHECK,
-        CommandKind::Status(_) => tool_defs::cli_command::STATUS,
-        CommandKind::Ui(_) => tool_defs::cli_command::UI,
-        CommandKind::Work(_) => tool_defs::cli_command::WORK,
-        CommandKind::Loop(_) => tool_defs::cli_command::LOOP,
-        CommandKind::Sqlx(_) => root_commands::SQLX.name,
-        CommandKind::MigrationAdd(_) => tool_defs::cli_command::MIGRATION_ADD,
-        CommandKind::SchemaDump(_) => tool_defs::cli_command::SCHEMA_DUMP,
-        CommandKind::Vault(_) => tool_defs::cli_command::VAULT,
-        CommandKind::GenerateSqlxUncheckedQueriesTodo(_) => {
-            tool_defs::cli_command::GENERATE_SQLX_UNCHECKED_QUERIES_TODO
-        }
-        CommandKind::Proxy(_) => tool_defs::cli_command::PROXY,
-        CommandKind::Prompt(_) => "prompt",
-        CommandKind::Agent(_) => tool_defs::cli_command::AGENT,
-        CommandKind::Codex(_) => tool_defs::cli_command::CODEX,
-        CommandKind::AgentMap(_) => tool_defs::cli_command::AGENT_MAP,
-        CommandKind::State(_) => tool_defs::cli_command::STATE,
-        CommandKind::Mcp => tool_defs::cli_command::MCP,
-        CommandKind::RuntimeCompatible(_) => "__runtime-compatible",
-    }
 }
 
 const fn should_report_json_command_errors(json_output: bool, command: &CommandKind) -> bool {
@@ -374,63 +376,105 @@ fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
 }
 
 fn run_runtime_compatible(opts: RuntimeCompatibleOpts) -> Result<()> {
-    validate_runtime_compatibility(
-        &opts.repo_root,
-        opts.contract_version,
-        opts.profile,
-        opts.capability_only,
-    )?;
-    Ok(())
+    RuntimeCompatibilityProbe::from_opts(&opts).validate()
 }
 
-fn validate_runtime_compatibility(
-    repo_root: &std::path::Path,
+#[derive(Clone, Copy, Debug)]
+struct RuntimeCompatibilityRequest<'a> {
+    repo_root: &'a std::path::Path,
     contract_version: Option<u32>,
     profile: RuntimeCompatibilityProfile,
-    capability_only: bool,
-) -> Result<Option<RepoContext>> {
-    let repo_root = std::fs::canonicalize(repo_root).with_context(|| {
-        format!(
-            "Failed to resolve Jig repository root {}",
-            repo_root.display()
-        )
-    })?;
-    if let Some(contract_version) = contract_version
-        && !crate::context::is_supported_contract_version(contract_version)
-    {
-        bail!(
-            "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
-            crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
-            crate::context::CURRENT_CONTRACT_VERSION
-        );
-    }
-    let ctx = if capability_only {
-        if contract_version.is_none() {
-            // Keep direct/manual uses of the private probe useful. Generated
-            // launchers and installers pass their rendered epoch explicitly so
-            // repair paths do not depend on a readable manifest.
-            RepoContext::supported_contract_version_from_root(&repo_root)?;
+}
+
+impl RuntimeCompatibilityRequest<'_> {
+    fn canonical_repo_root(self) -> Result<std::path::PathBuf> {
+        let repo_root = std::fs::canonicalize(self.repo_root).with_context(|| {
+            format!(
+                "Failed to resolve Jig repository root {}",
+                self.repo_root.display()
+            )
+        })?;
+        if let Some(contract_version) = self.contract_version
+            && !crate::context::is_supported_contract_version(contract_version)
+        {
+            bail!(
+                "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
+                crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
+                crate::context::CURRENT_CONTRACT_VERSION
+            );
         }
-        None
-    } else {
-        if let Some(launcher_contract_version) = contract_version {
-            let repository_contract_version =
-                RepoContext::declared_contract_version_from_root(&repo_root)?;
-            if launcher_contract_version != repository_contract_version {
-                bail!(
-                    "Launcher contract version {launcher_contract_version} does not match repository contract version {repository_contract_version}"
-                );
+        Ok(repo_root)
+    }
+
+    fn validate_profile(self) -> Result<()> {
+        if self.profile == RuntimeCompatibilityProfile::Default && !cfg!(feature = "dev-proxy") {
+            bail!(
+                "This Jig binary is incompatible with the default runtime profile because it was built without the dev-proxy feature"
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RuntimeCompatibilityProbe<'a> {
+    Capability(RuntimeCompatibilityRequest<'a>),
+    Repository(RuntimeCompatibilityRequest<'a>),
+}
+
+impl<'a> RuntimeCompatibilityProbe<'a> {
+    fn from_opts(opts: &'a RuntimeCompatibleOpts) -> Self {
+        let request = RuntimeCompatibilityRequest {
+            repo_root: &opts.repo_root,
+            contract_version: opts.contract_version,
+            profile: opts.profile,
+        };
+        if opts.capability_only {
+            Self::Capability(request)
+        } else {
+            Self::Repository(request)
+        }
+    }
+
+    fn validate(self) -> Result<()> {
+        match self {
+            Self::Capability(request) => validate_capability_runtime_compatibility(request),
+            Self::Repository(request) => {
+                validate_repository_runtime_compatibility(request).map(|_| ())
             }
         }
-        let ctx = RepoContext::load_from_root(repo_root)?;
-        crate::policy::validate_contract(&ctx)?;
-        Some(ctx)
-    };
-    if profile == RuntimeCompatibilityProfile::Default && !cfg!(feature = "dev-proxy") {
-        bail!(
-            "This Jig binary is incompatible with the default runtime profile because it was built without the dev-proxy feature"
-        );
     }
+}
+
+fn validate_capability_runtime_compatibility(
+    request: RuntimeCompatibilityRequest<'_>,
+) -> Result<()> {
+    let repo_root = request.canonical_repo_root()?;
+    if request.contract_version.is_none() {
+        // Keep direct/manual uses of the private probe useful. Generated
+        // launchers and installers pass their rendered epoch explicitly so
+        // repair paths do not depend on a readable manifest.
+        RepoContext::supported_contract_version_from_root(&repo_root)?;
+    }
+    request.validate_profile()
+}
+
+fn validate_repository_runtime_compatibility(
+    request: RuntimeCompatibilityRequest<'_>,
+) -> Result<RepoContext> {
+    let repo_root = request.canonical_repo_root()?;
+    if let Some(launcher_contract_version) = request.contract_version {
+        let repository_contract_version =
+            RepoContext::declared_contract_version_from_root(&repo_root)?;
+        if launcher_contract_version != repository_contract_version {
+            bail!(
+                "Launcher contract version {launcher_contract_version} does not match repository contract version {repository_contract_version}"
+            );
+        }
+    }
+    let ctx = RepoContext::load_from_root(repo_root)?;
+    crate::policy::validate_contract(&ctx)?;
+    request.validate_profile()?;
     Ok(ctx)
 }
 
