@@ -218,3 +218,61 @@ fn installer_rejects_a_directory_at_the_guard_path_without_retrying() {
             .contains("guard path is a directory instead of a file")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn installer_rejects_a_guard_symlink_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let install_root = temp.path().join("runtime");
+    let guard_target = temp.path().join("guard-target");
+    fs::write(&guard_target, "preserve me\n").unwrap();
+    symlink(&guard_target, temp.path().join("runtime.lock.guard")).unwrap();
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new(repo.join("scripts/install-jig.sh"))
+        .args(["--profile", "runtime", "--seed-dev-bin"])
+        .arg(&install_root)
+        .env("JIG_DEV_BIN", env!("CARGO_BIN_EXE_jig"))
+        .env_remove("JIG_INSTALL_LOCK_TOKEN")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Failed to open Jig installer guard"));
+    assert_eq!(fs::read_to_string(guard_target).unwrap(), "preserve me\n");
+}
+
+#[test]
+fn installer_python_does_not_import_modules_from_the_invocation_directory() {
+    let temp = tempdir().unwrap();
+    let install_root = temp.path().join("runtime");
+    let import_marker = temp.path().join("repository-module-imported");
+    fs::write(
+        temp.path().join("pathlib.py"),
+        "open('repository-module-imported', 'w').write('imported')\nraise RuntimeError('repository pathlib.py executed')\n",
+    )
+    .unwrap();
+
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new(repo.join("scripts/install-jig.sh"))
+        .args(["--profile", "runtime", "--seed-dev-bin"])
+        .arg(&install_root)
+        .env("JIG_DEV_BIN", env!("CARGO_BIN_EXE_jig"))
+        .env_remove("JIG_INSTALL_LOCK_TOKEN")
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !import_marker.exists(),
+        "installer imported repository-controlled pathlib.py"
+    );
+}

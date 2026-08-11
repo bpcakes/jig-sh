@@ -22,7 +22,7 @@ read_config_fields() {
   local contract_manifest="${1:-}"
   # Repository-scoped callers pass the manifest so one Python startup reads
   # both fixed metadata files before normal launcher dispatch.
-  python3 -c '
+  python3 -I -c '
 import ast
 import json
 import pathlib
@@ -135,7 +135,7 @@ read_config_fields_for_mode() {
 }
 
 read_contract_version() {
-  python3 -c '
+  python3 -I -c '
 import json
 import pathlib
 import sys
@@ -415,7 +415,7 @@ hash_stdin() {
     return
   fi
   if command -v python3 >/dev/null 2>&1; then
-    digest="$(python3 -c '
+    digest="$(python3 -I -c '
 import hashlib
 import sys
 
@@ -457,7 +457,7 @@ non_git_local_source_stamp() {
   local source_root="$1"
   local stamp_mode="$2"
   require_python3
-  python3 -c '
+  python3 -I -c '
 import hashlib
 import os
 import stat
@@ -1113,7 +1113,7 @@ resolve_executable_path() {
     return
   fi
   if command -v python3 >/dev/null 2>&1; then
-    python3 -c '
+    python3 -I -c '
 import os
 import sys
 
@@ -1155,11 +1155,12 @@ acquire_install_lock() {
   mkdir -p "$(dirname "$INSTALL_ROOT")"
   require_python3
   local status
-  if python3 -c '
+  if python3 -I -c '
 import errno
 import os
 import pathlib
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -1206,7 +1207,20 @@ for attempt in range(attempts):
         flags = os.O_RDWR | os.O_CREAT
         if hasattr(os, "O_BINARY"):
             flags |= os.O_BINARY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         file_descriptor = os.open(guard_path, flags, 0o600)
+        opened_guard = os.fstat(file_descriptor)
+        path_guard = os.lstat(guard_path)
+        if not stat.S_ISREG(opened_guard.st_mode) \
+                or not stat.S_ISREG(path_guard.st_mode) \
+                or opened_guard.st_nlink != 1 \
+                or path_guard.st_nlink != 1 \
+                or not os.path.samestat(opened_guard, path_guard):
+            os.close(file_descriptor)
+            file_descriptor = None
+            print(f"Jig installer guard path is not a standalone regular file: {guard_path}", file=sys.stderr)
+            raise SystemExit(1)
         if os.name == "nt" and os.fstat(file_descriptor).st_size == 0:
             os.write(file_descriptor, b"\0")
         if try_lock(file_descriptor):
@@ -1507,7 +1521,7 @@ native_binary_is_compatible() {
   # Bash retries ENOEXEC files as shell scripts. Use Python's direct exec path
   # so a crafted text file with an ELF/Mach-O prefix is rejected, never sourced.
   require_python3
-  python3 - "$bin_path" "$CONTRACT_VERSION" "$INSTALL_PROFILE" "$ROOT_DIR" <<'PY'
+  python3 -I - "$bin_path" "$CONTRACT_VERSION" "$INSTALL_PROFILE" "$ROOT_DIR" <<'PY'
 import subprocess
 import sys
 

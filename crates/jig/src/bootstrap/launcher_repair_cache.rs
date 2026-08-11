@@ -57,15 +57,16 @@ pub(super) fn retire_launcher_repair_seeded_caches(
         return outcome;
     }
 
-    let _locks = match RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::immediate())
-        .context(LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE)
-    {
-        Ok(locks) => locks,
-        Err(error) => {
-            outcome.errors.push(error);
-            return outcome;
-        }
-    };
+    let _locks =
+        match RuntimeCacheLocks::acquire(&cache_paths, RuntimeCacheLockPolicy::retirement())
+            .context(LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE)
+        {
+            Ok(locks) => locks,
+            Err(error) => {
+                outcome.errors.push(error);
+                return outcome;
+            }
+        };
     for cache in cache_paths {
         match cache_has_launcher_repair_seed(&cache) {
             Ok(true) => {}

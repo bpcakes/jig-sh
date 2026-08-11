@@ -29,13 +29,20 @@ use crate::command::{VaultCommand, VaultStatusRequest};
 use crate::context::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
 };
-use crate::context::{RepoContext, find_repo_root_from_or_env};
+use crate::context::{
+    JIG_REPO_ROOT_ENV, RepoContext, find_repo_root_from, find_repo_root_from_or_env,
+};
 #[cfg(test)]
 use crate::tool_defs::tool;
 
 mod runtime;
 
-use runtime::*;
+#[cfg(test)]
+use runtime::launcher_repair_staging_check_at;
+use runtime::{
+    contract_migration_check, launcher_repair_cache_check, launcher_repair_seed_stamp_is_present,
+    launcher_repair_staging_check, legacy_version_cache_check, runtime_check,
+};
 
 const COMMAND: &str = "doctor";
 const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
@@ -68,6 +75,9 @@ pub(crate) fn run() -> Result<Value> {
             return Ok(output(None, checks));
         }
     };
+    if let Some(notice) = doctor_root_override_notice(&cwd, &root) {
+        eprintln!("{notice}");
+    }
 
     checks.push(
         check(
@@ -196,6 +206,22 @@ pub(crate) fn run() -> Result<Value> {
         })),
         checks,
     ))
+}
+
+fn doctor_root_override_notice(cwd: &Path, selected_root: &Path) -> Option<String> {
+    if !RepoContext::repo_root_override_is_set() {
+        return None;
+    }
+    let local_root = find_repo_root_from(cwd).ok()?;
+    let local_root = fs::canonicalize(local_root).ok()?;
+    (local_root != selected_root).then(|| {
+        format!(
+            "jig doctor is using {JIG_REPO_ROOT_ENV}={} instead of the repository containing its invocation directory {}; unset {JIG_REPO_ROOT_ENV} to diagnose {}",
+            selected_root.display(),
+            local_root.display(),
+            local_root.display(),
+        )
+    })
 }
 
 pub(crate) fn program_available_on_path(program: &str) -> bool {

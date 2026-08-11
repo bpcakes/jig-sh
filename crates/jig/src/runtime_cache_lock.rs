@@ -33,10 +33,18 @@ impl RuntimeCacheLockPolicy {
         retry_delay: LOCK_RETRY_DELAY,
     };
 
+    #[cfg(test)]
     pub(crate) const fn immediate() -> Self {
         Self {
             attempts: 1,
             retry_delay: Duration::ZERO,
+        }
+    }
+
+    pub(crate) const fn retirement() -> Self {
+        Self {
+            attempts: 3,
+            retry_delay: Duration::from_secs(1),
         }
     }
 }
@@ -174,9 +182,37 @@ fn open_guard(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    options.open(path)
+    let file = options.open(path)?;
+    validate_guard_identity(path, &file)?;
+    Ok(file)
+}
+
+fn validate_guard_identity(path: &Path, file: &File) -> std::io::Result<()> {
+    let opened = file.metadata()?;
+    let named = fs::symlink_metadata(path)?;
+    if !opened.is_file() || !named.file_type().is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "guard path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.dev() != named.dev()
+            || opened.ino() != named.ino()
+            || opened.nlink() != 1
+            || named.nlink() != 1
+        {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "guard path is not a standalone regular file",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn write_guard_record(file: &mut File, record: &str) -> std::io::Result<()> {
@@ -355,6 +391,32 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn guard_symlink_is_rejected_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempdir().unwrap();
+        let cache = temp.path().join("contract-4");
+        let guard = path_with_suffix(&cache, LOCK_GUARD_SUFFIX);
+        let target = temp.path().join("guard-target");
+        fs::write(&target, "preserve me\n").unwrap();
+        symlink(&target, &guard).unwrap();
+
+        let error = RuntimeCacheLocks::acquire(
+            std::slice::from_ref(&cache),
+            RuntimeCacheLockPolicy::immediate(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to open Jig installer guard")
+        );
+        assert_eq!(fs::read_to_string(target).unwrap(), "preserve me\n");
     }
 
     #[test]

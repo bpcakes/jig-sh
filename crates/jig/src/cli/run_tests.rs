@@ -106,12 +106,10 @@ fn launcher_capability_flag_allowlist_matches_clap_globals() {
             .and_then(|(_, remainder)| remainder.split_once("\n}\n"))
             .map(|(body, _)| body)
             .unwrap_or_else(|| panic!("launcher is missing {function_name}"));
-        for flag in &globals {
-            assert!(
-                function_body.contains("jig_is_global_flag"),
-                "launcher {function_name} does not use the centralized global-option recognizer for {flag}"
-            );
-        }
+        assert!(
+            function_body.contains("jig_is_global_flag"),
+            "launcher {function_name} does not use the centralized global-option recognizer"
+        );
     }
 
     let top_level_subcommands = command

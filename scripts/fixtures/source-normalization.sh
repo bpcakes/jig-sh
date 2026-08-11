@@ -1311,9 +1311,9 @@ PY
   real_python="$(command -v python3)"
   printf '%s\n' \
     '#!/bin/sh' \
-    'if [ "${1:-}" = "-c" ]; then' \
-    '  code="$2"' \
-    '  shift 2' \
+    'if [ "${1:-}" = "-I" ] && [ "${2:-}" = "-c" ]; then' \
+    '  code="$3"' \
+    '  shift 3' \
     '  prefix='"'"'import builtins' \
     '_jig_real_import = builtins.__import__' \
     'def _jig_import(name, globals=None, locals=None, fromlist=(), level=0):' \
@@ -1321,7 +1321,7 @@ PY
     '        raise ModuleNotFoundError("forced fallback")' \
     '    return _jig_real_import(name, globals, locals, fromlist, level)' \
     'builtins.__import__ = _jig_import'"'" \
-    '  exec "$JIG_FIXTURE_REAL_PYTHON" -c "$prefix
+    '  exec "$JIG_FIXTURE_REAL_PYTHON" -I -c "$prefix
 $code" "$@"' \
     'fi' \
     'exec "$JIG_FIXTURE_REAL_PYTHON" "$@"' \
