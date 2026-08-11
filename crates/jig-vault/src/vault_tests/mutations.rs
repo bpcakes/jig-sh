@@ -1,9 +1,35 @@
 use super::*;
 
 #[test]
+fn field_mutations_require_explicit_version_one_migration_without_writing() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+    init_v1(&store, &passphrase());
+    let before_vault = store.read_vault_text().unwrap().unwrap();
+    let before_audit = store.read_audit_text().unwrap().unwrap();
+    let reference = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
+
+    let error = store
+        .apply_field_batch(
+            &passphrase(),
+            vec![FieldMutation::set(
+                reference,
+                FieldKind::Concealed,
+                SecretBytes::new(b"field-secret-value".to_vec()),
+            )],
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+    assert!(error.to_string().contains("jig vault migrate --to 2"));
+    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+    assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+}
+
+#[test]
 fn field_batch_is_atomic_and_preserves_encrypted_text_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
     vault.init(&passphrase()).unwrap();
     let concealed = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
     let text = VaultReference::parse("jig://Production/RESTIC_COMPRESSION").unwrap();
@@ -96,7 +122,7 @@ fn field_batch_is_atomic_and_preserves_encrypted_text_metadata() {
 #[test]
 fn legacy_secret_set_remains_concealed_in_version_two() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -118,7 +144,7 @@ fn legacy_secret_set_remains_concealed_in_version_two() {
 #[test]
 fn write_side_vault_limit_accepts_the_read_boundary_and_refuses_one_extra_byte() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     let boundary = "x".repeat(crate::store::VAULT_TEXT_READ_LIMIT as usize);
     store.write_vault_text(&boundary).unwrap();
     assert_eq!(
@@ -135,7 +161,7 @@ fn write_side_vault_limit_accepts_the_read_boundary_and_refuses_one_extra_byte()
 #[test]
 fn oversized_valid_field_batch_fails_before_audit_or_state_write() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
@@ -162,7 +188,7 @@ fn oversized_valid_field_batch_fails_before_audit_or_state_write() {
 #[test]
 fn batch_validation_rejects_mixed_valid_short_and_oversized_values_without_writing() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let before_audit = store.read_audit_text().unwrap().unwrap();
@@ -198,7 +224,7 @@ fn batch_validation_rejects_mixed_valid_short_and_oversized_values_without_writi
 #[test]
 fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let before_vault = store.read_vault_text().unwrap().unwrap();
     let reference = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
@@ -235,7 +261,7 @@ fn field_batch_save_failure_leaves_audited_leading_intent_and_can_be_retried() {
 #[test]
 fn migration_save_failure_leaves_version_one_readable_and_can_be_retried() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     init_v1(&store, &passphrase());
     let before_vault = store.read_vault_text().unwrap().unwrap();
 
@@ -257,7 +283,7 @@ fn migration_save_failure_leaves_version_one_readable_and_can_be_retried() {
 #[test]
 fn tampered_audit_blocks_field_batches_and_migration_without_new_append() {
     let temp = tempfile::tempdir().unwrap();
-    let field_store = VaultStore::resolve_for_test(Some(temp.path().join("field-vault"))).unwrap();
+    let field_store = VaultStore::resolve(Some(temp.path().join("field-vault"))).unwrap();
     field_store.init(&passphrase()).unwrap();
     let mut audit = field_store.read_audit_text().unwrap().unwrap();
     audit.push_str("not json\n");
@@ -280,8 +306,7 @@ fn tampered_audit_blocks_field_batches_and_migration_without_new_append() {
     );
     assert_eq!(field_store.read_audit_text().unwrap().unwrap(), audit);
 
-    let migration_store =
-        VaultStore::resolve_for_test(Some(temp.path().join("migration-vault"))).unwrap();
+    let migration_store = VaultStore::resolve(Some(temp.path().join("migration-vault"))).unwrap();
     init_v1(&migration_store, &passphrase());
     let mut migration_audit = migration_store.read_audit_text().unwrap().unwrap();
     migration_audit.push_str("not json\n");
@@ -540,7 +565,7 @@ fn header_tamper_fails_authentication() {
 #[test]
 fn open_validates_header_before_decoding_payload_fields() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let text = store.read_vault_text().unwrap().unwrap();
     let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -559,7 +584,7 @@ fn open_validates_header_before_decoding_payload_fields() {
 #[test]
 fn open_validates_kdf_before_decoding_wrapped_key_fields() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     let text = store.read_vault_text().unwrap().unwrap();
     let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();

@@ -14,7 +14,8 @@ Examples:
   jig codex homes
   jig codex homes --usage
   jig codex launch
-  jig codex launch codex-1 -- --search";
+  jig codex launch codex-1 -- --search
+  jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20";
 
 pub(super) const CODEX_LAUNCH_AFTER_HELP: &str = "\
 With no HOME, open a searchable terminal picker immediately. Account and usage
@@ -31,6 +32,18 @@ Examples:
   jig codex launch ~/.codex-work -- --profile deep-review
   jig codex launch codex-1 --dry-run -- --search";
 
+pub(super) const CODEX_RESUME_AFTER_HELP: &str = "\
+Jig queries every discovered Codex home for SESSION_ID, then launches Codex with
+the single matching directory as CODEX_HOME. Use --home to select an explicit
+home without automatic lookup. Interactive terminals show lookup progress.
+Arguments after -- are forwarded to `codex resume` without shell parsing.
+
+Examples:
+  jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20
+  jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 -- --search
+  jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --home codex-ac
+  jig codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20 --dry-run -- --search";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum CodexCommand {
     /// List discovered Codex homes and their authenticated accounts.
@@ -42,6 +55,12 @@ pub(crate) enum CodexCommand {
         after_help = CODEX_LAUNCH_AFTER_HELP
     )]
     Launch(CodexLaunchOpts),
+    /// Find the Codex home containing a session and resume it.
+    #[command(
+        name = tool_defs::cli_command::CODEX_RESUME,
+        after_help = CODEX_RESUME_AFTER_HELP
+    )]
+    Resume(CodexResumeOpts),
 }
 
 #[derive(Args, Debug)]
@@ -70,6 +89,30 @@ pub(crate) struct CodexLaunchOpts {
         allow_hyphen_values = true,
         value_name = "CODEX_ARGS",
         help = "Arguments forwarded exactly to Codex after --"
+    )]
+    pub(crate) codex_args: Vec<OsString>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct CodexResumeOpts {
+    #[arg(value_name = "SESSION_ID", help = "Codex session UUID to resume")]
+    pub(crate) session_id: String,
+    #[arg(
+        long,
+        value_name = "HOME",
+        help = "Use this Codex home instead of looking up the session"
+    )]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Print the resolved home and Codex command without launching"
+    )]
+    pub(crate) dry_run: bool,
+    #[arg(
+        last = true,
+        allow_hyphen_values = true,
+        value_name = "CODEX_ARGS",
+        help = "Arguments forwarded exactly to `codex resume` after --"
     )]
     pub(crate) codex_args: Vec<OsString>,
 }
@@ -118,6 +161,28 @@ mod tests {
                 );
             }
             other => panic!("expected codex launch command, got {other:?}"),
+        }
+
+        let resume = Cli::try_parse_from([
+            "jig",
+            "codex",
+            "resume",
+            "019fe6e4-972f-7392-aaf3-58cb652a4e20",
+            "--home",
+            "codex-ac",
+            "--dry-run",
+            "--",
+            "--search",
+        ])
+        .unwrap();
+        match resume.command {
+            CommandKind::Codex(CodexCommand::Resume(opts)) => {
+                assert_eq!(opts.session_id, "019fe6e4-972f-7392-aaf3-58cb652a4e20");
+                assert_eq!(opts.home.as_deref(), Some(Path::new("codex-ac")));
+                assert!(opts.dry_run);
+                assert_eq!(opts.codex_args, [OsString::from("--search")]);
+            }
+            other => panic!("expected codex resume command, got {other:?}"),
         }
 
         assert!(

@@ -10,6 +10,7 @@
 - Add cancellable status collection
 - Standardize JSON errors and work validation
 - Add interactive Codex home launcher
+- Add home-aware Codex session resume
 - Configure Codex home for loop workers
 - Add command availability inventory
 - Namespace SQLx project commands
@@ -21,6 +22,9 @@
 - Keep bare launcher help reachable under a broken repository contract, anchor relative runtime source paths to the repository, and reject non-file launcher paths in Doctor.
 - Make launcher-only repair transactional and self-contained: preflight its recorded source, warn when embedded repair templates replace source-specific launcher customizations, preserve the legacy contract epoch, validate the running repair binary, seed truthfully fingerprinted caches, refresh the cheap identity stamp after a digest fallback, roll back published scripts if real runtime seeding fails, and restore prior caches if the rendered-script transaction cannot commit.
 - Drain noisy owned subprocesses promptly while retaining hard time, memory, capture, cancellation, and cleanup bounds.
+- Keep stale missing Codex-home candidates from blocking a unique session resume
+- Recognize supported Codex app-server missing-thread response variants during resume lookup
+- Preserve session-lookup cancellation even when Codex app-server emits stderr
 
 ### Breaking
 - Generated repositories move from contract v3 to v4 and no longer pin `jig_version`/`JIG_VERSION`. Run a current Jig binary with `jig update <repo> --force` to migrate the full harness. If the legacy wrapper cannot start, first run `jig update <repo> --launcher-only --force`, then perform the full update; `doctor` treats the unmigrated launcher as a required migration and exits nonzero while v2/v3 remain runtime-readable. A repaired legacy launcher depends on its seeded compatible cache until full migration, so fresh clones, cacheless CI, or cache cleanup require a current external Jig binary to repeat the narrow repair.

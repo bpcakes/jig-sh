@@ -8,6 +8,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 use anyhow::{Context, Result as AnyResult, bail};
 
 use crate::crypto::KdfParams;
+use crate::path_security::is_trusted_root_alias;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::{AUDIT_FILE, VAULT_FILE, VaultStore, ensure_tree_has_no_symlinks};
@@ -78,7 +79,7 @@ fn reject_symlinked_path_components(path: &Path) -> AnyResult<()> {
     for ancestor in ancestors {
         let metadata = fs::symlink_metadata(ancestor)
             .with_context(|| format!("failed to inspect path component {}", ancestor.display()))?;
-        if metadata.file_type().is_symlink() {
+        if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
             bail!(
                 "refusing existing vault through symlinked path component {}",
                 ancestor.display()

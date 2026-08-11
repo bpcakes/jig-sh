@@ -369,7 +369,7 @@ pub(crate) enum CommandKind {
         after_help = agent::AGENT_AFTER_HELP
     )]
     Agent(AgentCommand),
-    /// Inspect Codex homes or launch Codex with an isolated account and state root.
+    /// Inspect Codex homes, launch Codex, or resume a session from its owning home.
     #[command(
         name = root_commands::CODEX.name,
         display_order = root_commands::CODEX.display_order,

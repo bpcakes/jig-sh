@@ -1,7 +1,6 @@
-use std::collections::HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
-use std::fs;
+#[cfg(unix)]
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,22 +8,69 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Map as JsonMap, Value as JsonValue, json};
+#[cfg(unix)]
+use anyhow::anyhow;
+use anyhow::{Context, Result, bail};
+use serde_json::{Value as JsonValue, json};
 
-use self::app_server::{AppServerAccountResponse, app_server_account};
+use self::home::{
+    canonical_or, conventional_home, current_codex_home, discover_homes, discover_homes_from,
+    expand_tilde_path, has_tilde_prefix, home_name, home_name_matches, is_bare_home_name,
+    same_path, user_home,
+};
+use self::inspection::{inspect_home, inspection_failure};
+pub(crate) use self::resume::{
+    normalize_session_id, resolve_resume_home, resolve_resume_home_with_progress,
+};
 
 mod app_server;
+mod home;
+mod inspection;
+mod resume;
 
 const CODEX_BIN_ENV: &str = "JIG_CODEX_BIN";
 pub(crate) const CODEX_HOME_ENV: &str = "CODEX_HOME";
-const MAX_PARALLEL_INSPECTIONS: usize = 4;
+const MAX_PARALLEL_HOME_WORKERS: usize = 4;
+const SESSION_LOOKUP_CANCELLED: &str = "Codex session lookup was cancelled";
 
 #[derive(Clone)]
 struct DiscoveredHomes {
     paths: Vec<PathBuf>,
-    errors: Vec<String>,
+    issues: Vec<DiscoveryIssue>,
     representation_lossy: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveryIssueKind {
+    CandidateMissing,
+    CandidateUnreadable,
+    EntryUnreadable,
+    ScanIncomplete,
+}
+
+#[derive(Clone, Debug)]
+struct DiscoveryIssue {
+    kind: DiscoveryIssueKind,
+    message: String,
+}
+
+impl DiscoveryIssue {
+    fn new(kind: DiscoveryIssueKind, message: String) -> Self {
+        Self { kind, message }
+    }
+
+    fn blocks_resume_uniqueness(&self) -> bool {
+        self.kind != DiscoveryIssueKind::CandidateMissing
+    }
+}
+
+impl DiscoveredHomes {
+    fn resume_coverage_complete(&self) -> bool {
+        !self
+            .issues
+            .iter()
+            .any(DiscoveryIssue::blocks_resume_uniqueness)
+    }
 }
 
 /// Exact discovered homes plus the inputs needed for background inspection.
@@ -39,6 +85,58 @@ pub(crate) struct CodexHomeCandidate {
     pub(crate) path: PathBuf,
     pub(crate) name: String,
     pub(crate) current: bool,
+}
+
+#[derive(Debug)]
+enum ThreadHomeProbe {
+    Found,
+    Missing,
+    Failed(ResumeProbeFailure),
+}
+
+#[derive(Debug)]
+enum ResumeProbeFailure {
+    Cancelled,
+    Inspection(String),
+    WorkerPanicked,
+    WorkerStopped,
+}
+
+impl ResumeProbeFailure {
+    fn message(&self) -> &str {
+        match self {
+            Self::Cancelled => SESSION_LOOKUP_CANCELLED,
+            Self::Inspection(message) => message,
+            Self::WorkerPanicked => "Codex session lookup worker panicked",
+            Self::WorkerStopped => "Codex session lookup worker stopped",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResumeHomeProbeFailure<'a> {
+    home: &'a PathBuf,
+    failure: ResumeProbeFailure,
+}
+
+/// The complete, closed set of policy outcomes from resume-home probing.
+///
+/// This deliberately carries only the probe classification and its associated
+/// homes. Path canonicalization and user-facing diagnostics happen after this
+/// phase so they cannot accidentally change the selection policy.
+#[derive(Debug)]
+enum ResumeHomeSelection<'a> {
+    Cancelled,
+    Unique(&'a PathBuf),
+    Unconfirmed {
+        home: &'a PathBuf,
+        failures: Vec<ResumeHomeProbeFailure<'a>>,
+    },
+    Ambiguous(Vec<&'a PathBuf>),
+    Missing {
+        failures: Vec<ResumeHomeProbeFailure<'a>>,
+        discovery_incomplete: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -149,13 +247,13 @@ where
     })?;
 
     let mut errors = discovered
-        .errors
+        .issues
         .iter()
-        .map(|message| {
+        .map(|issue| {
             json!({
                 "home": null,
                 "kind": "discovery",
-                "message": message
+                "message": issue.message
             })
         })
         .collect::<Vec<_>>();
@@ -197,8 +295,12 @@ pub(crate) fn discover_home_inspection() -> Result<CodexHomeInspection> {
 }
 
 impl CodexHomeInspection {
-    pub(crate) fn discovery_warnings(&self) -> &[String] {
-        &self.discovered.errors
+    pub(crate) fn discovery_warnings(&self) -> Vec<String> {
+        self.discovered
+            .issues
+            .iter()
+            .map(|issue| issue.message.clone())
+            .collect()
     }
 
     pub(crate) fn candidates(&self) -> Vec<CodexHomeCandidate> {
@@ -245,31 +347,78 @@ where
     F: Fn(PathBuf) -> JsonValue + Sync,
     P: FnMut(usize, &mut JsonValue) -> Result<()>,
 {
-    if discovered.is_empty() {
-        return Ok(Vec::new());
+    let mut progress_error = None;
+    let inspected = execute_homes_parallel(
+        discovered,
+        MAX_PARALLEL_HOME_WORKERS,
+        |_| None,
+        inspect,
+        |index, result| match progress(index, result) {
+            Ok(()) => true,
+            Err(error) => {
+                progress_error = Some(error);
+                false
+            }
+        },
+        || inspection_failure("Codex home inspection worker panicked"),
+        || inspection_failure("Codex home inspection worker stopped"),
+    );
+
+    if let Some(error) = progress_error {
+        return Err(error);
     }
 
-    let worker_count = discovered.len().min(MAX_PARALLEL_INSPECTIONS);
+    Ok(inspected)
+}
+
+/// Runs bounded work over exact homes while retaining input-order results.
+///
+/// Completion callbacks observe results as workers finish. Returning `false`
+/// stops further callbacks but deliberately keeps draining worker results so
+/// scoped threads finish before the caller observes its callback error.
+fn execute_homes_parallel<T, C, F, P, H, S>(
+    homes: &[PathBuf],
+    max_parallel: usize,
+    preflight: C,
+    work: F,
+    mut on_complete: P,
+    panicked: H,
+    stopped: S,
+) -> Vec<T>
+where
+    T: Send,
+    C: Fn(&Path) -> Option<T> + Sync,
+    F: Fn(PathBuf) -> T + Sync,
+    P: FnMut(usize, &mut T) -> bool,
+    H: Fn() -> T + Sync,
+    S: Fn() -> T,
+{
+    if homes.is_empty() {
+        return Vec::new();
+    }
+
+    let worker_count = homes.len().min(max_parallel.max(1));
     let next = AtomicUsize::new(0);
     let (sender, receiver) = mpsc::channel();
-    let mut inspected = vec![None; discovered.len()];
-    let mut progress_error = None;
+    let mut results = (0..homes.len()).map(|_| None).collect::<Vec<_>>();
+    let mut report_completions = true;
     thread::scope(|scope| {
         for _ in 0..worker_count {
             let sender = sender.clone();
-            let inspect = &inspect;
             let next = &next;
+            let preflight = &preflight;
+            let work = &work;
+            let panicked = &panicked;
             scope.spawn(move || {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(home) = discovered.get(index).cloned() else {
+                    let Some(home) = homes.get(index).cloned() else {
                         break;
                     };
-                    let result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| inspect(home)))
-                            .unwrap_or_else(|_| {
-                                inspection_failure("Codex home inspection worker panicked")
-                            });
+                    let result = preflight(&home).unwrap_or_else(|| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(home)))
+                            .unwrap_or_else(|_| panicked())
+                    });
                     if sender.send((index, result)).is_err() {
                         break;
                     }
@@ -278,25 +427,17 @@ where
         }
         drop(sender);
         for (index, mut result) in receiver {
-            if progress_error.is_none() {
-                if let Err(error) = progress(index, &mut result) {
-                    progress_error = Some(error);
-                }
+            if report_completions {
+                report_completions = on_complete(index, &mut result);
             }
-            inspected[index] = Some(result);
+            results[index] = Some(result);
         }
     });
 
-    if let Some(error) = progress_error {
-        return Err(error);
-    }
-
-    Ok(inspected
+    results
         .into_iter()
-        .map(|result| {
-            result.unwrap_or_else(|| inspection_failure("Codex home inspection worker stopped"))
-        })
-        .collect())
+        .map(|result| result.unwrap_or_else(&stopped))
+        .collect()
 }
 
 fn enrich_inspected_home(
@@ -464,6 +605,14 @@ fn resolve_launch_home_from(
 }
 
 pub(crate) fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+    command_dry_run_report("codex launch", home, args)
+}
+
+pub(crate) fn resume_dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
+    command_dry_run_report("codex resume", home, args)
+}
+
+fn command_dry_run_report(command: &str, home: &Path, args: &[OsString]) -> JsonValue {
     let codex_bin = codex_bin();
     let representation_lossy = home.as_os_str().to_str().is_none()
         || codex_bin.to_str().is_none()
@@ -471,7 +620,7 @@ pub(crate) fn dry_run_report(home: &Path, args: &[OsString]) -> JsonValue {
     json!({
         "schema_version": 1,
         "ok": true,
-        "command": "codex launch",
+        "command": command,
         "dry_run": true,
         "home": home.display().to_string(),
         "codex_bin": codex_bin.to_string_lossy(),
@@ -514,381 +663,6 @@ pub(crate) fn launch(home: &Path, args: &[OsString]) -> Result<()> {
         }
         Ok(())
     }
-}
-
-fn inspect_home(
-    home: PathBuf,
-    codex_bin: &OsStr,
-    include_usage: bool,
-    cancelled: &(dyn Fn() -> bool + Sync),
-) -> JsonValue {
-    if cancelled() {
-        return inspection_failure("Codex app-server inspection was cancelled");
-    }
-    match app_server_account(&home, codex_bin, include_usage, cancelled) {
-        Ok(response) => inspected_home_json(response, include_usage),
-        Err(error) => inspection_failure(error),
-    }
-}
-
-fn inspection_failure(error: impl Into<String>) -> JsonValue {
-    let error = error.into();
-    json!({
-        "account": null,
-        "rate_limits": [],
-        "status": "unknown",
-        "inspection_error": error,
-        "usage_error": null
-    })
-}
-
-fn inspected_home_json(response: AppServerAccountResponse, include_usage: bool) -> JsonValue {
-    let account = match normalize_account(&response.account) {
-        Ok(account) => account,
-        Err(error) => return inspection_failure(error),
-    };
-    let rate_limits = if account.is_null() {
-        Vec::new()
-    } else {
-        response
-            .rate_limits
-            .as_ref()
-            .map(normalize_rate_limits)
-            .unwrap_or_default()
-    };
-    let status = if account.is_null() {
-        Some("not logged in".to_owned())
-    } else {
-        None
-    };
-    let mut usage_error = if account.is_null() {
-        None
-    } else {
-        response.usage_error
-    };
-    if !account.is_null()
-        && include_usage
-        && usage_error.is_none()
-        && !rate_limits_have_usage_data(&rate_limits)
-    {
-        usage_error = Some("account/rateLimits/read returned no usage data".into());
-    }
-    json!({
-        "account": account,
-        "rate_limits": rate_limits,
-        "usage_included": include_usage,
-        "status": status,
-        "inspection_error": null,
-        "usage_error": usage_error
-    })
-}
-
-fn normalize_account(result: &JsonValue) -> std::result::Result<JsonValue, String> {
-    let Some(account) = result.get("account") else {
-        return Err("account/read result did not include an account field".into());
-    };
-    if account.is_null() {
-        return Ok(JsonValue::Null);
-    }
-    let Some(account) = account.as_object() else {
-        return Err("account/read result included an invalid account field".into());
-    };
-    Ok(json!({
-        "type": account.get("type").cloned().unwrap_or(JsonValue::Null),
-        "email": account.get("email").cloned().unwrap_or(JsonValue::Null),
-        "plan_type": account.get("planType").cloned().unwrap_or(JsonValue::Null)
-    }))
-}
-
-fn normalize_rate_limits(result: &JsonValue) -> Vec<JsonValue> {
-    let mut buckets = result
-        .get("rateLimitsByLimitId")
-        .and_then(JsonValue::as_object)
-        .filter(|buckets| !buckets.is_empty())
-        .map(|buckets| {
-            buckets
-                .iter()
-                .map(|(id, bucket)| normalized_bucket(id, bucket))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| {
-            result
-                .get("rateLimits")
-                .filter(|bucket| bucket.is_object())
-                .map(|bucket| {
-                    let id = bucket
-                        .get("limitId")
-                        .and_then(JsonValue::as_str)
-                        .unwrap_or("codex");
-                    vec![normalized_bucket(id, bucket)]
-                })
-                .unwrap_or_default()
-        });
-    buckets.sort_by(|left, right| {
-        left.get("id")
-            .and_then(JsonValue::as_str)
-            .cmp(&right.get("id").and_then(JsonValue::as_str))
-    });
-    buckets
-}
-
-fn rate_limits_have_usage_data(buckets: &[JsonValue]) -> bool {
-    buckets.iter().any(|bucket| {
-        ["primary", "secondary"].into_iter().any(|window| {
-            bucket
-                .get(window)
-                .and_then(|window| window.get("used_percent"))
-                .and_then(JsonValue::as_f64)
-                .is_some()
-        })
-    })
-}
-
-fn normalized_bucket(id: &str, bucket: &JsonValue) -> JsonValue {
-    json!({
-        "id": id,
-        "name": bucket.get("limitName").cloned().unwrap_or(JsonValue::Null),
-        "plan_type": bucket.get("planType").cloned().unwrap_or(JsonValue::Null),
-        "primary": normalized_window(bucket.get("primary")),
-        "secondary": normalized_window(bucket.get("secondary")),
-        "reached": bucket.get("rateLimitReachedType").cloned().unwrap_or(JsonValue::Null)
-    })
-}
-
-fn normalized_window(window: Option<&JsonValue>) -> JsonValue {
-    let Some(window) = window.and_then(JsonValue::as_object) else {
-        return JsonValue::Null;
-    };
-    let mut normalized = JsonMap::new();
-    normalized.insert(
-        "used_percent".into(),
-        window
-            .get("usedPercent")
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-    );
-    normalized.insert(
-        "duration_minutes".into(),
-        window
-            .get("windowDurationMins")
-            .cloned()
-            .unwrap_or(JsonValue::Null),
-    );
-    normalized.insert(
-        "resets_at".into(),
-        window.get("resetsAt").cloned().unwrap_or(JsonValue::Null),
-    );
-    JsonValue::Object(normalized)
-}
-
-fn discover_homes() -> Result<DiscoveredHomes> {
-    let user_home = user_home()?;
-    let current = current_codex_home()?;
-    Ok(discover_homes_from(&user_home, &current))
-}
-
-fn discover_homes_from(user_home: &Path, current: &Path) -> DiscoveredHomes {
-    discover_homes_from_with_metadata(user_home, current, |path| fs::metadata(path))
-}
-
-fn discover_homes_from_with_metadata<F>(
-    user_home: &Path,
-    current: &Path,
-    metadata: F,
-) -> DiscoveredHomes
-where
-    F: Fn(&Path) -> io::Result<fs::Metadata>,
-{
-    discover_homes_from_with_sources(user_home, current, metadata, |path, inspect_entry| {
-        for entry in fs::read_dir(path)? {
-            inspect_entry(entry.map(|entry| (entry.file_name(), entry.path())));
-        }
-        Ok(())
-    })
-}
-
-fn discover_homes_from_with_sources<F, R>(
-    user_home: &Path,
-    current: &Path,
-    metadata: F,
-    read_entries: R,
-) -> DiscoveredHomes
-where
-    F: Fn(&Path) -> io::Result<fs::Metadata>,
-    R: FnOnce(&Path, &mut dyn FnMut(io::Result<(OsString, PathBuf)>)) -> io::Result<()>,
-{
-    let mut candidates = Vec::new();
-    let mut errors = Vec::new();
-    let mut representation_lossy = false;
-    let mut inspected = HashSet::new();
-    let default = user_home.join(".codex");
-    inspected.insert(default.clone());
-    add_directory_candidate(
-        default,
-        false,
-        &metadata,
-        &mut candidates,
-        &mut errors,
-        &mut representation_lossy,
-    );
-    let scan_result = {
-        let mut inspect_entry = |entry: io::Result<(OsString, PathBuf)>| {
-            let (name, path) = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    errors.push(format!("Failed to inspect a Codex home candidate: {error}"));
-                    return;
-                }
-            };
-            if name.to_string_lossy().starts_with(".codex-") {
-                inspected.insert(path.clone());
-                add_directory_candidate(
-                    path,
-                    true,
-                    &metadata,
-                    &mut candidates,
-                    &mut errors,
-                    &mut representation_lossy,
-                );
-            }
-        };
-        read_entries(user_home, &mut inspect_entry)
-    };
-    if let Err(error) = scan_result {
-        errors.push(format!(
-            "Failed to inspect {} for Codex homes: {error}",
-            user_home.display()
-        ));
-    }
-    if !inspected.contains(current) {
-        add_directory_candidate(
-            current.to_path_buf(),
-            true,
-            &metadata,
-            &mut candidates,
-            &mut errors,
-            &mut representation_lossy,
-        );
-    }
-
-    let mut seen = HashSet::new();
-    candidates.retain(|candidate| seen.insert(canonical_key(candidate)));
-    candidates.sort_by(|left, right| {
-        let left_name = home_name(left);
-        let right_name = home_name(right);
-        (left_name != "codex", left_name).cmp(&(right_name != "codex", right_name))
-    });
-    DiscoveredHomes {
-        paths: candidates,
-        errors,
-        representation_lossy,
-    }
-}
-
-fn add_directory_candidate<F>(
-    candidate: PathBuf,
-    report_not_found: bool,
-    metadata: &F,
-    candidates: &mut Vec<PathBuf>,
-    errors: &mut Vec<String>,
-    representation_lossy: &mut bool,
-) where
-    F: Fn(&Path) -> io::Result<fs::Metadata>,
-{
-    *representation_lossy |= candidate.as_os_str().to_str().is_none();
-    match metadata(&candidate) {
-        Ok(metadata) if metadata.is_dir() => candidates.push(candidate),
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound && !report_not_found => {}
-        Err(error) => errors.push(format!(
-            "Failed to inspect Codex home candidate {}: {error}",
-            candidate.display()
-        )),
-    }
-}
-
-fn current_codex_home() -> Result<PathBuf> {
-    let configured = configured_codex_home()
-        .ok_or_else(|| anyhow!("Could not determine the Codex home directory"))?;
-    absolute_path(configured)
-}
-
-fn user_home() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| anyhow!("Could not determine the user home directory"))
-}
-
-fn expand_tilde_path(input: &Path, user_home: &Path) -> Option<PathBuf> {
-    let mut components = input.components();
-    if components.next() == Some(std::path::Component::Normal(OsStr::new("~"))) {
-        return Some(user_home.join(components.as_path()));
-    }
-    None
-}
-
-fn has_tilde_prefix(input: &Path) -> bool {
-    input.components().next() == Some(std::path::Component::Normal(OsStr::new("~")))
-}
-
-fn is_bare_home_name(input: &Path) -> bool {
-    let mut components = input.components();
-    matches!(components.next(), Some(std::path::Component::Normal(_)))
-        && components.next().is_none()
-}
-
-fn absolute_path(path: PathBuf) -> Result<PathBuf> {
-    absolute_path_with_current_dir(path, || {
-        env::current_dir().context("Failed to resolve the current directory")
-    })
-}
-
-fn absolute_path_with_current_dir<C>(path: PathBuf, current_dir: C) -> Result<PathBuf>
-where
-    C: FnOnce() -> Result<PathBuf>,
-{
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Ok(current_dir()?.join(path))
-    }
-}
-
-fn canonical_or(path: PathBuf) -> Result<PathBuf> {
-    path.canonicalize()
-        .with_context(|| format!("Failed to resolve Codex home {}", path.display()))
-}
-
-fn canonical_key(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    canonical_key(left) == canonical_key(right)
-}
-
-fn home_name(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy();
-    name.strip_prefix('.').unwrap_or(&name).to_string()
-}
-
-fn home_name_matches(path: &Path, requested: &OsStr) -> bool {
-    let name = path.file_name().unwrap_or(path.as_os_str());
-    let encoded = name.as_encoded_bytes();
-    encoded.strip_prefix(b".").unwrap_or(encoded) == requested.as_encoded_bytes()
-}
-
-fn conventional_home(user_home: &Path, requested: &OsStr) -> PathBuf {
-    if requested == "codex" || requested == "default" {
-        return user_home.join(".codex");
-    }
-    let mut name = OsString::from(".");
-    if !requested.as_encoded_bytes().starts_with(b"codex-") {
-        name.push("codex-");
-    }
-    name.push(requested);
-    user_home.join(name)
 }
 
 pub(crate) fn configured_codex_home() -> Option<PathBuf> {

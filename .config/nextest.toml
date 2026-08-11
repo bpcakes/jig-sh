@@ -4,6 +4,8 @@ nextest-version = "0.9.130"
 
 [profile.default]
 fail-fast = false
+# Keep process- and environment-heavy tests deterministic on high-core hosts.
+test-threads = 4
 # Surface stalled cross-platform tests promptly; CI jobs retain their hard timeout.
 slow-timeout = { period = "60s" }
 

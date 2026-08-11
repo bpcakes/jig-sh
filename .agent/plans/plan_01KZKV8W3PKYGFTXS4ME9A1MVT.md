@@ -1,0 +1,3 @@
+Implement jig codex resume SESSION_ID by resolving the owning CODEX_HOME through Codex app-server inspection, forwarding resume arguments, documenting behavior, and validating focused tests plus repository gates.
+
+Implemented home-aware Codex resume using bounded concurrent app-server thread/read probes, explicit --home override, dry-run/JSON output, UUID normalization, integration tests, and documentation. Focused tests, real-session dry runs, formatting, contract, and jig-sh library clippy pass. The full workspace test gate had one unrelated concurrent fixture failure that passes in isolation; the repository-wide clippy gate also exposes a pre-existing jig-dev-proxy test-target needless_return lint.

@@ -100,6 +100,67 @@ printf '<%s>\n' "$@"
 }
 
 #[test]
+fn resume_finds_the_owning_home_and_forwards_codex_arguments() {
+    let temp = support::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    let launched = temp.path().join("launched-home");
+    let arguments = temp.path().join("launched-arguments");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let session_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let stub = write_executable(
+        temp.path().join("codex-stub.sh"),
+        &format!(
+            r#"#!/bin/sh
+if [ "${{1:-}}" = "app-server" ]; then
+  read -r initialize
+  printf '%s\n' '{{"id":0,"result":{{}}}}'
+  read -r initialized
+  read -r thread
+  case "$CODEX_HOME" in
+    */.codex-work)
+      printf '%s\n' '{{"id":1,"result":{{"thread":{{"id":"{session_id}"}}}}}}'
+      ;;
+    *)
+      printf '%s\n' '{{"id":1,"error":{{"code":-32600,"message":"thread not loaded: {session_id}"}}}}'
+      ;;
+  esac
+  sleep 30
+  exit 0
+fi
+printf '%s\n' "$CODEX_HOME" > "$JIG_TEST_LAUNCHED"
+printf '<%s>\n' "$@" > "$JIG_TEST_ARGUMENTS"
+"#,
+        ),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["codex", "resume", session_id, "--", "--search"])
+        .env("HOME", temp.path())
+        .env("CODEX_HOME", &default)
+        .env("JIG_CODEX_BIN", &stub)
+        .env("JIG_TEST_LAUNCHED", &launched)
+        .env("JIG_TEST_ARGUMENTS", &arguments)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "resume failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(launched).unwrap().trim(),
+        work.canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(
+        fs::read_to_string(arguments).unwrap(),
+        format!("<resume>\n<{session_id}>\n<--search>\n")
+    );
+}
+
+#[test]
 fn interactive_picker_opens_before_inspection_and_launches_searched_exact_home() {
     let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
@@ -265,6 +326,86 @@ sleep 30
     assert!(output.contains("1/2"), "{output}");
     assert!(output.contains("2/2"), "{output}");
     assert!(output.contains("inspected 2 Codex homes"), "{output}");
+}
+
+#[test]
+fn resume_shows_terminal_progress_while_session_homes_are_probed() {
+    let temp = support::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    let work = temp.path().join(".codex-work");
+    fs::create_dir(&default).unwrap();
+    fs::create_dir(&work).unwrap();
+    let session_id = "019fe6e4-972f-7392-aaf3-58cb652a4e20";
+    let stub = write_executable(
+        temp.path().join("codex-stub.sh"),
+        &format!(
+            r#"#!/bin/sh
+read -r initialize
+printf '%s\n' '{{"id":0,"result":{{}}}}'
+read -r initialized
+read -r thread
+case "$CODEX_HOME" in
+  */.codex-work)
+    printf '%s\n' '{{"id":1,"result":{{"thread":{{"id":"{session_id}"}}}}}}'
+    ;;
+  *)
+    printf '%s\n' '{{"id":1,"error":{{"code":-32600,"message":"no rollout found for thread id {session_id}"}}}}'
+    ;;
+esac
+sleep 30
+"#,
+        ),
+    );
+    let Some((mut master, stdout, stderr)) = required_pseudo_terminal("resume progress") else {
+        return;
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["codex", "resume", session_id, "--dry-run"])
+        .env("HOME", temp.path())
+        .env("CODEX_HOME", &default)
+        .env("JIG_CODEX_BIN", &stub)
+        .env("NO_COLOR", "1")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    set_nonblocking(&master);
+
+    let mut output = Vec::new();
+    read_until(
+        &mut master,
+        &mut output,
+        "Codex resume: dry run",
+        Duration::from_secs(5),
+    );
+    let status = child
+        .wait_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap_or_else(|| {
+            child.kill().unwrap();
+            child.wait().unwrap()
+        });
+    read_available(&mut master, &mut output);
+
+    let output = String::from_utf8_lossy(&output);
+    assert!(
+        status.success(),
+        "resume exited with {status}; output: {output}"
+    );
+    assert!(
+        output.contains("jig codex resume | find the Codex home containing the session"),
+        "{output}"
+    );
+    assert!(output.contains("inspect homes"), "{output}");
+    assert!(output.contains("0/2"), "{output}");
+    assert!(output.contains("1/2"), "{output}");
+    assert!(output.contains("2/2"), "{output}");
+    assert!(
+        output.contains("found the session's Codex home"),
+        "{output}"
+    );
 }
 
 #[test]

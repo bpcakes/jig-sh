@@ -3,7 +3,9 @@ use std::io::Write;
 use anyhow::Result;
 
 use self::agent::{format_agent_bootstrap_summary, format_agent_doctor_summary};
-use self::codex::{format_codex_homes_summary, format_codex_launch_summary};
+use self::codex::{
+    format_codex_homes_summary, format_codex_launch_summary, format_codex_resume_summary,
+};
 pub(super) use self::doctor::format_doctor_summary;
 pub(super) use self::info::format_info_summary;
 use self::loops::{
@@ -47,6 +49,7 @@ pub(super) enum HumanOutput {
     AgentBootstrap,
     CodexHomes,
     CodexLaunch,
+    CodexResume,
     WorkCheck,
     WorkGates,
     WorkEvidence,
@@ -102,6 +105,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::AgentBootstrap => format_agent_bootstrap_summary(value),
         HumanOutput::CodexHomes => format_codex_homes_summary(value),
         HumanOutput::CodexLaunch => format_codex_launch_summary(value),
+        HumanOutput::CodexResume => format_codex_resume_summary(value),
         HumanOutput::WorkCheck => format_work_check_summary(value),
         HumanOutput::WorkGates => format_work_gates_summary(value),
         HumanOutput::WorkEvidence => format_work_evidence_summary(value),

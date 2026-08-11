@@ -223,7 +223,7 @@ fn cli_generated_v1_fixture_migrates_without_rewriting_its_audit_prefix() {
 #[test]
 fn cli_generated_v1_fixture_validates_header_before_salt_and_payloads() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&store);
     let mut file = cli_generated_v1_fixture_file();
     file["header"]["magic"] = serde_json::json!("not-a-vault");
@@ -248,7 +248,7 @@ fn cli_generated_v1_fixture_validates_header_before_salt_and_payloads() {
 #[test]
 fn cli_generated_v1_fixture_validates_kdf_before_wrapped_payloads() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&store);
     let mut file = cli_generated_v1_fixture_file();
     file["header"]["kdf"]["memory_kib"] = serde_json::json!(0);
@@ -273,7 +273,7 @@ fn cli_generated_v1_fixture_validates_kdf_before_wrapped_payloads() {
 #[test]
 fn cli_generated_v1_fixture_decodes_wrapped_payload_before_state_payload() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     install_cli_generated_v1_fixture(&store);
     let mut file = cli_generated_v1_fixture_file();
     file["wrapped_dek_nonce_b64"] = serde_json::json!("not valid base64");
@@ -295,7 +295,7 @@ fn cli_generated_v1_fixture_decodes_wrapped_payload_before_state_payload() {
 #[test]
 fn version_one_fixture_remains_readable_and_uses_the_original_state_shape() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     init_v1(&store, &passphrase());
 
     store
@@ -336,7 +336,7 @@ fn version_one_fixture_remains_readable_and_uses_the_original_state_shape() {
 #[test]
 fn version_one_state_ignores_stray_kind_values_and_treats_every_entry_as_concealed() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     init_v1(&store, &passphrase());
     store
         .set_secret(
@@ -368,7 +368,7 @@ fn version_one_state_ignores_stray_kind_values_and_treats_every_entry_as_conceal
 #[test]
 fn version_two_state_rejects_unknown_field_kind() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     store.init(&passphrase()).unwrap();
     store
         .set_secret(
@@ -391,7 +391,7 @@ fn version_two_state_rejects_unknown_field_kind() {
 #[test]
 fn explicit_migration_reseals_version_one_under_version_two_aad() {
     let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
     init_v1(&store, &passphrase());
     store
         .set_secret(
@@ -482,30 +482,4 @@ fn explicit_migration_reseals_version_one_under_version_two_aad() {
     let migration_again = store.migrate(&passphrase(), FORMAT_VERSION).unwrap();
     assert!(!migration_again.changed);
     assert_eq!(store.read_vault_text().unwrap().unwrap(), after_text);
-}
-
-#[test]
-fn field_mutations_require_explicit_version_one_migration_without_writing() {
-    let temp = tempfile::tempdir().unwrap();
-    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
-    init_v1(&store, &passphrase());
-    let before_vault = store.read_vault_text().unwrap().unwrap();
-    let before_audit = store.read_audit_text().unwrap().unwrap();
-    let reference = VaultReference::parse("jig://Production/RESTIC_PASSWORD").unwrap();
-
-    let error = store
-        .apply_field_batch(
-            &passphrase(),
-            vec![FieldMutation::set(
-                reference,
-                FieldKind::Concealed,
-                SecretBytes::new(b"field-secret-value".to_vec()),
-            )],
-        )
-        .unwrap_err();
-
-    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
-    assert!(error.to_string().contains("jig vault migrate --to 2"));
-    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
-    assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
 }

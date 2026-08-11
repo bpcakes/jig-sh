@@ -8,17 +8,18 @@ use secrecy::SecretString;
 use std::io::{self, Write};
 use zeroize::Zeroizing;
 
-#[path = "vault_tests/lifecycle.rs"]
-mod lifecycle;
-
-#[path = "vault_tests/compatibility.rs"]
-mod compatibility;
-#[path = "vault_tests/fields.rs"]
-mod fields;
+#[path = "vault_tests/exec.rs"]
+mod exec;
 #[path = "vault_tests/import.rs"]
 mod import;
-#[path = "vault_tests/reveal_exec.rs"]
-mod reveal_exec;
+#[path = "vault_tests/legacy.rs"]
+mod legacy;
+#[path = "vault_tests/lifecycle.rs"]
+mod lifecycle;
+#[path = "vault_tests/mutations.rs"]
+mod mutations;
+#[path = "vault_tests/reveal.rs"]
+mod reveal;
 
 fn passphrase() -> SecretString {
     SecretString::from("correct horse battery staple".to_string())

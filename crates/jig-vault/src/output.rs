@@ -198,6 +198,7 @@ mod unix {
 
     use super::{OutputFailureStage, OutputInstallFailure};
     use crate::VaultErrorKind;
+    use crate::path_security::is_trusted_root_alias;
 
     pub(super) fn preflight_private_destination(
         path: &Path,
@@ -498,7 +499,7 @@ mod unix {
                     ancestor.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
                 bail!(
                     "refusing private vault output through symlinked parent {}",
                     ancestor.display()

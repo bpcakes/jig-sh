@@ -123,7 +123,10 @@ impl fmt::Debug for ParsedBackupArchive {
         #[cfg(target_os = "linux")]
         debug
             .field("header", &self.header)
+            .field("salt_len", &self.salt.len())
+            .field("nonce_len", &self.nonce.len())
             .field("serialized_len", &self.serialized_len)
+            .field("ciphertext_len", &self.ciphertext.len())
             .field("ciphertext", &"[REDACTED]");
         debug.finish_non_exhaustive()
     }

@@ -9,6 +9,7 @@ mod exec_output;
 mod exec_process;
 mod format;
 mod output;
+mod path_security;
 mod redact;
 mod run;
 mod secret;

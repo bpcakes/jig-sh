@@ -205,6 +205,14 @@ fn format_codex_reset_from(timestamp: u64, now: u64) -> Option<String> {
 }
 
 pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
+    format_codex_command_summary(value, "Codex launch")
+}
+
+pub(super) fn format_codex_resume_summary(value: &serde_json::Value) -> String {
+    format_codex_command_summary(value, "Codex resume")
+}
+
+fn format_codex_command_summary(value: &serde_json::Value, label: &str) -> String {
     let (home, home_sanitized) = sanitized_display(value_str(value, "home").unwrap_or("<unknown>"));
     let (codex_bin, codex_bin_sanitized) =
         sanitized_display(value_str(value, "codex_bin").unwrap_or("codex"));
@@ -223,7 +231,7 @@ pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
             }),
     );
     let mut lines = vec![
-        "Codex launch: dry run".into(),
+        format!("{label}: dry run"),
         format!("  CODEX_HOME: {home}"),
         format!("  Command (POSIX shell): {}", command.join(" ")),
     ];
@@ -433,6 +441,18 @@ mod tests {
         assert!(summary.contains("CODEX_HOME: /tmp/.codex-work"));
         assert!(summary.contains("'/opt/Codex CLI/codex'"));
         assert!(summary.contains("--search 'prompt with spaces'"));
+    }
+
+    #[test]
+    fn codex_resume_summary_identifies_the_resume_dry_run() {
+        let summary = format_codex_resume_summary(&json!({
+            "home": "/tmp/.codex-work",
+            "codex_bin": "codex",
+            "args": ["resume", "019fe6e4-972f-7392-aaf3-58cb652a4e20"]
+        }));
+
+        assert!(summary.starts_with("Codex resume: dry run"));
+        assert!(summary.contains("codex resume 019fe6e4-972f-7392-aaf3-58cb652a4e20"));
     }
 
     #[test]
