@@ -488,7 +488,7 @@ fn draw_package_table(frame: &mut Frame, area: Rect, app: &App, packages: &[&Pac
                 .bottom_margin(1),
         )
         .block(panel(&title))
-        .highlight_style(Style::default().bg(Color::DarkGray).bold())
+        .row_highlight_style(Style::default().bg(Color::DarkGray).bold())
         .highlight_symbol("> ");
     let mut state = TableState::default();
     state.select(Some(app.package_index));

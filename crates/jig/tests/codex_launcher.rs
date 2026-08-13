@@ -256,6 +256,53 @@ sleep 30
 }
 
 #[test]
+fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
+    let temp = support::tempdir().unwrap();
+    let default = temp.path().join(".codex");
+    fs::create_dir(&default).unwrap();
+    let stub = write_executable(temp.path().join("codex-stub.sh"), "#!/bin/sh\nexit 0\n");
+    let Some((mut master, stdin, stdout)) =
+        required_pseudo_terminal_with_size("large picker", 608, 113)
+    else {
+        return;
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["codex", "launch"])
+        .env("HOME", temp.path())
+        .env("CODEX_HOME", &default)
+        .env("JIG_CODEX_BIN", &stub)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    set_nonblocking(&master);
+
+    let mut output = Vec::new();
+    read_until(
+        &mut master,
+        &mut output,
+        "Codex Home Picker",
+        Duration::from_secs(5),
+    );
+    master.write_all(b"q").unwrap();
+    let status = child
+        .wait_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap_or_else(|| {
+            child.kill().unwrap();
+            child.wait().unwrap()
+        });
+
+    assert!(
+        status.success(),
+        "large picker exited with {status}; output: {}",
+        String::from_utf8_lossy(&output)
+    );
+}
+
+#[test]
 fn homes_shows_terminal_progress_while_accounts_are_inspected() {
     let temp = support::tempdir().unwrap();
     let default = temp.path().join(".codex");
@@ -549,6 +596,10 @@ fn write_executable(path: impl AsRef<Path>, contents: &str) -> std::path::PathBu
 }
 
 fn pseudo_terminal() -> std::io::Result<(File, File, File)> {
+    pseudo_terminal_with_size(120, 30)
+}
+
+fn pseudo_terminal_with_size(columns: u16, rows: u16) -> std::io::Result<(File, File, File)> {
     let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
     if master < 0 {
         return Err(std::io::Error::last_os_error());
@@ -570,8 +621,8 @@ fn pseudo_terminal() -> std::io::Result<(File, File, File)> {
     }
     let slave = unsafe { File::from_raw_fd(slave) };
     let size = libc::winsize {
-        ws_row: 30,
-        ws_col: 120,
+        ws_row: rows,
+        ws_col: columns,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
@@ -587,7 +638,22 @@ fn pseudo_terminal() -> std::io::Result<(File, File, File)> {
 }
 
 fn required_pseudo_terminal(label: &str) -> Option<(File, File, File)> {
-    match pseudo_terminal() {
+    required_pseudo_terminal_from(label, pseudo_terminal())
+}
+
+fn required_pseudo_terminal_with_size(
+    label: &str,
+    columns: u16,
+    rows: u16,
+) -> Option<(File, File, File)> {
+    required_pseudo_terminal_from(label, pseudo_terminal_with_size(columns, rows))
+}
+
+fn required_pseudo_terminal_from(
+    label: &str,
+    terminal: std::io::Result<(File, File, File)>,
+) -> Option<(File, File, File)> {
+    match terminal {
         Ok(terminal) => Some(terminal),
         Err(error) if pty_is_unavailable(&error) && pty_skip_is_explicitly_allowed() => {
             eprintln!("skipping {label} PTY test because {ALLOW_PTY_SKIP_ENV}=1: {error}");

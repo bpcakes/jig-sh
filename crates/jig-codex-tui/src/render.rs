@@ -184,7 +184,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
                 .style(Style::default().fg(ACCENT).bold()),
         )
         .block(panel("Homes  (* current)"))
-        .highlight_style(
+        .row_highlight_style(
             Style::default()
                 .bg(Color::Blue)
                 .fg(Color::White)
@@ -232,7 +232,7 @@ fn draw_compact_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]
     )
     .header(Row::new(["", "Home", "Usage", "State"]).style(Style::default().fg(ACCENT).bold()))
     .block(panel("Homes  (* current)"))
-    .highlight_style(
+    .row_highlight_style(
         Style::default()
             .bg(Color::Blue)
             .fg(Color::White)

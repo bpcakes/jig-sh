@@ -55,9 +55,11 @@ jig-vault.workspace = true
 libc.workspace = true
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
 rpassword.workspace = true
-# rustyline's default `with-dirs` feature pulls home 0.5.12 (Rust 1.88), and an
-# exact version prevents compatible-range drift beyond the workspace Rust 1.85 MSRV.
-rustyline = { version = "=18.0.0", default-features = false }
+# Rustyline 18 requires unicode-width 0.2.2, which cannot resolve alongside
+# Ratatui 0.29's exact 0.2.0 requirement. Keep Rustyline 17 while Rust 1.85 and
+# Ratatui 0.29 are the workspace constraints. Its default `with-dirs` feature is
+# disabled because newer `home` releases require Rust 1.88.
+rustyline = { version = "=17.0.2", default-features = false }
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

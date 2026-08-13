@@ -19,16 +19,17 @@ The implementation-agent launcher discussed as a later product milestone is deli
 - [x] (2026-07-27 16:43Z) Passed formatting, focused and full workspace tests, Clippy, Rust 1.85/no-default compatibility, crate packaging, repository policy checks, and both required plan gates. Full-work-check receipt: `receipt_01KYJ7FMPTNRWXBJJ7R5745DB6`.
 - [x] (2026-07-27 16:29Z) Dogfooded the development binary against `/Users/aa/Documents/hocr2` at 80x24: inspected 130 packages, 25 blockers, native/normalized progress, and current target/legacy inputs; quitting during the active Ruby provider returned in 0.036 seconds with no provider descendant remaining.
 - [x] (2026-07-27 16:44Z) Recorded fresh evidence for every changed path and closed the structured plan successfully; the final repository commit carries the implementation and closure records together.
+- [x] (2026-08-13) Superseded the Ratatui 0.28.1 dependency decision with Ratatui 0.29.0 after reproducing the 65,535-cell failure at 608x113; aligned dependency rationale and compatibility pins while retaining Rust 1.85.
 
 ## Surprises & Discoveries
 
 - Observation: hocr2's current private Ruby provider takes about 4.7 seconds and returns 130 packages, 518 acceptance checks, and 25 blockers.
   Evidence: `scripts/jig status --json` in `/Users/aa/Documents/hocr2` reported `duration_ms: 4700`, `work_packages: 130`, `acceptance_checks: 518`, and `blockers: 25`. Refresh must therefore run off the terminal event loop and must not use an aggressive default interval.
 
-- Observation: the workspace declares Rust 1.85, while the current Ratatui 0.30 line declares Rust 1.88. Ratatui 0.29 additionally hard-pins `unicode-width` 0.2.0, which cannot resolve alongside Jig's 0.2.2 dependency.
-  Evidence: the root `Cargo.toml` contains `rust-version = "1.85"` and Ratatui 0.30.2's published manifest contains `rust-version = "1.88.0"`. Cargo rejected Ratatui 0.29.0 because it requires `unicode-width =0.2.0` while `jig-dev-proxy` resolves the workspace's `unicode-width =0.2.2`. Ratatui 0.28.1 uses Crossterm 0.28.1 and an independent `unicode-width` 0.1.13 dependency.
+- Observation: the workspace declares Rust 1.85, while the current Ratatui 0.30 line declares Rust 1.88. Ratatui 0.29 hard-pins `unicode-width` 0.2.0, so adopting its large-buffer fix requires aligning Jig's direct width dependency and Rustyline on that release.
+  Evidence: the root `Cargo.toml` contains `rust-version = "1.85"`; Ratatui 0.29.0 declares Rust 1.74 and calculates `Rect` areas as `u32`; Ratatui 0.30.2 declares `rust-version = "1.88.0"`. The workspace therefore pins Ratatui 0.29.0, `unicode-width` 0.2.0, and Rustyline 17.0.2 until the Rust floor can move.
 
-- Observation: Ratatui 0.28's compatible `instability = "0.3"` range now resolves to instability 0.3.12, which declares Rust 1.88 even though Ratatui itself declares Rust 1.74.
+- Observation: Ratatui's compatible `instability = "0.3"` range can resolve to instability releases that require a newer Rust version than Ratatui itself.
   Evidence: `cargo metadata` reported `instability 0.3.12 rust-version 1.88` and `darling 0.23.0 rust-version 1.88.0`. `cargo info instability@0.3.10` reports Rust 1.64, while 0.3.11 reports Rust 1.88.
 
 - Observation: Jig's existing provider supervisor already accepts a cancellation callback and owns full process-tree cleanup, but `status::snapshot` currently hard-codes a callback that never cancels.
@@ -49,9 +50,9 @@ The implementation-agent launcher discussed as a later product milestone is deli
   Rationale: scripts and current operators keep stable behavior, while the interactive surface is explicit and testable. The global `--json` flag conflicts with `--tui`.
   Date/Author: 2026-07-27 / Codex
 
-- Decision: use Ratatui 0.28.1 with Crossterm 0.28.1, both exactly pinned in workspace dependencies.
-  Rationale: Ratatui provides deterministic test rendering and portable terminal handling. Version 0.28.1 has the required API, shares Crossterm 0.28.1, remains below the workspace's Rust 1.85 floor, and avoids downgrading Jig's existing `unicode-width` 0.2.2 dependency. Exact pins prevent compatible-range drift.
-  Date/Author: 2026-07-27 / Codex
+- Decision: use Ratatui 0.29.0 with Crossterm 0.28.1, both exactly pinned in workspace dependencies.
+  Rationale: Ratatui 0.29 is the newest release below the workspace's Rust 1.85 floor and its `u32` buffer areas render terminals containing more than 65,535 cells. Its exact `unicode-width` 0.2.0 requirement is accepted as part of this decision; Jig aligns its direct width dependency and Rustyline accordingly. Exact pins prevent compatible-range drift.
+  Date/Author: 2026-08-13 / Codex, superseding the 2026-07-27 Ratatui 0.28.1 decision after the large-terminal crash was reproduced
 
 - Decision: add a direct exact `instability = 0.3.10` dependency to `jig-status-tui`.
   Rationale: this constrains Ratatui's transitive range to the latest release whose declared Rust floor is below Jig's 1.85 floor. A lockfile-only downgrade could drift again during an allowed dependency update.
@@ -86,6 +87,8 @@ The implementation-agent launcher discussed as a later product milestone is deli
 The implementation, hocr2 dogfood, repository-wide verification, and structured plan closure are complete. The crate split answered the architectural concern cleanly: Jig owns provider execution and the generic CLI entrypoint, while `jig-status-tui` owns only a typed view model, terminal runtime, and rendering over aggregate JSON. The existing browser `jig-ui` remains unchanged.
 
 The real hocr2 run showed that the dashboard is useful at the minimum practical 80x24 size and that a multi-second closed-source Ruby provider does not make quit unresponsive. It also surfaced two issues that fixture-only development would have missed: idle redraw traffic and provider strings as a terminal-injection boundary. Both are covered in the implementation and focused tests. The full recorded Jig work check passed both the contract gate and all workspace tests, and the required gates reported fresh receipts over every changed non-state path. The Codex launcher remains intentionally unimplemented because status interoperability does not imply launch authority.
+
+The shared terminal stack now pins Ratatui 0.29.0 so the status dashboard and later Jig TUIs can render buffers larger than 65,535 cells. The workspace deliberately aligns `unicode-width` at 0.2.0 and Rustyline at 17.0.2 as compatibility consequences of retaining Rust 1.85.
 
 ## Context and Orientation
 
@@ -255,7 +258,7 @@ In `crates/jig-status-tui/src/lib.rs`, expose:
 
 Pin these workspace dependencies:
 
-    ratatui = "=0.28.1"
+    ratatui = "=0.29.0"
     crossterm = "=0.28.1"
 
 Use the Crossterm backend supplied by that Ratatui line. Do not add an async runtime: one standard thread, channel, and atomic cancellation flag are sufficient and keep the feature independent of Tokio.
@@ -264,7 +267,7 @@ Plan revision note (2026-07-27 16:00Z): replaced the initial one-paragraph plan 
 
 Plan revision note (2026-07-27 16:08Z): after the user challenged whether a terminal UI should live inside Jig, moved terminal presentation from the main `jig` crate to a separate CLI-owned `jig-status-tui` workspace crate while retaining the generic `jig status --tui` entrypoint and explicitly preserving the proprietary launcher boundary.
 
-Plan revision note (2026-07-27 16:12Z): changed the Ratatui pin from 0.29.0 to 0.28.1 after Cargo proved that 0.29.0's exact `unicode-width` 0.2.0 dependency conflicts with Jig's existing 0.2.2 requirement. This preserves the Rust floor and avoids a workspace dependency downgrade.
+Plan revision note (2026-07-27 16:12Z, superseded 2026-08-13): initially changed the Ratatui pin from 0.29.0 to 0.28.1 to avoid aligning the workspace on `unicode-width` 0.2.0. A reproduced crash on a 608x113 terminal later proved that Ratatui 0.29's large-buffer support is required.
 
 Plan revision note (2026-07-27 16:32Z): pinned Ratatui's `instability` transitive dependency at 0.3.10 after dependency metadata showed that the unconstrained current 0.3.12 release had silently raised the effective Rust floor to 1.88.
 
@@ -273,3 +276,5 @@ Plan revision note (2026-07-27 16:33Z): recorded the completed implementation, t
 Plan revision note (2026-07-27 16:43Z): recorded the passing full-work-check receipt and fresh required gates. Only structured closure and the final repository commit remain.
 
 Plan revision note (2026-07-27 16:44Z): recorded successful structured closure after all required evidence remained fresh.
+
+Plan revision note (2026-08-13): superseded the Ratatui 0.28.1 dependency decision with Ratatui 0.29.0 after reproducing the 65,535-cell buffer failure. The workspace now deliberately accepts Ratatui 0.29's `unicode-width` 0.2.0 requirement and Rustyline 17 compatibility dependency while retaining Rust 1.85.
