@@ -15,7 +15,7 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - [x] (2026-08-13 21:47Z) Researched the current Vault v2 surface, existing Jig TUIs, comparable secret-management TUIs, and plaintext/session constraints.
 - [x] (2026-08-13 21:47Z) Authored this self-contained ExecPlan and divided the work into independently testable, committable milestones.
 - [x] (2026-08-13 21:49Z) Opened structured Jig work `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`, whose body points to this authoritative ExecPlan.
-- [ ] Milestone 1: add metadata snapshots, verified activity, and atomic field/item/legacy transformations to `jig-vault`; test and commit the core slice.
+- [x] (2026-08-13 22:02Z) Milestone 1: added verified, disjoint metadata snapshots; newest-first safe activity projection; and atomic kind-change, field/item rename, item removal, and legacy conversion APIs. All 206 `jig-vault` tests and strict all-target Clippy pass.
 - [ ] Milestone 2: add the `jig-vault-tui` crate, shared terminal input mechanics, CLI entrypoint, fixed-scope unlock/lock/init/migrate states, responsive explorer, and legacy visibility; test and commit the browsing slice.
 - [ ] Milestone 3: add protected value entry plus canonical and legacy create/replace/change-kind/rename/delete workflows; test and commit the management slice.
 - [ ] Milestone 4: add 1Password import, encrypted backup, passphrase change, verified activity, audit verification, and absent-home restore tools; test and commit the lifecycle-tools slice.
@@ -39,6 +39,9 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 
 - Observation: Crossterm 0.28.1 is already built with bracketed-paste and event features, but shared `TerminalSession` currently enables only raw mode, alternate screen, and cursor hiding.
   Evidence: `cargo tree -e features -p jig-tui` reports `crossterm/bracketed-paste`; `crates/jig-tui/src/lib.rs::TerminalSession` has no paired paste enable/disable commands.
+
+- Observation: the existing audit verifier consumed its audit-log `String`, which made a verified activity projection either re-read the file or duplicate the whole log.
+  Evidence: Milestone 1 changed the private `verify_chain_text` helper to borrow `&str`; activity now verifies once and reparses only the authenticated valid prefix while the vault lock remains held.
 
 ## Decision Log
 
@@ -78,9 +81,13 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
   Rationale: the user explicitly requested suitable slice commits, and each milestone is designed to leave tests green and provide a restartable boundary. Commits must include only files belonging to that milestone plus append-only Jig work records produced for it.
   Date/Author: 2026-08-13 / Codex
 
+- Decision: give each new atomic management operation a distinct audit action instead of disguising metadata-only moves as field set/remove batches.
+  Rationale: kind changes, renames, item removal, and legacy conversion do not expose or replace values. Distinct authenticated actions make the Activity view intelligible and allow action-specific safe metadata whitelisting without returning arbitrary audit JSON.
+  Date/Author: 2026-08-13 / Codex
+
 ## Outcomes & Retrospective
 
-Implementation has not started. Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. The intended outcome is a complete management interface with all five milestones finished, the final repository test gate green, no plaintext sentinel observable outside controlled sinks, and the structured work plan closed. Update this section after each milestone with the user-visible behavior, commit identifier, verification evidence, remaining work, and any security tradeoff that changed.
+Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supplies the complete metadata and atomic domain foundation: one unlock now returns canonical fields, disjoint unrepresentable legacy records, format/identity metadata, and audit verification; verified recent activity contains only whitelisted summaries; and management moves preserve encrypted bytes and creation timestamps under one audited lock/save. Collision, v1, tamper, short-value, timestamp, no-plaintext, and legacy-deduplication tests are included. The complete `jig-vault` suite reports 206 passed in 98.91 seconds, and strict all-target Clippy passes. Milestones 2–5 and the final repository gates remain.
 
 ## Context and Orientation
 
@@ -329,3 +336,5 @@ Use existing workspace `ratatui`, `crossterm`, `unicode-width`, `secrecy`, and `
 Revision note (2026-08-13): Created this plan from the completed Vault v2 and TUI design investigation. It preserves all five recommended delivery stages, makes legacy visibility and controlled plaintext sinks explicit, and turns each stage into a testable commit boundary.
 
 Revision note (2026-08-13): Recorded structured work `plan_01KZYHNEMNNN5B80EDBFA2WDJ9` after opening it with a body that points back to this authoritative plan.
+
+Revision note (2026-08-13): Recorded Milestone 1 implementation and evidence after adding the metadata-only snapshot/activity boundary and atomic management transformations required by the TUI.

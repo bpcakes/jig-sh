@@ -18,7 +18,7 @@ mod template;
 mod types;
 mod vault;
 
-pub use audit::AuditVerification;
+pub use audit::{AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VaultActivityRecord};
 pub use backup::{
     BACKUP_FORMAT_VERSION, BackupCreateRequest, BackupCreateResult, BackupRestoreRequest,
     BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES,
@@ -36,6 +36,7 @@ pub use secret::{SecretBytes, SecretBytesCapacityError};
 pub use template::{InjectionTemplate, MAX_TEMPLATE_INPUT_LEN, MAX_TEMPLATE_OUTPUT_LEN};
 pub use types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 pub use vault::{
-    FieldBatchResult, FieldMutation, FieldRecord, MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN,
-    RevealResult, SecretRecord, Vault, VaultMigration, VaultStatus, validate_new_vault_passphrase,
+    FieldBatchResult, FieldKindChangeResult, FieldMutation, FieldRecord, LegacyConversionResult,
+    MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, RevealResult, SecretRecord, Vault,
+    VaultMigration, VaultSnapshot, VaultStatus, validate_new_vault_passphrase,
 };

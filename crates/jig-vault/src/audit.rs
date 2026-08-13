@@ -24,9 +24,14 @@ pub(crate) enum AuditAction {
     ExecFinish,
     ExecStart,
     FieldBatchApply,
+    FieldKindChange,
+    FieldRename,
     FieldReadFailed,
     FieldReadFinish,
     FieldReadStart,
+    ItemRemove,
+    ItemRename,
+    LegacySecretConvert,
     OnePasswordImport,
     PassphraseChange,
     SecretRemove,
@@ -53,9 +58,14 @@ impl AuditAction {
             Self::ExecFinish => "exec_finish",
             Self::ExecStart => "exec_start",
             Self::FieldBatchApply => "field_batch_apply",
+            Self::FieldKindChange => "field_kind_change",
+            Self::FieldRename => "field_rename",
             Self::FieldReadFailed => "field_read_failed",
             Self::FieldReadFinish => "field_read_finish",
             Self::FieldReadStart => "field_read_start",
+            Self::ItemRemove => "item_remove",
+            Self::ItemRename => "item_rename",
+            Self::LegacySecretConvert => "legacy_secret_convert",
             Self::OnePasswordImport => "onepassword_import",
             Self::PassphraseChange => "passphrase_change",
             Self::SecretRemove => "secret_remove",
@@ -87,6 +97,25 @@ pub struct AuditVerification {
     pub latest_mac: Option<String>,
     pub torn_tail_bytes: usize,
 }
+
+/// One verified audit event projected into metadata safe for an interactive
+/// activity view.
+///
+/// The original event details and MAC fields are intentionally not exposed.
+/// `subject` and `outcome` are assembled only from action-specific,
+/// crate-controlled metadata.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultActivityRecord {
+    pub event_id: String,
+    pub timestamp_ms: i128,
+    pub action: String,
+    pub subject: Option<String>,
+    pub outcome: Option<String>,
+}
+
+/// Maximum number of verified activity records returned by one request.
+pub const MAX_VAULT_ACTIVITY_RECORDS: usize = 1_000;
 
 #[derive(Serialize)]
 struct AuditEventForMac<'a> {
@@ -183,7 +212,32 @@ pub(crate) fn verify_chain_unlocked(
             store.audit_path().display()
         )
     })?;
-    Ok(verify_chain_text(text, audit_key)?.verification)
+    Ok(verify_chain_text(&text, audit_key)?.verification)
+}
+
+pub(crate) fn verified_activity_unlocked(
+    store: &VaultStore,
+    audit_key: &[u8],
+    limit: usize,
+) -> Result<(AuditVerification, Vec<VaultActivityRecord>)> {
+    let text = store.read_audit_text()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "vault audit log is missing at {}; remove the stale vault home or restore audit.jsonl before continuing",
+            store.audit_path().display()
+        )
+    })?;
+    let verified = verify_chain_text(&text, audit_key)?;
+    let events = text[..verified.valid_len]
+        .lines()
+        .rev()
+        .take(limit)
+        .map(|line| {
+            serde_json::from_str::<AuditEvent>(line)
+                .context("failed to re-read a verified vault audit event")
+                .map(project_activity_record)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((verified.verification, events))
 }
 
 struct VerifiedAuditLog {
@@ -198,7 +252,7 @@ fn verify_chain_for_append_unlocked(
     allow_missing: bool,
 ) -> Result<VerifiedAuditLog> {
     match store.read_audit_text()? {
-        Some(text) => verify_chain_text(text, audit_key),
+        Some(text) => verify_chain_text(&text, audit_key),
         None if allow_missing => Ok(empty_verified_audit_log()),
         None if !store.exists()? => Ok(empty_verified_audit_log()),
         None => Err(anyhow::anyhow!(
@@ -220,7 +274,7 @@ const fn empty_verified_audit_log() -> VerifiedAuditLog {
     }
 }
 
-fn verify_chain_text(text: String, audit_key: &[u8]) -> Result<VerifiedAuditLog> {
+fn verify_chain_text(text: &str, audit_key: &[u8]) -> Result<VerifiedAuditLog> {
     let mut previous_mac = None;
     let mut event_count = 0;
     let mut valid_len = 0;
@@ -286,6 +340,129 @@ fn verify_chain_text(text: String, audit_key: &[u8]) -> Result<VerifiedAuditLog>
         valid_len,
         audit_len,
     })
+}
+
+fn project_activity_record(event: AuditEvent) -> VaultActivityRecord {
+    let action = safe_activity_text(&event.action).unwrap_or_else(|| "unsupported".into());
+    VaultActivityRecord {
+        event_id: safe_activity_text(&event.event_id).unwrap_or_else(|| "unknown".into()),
+        timestamp_ms: event.timestamp_ms,
+        subject: activity_subject(&action, &event.details),
+        outcome: activity_outcome(&action, &event.details),
+        action,
+    }
+}
+
+fn activity_subject(action: &str, details: &Value) -> Option<String> {
+    match action {
+        "vault_initialized" => detail_string(details, "vault_id"),
+        "secret_set" | "secret_remove" => detail_string(details, "secret_name"),
+        "field_kind_change" | "field_read_start" => detail_string(details, "reference"),
+        "field_rename" => detail_pair(details, "from", "to"),
+        "item_remove" => detail_string(details, "item"),
+        "item_rename" => detail_pair(details, "from", "to"),
+        "legacy_secret_convert" => detail_pair(details, "secret_name", "reference"),
+        "field_batch_apply" => first_field_batch_reference(details),
+        "onepassword_import" => detail_count(details, "field_count", "fields"),
+        "vault_format_migrate" => detail_number_pair(details, "from_version", "to_version"),
+        "backup_start" | "backup_restore" => detail_string(details, "source_vault_id"),
+        "backup_failed"
+        | "backup_finish"
+        | "exec_failed"
+        | "exec_finish"
+        | "exec_start"
+        | "field_read_failed"
+        | "field_read_finish"
+        | "template_inject_failed"
+        | "template_inject_finish"
+        | "template_inject_start" => detail_string(details, "operation_id"),
+        "brokered_run_failed" | "brokered_run_finish" | "brokered_run_start" => {
+            detail_string(details, "run_id")
+        }
+        "passphrase_change" => details
+            .get("format_version")
+            .and_then(Value::as_u64)
+            .map(|version| format!("format v{version}")),
+        _ => None,
+    }
+}
+
+fn activity_outcome(action: &str, details: &Value) -> Option<String> {
+    if action.ends_with("_failed") {
+        return Some("failed".into());
+    }
+    if action.ends_with("_finish") {
+        return Some("finished".into());
+    }
+    if action.ends_with("_start") {
+        return Some("started".into());
+    }
+    match action {
+        "vault_initialized" => Some("initialized".into()),
+        "vault_format_migrate" => Some("migrated".into()),
+        "passphrase_change" => Some("changed".into()),
+        "secret_set" => Some("saved".into()),
+        "secret_remove" => details
+            .get("removed")
+            .and_then(Value::as_bool)
+            .map(|removed| if removed { "removed" } else { "not found" }.into()),
+        "field_batch_apply"
+        | "field_kind_change"
+        | "field_rename"
+        | "item_remove"
+        | "item_rename"
+        | "legacy_secret_convert" => Some("applied".into()),
+        "onepassword_import" => Some("imported".into()),
+        "backup_restore" => Some("restored".into()),
+        _ => None,
+    }
+}
+
+fn detail_string(details: &Value, key: &str) -> Option<String> {
+    details
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(safe_activity_text)
+}
+
+fn detail_pair(details: &Value, left: &str, right: &str) -> Option<String> {
+    let left = detail_string(details, left)?;
+    let right = detail_string(details, right)?;
+    Some(format!("{left} -> {right}"))
+}
+
+fn detail_number_pair(details: &Value, left: &str, right: &str) -> Option<String> {
+    let left = details.get(left)?.as_u64()?;
+    let right = details.get(right)?.as_u64()?;
+    Some(format!("{left} -> {right}"))
+}
+
+fn detail_count(details: &Value, key: &str, label: &str) -> Option<String> {
+    let count = details.get(key)?.as_u64()?;
+    Some(format!("{count} {label}"))
+}
+
+fn first_field_batch_reference(details: &Value) -> Option<String> {
+    ["set", "remove"].into_iter().find_map(|key| {
+        details
+            .get(key)
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .and_then(|value| detail_string(value, "reference"))
+    })
+}
+
+fn safe_activity_text(value: &str) -> Option<String> {
+    const MAX_ACTIVITY_TEXT_BYTES: usize = 256;
+    if value.is_empty()
+        || value.len() > MAX_ACTIVITY_TEXT_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+    {
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 fn bail_audit_chain<T>(zero_based_index: usize, reason: impl std::fmt::Display) -> Result<T> {

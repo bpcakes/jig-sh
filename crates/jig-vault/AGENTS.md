@@ -28,12 +28,14 @@
 - Change brokered run authorization/audit orchestration: `src/broker.rs`.
 - Change child-process secret delivery after resolution: `src/run.rs`.
 - Change audit record shape: `src/audit.rs`.
+- Change metadata snapshots, verified activity projection, or atomic field/item transformations: `src/vault.rs` and `src/audit.rs`.
 - Add passphrase rotation or recovery flows: `src/crypto.rs`, `src/format.rs`, and `src/vault.rs`; v1 intentionally has no passphrase-change API.
 
 ## Invariants
 
 - Never store plaintext secrets outside encrypted vault state.
 - Never return plaintext secret values from public metadata/listing APIs.
+- `VaultSnapshot` must keep canonical fields disjoint from unrepresentable legacy entries and verify the audit chain under the same lock before returning metadata. `VaultActivityRecord` must project only action-specific safe metadata after complete chain verification; never expose arbitrary audit detail JSON through it.
 - Do not expose plaintext secret values through errors, logs, audit details, runtime JSON, or `Debug` output.
 - Canonical references are contextual `jig://ITEM/FIELD` names. Scope selection belongs to the caller; do not add repository identity or cross-vault routing to a reference.
 - Version 1 remains readable with every value treated as concealed. Version 2 adds encrypted handling kinds; require explicit one-way migration before field mutation, import, passphrase change, or backup, and keep older readers failing closed on version 2.
@@ -51,6 +53,7 @@
 - Treat redaction as a backup control, not as the core security boundary.
 - Verify the audit chain before appending new audit events.
 - Vault mutations append audit intent before saving the new state; crashes may leave audit leading state, but state should not lead audit.
+- Field kind changes, field/item renames, item removal, and legacy conversion must remain single-lock atomic mutations. They must never be implemented by exposing plaintext or composing separate public read/remove/set calls.
 - The local HMAC audit chain detects edited records and broken links, but deletion, truncation, or rollback still requires external checkpoints or backups to prove.
 - Brokered env injection must not override the cleaned child process' preserved environment allowlist, such as `PATH`, `HOME`, `TMPDIR`, and locale variables.
 - Child-process environment injection necessarily gives `std::process::Command` a non-zeroizable copy of each injected secret; prefer future OS-specific delivery primitives for stronger isolation.
