@@ -8,10 +8,11 @@ use ratatui::{
 };
 
 use crate::model::{
-    App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus, InitializeFocus,
-    ItemIdentity, LegacyWriteFocus, ManagementForm, RenameFieldFocus, Screen, StatusKind,
-    kind_label,
+    ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
+    ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
+    RenameFieldFocus, Screen, StatusKind, kind_label,
 };
+use crate::tools::{BackupFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu};
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -57,8 +58,17 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::Help
         | Screen::ConfirmMigration
         | Screen::Form(_)
-        | Screen::ConfirmDelete(_) => {
-            draw_browser(frame, area, app);
+        | Screen::ConfirmDelete(_)
+        | Screen::Tools(_)
+        | Screen::ToolForm(_)
+        | Screen::ImportPreview(_)
+        | Screen::Activity(_)
+        | Screen::AuditResult(_) => {
+            if app.snapshot.is_some() {
+                draw_browser(frame, area, app);
+            } else {
+                draw_missing(frame, area, app);
+            }
             match &app.screen {
                 Screen::Help => draw_help(frame, centered_rect(78, 74, area)),
                 Screen::ConfirmMigration => {
@@ -69,6 +79,19 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 }
                 Screen::ConfirmDelete(confirmation) => {
                     draw_delete_confirmation(frame, centered_rect(78, 52, area), app, confirmation);
+                }
+                Screen::Tools(menu) => draw_tools(frame, centered_rect(70, 60, area), menu),
+                Screen::ToolForm(form) => {
+                    draw_tool_form(frame, centered_rect(82, 72, area), app, form);
+                }
+                Screen::ImportPreview(preview) => {
+                    draw_import_preview(frame, centered_rect(90, 82, area), app, preview);
+                }
+                Screen::Activity(view) => {
+                    draw_activity(frame, centered_rect(90, 82, area), view);
+                }
+                Screen::AuditResult(verification) => {
+                    draw_audit_result(frame, centered_rect(72, 48, area), verification);
                 }
                 _ => {}
             }
@@ -708,6 +731,344 @@ fn draw_delete_confirmation(
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn draw_tools(frame: &mut Frame, area: Rect, menu: &ToolsMenu) {
+    frame.render_widget(Clear, area);
+    let items = menu
+        .choices
+        .iter()
+        .map(|choice| ListItem::new(choice.label()))
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(menu.selected));
+    frame.render_stateful_widget(
+        list(items, "Vault tools")
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Blue)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("› "),
+        area,
+        &mut state,
+    );
+    let footer = Rect::new(
+        area.x.saturating_add(2),
+        area.bottom().saturating_sub(2),
+        area.width.saturating_sub(4),
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new("j/k move   Enter open   Esc close").style(Style::default().fg(MUTED)),
+        footer,
+    );
+}
+
+fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
+    frame.render_widget(Clear, area);
+    let (title, mut lines) = match form {
+        ToolForm::ImportOnePassword {
+            env_file,
+            item,
+            out_env,
+            replace,
+            overwrite,
+            dry_run,
+            focus,
+        } => (
+            "1Password dotenv import",
+            vec![
+                form_value_line(
+                    "Source .env",
+                    env_file,
+                    *focus == ImportFocus::EnvFile,
+                    false,
+                ),
+                form_value_line("Item", item, *focus == ImportFocus::Item, false),
+                form_value_line(
+                    "Generated .env",
+                    out_env,
+                    *focus == ImportFocus::OutEnv,
+                    false,
+                ),
+                toggle_line("Replace fields", *replace, *focus == ImportFocus::Replace),
+                toggle_line(
+                    "Overwrite generated file",
+                    *overwrite,
+                    *focus == ImportFocus::Overwrite,
+                ),
+                toggle_line("Dry run", *dry_run, *focus == ImportFocus::DryRun),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Preview parses metadata and checks collisions without invoking `op`.",
+                    Style::default().fg(MUTED),
+                )),
+            ],
+        ),
+        ToolForm::CreateBackup {
+            output,
+            overwrite,
+            focus,
+        } => (
+            "Create encrypted backup",
+            vec![
+                form_value_line(
+                    "Backup output",
+                    output,
+                    *focus == BackupFocus::Output,
+                    false,
+                ),
+                toggle_line(
+                    "Overwrite regular file",
+                    *overwrite,
+                    *focus == BackupFocus::Overwrite,
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "The archive is independently encrypted and installed as a private file.",
+                    Style::default().fg(MUTED),
+                )),
+            ],
+        ),
+        ToolForm::ChangePassphrase {
+            new_passphrase,
+            confirmation,
+            focus,
+        } => (
+            "Change vault passphrase",
+            vec![
+                form_value_line(
+                    "New passphrase",
+                    &new_passphrase.render_label(),
+                    *focus == PassphraseFocus::New,
+                    true,
+                ),
+                form_value_line(
+                    "Confirm passphrase",
+                    &confirmation.render_label(),
+                    *focus == PassphraseFocus::Confirmation,
+                    true,
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "The current process credential changes only after atomic rotation succeeds.",
+                    Style::default().fg(WARN),
+                )),
+            ],
+        ),
+        ToolForm::RestoreBackup {
+            input,
+            passphrase,
+            confirmation,
+            focus,
+        } => (
+            "Restore encrypted backup",
+            vec![
+                form_value_line("Backup input", input, *focus == RestoreFocus::Input, false),
+                form_value_line(
+                    "Backup vault passphrase",
+                    &passphrase.render_label(),
+                    *focus == RestoreFocus::Passphrase,
+                    true,
+                ),
+                form_value_line(
+                    "Type RESTORE",
+                    confirmation,
+                    *focus == RestoreFocus::Confirmation,
+                    false,
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Restore is available only for a completely absent target and rechecks that invariant at installation.",
+                    Style::default().fg(WARN),
+                )),
+            ],
+        ),
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Tab switch field   Space toggle option   Enter continue   Esc cancel   Ctrl-U clear",
+    ));
+    append_status(&mut lines, app);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel(title))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportPreviewState) {
+    frame.render_widget(Clear, area);
+    let preview = &state.preview;
+    let max_rows = usize::from(area.height.saturating_sub(13));
+    let mut lines = vec![
+        key_value("Source", &preview.env_file.to_string_lossy()),
+        key_value("Item", &format!("jig://{}", preview.item.as_str())),
+        key_value("Destination", &preview.out_env.to_string_lossy()),
+        toggle_line("Replace fields (r)", preview.replace, false),
+        toggle_line("Overwrite file (o)", preview.overwrite, false),
+        Line::from(""),
+    ];
+    for row in preview.rows.iter().take(max_rows) {
+        lines.push(Line::from(format!(
+            "{} → {}  [{}]  {}",
+            sanitize_text(&row.variable),
+            sanitize_text(&row.reference.to_string()),
+            kind_label(row.kind),
+            if row.replaces_existing {
+                "replace"
+            } else {
+                "create"
+            }
+        )));
+    }
+    if preview.rows.len() > max_rows {
+        lines.push(Line::from(Span::styled(
+            format!("… {} additional fields", preview.rows.len() - max_rows),
+            Style::default().fg(MUTED),
+        )));
+    }
+    lines.push(Line::from(""));
+    if preview.dry_run {
+        lines.push(Line::from(Span::styled(
+            "Dry run: no 1Password values were resolved and no files or fields will change.",
+            Style::default().fg(GOOD),
+        )));
+        lines.push(Line::from("Enter finish dry run   Esc close"));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Commit will invoke `op`, atomically import fields, then install the private dotenv file.",
+            Style::default().fg(WARN),
+        )));
+        lines.push(form_value_line(
+            "Type IMPORT",
+            &state.confirmation,
+            true,
+            false,
+        ));
+        lines.push(Line::from(
+            "r/o toggle permissions   Enter commit   Esc cancel   Ctrl-U clear",
+        ));
+    }
+    append_status(&mut lines, app);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel("1Password import preview"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_activity(frame: &mut Frame, area: Rect, view: &ActivityView) {
+    frame.render_widget(Clear, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(65),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let items = view
+        .records
+        .iter()
+        .map(|record| {
+            let subject = record.subject.as_deref().unwrap_or("—");
+            ListItem::new(format!(
+                "{}  {}  {}",
+                record.timestamp_ms,
+                sanitize_text(&record.action),
+                sanitize_text(subject)
+            ))
+        })
+        .collect::<Vec<_>>();
+    let selected = (!view.records.is_empty()).then_some(view.selected);
+    let mut state = ListState::default().with_selected(selected);
+    frame.render_stateful_widget(
+        list(items, "Verified activity (newest first)"),
+        chunks[0],
+        &mut state,
+    );
+    let details = view.records.get(view.selected).map_or_else(
+        || vec![Line::from("No verified activity records.")],
+        |record| {
+            vec![
+                key_value("Action", &record.action),
+                key_value("Subject", record.subject.as_deref().unwrap_or("—")),
+                key_value("Outcome", record.outcome.as_deref().unwrap_or("—")),
+                key_value("Timestamp", &format!("{} ms", record.timestamp_ms)),
+                key_value("Event", &record.event_id),
+            ]
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(details)
+            .block(panel("Safe metadata"))
+            .wrap(Wrap { trim: true }),
+        chunks[1],
+    );
+    frame.render_widget(
+        Paragraph::new("j/k move   PageUp/PageDown   Enter/Esc close")
+            .style(Style::default().fg(MUTED)),
+        chunks[2],
+    );
+}
+
+fn draw_audit_result(frame: &mut Frame, area: Rect, verification: &jig_vault::AuditVerification) {
+    frame.render_widget(Clear, area);
+    let state = if verification.torn_tail_bytes == 0 {
+        Span::styled(
+            "Verified",
+            Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::styled(
+            "Verified prefix with torn tail",
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(state),
+            Line::from(""),
+            key_value(
+                "Authenticated events",
+                &verification.event_count.to_string(),
+            ),
+            key_value(
+                "Ignored torn-tail bytes",
+                &verification.torn_tail_bytes.to_string(),
+            ),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Raw audit details and MAC material are not shown in the TUI.",
+                Style::default().fg(MUTED),
+            )),
+            Line::from("Enter or Esc closes this result."),
+        ])
+        .block(panel("Audit verification"))
+        .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn toggle_line(label: &str, enabled: bool, focused: bool) -> Line<'static> {
+    form_value_line(label, if enabled { "yes" } else { "no" }, focused, false)
+}
+
+fn append_status(lines: &mut Vec<Line<'static>>, app: &App) {
+    if let Some(status) = &app.status {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(match status.kind {
+                StatusKind::Info => GOOD,
+                StatusKind::Error => BAD,
+            }),
+        )));
+    }
 }
 
 fn form_value_line(label: &str, value: &str, focused: bool, protected: bool) -> Line<'static> {

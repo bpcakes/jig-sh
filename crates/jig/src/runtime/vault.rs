@@ -153,7 +153,12 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     // Compute the exact recovery command before unlock, external resolution,
     // or mutation. This rejects non-UTF-8 path metadata rather than emitting a
     // lossy command only after a post-commit destination failure.
-    let recovery_command = onepassword_import_recovery_command(&request, vault.root())?;
+    let recovery_command = super::vault_import::recovery_command(
+        &request.env_file,
+        &request.item,
+        &request.out_env,
+        vault.root(),
+    )?;
     let passphrase = passphrase()?;
     let existing = vault.preview_import_fields(&passphrase, &references)?;
 
@@ -229,44 +234,6 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     });
     add_vault_scope_fields(&mut output, &resolved);
     Ok(output)
-}
-
-fn onepassword_import_recovery_command(
-    request: &VaultImportOnePasswordRequest,
-    vault_home: &Path,
-) -> Result<String> {
-    let source = exact_recovery_path("source", &request.env_file)?;
-    let destination = exact_recovery_path("destination", &request.out_env)?;
-    let vault_home = exact_recovery_path("vault home", vault_home)?;
-    Ok([
-        "jig".to_owned(),
-        "vault".to_owned(),
-        "import".to_owned(),
-        "onepassword".to_owned(),
-        "--env-file".to_owned(),
-        shell_quote(source),
-        "--item".to_owned(),
-        shell_quote(request.item.as_str()),
-        "--out-env".to_owned(),
-        shell_quote(destination),
-        "--replace".to_owned(),
-        "--overwrite".to_owned(),
-        "--home".to_owned(),
-        shell_quote(vault_home),
-    ]
-    .join(" "))
-}
-
-fn exact_recovery_path<'a>(label: &str, path: &'a Path) -> Result<&'a str> {
-    path.to_str().ok_or_else(|| {
-        anyhow!(
-            "vault import {label} path is not valid UTF-8; choose a UTF-8 path so a post-commit recovery command can be exact"
-        )
-    })
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn exec(request: VaultExecRequest) -> Result<VaultRawOutcome> {

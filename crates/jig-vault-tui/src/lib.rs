@@ -15,6 +15,7 @@ mod model;
 mod render;
 mod runtime;
 mod secret_input;
+mod tools;
 
 #[cfg(test)]
 mod tests;
@@ -136,6 +137,7 @@ pub enum VaultAction {
         out_env: PathBuf,
         replace: bool,
         overwrite: bool,
+        preview: bool,
         dry_run: bool,
     },
     CreateBackup {
@@ -165,6 +167,19 @@ pub struct ImportPreviewRow {
     pub replaces_existing: bool,
 }
 
+/// Metadata-only preview of one proposed 1Password dotenv import.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportPreview {
+    pub env_file: PathBuf,
+    pub item: VaultItem,
+    pub out_env: PathBuf,
+    pub replace: bool,
+    pub overwrite: bool,
+    pub dry_run: bool,
+    pub rows: Vec<ImportPreviewRow>,
+    pub destination_exists: bool,
+}
+
 /// Metadata-only completion returned by [`VaultBackend::execute`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -172,14 +187,17 @@ pub enum VaultActionResult {
     Snapshot(VaultSnapshot),
     Activity(Vec<VaultActivityRecord>),
     Audit(AuditVerification),
-    ImportPreview {
-        rows: Vec<ImportPreviewRow>,
-        destination_exists: bool,
-    },
+    ImportPreview(ImportPreview),
     BackupCreated {
         output: PathBuf,
         bytes_written: usize,
         backup_version: u32,
+        snapshot: VaultSnapshot,
+    },
+    Restored {
+        root: PathBuf,
+        vault_id: String,
+        format_version: u32,
     },
     Exported {
         output: PathBuf,

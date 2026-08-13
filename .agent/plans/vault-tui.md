@@ -18,7 +18,7 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - [x] (2026-08-13 22:02Z) Milestone 1: added verified, disjoint metadata snapshots; newest-first safe activity projection; and atomic kind-change, field/item rename, item removal, and legacy conversion APIs. All 206 `jig-vault` tests and strict all-target Clippy pass.
 - [x] (2026-08-13 22:26Z) Milestone 2: added the `jig-vault-tui` crate, protected input and paired bracketed-paste lifecycle, explicit CLI entrypoint, fixed-scope session adapter, unlock/lock/init/migrate states, responsive explorer, legacy visibility, and PTY restoration coverage. Focused tests and strict all-target Clippy pass.
 - [x] (2026-08-13 22:53Z) Milestone 3: added bounded protected value entry plus canonical and legacy create/replace/change-kind/rename/delete/convert workflows, atomic stale-state preconditions, exact destructive confirmation, and management PTY coverage. All focused suites and strict all-target Clippy pass.
-- [ ] Milestone 4: add 1Password import, encrypted backup, passphrase change, verified activity, audit verification, and absent-home restore tools; test and commit the lifecycle-tools slice.
+- [x] (2026-08-13 23:32Z) Milestone 4: added the Tools palette with metadata-only 1Password preview/dry-run and confirmed import, encrypted backup, passphrase rotation, verified Activity/audit views, and Linux absent-home restore. Focused core, adapter, integration, PTY, formatting, and strict Clippy checks pass.
 - [ ] Milestone 5: add private-file export, security-reviewed transient Peek, idle locking, signal/concurrency hardening, documentation, PTY acceptance, and sentinel leakage tests; test and commit the controlled-output slice.
 - [ ] Build the development Jig binary and pass formatting, strict Clippy, contract, full repository test, structured evidence, gate, receipt, and final diff audits.
 - [ ] Close structured work and record final commit identifiers and outcomes.
@@ -57,6 +57,12 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 
 - Observation: the first broad `scripts/jig work check` attempt did not fit within this execution session as one buffered command.
   Evidence: receipt `receipt_01KZYNKZE3ASCRRK1E9BZ4TKQX` records Nextest status 100 after 317.63 seconds; its captured summary shows all 1,939 tests that ran passed and 18 remained unrun before the configured second vault partition began. Focused vault suites passed separately, the contract gate is fresh, and the required final test gate remains deliberately unresolved until the complete delivery run.
+
+- Observation: a safe 1Password preview can validate mappings, output hardening, recovery-command encodability, and current field collisions without spawning `op` or retaining values.
+  Evidence: the TUI adapter reuses the existing dotenv parser and import-entry projection, calls the core metadata-only collision preview, and invokes the owned resolver only after exact `IMPORT` confirmation. A fake-`op` test proves preview and dry-run do not create its log, while commit strips both reserved passphrase variables and writes the expected private reference file.
+
+- Observation: raw PTY output is not a stable plain-text snapshot because Ratatui may split visible labels with cursor-positioning escape sequences.
+  Evidence: the lifecycle Tools acceptance initially waited for multiword box titles that were visibly present but non-contiguous in the byte stream. It now synchronizes on stable action identifiers and waits for the browser repaint after closing Activity before resizing and locking.
 
 ## Decision Log
 
@@ -108,6 +114,14 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
   Rationale: storage has no trash or version history, so field and legacy deletion use their full identity while item deletion uses `DELETE` and displays the affected count. Empty replacement state preserves the rule that current plaintext never enters the presentation model.
   Date/Author: 2026-08-13 / Codex
 
+- Decision: make lifecycle operations a version- and state-aware Tools palette, with restore as the only action for an absent Linux target and import/backup/passphrase tools available only for an unlocked v2 vault.
+  Rationale: this keeps the everyday explorer compact, prevents unsupported v1 writes, and makes destructive lifecycle operations deliberate without inventing a second scope-selection surface.
+  Date/Author: 2026-08-13 / Codex
+
+- Decision: show only the public verified activity projection and audit counts/torn-tail status; never render raw audit JSON or `latest_mac` even though the public verification type carries it.
+  Rationale: the activity projection is explicitly whitelisted domain metadata. MAC material is neither operationally useful in the TUI nor part of the requested management view, and omitting it narrows the render boundary.
+  Date/Author: 2026-08-13 / Codex
+
 ## Outcomes & Retrospective
 
 Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supplies the complete metadata and atomic domain foundation: one unlock now returns canonical fields, disjoint unrepresentable legacy records, format/identity metadata, and audit verification; verified recent activity contains only whitelisted summaries; and management moves preserve encrypted bytes and creation timestamps under one audited lock/save. Collision, v1, tamper, short-value, timestamp, no-plaintext, and legacy-deduplication tests are included. The complete `jig-vault` suite reports 206 passed in 98.91 seconds.
@@ -115,6 +129,8 @@ Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supp
 Milestone 2 adds an explicit TTY-only `jig vault tui`, rejects JSON before scope or credential side effects, fixes scope for the session, and moves a captured environment credential into protected ownership before any worker exists. The CLI-owned backend retains only `SecretString`, reopens current authenticated state for each action, and blocks lock/exit on its one worker. The TUI browses canonical items and disjoint legacy entries in wide three-pane or compact breadcrumb layouts, preserves exact selection across refreshes, supports metadata-only search, makes v1 migration deliberate, and never renders the test sentinel. Focused evidence is 6 `jig-tui` tests, 11 `jig-vault-tui` tests, 92 filtered `jig-sh` vault tests, one end-to-end PTY unlock/resize/lock/quit test, and strict all-target Clippy across the affected crates. Milestones 3–5 and the final repository gates remain.
 
 Milestone 3 completes interactive value management. Canonical fields can be created, replaced from an always-empty editor or exact binary regular file, retyped, renamed or moved, and deleted individually or by item; legacy values can be explicitly created, replaced, converted atomically, and removed. Protected input is capped at one MiB, uses non-growing zeroizing storage, rejects an overflowing paste as a unit, and exposes only bullets and byte counts to rendering. Destructive actions require exact typed confirmation. Create, replace, and required-remove preconditions are enforced under the vault lock so concurrent CLI changes cannot be overwritten from a stale form, and conflict/not-found results trigger a metadata refresh without automatic retry. Evidence is 209 `jig-vault` tests in 95.33 seconds, 19 `jig-vault-tui` tests in 7.68 seconds, 93 filtered `jig-sh` vault tests in 65.30 seconds, one 2.45-second PTY unlock/create/resize/lock/unlock/quit test, and warning-free strict all-target Clippy across all affected crates. Milestones 4–5 and the final repository gates remain.
+
+Milestone 4 adds a state-aware Tools palette. Import parses and previews only safe mappings and collisions, supports a true no-`op` dry run, requires exact `IMPORT`, then reparses and rechecks current destinations immediately before the hardened owned resolver. Backup creation is private and no-clobber by default. Passphrase rotation updates the process credential only after the atomic core change. Activity and audit screens render verified whitelisted metadata without MAC material, while Linux restore is available only for an absent target and returns to the ordinary locked flow. Evidence is 209 `jig-vault` tests in 94.12 seconds, 23 `jig-vault-tui` tests in 7.67 seconds, 95 filtered `jig-sh` vault tests in 67.22 seconds, five `vault_import` integration tests in 53.57 seconds, one `vault_lifecycle` integration test in 118.07 seconds, the expanded PTY acceptance in 3.01 seconds, and warning-free strict all-target Clippy. Milestone 5 and the final repository gates remain.
 
 ## Context and Orientation
 

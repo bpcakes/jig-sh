@@ -2,11 +2,15 @@ use std::{collections::BTreeSet, path::Path};
 
 use jig_tui::sanitize_text;
 use jig_vault::{
-    FieldKind, FieldRecord, SecretBytes, SecretName, SecretRecord, VaultItem, VaultReference,
-    VaultSnapshot, VaultWriteMode,
+    AuditVerification, FieldKind, FieldRecord, SecretBytes, SecretName, SecretRecord,
+    VaultActivityRecord, VaultItem, VaultReference, VaultSnapshot, VaultWriteMode,
 };
 
-use crate::{VaultAction, VaultDescriptor, VaultUiError, secret_input::SecretInput};
+use crate::{
+    ImportPreview, VaultAction, VaultDescriptor, VaultUiError,
+    secret_input::SecretInput,
+    tools::{ToolChoice, ToolForm, ToolsMenu},
+};
 
 #[derive(Debug)]
 pub(crate) struct App {
@@ -136,6 +140,13 @@ impl App {
         self.status = Some(StatusMessage::error(error.message()));
     }
 
+    pub(crate) fn fail_restore(&mut self, error: &VaultUiError) {
+        self.snapshot = None;
+        self.next_selection = None;
+        self.screen = Screen::Missing;
+        self.status = Some(StatusMessage::error(error.message()));
+    }
+
     pub(crate) fn lock(&mut self) {
         self.snapshot = None;
         self.next_selection = None;
@@ -158,9 +169,21 @@ impl App {
     pub(crate) fn close_overlay(&mut self) {
         if matches!(
             self.screen,
-            Screen::Help | Screen::ConfirmMigration | Screen::Form(_) | Screen::ConfirmDelete(_)
+            Screen::Help
+                | Screen::ConfirmMigration
+                | Screen::Form(_)
+                | Screen::ConfirmDelete(_)
+                | Screen::Tools(_)
+                | Screen::ToolForm(_)
+                | Screen::ImportPreview(_)
+                | Screen::Activity(_)
+                | Screen::AuditResult(_)
         ) {
-            self.screen = Screen::Browse;
+            self.screen = if self.snapshot.is_some() {
+                Screen::Browse
+            } else {
+                Screen::Missing
+            };
             self.status = None;
         }
     }
@@ -187,6 +210,7 @@ impl App {
                 InitializeFocus::Confirmation => confirmation,
             }),
             Screen::Form(form) => form.protected_input_mut(),
+            Screen::ToolForm(form) => form.protected_input_mut(),
             _ => None,
         }
     }
@@ -194,7 +218,9 @@ impl App {
     pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
         match &mut self.screen {
             Screen::Form(form) => form.metadata_input_mut(),
+            Screen::ToolForm(form) => form.metadata_input_mut(),
             Screen::ConfirmDelete(confirmation) => Some(&mut confirmation.input),
+            Screen::ImportPreview(preview) => Some(&mut preview.confirmation),
             _ => None,
         }
     }
@@ -221,6 +247,154 @@ impl App {
             (Focus::Fields, false) | (Focus::Items, true) => Focus::Details,
             (Focus::Details, false) | (Focus::Fields, true) => Focus::Items,
         };
+    }
+
+    pub(crate) fn open_tools(&mut self) {
+        if self.snapshot.is_none() && !cfg!(target_os = "linux") {
+            self.set_error("Encrypted backup restore is currently supported only on Linux.");
+            return;
+        }
+        let menu = self
+            .snapshot
+            .as_ref()
+            .map_or_else(ToolsMenu::missing, |snapshot| {
+                ToolsMenu::unlocked(snapshot.format_version)
+            });
+        self.screen = Screen::Tools(menu);
+        self.searching = false;
+        self.status = None;
+    }
+
+    pub(crate) fn move_tool_selection(&mut self, delta: isize) {
+        if let Screen::Tools(menu) = &mut self.screen {
+            menu.move_selection(delta);
+        }
+    }
+
+    pub(crate) fn activate_tool(&mut self) -> Option<VaultAction> {
+        let Screen::Tools(menu) = &self.screen else {
+            return None;
+        };
+        let choice = menu.selected()?;
+        match choice {
+            ToolChoice::Activity => {
+                self.begin_loading("Loading verified vault activity");
+                Some(VaultAction::Activity { limit: 100 })
+            }
+            ToolChoice::VerifyAudit => {
+                self.begin_loading("Verifying vault audit chain");
+                Some(VaultAction::VerifyAudit)
+            }
+            _ => {
+                self.screen = Screen::ToolForm(
+                    ToolForm::for_choice(choice).expect("form-backed tool has a form"),
+                );
+                self.status = None;
+                None
+            }
+        }
+    }
+
+    pub(crate) fn apply_activity(&mut self, records: Vec<VaultActivityRecord>) {
+        self.screen = Screen::Activity(ActivityView {
+            records,
+            selected: 0,
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn move_activity_selection(&mut self, delta: isize) {
+        if let Screen::Activity(view) = &mut self.screen {
+            if view.records.is_empty() {
+                view.selected = 0;
+            } else {
+                view.selected = view
+                    .selected
+                    .saturating_add_signed(delta)
+                    .min(view.records.len() - 1);
+            }
+        }
+    }
+
+    pub(crate) fn apply_audit_result(&mut self, verification: AuditVerification) {
+        self.screen = Screen::AuditResult(verification);
+        self.status = None;
+    }
+
+    pub(crate) fn apply_import_preview(&mut self, preview: ImportPreview) {
+        self.screen = Screen::ImportPreview(ImportPreviewState {
+            preview,
+            confirmation: String::new(),
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn toggle_import_replace(&mut self) {
+        if let Screen::ImportPreview(state) = &mut self.screen {
+            state.preview.replace = !state.preview.replace;
+        }
+    }
+
+    pub(crate) fn toggle_import_overwrite(&mut self) {
+        if let Screen::ImportPreview(state) = &mut self.screen {
+            state.preview.overwrite = !state.preview.overwrite;
+        }
+    }
+
+    pub(crate) fn submit_import_preview(&mut self) -> Option<VaultAction> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::ImportPreview(state) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        if state.preview.dry_run {
+            self.status = Some(StatusMessage::info(
+                "1Password dry-run preview completed without resolving values or changing files.",
+            ));
+            return None;
+        }
+        if state.preview.rows.iter().any(|row| row.replaces_existing) && !state.preview.replace {
+            self.screen = Screen::ImportPreview(state);
+            self.set_error("Existing fields require Replace; press r to enable it.");
+            return None;
+        }
+        if state.preview.destination_exists && !state.preview.overwrite {
+            self.screen = Screen::ImportPreview(state);
+            self.set_error("The dotenv destination requires Overwrite; press o to enable it.");
+            return None;
+        }
+        if state.confirmation != "IMPORT" {
+            self.screen = Screen::ImportPreview(state);
+            self.set_error("Type IMPORT exactly to resolve and commit the previewed import.");
+            return None;
+        }
+        if let Some(first) = state.preview.rows.first() {
+            self.next_selection = Some(SelectionHint {
+                item: ItemIdentity::Canonical(first.reference.item().to_owned()),
+                entry: Some(EntryIdentity::Field(first.reference.clone())),
+            });
+        }
+        let preview = state.preview;
+        self.begin_loading("Resolving and importing 1Password values");
+        Some(VaultAction::ImportOnePassword {
+            env_file: preview.env_file,
+            item: preview.item,
+            out_env: preview.out_env,
+            replace: preview.replace,
+            overwrite: preview.overwrite,
+            preview: false,
+            dry_run: false,
+        })
+    }
+
+    pub(crate) fn apply_restore(&mut self) {
+        self.descriptor.exists = true;
+        self.snapshot = None;
+        self.next_selection = None;
+        self.screen = Screen::Locked(SecretInput::new());
+        self.status = Some(StatusMessage::info(
+            "Encrypted backup restored. Enter its vault passphrase to unlock.",
+        ));
     }
 
     pub(crate) fn begin_add(&mut self) {
@@ -427,14 +601,18 @@ impl App {
     }
 
     pub(crate) fn cycle_form_focus(&mut self, backwards: bool) {
-        if let Screen::Form(form) = &mut self.screen {
-            form.cycle_focus(backwards);
+        match &mut self.screen {
+            Screen::Form(form) => form.cycle_focus(backwards),
+            Screen::ToolForm(form) => form.cycle_focus(backwards),
+            _ => {}
         }
     }
 
-    pub(crate) fn toggle_form_kind(&mut self) {
-        if let Screen::Form(form) = &mut self.screen {
-            form.toggle_kind();
+    pub(crate) fn toggle_form_choice(&mut self) {
+        match &mut self.screen {
+            Screen::Form(form) => form.toggle_kind(),
+            Screen::ToolForm(form) => form.toggle_choice(),
+            _ => {}
         }
     }
 
@@ -452,6 +630,30 @@ impl App {
             }
             Err(message) => {
                 self.screen = Screen::Form(form);
+                self.set_error(&message);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn submit_tool_form(&mut self) -> Option<VaultAction> {
+        let fallback = if self.snapshot.is_some() {
+            Screen::Browse
+        } else {
+            Screen::Missing
+        };
+        let screen = std::mem::replace(&mut self.screen, fallback);
+        let Screen::ToolForm(mut form) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        match form.submission() {
+            Ok(submission) => {
+                self.begin_loading(submission.label);
+                Some(submission.action)
+            }
+            Err(message) => {
+                self.screen = Screen::ToolForm(form);
                 self.set_error(&message);
                 None
             }
@@ -767,6 +969,23 @@ pub(crate) enum Screen {
     ConfirmMigration,
     Form(ManagementForm),
     ConfirmDelete(DeleteConfirmation),
+    Tools(ToolsMenu),
+    ToolForm(ToolForm),
+    ImportPreview(ImportPreviewState),
+    Activity(ActivityView),
+    AuditResult(AuditVerification),
+}
+
+#[derive(Debug)]
+pub(crate) struct ImportPreviewState {
+    pub(crate) preview: ImportPreview,
+    pub(crate) confirmation: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ActivityView {
+    pub(crate) records: Vec<VaultActivityRecord>,
+    pub(crate) selected: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

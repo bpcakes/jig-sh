@@ -11,6 +11,7 @@
 - `src/render.rs`: responsive Ratatui presentation; render data must remain metadata-only.
 - `src/runtime.rs`: terminal event loop, action worker ownership, and direct controlled-output coordination.
 - `src/secret_input.rs`: bounded zeroizing protected input.
+- `src/tools.rs`: lifecycle-tool palette, protected forms, and import/restore confirmations.
 
 ## Edit here for X
 
@@ -25,6 +26,8 @@
 - Keep exact `VaultReference` and legacy-name identities separate from sanitized display text.
 - Protected inputs use `SecretInput`; they are neither cloned nor formatted as plaintext.
 - Protected file input accepts only a bounded, non-symlink regular file and preserves exact bytes without routing them through text metadata buffers.
+- Import dry-run and preview paths resolve no values; a commit requires the separate exact `IMPORT` confirmation and rechecks current collisions and destination state.
+- Restore is offered only for an absent target and returns through the ordinary locked/unlock flow; passphrase rotation replaces the session credential only after the atomic core change succeeds.
 - At most one backend worker may exist. Join a non-cancellable mutation before terminal restoration.
 - Scope is fixed for the session and stays visible.
 - Lock drops credentials, snapshots, and all pending protected inputs.

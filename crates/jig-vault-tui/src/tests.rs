@@ -7,7 +7,7 @@ use secrecy::SecretString;
 use tempfile::tempdir;
 
 use crate::{
-    VaultAction, VaultDescriptor,
+    ImportPreview, ImportPreviewRow, VaultAction, VaultDescriptor,
     model::{App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm, Screen},
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
@@ -559,4 +559,186 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
         VaultAction::RemoveItem { item } => assert_eq!(item.as_str(), "Production"),
         other => panic!("unexpected action: {other:?}"),
     }
+}
+
+#[test]
+fn tools_palette_opens_verified_activity_and_audit_results() {
+    let mut app = browsing_app();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
+    );
+    assert!(matches!(app.screen, Screen::Tools(_)));
+    match submit_key(&mut app) {
+        VaultAction::Activity { limit } => assert_eq!(limit, 100),
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    let temp = tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("activity-vault"))).unwrap();
+    let passphrase = SecretString::from("correct horse battery staple".to_owned());
+    vault.init(&passphrase).unwrap();
+    vault
+        .set_field(
+            &passphrase,
+            "jig://Production/API_TOKEN".parse().unwrap(),
+            FieldKind::Concealed,
+            SecretBytes::new(b"activity-secret-sentinel".to_vec()),
+        )
+        .unwrap();
+    app.apply_activity(vault.activity(&passphrase, 10).unwrap());
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Verified activity"), "{rendered}");
+    assert!(rendered.contains("field_batch_apply"), "{rendered}");
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+
+    let mut verification = snapshot().audit;
+    verification.latest_mac = Some(std::str::from_utf8(SENTINEL).unwrap().to_owned());
+    let expected_event_count = verification.event_count.to_string();
+    app.apply_audit_result(verification);
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Authenticated events"), "{rendered}");
+    assert!(rendered.contains(&expected_event_count), "{rendered}");
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
+    let mut app = browsing_app();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
+    );
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(app.screen, Screen::ToolForm(_)));
+
+    handle_paste(&mut app, "/tmp/source.env");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "Production");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "/tmp/generated.env");
+    match submit_key(&mut app) {
+        VaultAction::ImportOnePassword {
+            env_file,
+            item,
+            out_env,
+            preview,
+            dry_run,
+            ..
+        } => {
+            assert_eq!(env_file, PathBuf::from("/tmp/source.env"));
+            assert_eq!(item.as_str(), "Production");
+            assert_eq!(out_env, PathBuf::from("/tmp/generated.env"));
+            assert!(preview);
+            assert!(!dry_run);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_import_preview(ImportPreview {
+        env_file: PathBuf::from("/tmp/source.env"),
+        item: "jig://Production".parse().unwrap(),
+        out_env: PathBuf::from("/tmp/generated.env"),
+        replace: false,
+        overwrite: false,
+        dry_run: false,
+        rows: vec![ImportPreviewRow {
+            variable: "TOKEN".to_owned(),
+            reference: "jig://Production/TOKEN".parse().unwrap(),
+            kind: FieldKind::Concealed,
+            replaces_existing: true,
+        }],
+        destination_exists: true,
+    });
+    handle_paste(&mut app, "IMPORT");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+    );
+    match submit_key(&mut app) {
+        VaultAction::ImportOnePassword {
+            replace,
+            overwrite,
+            preview,
+            ..
+        } => {
+            assert!(replace);
+            assert!(overwrite);
+            assert!(!preview);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn backup_and_passphrase_forms_emit_metadata_only_actions() {
+    let mut app = browsing_app();
+    app.open_tools();
+    app.move_tool_selection(3);
+    app.activate_tool();
+    handle_paste(&mut app, "/tmp/vault-backup.jig");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    match submit_key(&mut app) {
+        VaultAction::CreateBackup { output, overwrite } => {
+            assert_eq!(output, PathBuf::from("/tmp/vault-backup.jig"));
+            assert!(overwrite);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    app.open_tools();
+    app.move_tool_selection(4);
+    app.activate_tool();
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+    let action = submit_key(&mut app);
+    let debug = format!("{action:?}");
+    assert!(!debug.contains(std::str::from_utf8(SENTINEL).unwrap()));
+    assert!(matches!(action, VaultAction::ChangePassphrase { .. }));
+}
+
+#[test]
+fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
+    let mut app = App::new(descriptor(false));
+    app.open_tools();
+    app.activate_tool();
+    handle_paste(&mut app, "/tmp/vault-backup.jig");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+    let backend = TestBackend::new(90, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(!rendered.contains(std::str::from_utf8(SENTINEL).unwrap()));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "RESTORE");
+    let action = submit_key(&mut app);
+    assert!(!format!("{action:?}").contains(std::str::from_utf8(SENTINEL).unwrap()));
+    assert!(matches!(action, VaultAction::RestoreBackup { .. }));
 }

@@ -143,9 +143,32 @@ fn apply_completion(
                 OperationKind::Refresh => "Vault metadata refreshed.",
                 OperationKind::Migrate => "Vault migrated to version 2.",
                 OperationKind::Mutation => "Vault updated.",
+                OperationKind::Import => "1Password import completed.",
+                OperationKind::Passphrase => "Vault passphrase changed.",
+                OperationKind::Activity
+                | OperationKind::VerifyAudit
+                | OperationKind::ImportPreview
+                | OperationKind::Backup
+                | OperationKind::Restore => "Vault operation completed.",
             };
             app.set_info(message);
         }
+        Ok(VaultActionResult::Activity(records)) => app.apply_activity(records),
+        Ok(VaultActionResult::Audit(verification)) => app.apply_audit_result(verification),
+        Ok(VaultActionResult::ImportPreview(preview)) => app.apply_import_preview(preview),
+        Ok(VaultActionResult::BackupCreated {
+            output,
+            bytes_written,
+            backup_version,
+            snapshot,
+        }) => {
+            app.apply_snapshot(snapshot);
+            app.set_info(&format!(
+                "Encrypted backup v{backup_version} written to {} ({bytes_written} bytes).",
+                output.display()
+            ));
+        }
+        Ok(VaultActionResult::Restored { .. }) => app.apply_restore(),
         Ok(_) => app.fail_action(&VaultUiError::new(
             VaultUiErrorKind::Other,
             "Vault backend returned an unexpected action result.",
@@ -153,7 +176,11 @@ fn apply_completion(
         Err(error) => {
             if error.kind() == VaultUiErrorKind::Authentication {
                 backend.lock();
-                app.fail_unlock(&error);
+                if completion.kind == OperationKind::Restore {
+                    app.fail_restore(&error);
+                } else {
+                    app.fail_unlock(&error);
+                }
                 return;
             }
             if let Some(Ok(snapshot)) = completion.refreshed_after_error {
@@ -164,9 +191,16 @@ fn apply_completion(
             match completion.kind {
                 OperationKind::Unlock => app.fail_unlock(&error),
                 OperationKind::Initialize => app.fail_initialize(&error),
-                OperationKind::Refresh | OperationKind::Migrate | OperationKind::Mutation => {
-                    app.fail_action(&error);
-                }
+                OperationKind::Restore => app.fail_restore(&error),
+                OperationKind::Refresh
+                | OperationKind::Migrate
+                | OperationKind::Mutation
+                | OperationKind::Activity
+                | OperationKind::VerifyAudit
+                | OperationKind::ImportPreview
+                | OperationKind::Import
+                | OperationKind::Backup
+                | OperationKind::Passphrase => app.fail_action(&error),
             }
         }
     }
@@ -195,6 +229,15 @@ impl BackendRequest {
             Self::Initialize(_) => OperationKind::Initialize,
             Self::Execute(VaultAction::MigrateToV2) => OperationKind::Migrate,
             Self::Execute(VaultAction::Refresh) => OperationKind::Refresh,
+            Self::Execute(VaultAction::Activity { .. }) => OperationKind::Activity,
+            Self::Execute(VaultAction::VerifyAudit) => OperationKind::VerifyAudit,
+            Self::Execute(VaultAction::ImportOnePassword { preview: true, .. }) => {
+                OperationKind::ImportPreview
+            }
+            Self::Execute(VaultAction::ImportOnePassword { .. }) => OperationKind::Import,
+            Self::Execute(VaultAction::CreateBackup { .. }) => OperationKind::Backup,
+            Self::Execute(VaultAction::ChangePassphrase { .. }) => OperationKind::Passphrase,
+            Self::Execute(VaultAction::RestoreBackup { .. }) => OperationKind::Restore,
             Self::Execute(_) => OperationKind::Mutation,
         }
     }
@@ -207,6 +250,13 @@ enum OperationKind {
     Refresh,
     Migrate,
     Mutation,
+    Activity,
+    VerifyAudit,
+    ImportPreview,
+    Import,
+    Backup,
+    Passphrase,
+    Restore,
 }
 
 struct BackendCompletion {
@@ -232,17 +282,19 @@ impl ActionWorker {
                     .map(VaultActionResult::Snapshot),
                 BackendRequest::Execute(action) => backend.execute(action),
             };
-            let refreshed_after_error = if kind == OperationKind::Mutation
-                && result.as_ref().is_err_and(|error| {
-                    matches!(
-                        error.kind(),
-                        VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
-                    )
-                }) {
-                Some(backend.refresh())
-            } else {
-                None
-            };
+            let refreshed_after_error =
+                if matches!(kind, OperationKind::Mutation | OperationKind::Import)
+                    && result.as_ref().is_err_and(|error| {
+                        matches!(
+                            error.kind(),
+                            VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
+                        )
+                    })
+                {
+                    Some(backend.refresh())
+                } else {
+                    None
+                };
             BackendCompletion {
                 kind,
                 result,
@@ -300,6 +352,19 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         Screen::Form(_) => return handle_form_key(app, key),
         Screen::ConfirmDelete(_) => return handle_delete_key(app, key),
+        Screen::Tools(_) => return handle_tools_key(app, key),
+        Screen::ToolForm(_) => return handle_tool_form_key(app, key),
+        Screen::ImportPreview(_) => return handle_import_preview_key(app, key),
+        Screen::Activity(_) => return handle_activity_key(app, key),
+        Screen::AuditResult(_) => {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                    app.close_overlay();
+                    RuntimeAction::Redraw
+                }
+                _ => RuntimeAction::Ignore,
+            };
+        }
         Screen::Browse => {}
     }
 
@@ -436,7 +501,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         KeyCode::Char('L') => RuntimeAction::Lock,
         KeyCode::Char(':') => {
-            app.set_info("Tools are available after unlocking a version 2 vault.");
+            app.open_tools();
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -451,7 +516,7 @@ fn handle_missing_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         KeyCode::Esc | KeyCode::Char('q') => RuntimeAction::Quit,
         KeyCode::Char(':') => {
-            app.set_info("Backup restore will be available from the Tools screen.");
+            app.open_tools();
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -516,6 +581,18 @@ fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> Run
 }
 
 fn handle_form_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    handle_edit_form_key(app, key, App::submit_form)
+}
+
+fn handle_tool_form_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    handle_edit_form_key(app, key, App::submit_tool_form)
+}
+
+fn handle_edit_form_key(
+    app: &mut App,
+    key: KeyEvent,
+    submit: fn(&mut App) -> Option<VaultAction>,
+) -> RuntimeAction {
     match key.code {
         KeyCode::Esc => {
             app.close_overlay();
@@ -533,11 +610,11 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             if app.metadata_input_mut().is_some() || app.protected_input_mut().is_some() {
                 push_form_character(app, ' ')
             } else {
-                app.toggle_form_kind();
+                app.toggle_form_choice();
                 RuntimeAction::Redraw
             }
         }
-        KeyCode::Enter => app.submit_form().map_or(RuntimeAction::Redraw, |action| {
+        KeyCode::Enter => submit(app).map_or(RuntimeAction::Redraw, |action| {
             RuntimeAction::Start(BackendRequest::Execute(action))
         }),
         KeyCode::Backspace => {
@@ -562,6 +639,98 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
             push_form_character(app, character)
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn handle_tools_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.move_tool_selection(1);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.move_tool_selection(-1);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => app.activate_tool().map_or(RuntimeAction::Redraw, |action| {
+            RuntimeAction::Start(BackendRequest::Execute(action))
+        }),
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn handle_activity_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.move_activity_selection(1);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.move_activity_selection(-1);
+            RuntimeAction::Redraw
+        }
+        KeyCode::PageDown => {
+            app.move_activity_selection(10);
+            RuntimeAction::Redraw
+        }
+        KeyCode::PageUp => {
+            app.move_activity_selection(-10);
+            RuntimeAction::Redraw
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('r') => {
+            app.toggle_import_replace();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('o') => {
+            app.toggle_import_overwrite();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => app
+            .submit_import_preview()
+            .map_or(RuntimeAction::Redraw, |action| {
+                RuntimeAction::Start(BackendRequest::Execute(action))
+            }),
+        KeyCode::Backspace => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.pop();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.clear();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if let Some(input) = app.metadata_input_mut() {
+                input.push(character);
+            }
+            RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
     }

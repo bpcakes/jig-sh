@@ -77,6 +77,36 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
+    let tools_offset = output.len();
+    master.write_all(b":").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        tools_offset,
+        "Enter open",
+        Duration::from_secs(3),
+    );
+    let activity_offset = output.len();
+    master.write_all(b"\r").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        activity_offset,
+        "field_batch_apply",
+        Duration::from_secs(8),
+    );
+    assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
+    assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
+    let browse_offset = output.len();
+    master.write_all(b"\x1b").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        browse_offset,
+        "Value hidden.",
+        Duration::from_secs(3),
+    );
+
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
     // resize meaning.

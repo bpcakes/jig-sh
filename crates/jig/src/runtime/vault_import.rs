@@ -8,7 +8,7 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_vault::{FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes};
+use jig_vault::{FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes, VaultItem};
 use zeroize::Zeroizing;
 
 use crate::command::{VaultImportEnvironment, VaultImportValueSource};
@@ -114,6 +114,46 @@ pub(crate) fn preflight_destination(path: &Path) -> Result<bool> {
             )
         }),
     }
+}
+
+pub(crate) fn recovery_command(
+    env_file: &Path,
+    item: &VaultItem,
+    out_env: &Path,
+    vault_home: &Path,
+) -> Result<String> {
+    let source = exact_recovery_path("source", env_file)?;
+    let destination = exact_recovery_path("destination", out_env)?;
+    let vault_home = exact_recovery_path("vault home", vault_home)?;
+    Ok([
+        "jig".to_owned(),
+        "vault".to_owned(),
+        "import".to_owned(),
+        "onepassword".to_owned(),
+        "--env-file".to_owned(),
+        shell_quote(source),
+        "--item".to_owned(),
+        shell_quote(item.as_str()),
+        "--out-env".to_owned(),
+        shell_quote(destination),
+        "--replace".to_owned(),
+        "--overwrite".to_owned(),
+        "--home".to_owned(),
+        shell_quote(vault_home),
+    ]
+    .join(" "))
+}
+
+fn exact_recovery_path<'a>(label: &str, path: &'a Path) -> Result<&'a str> {
+    path.to_str().ok_or_else(|| {
+        anyhow!(
+            "vault import {label} path is not valid UTF-8; choose a UTF-8 path so a post-commit recovery command can be exact"
+        )
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn destination_bytes(entries: &[ImportEntry]) -> Result<SecretBytes> {

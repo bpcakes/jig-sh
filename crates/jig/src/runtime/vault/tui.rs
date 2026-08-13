@@ -6,9 +6,13 @@ use std::{
 use anyhow::Result;
 #[cfg(all(unix, not(test)))]
 use anyhow::anyhow;
-use jig_vault::{SecretBytes, Vault, VaultError, VaultErrorKind, VaultReference, VaultSnapshot};
+use jig_vault::{
+    PreparedPrivateFile, SecretBytes, Vault, VaultError, VaultErrorKind, VaultReference,
+    VaultSnapshot,
+};
 use jig_vault_tui::{
-    VaultAction, VaultActionResult, VaultBackend, VaultDescriptor, VaultUiError, VaultUiErrorKind,
+    ImportPreview, ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultDescriptor,
+    VaultUiError, VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
@@ -105,6 +109,144 @@ impl VaultTuiBackend {
 
     fn snapshot(&self) -> std::result::Result<VaultSnapshot, VaultUiError> {
         self.with_vault(Vault::snapshot)
+    }
+
+    fn preview_onepassword_import(
+        &self,
+        env_file: std::path::PathBuf,
+        item: jig_vault::VaultItem,
+        out_env: std::path::PathBuf,
+        replace: bool,
+        overwrite: bool,
+        dry_run: bool,
+    ) -> std::result::Result<ImportPreview, VaultUiError> {
+        let environment = super::super::vault_env::parse_onepassword_env_file(&env_file, &item)
+            .map_err(map_anyhow_error)?;
+        let entries = super::super::vault_import::import_entries(&environment);
+        let references = entries
+            .iter()
+            .map(|entry| entry.reference.clone())
+            .collect::<Vec<_>>();
+        let destination_exists = super::super::vault_import::preflight_destination(&out_env)
+            .map_err(map_anyhow_error)?;
+        PreparedPrivateFile::preflight(&out_env, destination_exists).map_err(map_vault_error)?;
+        super::super::vault_import::recovery_command(
+            &env_file,
+            &item,
+            &out_env,
+            &self.descriptor.home,
+        )
+        .map_err(map_anyhow_error)?;
+        let existing = self.with_vault(|selected, passphrase| {
+            selected.preview_import_fields(passphrase, &references)
+        })?;
+        let rows = entries
+            .into_iter()
+            .zip(existing)
+            .map(|(entry, replaces_existing)| ImportPreviewRow {
+                variable: entry.name,
+                reference: entry.reference,
+                kind: entry.kind,
+                replaces_existing,
+            })
+            .collect();
+        Ok(ImportPreview {
+            env_file,
+            item,
+            out_env,
+            replace,
+            overwrite,
+            dry_run,
+            rows,
+            destination_exists,
+        })
+    }
+
+    fn commit_onepassword_import(
+        &self,
+        env_file: std::path::PathBuf,
+        item: jig_vault::VaultItem,
+        out_env: std::path::PathBuf,
+        replace: bool,
+        overwrite: bool,
+    ) -> std::result::Result<VaultSnapshot, VaultUiError> {
+        let environment = super::super::vault_env::parse_onepassword_env_file(&env_file, &item)
+            .map_err(map_anyhow_error)?;
+        let entries = super::super::vault_import::import_entries(&environment);
+        let references = entries
+            .iter()
+            .map(|entry| entry.reference.clone())
+            .collect::<Vec<_>>();
+        let destination_exists = super::super::vault_import::preflight_destination(&out_env)
+            .map_err(map_anyhow_error)?;
+        if destination_exists && !overwrite {
+            return Err(VaultUiError::new(
+                VaultUiErrorKind::Conflict,
+                format!(
+                    "Vault import destination {} already exists; enable Overwrite to replace it atomically.",
+                    out_env.display()
+                ),
+            ));
+        }
+        PreparedPrivateFile::preflight(&out_env, overwrite).map_err(map_vault_error)?;
+        let recovery_command = super::super::vault_import::recovery_command(
+            &env_file,
+            &item,
+            &out_env,
+            &self.descriptor.home,
+        )
+        .map_err(map_anyhow_error)?;
+        let existing = self.with_vault(|selected, passphrase| {
+            selected.preview_import_fields(passphrase, &references)
+        })?;
+        if !replace {
+            if let Some((entry, _)) = entries.iter().zip(&existing).find(|(_, exists)| **exists) {
+                return Err(VaultUiError::new(
+                    VaultUiErrorKind::Conflict,
+                    format!(
+                        "Vault field '{}' already exists; enable Replace to import over it.",
+                        entry.reference
+                    ),
+                ));
+            }
+        }
+
+        let imported =
+            super::super::vault_import::resolve_import(environment).map_err(map_anyhow_error)?;
+        let prepared = PreparedPrivateFile::prepare(&out_env, imported.destination, overwrite)
+            .map_err(map_vault_error)?;
+        self.with_vault(|selected, passphrase| {
+            selected.import_fields(passphrase, imported.mutations, replace)
+        })?;
+        if let Err(error) = prepared.install() {
+            return Err(VaultUiError::new(
+                map_vault_error_kind(error.kind()),
+                format!(
+                    "Vault import succeeded, but destination installation failed: {}. Safe rerun: {recovery_command}",
+                    error.message()
+                ),
+            ));
+        }
+        self.refresh()
+    }
+
+    fn change_session_passphrase(
+        &self,
+        new_passphrase: SecretBytes,
+    ) -> std::result::Result<VaultSnapshot, VaultUiError> {
+        let new_passphrase = Self::passphrase_from_bytes(new_passphrase)?;
+        let mut credential = self.credential()?;
+        let current = credential.as_ref().ok_or_else(|| {
+            VaultUiError::new(VaultUiErrorKind::Authentication, "Vault is locked.")
+        })?;
+        let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
+        selected
+            .change_passphrase(current, &new_passphrase)
+            .map_err(map_vault_error)?;
+        *credential = Some(new_passphrase);
+        selected
+            .snapshot(credential.as_ref().expect("new credential was installed"))
+            .map_err(map_vault_error)
     }
 }
 
@@ -217,6 +359,68 @@ impl VaultBackend for VaultTuiBackend {
                 })?;
                 self.refresh().map(VaultActionResult::Snapshot)
             }
+            VaultAction::Activity { limit } => self
+                .with_vault(|selected, passphrase| selected.activity(passphrase, limit))
+                .map(VaultActionResult::Activity),
+            VaultAction::VerifyAudit => self
+                .with_vault(Vault::verify_audit)
+                .map(VaultActionResult::Audit),
+            VaultAction::ImportOnePassword {
+                env_file,
+                item,
+                out_env,
+                replace,
+                overwrite,
+                preview,
+                dry_run,
+            } => {
+                if preview {
+                    self.preview_onepassword_import(
+                        env_file, item, out_env, replace, overwrite, dry_run,
+                    )
+                    .map(VaultActionResult::ImportPreview)
+                } else if dry_run {
+                    Err(VaultUiError::new(
+                        VaultUiErrorKind::InvalidInput,
+                        "A 1Password dry run may preview metadata only and cannot commit.",
+                    ))
+                } else {
+                    self.commit_onepassword_import(env_file, item, out_env, replace, overwrite)
+                        .map(VaultActionResult::Snapshot)
+                }
+            }
+            VaultAction::CreateBackup { output, overwrite } => {
+                let result = self.with_vault(|selected, passphrase| {
+                    let request = Vault::preflight_backup_create(
+                        selected.root().to_path_buf(),
+                        &output,
+                        overwrite,
+                    )?;
+                    Vault::create_backup(passphrase, request)
+                })?;
+                let snapshot = self.refresh()?;
+                Ok(VaultActionResult::BackupCreated {
+                    output,
+                    bytes_written: result.bytes_written,
+                    backup_version: result.backup_version,
+                    snapshot,
+                })
+            }
+            VaultAction::RestoreBackup { input, passphrase } => {
+                let passphrase = Self::passphrase_from_bytes(passphrase)?;
+                let request = Vault::preflight_backup_restore(&input, self.descriptor.home.clone())
+                    .map_err(map_vault_error)?;
+                let restored =
+                    Vault::restore_backup(&passphrase, request).map_err(map_vault_error)?;
+                Ok(VaultActionResult::Restored {
+                    root: restored.root,
+                    vault_id: restored.vault_id,
+                    format_version: restored.format_version,
+                })
+            }
+            VaultAction::ChangePassphrase { new_passphrase } => self
+                .change_session_passphrase(new_passphrase)
+                .map(VaultActionResult::Snapshot),
             _ => Err(VaultUiError::new(
                 VaultUiErrorKind::Unsupported,
                 "This Vault TUI action is not available in the current milestone.",
@@ -238,7 +442,12 @@ impl VaultBackend for VaultTuiBackend {
 }
 
 fn map_vault_error(error: VaultError) -> VaultUiError {
-    let kind = match error.kind() {
+    let kind = map_vault_error_kind(error.kind());
+    VaultUiError::new(kind, error.message())
+}
+
+fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
+    match kind {
         VaultErrorKind::Authentication => VaultUiErrorKind::Authentication,
         VaultErrorKind::InvalidInput => VaultUiErrorKind::InvalidInput,
         VaultErrorKind::NotFound => VaultUiErrorKind::NotFound,
@@ -249,8 +458,7 @@ fn map_vault_error(error: VaultError) -> VaultUiError {
             VaultUiErrorKind::Other
         }
         _ => VaultUiErrorKind::Other,
-    };
-    VaultUiError::new(kind, error.message())
+    }
 }
 
 fn map_anyhow_error(error: anyhow::Error) -> VaultUiError {
@@ -412,5 +620,263 @@ mod tests {
             panic!("expected snapshot");
         };
         assert!(empty.fields.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_tools_backup_restore_rotate_verify_and_project_activity() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/TOKEN".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"lifecycle-secret-sentinel".to_vec()),
+            )
+            .unwrap();
+        let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+
+        let VaultActionResult::Activity(activity) = backend
+            .execute(VaultAction::Activity { limit: 10 })
+            .unwrap()
+        else {
+            panic!("expected activity");
+        };
+        assert!(!activity.is_empty());
+        assert!(!format!("{activity:?}").contains("lifecycle-secret-sentinel"));
+        let VaultActionResult::Audit(verification) =
+            backend.execute(VaultAction::VerifyAudit).unwrap()
+        else {
+            panic!("expected audit verification");
+        };
+        assert_eq!(verification.torn_tail_bytes, 0);
+
+        let backup = temp.path().join("vault.backup");
+        let VaultActionResult::BackupCreated {
+            bytes_written,
+            backup_version,
+            ..
+        } = backend
+            .execute(VaultAction::CreateBackup {
+                output: backup.clone(),
+                overwrite: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected backup result");
+        };
+        assert!(bytes_written > 0);
+        assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
+        let collision = backend
+            .execute(VaultAction::CreateBackup {
+                output: backup.clone(),
+                overwrite: false,
+            })
+            .unwrap_err();
+        assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
+
+        #[cfg(target_os = "linux")]
+        {
+            let restored_home = temp.path().join("restored-vault");
+            let restored_backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();
+            let VaultActionResult::Restored {
+                root,
+                format_version,
+                ..
+            } = restored_backend
+                .execute(VaultAction::RestoreBackup {
+                    input: backup,
+                    passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
+                })
+                .unwrap()
+            else {
+                panic!("expected restore result");
+            };
+            assert_eq!(root, restored_home);
+            assert_eq!(format_version, 2);
+            let restored = restored_backend
+                .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+                .unwrap();
+            assert_eq!(restored.fields.len(), 1);
+        }
+
+        let new_passphrase = b"new correct horse battery staple";
+        let VaultActionResult::Snapshot(rotated) = backend
+            .execute(VaultAction::ChangePassphrase {
+                new_passphrase: SecretBytes::new(new_passphrase.to_vec()),
+            })
+            .unwrap()
+        else {
+            panic!("expected refreshed snapshot");
+        };
+        assert_eq!(rotated.fields.len(), 1);
+        assert_eq!(
+            vault.snapshot(&passphrase).unwrap_err().kind(),
+            VaultErrorKind::Authentication
+        );
+        assert!(
+            vault
+                .snapshot(&SecretString::from(
+                    String::from_utf8(new_passphrase.to_vec()).unwrap()
+                ))
+                .is_ok()
+        );
+        assert!(backend.refresh().is_ok());
+
+        let audit_path = home.join("audit.jsonl");
+        let audit = std::fs::read_to_string(&audit_path).unwrap();
+        std::fs::write(
+            &audit_path,
+            audit.replace(
+                "\"action\":\"field_batch_apply\"",
+                "\"action\":\"secret_get\"",
+            ),
+        )
+        .unwrap();
+        let tampered = backend.execute(VaultAction::VerifyAudit).unwrap_err();
+        assert_eq!(tampered.kind(), VaultUiErrorKind::Audit);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn onepassword_preview_avoids_op_and_commit_reuses_the_hardened_resolver() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        let backend = VaultTuiBackend::new(request(home)).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+
+        let bin = temp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let op = bin.join("op");
+        let log = temp.path().join("op.log");
+        std::fs::write(
+            &op,
+            r#"#!/bin/sh
+set -eu
+if [ "${JIG_VAULT_PASSPHRASE+set}" = set ] || [ "${JIG_VAULT_NEW_PASSPHRASE+set}" = set ]; then
+  printf '%s\n' 'reserved-env-leaked' >> "$OP_TEST_LOG"
+  exit 87
+fi
+printf '%s\n' "$3" >> "$OP_TEST_LOG"
+printf '%s' 'resolved-tui-import-secret'
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut path_parts = vec![bin];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_parts.extend(std::env::split_paths(&path));
+        }
+        let _path = EnvVarGuard::set("PATH", std::env::join_paths(path_parts).unwrap());
+        let _current = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "must-not-reach-op");
+        let _new = EnvVarGuard::set("JIG_VAULT_NEW_PASSPHRASE", "must-not-reach-op");
+        let _log = EnvVarGuard::set("OP_TEST_LOG", &log);
+
+        let source = temp.path().join("source.env");
+        let destination = temp.path().join("generated.env");
+        std::fs::write(&source, b"TOKEN=op://Test/Login/TOKEN\nMODE=production\n").unwrap();
+        let item = jig_vault::VaultItem::parse("jig://Production").unwrap();
+        let VaultActionResult::ImportPreview(preview) = backend
+            .execute(VaultAction::ImportOnePassword {
+                env_file: source.clone(),
+                item: item.clone(),
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                preview: true,
+                dry_run: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected import preview");
+        };
+        assert_eq!(preview.rows.len(), 2);
+        assert!(!preview.destination_exists);
+        assert!(!log.exists(), "preview unexpectedly invoked op");
+
+        let error = backend
+            .execute(VaultAction::ImportOnePassword {
+                env_file: source.clone(),
+                item: item.clone(),
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                preview: false,
+                dry_run: true,
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), VaultUiErrorKind::InvalidInput);
+        assert!(
+            !log.exists(),
+            "invalid dry-run commit unexpectedly invoked op"
+        );
+
+        let VaultActionResult::Snapshot(imported) = backend
+            .execute(VaultAction::ImportOnePassword {
+                env_file: source,
+                item,
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                preview: false,
+                dry_run: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected imported snapshot");
+        };
+        assert_eq!(imported.fields.len(), 2);
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"TOKEN=jig://Production/TOKEN\nMODE=jig://Production/MODE\n"
+        );
+        let log_text = std::fs::read_to_string(log).unwrap();
+        assert!(log_text.contains("op://Test/Login/TOKEN"));
+        assert!(!log_text.contains("reserved-env-leaked"));
+
+        let log_len = log_text.len();
+        let VaultActionResult::ImportPreview(existing) = backend
+            .execute(VaultAction::ImportOnePassword {
+                env_file: temp.path().join("source.env"),
+                item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+                out_env: destination,
+                replace: false,
+                overwrite: false,
+                preview: true,
+                dry_run: true,
+            })
+            .unwrap()
+        else {
+            panic!("expected existing import preview");
+        };
+        assert!(existing.destination_exists);
+        assert!(existing.rows.iter().all(|row| row.replaces_existing));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("op.log"))
+                .unwrap()
+                .len(),
+            log_len
+        );
     }
 }
