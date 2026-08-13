@@ -920,6 +920,14 @@ fn parses_proxy_run_no_proxy() {
 
 #[test]
 fn parses_vault_commands() {
+    let tui = Cli::try_parse_from(["jig", "vault", "tui", "--home", "/tmp/jig-vault"]).unwrap();
+    match tui.command {
+        CommandKind::Vault(VaultCommand::Tui(opts)) => {
+            assert_eq!(opts.vault.home, Some(PathBuf::from("/tmp/jig-vault")));
+        }
+        other => panic!("expected vault tui command, got {other:?}"),
+    }
+
     let init = Cli::try_parse_from(["jig", "vault", "init", "--home", "/tmp/jig-vault"]).unwrap();
     match init.command {
         CommandKind::Vault(VaultCommand::Init(opts)) => {

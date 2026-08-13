@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
-#[cfg(unix)]
 use jig_vault::SecretBytes;
 use jig_vault::{Vault, validate_new_vault_passphrase};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
@@ -139,6 +138,18 @@ fn concrete_vault_home(resolved: &ResolvedVaultRuntime) -> Result<PathBuf> {
 
 pub(crate) fn capture_passphrase() -> Result<()> {
     capture_passphrase_with_prompt(PromptKind::Unlock)
+}
+
+pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
+    let Some(value) = std::env::var_os(PASSPHRASE_ENV) else {
+        strip_passphrase_environment();
+        return Ok(None);
+    };
+    let passphrase = passphrase_from_os(value, PASSPHRASE_ENV)?;
+    strip_passphrase_environment();
+    Ok(Some(SecretBytes::new(
+        passphrase.expose_secret().as_bytes().to_vec(),
+    )))
 }
 
 pub(crate) fn capture_new_passphrase() -> Result<()> {
@@ -420,6 +431,30 @@ mod tests {
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
         assert!(passphrase().is_err());
+    }
+
+    #[test]
+    fn tui_capture_returns_protected_bytes_and_strips_both_environment_values() {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, "correct horse battery staple");
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        let captured = take_optional_tui_passphrase().unwrap().unwrap();
+
+        assert_eq!(captured.as_slice(), b"correct horse battery staple");
+        assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+        assert!(passphrase().is_err());
+    }
+
+    #[test]
+    fn missing_tui_passphrase_still_strips_stale_rotation_value() {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::remove(PASSPHRASE_ENV);
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        assert!(take_optional_tui_passphrase().unwrap().is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
     }
 
     #[test]

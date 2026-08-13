@@ -176,6 +176,9 @@ pub(crate) enum VaultCommand {
     /// Inspect local vault presence without decrypting values.
     #[command(name = tool_defs::cli_command::VAULT_STATUS)]
     Status(VaultStatusOpts),
+    /// Open the keyboard-first full-screen vault manager.
+    #[command(name = tool_defs::cli_command::VAULT_TUI)]
+    Tui(VaultTuiOpts),
     /// Explicitly upgrade an existing vault format.
     #[command(
         name = tool_defs::cli_command::VAULT_MIGRATE,
@@ -377,6 +380,12 @@ pub(crate) struct VaultInitOpts {
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct VaultStatusOpts {
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct VaultTuiOpts {
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
 }

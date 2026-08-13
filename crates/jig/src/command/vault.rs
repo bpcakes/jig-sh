@@ -14,6 +14,7 @@ pub(crate) enum VaultCommand {
     Backup(VaultBackupCommand),
     Init(VaultInitRequest),
     Status(VaultStatusRequest),
+    Tui(VaultTuiRequest),
     Migrate(VaultMigrateRequest),
     Passphrase(VaultPassphraseCommand),
     Exec(VaultExecRequest),
@@ -113,6 +114,11 @@ pub(crate) struct VaultInitRequest {
 
 #[derive(Debug)]
 pub(crate) struct VaultStatusRequest {
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultTuiRequest {
     pub(crate) vault: VaultRuntimeOptions,
 }
 

@@ -13,7 +13,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use crossterm::{
     cursor::{Hide, Show},
-    event::{KeyEvent, KeyEventKind},
+    event::{DisableBracketedPaste, EnableBracketedPaste, KeyEvent, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -88,24 +88,47 @@ fn is_unsafe_format_character(character: char) -> bool {
 /// Owns raw mode, alternate-screen state, cursor visibility, and restoration.
 pub struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    bracketed_paste: bool,
 }
 
 impl TerminalSession {
     /// Enters raw mode and the alternate screen.
     pub fn enter(label: &str) -> Result<Self> {
+        Self::enter_with_options(label, false)
+    }
+
+    /// Enters raw mode and the alternate screen with bracketed paste events.
+    /// Paste mode is paired with restoration on every return and unwind path.
+    pub fn enter_with_bracketed_paste(label: &str) -> Result<Self> {
+        Self::enter_with_options(label, true)
+    }
+
+    fn enter_with_options(label: &str, bracketed_paste: bool) -> Result<Self> {
         enable_raw_mode().with_context(|| format!("failed to enable {label} terminal raw mode"))?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
-            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        let enter_result = if bracketed_paste {
+            execute!(stdout, EnterAlternateScreen, Hide, EnableBracketedPaste)
+        } else {
+            execute!(stdout, EnterAlternateScreen, Hide)
+        };
+        if let Err(error) = enter_result {
+            let _ = execute!(stdout, DisableBracketedPaste, Show, LeaveAlternateScreen);
             let _ = disable_raw_mode();
             return Err(error).with_context(|| format!("failed to enter the {label} terminal"));
         }
         let backend = CrosstermBackend::new(stdout);
         match Terminal::new(backend) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(terminal) => Ok(Self {
+                terminal,
+                bracketed_paste,
+            }),
             Err(error) => {
                 let mut stdout = io::stdout();
-                let _ = execute!(stdout, Show, LeaveAlternateScreen);
+                if bracketed_paste {
+                    let _ = execute!(stdout, DisableBracketedPaste, Show, LeaveAlternateScreen);
+                } else {
+                    let _ = execute!(stdout, Show, LeaveAlternateScreen);
+                }
                 let _ = disable_raw_mode();
                 Err(error).with_context(|| format!("failed to initialize the {label} terminal"))
             }
@@ -121,7 +144,16 @@ impl TerminalSession {
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = self.terminal.show_cursor();
-        let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+        if self.bracketed_paste {
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                DisableBracketedPaste,
+                Show,
+                LeaveAlternateScreen
+            );
+        } else {
+            let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+        }
         let _ = disable_raw_mode();
     }
 }

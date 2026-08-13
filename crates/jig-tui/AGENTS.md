@@ -15,6 +15,7 @@
 - Change terminal-safe text handling: `src/lib.rs` in `sanitize_text`.
 - Change status-specific interaction: `crates/jig-status-tui/`.
 - Change Codex-picker interaction: `crates/jig-codex-tui/`.
+- Change Vault-manager interaction: `crates/jig-vault-tui/`.
 
 ## Invariants
 
@@ -29,3 +30,4 @@
 - `cargo clippy -p jig-tui --all-targets -- -D warnings`
 - `cargo test -p jig-status-tui`
 - `cargo test -p jig-codex-tui`
+- `cargo test -p jig-vault-tui`

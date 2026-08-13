@@ -1,0 +1,31 @@
+[package]
+name = "jig-vault-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Internal keyboard-first Vault manager used by the matching jig-sh CLI release."
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords = ["secrets", "terminal", "tui", "development-tools"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "jig_vault_tui"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+jig-tui.workspace = true
+jig-vault.workspace = true
+ratatui.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+jig-vault = { workspace = true, features = ["test-utils"] }
+secrecy.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

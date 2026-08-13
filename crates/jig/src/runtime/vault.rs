@@ -29,12 +29,14 @@ const VAULT_HOME_ENV: &str = "JIG_VAULT_HOME";
 const VAULT_FILE_NAME: &str = "vault.json";
 
 mod lifecycle;
+pub(super) mod tui;
 
 #[cfg(test)]
 use lifecycle::set_captured_passphrase;
 pub(crate) use lifecycle::{
     capture_new_passphrase, capture_passphrase, capture_passphrase_change, passphrase_env_present,
     passphrase_prompt_available, preflight_scoped_command, strip_passphrase_environment,
+    take_optional_tui_passphrase,
 };
 use lifecycle::{
     change_passphrase, create_backup, hidden_terminal_input_available, passphrase,
@@ -63,6 +65,9 @@ fn dispatch_with_resolver(command: VaultCommand, resolver: VaultResolver) -> Res
         },
         VaultCommand::Init(request) => init(request, resolver),
         VaultCommand::Status(request) => status(request),
+        VaultCommand::Tui(_) => {
+            bail!("internal error: vault TUI reached the structured dispatcher")
+        }
         VaultCommand::Migrate(request) => migrate(request),
         VaultCommand::Passphrase(VaultPassphraseCommand::Change(request)) => {
             change_passphrase(request)

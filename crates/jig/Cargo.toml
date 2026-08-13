@@ -52,6 +52,7 @@ jig-status-tui.workspace = true
 jig-tui.workspace = true
 jig-ui.workspace = true
 jig-vault.workspace = true
+jig-vault-tui.workspace = true
 libc.workspace = true
 minijinja = { version = "2.19.0", features = ["custom_syntax", "json"] }
 rpassword.workspace = true

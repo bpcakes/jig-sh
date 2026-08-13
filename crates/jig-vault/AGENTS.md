@@ -43,7 +43,7 @@
 - Public reveal/injection operations must consume directly into an immediate caller-selected sink and finish their lifecycle audit. Do not expose abandonable prepared reveals or plaintext accessors.
 - Transparent exec inherits ordinary stdin/environment, streams independently redacted byte output, and preserves normal child status; it must not inherit the constrained broker's timeout, output cap, or cleaned-environment contract. Keep brokered run behavior compatible.
 - Backup envelopes keep vault and audit bytes encrypted, and restore installs only into a proven absent home through private sibling staging; no restore path may resolve or overwrite an existing target.
-- `SecretBytes::extend_from_slice` must remain non-growing; callers should preallocate to their hard cap before reading secret-bearing streams.
+- `SecretBytes::extend_from_slice` must remain non-growing; callers should preallocate to their hard cap before reading secret-bearing streams. Truncation and clearing must overwrite removed bytes while retaining that allocation for protected editors.
 - Authenticate vault header bytes as AEAD associated data and include a payload role so wrapped-key and state ciphertexts do not share an AEAD context.
 - Keep vault state outside `.agent/state`.
 - Secret names are operator metadata, not secret material. They may appear in audit details, may contain path-shaped labels like `/` and `.`, and must never be treated as filesystem-safe path components without a separate encoding/newtype.

@@ -1346,6 +1346,7 @@ dependencies = [
  "jig-tui",
  "jig-ui",
  "jig-vault",
+ "jig-vault-tui",
  "libc",
  "minijinja",
  "rpassword",
@@ -1436,6 +1437,20 @@ dependencies = [
  "ulid",
  "windows-sys 0.61.2",
  "zeroize",
+]
+
+[[package]]
+name = "jig-vault-tui"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "jig-tui",
+ "jig-vault",
+ "ratatui",
+ "secrecy",
+ "tempfile",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
