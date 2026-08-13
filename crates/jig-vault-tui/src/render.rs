@@ -8,7 +8,9 @@ use ratatui::{
 };
 
 use crate::model::{
-    App, EntryIdentity, Focus, InitializeFocus, ItemIdentity, Screen, StatusKind, kind_label,
+    App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus, InitializeFocus,
+    ItemIdentity, LegacyWriteFocus, ManagementForm, RenameFieldFocus, Screen, StatusKind,
+    kind_label,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -51,12 +53,22 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             *focus,
         ),
         Screen::Loading(label) => draw_loading(frame, area, app, label),
-        Screen::Browse | Screen::Help | Screen::ConfirmMigration => {
+        Screen::Browse
+        | Screen::Help
+        | Screen::ConfirmMigration
+        | Screen::Form(_)
+        | Screen::ConfirmDelete(_) => {
             draw_browser(frame, area, app);
-            match app.screen {
+            match &app.screen {
                 Screen::Help => draw_help(frame, centered_rect(78, 74, area)),
                 Screen::ConfirmMigration => {
                     draw_migration_confirmation(frame, centered_rect(72, 42, area));
+                }
+                Screen::Form(form) => {
+                    draw_management_form(frame, centered_rect(78, 68, area), app, form);
+                }
+                Screen::ConfirmDelete(confirmation) => {
+                    draw_delete_confirmation(frame, centered_rect(78, 52, area), app, confirmation);
                 }
                 _ => {}
             }
@@ -165,9 +177,9 @@ fn draw_loading(frame: &mut Frame, area: Rect, app: &App, label: &str) {
 
 fn draw_browser(frame: &mut Frame, area: Rect, app: &App) {
     let footer_height = if app.searching || !app.filter.is_empty() || app.status.is_some() {
-        3
+        5
     } else {
-        2
+        4
     };
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -401,9 +413,19 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     {
         "READ-ONLY v1  m migrate  / filter  Tab/h/l focus  j/k move  r refresh  L lock  ? help  q quit"
     } else {
-        "/ filter  Tab/h/l focus  j/k move  r refresh  : tools  L lock  ? help  q quit"
+        "/ filter  Tab/h/l focus  j/k move  r refresh  L lock  ? help  q quit"
     };
     let mut lines = vec![Line::from(format!("{breadcrumb}{controls}"))];
+    if !app.searching
+        && app
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.format_version == 2)
+    {
+        lines.push(Line::from(
+            "a add  A legacy  e replace  K kind  n rename  c convert  D delete  : tools",
+        ));
+    }
     if app.searching || !app.filter.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("/", Style::default().fg(ACCENT)),
@@ -435,6 +457,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             Line::from("/            filter item, field, reference, or legacy metadata"),
             Line::from("r            reopen and refresh authenticated metadata"),
             Line::from("m            explicitly migrate a version 1 vault"),
+            Line::from("a / A        add a field / explicit legacy entry"),
+            Line::from("e / K        replace a value / change field kind"),
+            Line::from("n / c        rename field or item / convert legacy entry"),
+            Line::from("D            delete with exact typed confirmation"),
             Line::from(":            lifecycle tools"),
             Line::from("L            lock and wipe process-local session state"),
             Line::from("q            quit"),
@@ -471,6 +497,235 @@ fn draw_migration_confirmation(frame: &mut Frame, area: Rect) {
         .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &ManagementForm) {
+    frame.render_widget(Clear, area);
+    let (title, mut lines) = match form {
+        ManagementForm::WriteField {
+            mode,
+            item,
+            field,
+            kind,
+            value,
+            value_file,
+            focus,
+        } => {
+            let action = match mode {
+                jig_vault::VaultWriteMode::Create => "Create field",
+                jig_vault::VaultWriteMode::Replace => "Replace field value",
+                jig_vault::VaultWriteMode::Upsert => "Write field",
+            };
+            let mut lines = vec![
+                form_value_line("Item", item, *focus == FieldWriteFocus::Item, false),
+                form_value_line("Field", field, *focus == FieldWriteFocus::Field, false),
+                form_value_line(
+                    "Kind",
+                    kind_label(*kind),
+                    *focus == FieldWriteFocus::Kind,
+                    false,
+                ),
+                form_value_line(
+                    "Value",
+                    &value.render_label(),
+                    *focus == FieldWriteFocus::Value,
+                    true,
+                ),
+                form_value_line(
+                    "Value file",
+                    value_file,
+                    *focus == FieldWriteFocus::File,
+                    false,
+                ),
+                Line::from(""),
+            ];
+            if *mode == jig_vault::VaultWriteMode::Replace {
+                lines.push(Line::from(Span::styled(
+                    "The current value was not loaded. It remains unchanged until Save succeeds.",
+                    Style::default().fg(WARN),
+                )));
+            }
+            (action, lines)
+        }
+        ManagementForm::WriteLegacy {
+            mode,
+            name,
+            value,
+            value_file,
+            focus,
+        } => {
+            let action = match mode {
+                jig_vault::VaultWriteMode::Create => "Create legacy entry",
+                jig_vault::VaultWriteMode::Replace => "Replace legacy value",
+                jig_vault::VaultWriteMode::Upsert => "Write legacy entry",
+            };
+            let mut lines = vec![
+                form_value_line("Name", name, *focus == LegacyWriteFocus::Name, false),
+                form_value_line(
+                    "Value",
+                    &value.render_label(),
+                    *focus == LegacyWriteFocus::Value,
+                    true,
+                ),
+                form_value_line(
+                    "Value file",
+                    value_file,
+                    *focus == LegacyWriteFocus::File,
+                    false,
+                ),
+                Line::from(""),
+            ];
+            if *mode == jig_vault::VaultWriteMode::Replace {
+                lines.push(Line::from(Span::styled(
+                    "The current value was not loaded. It remains unchanged until Save succeeds.",
+                    Style::default().fg(WARN),
+                )));
+            }
+            (action, lines)
+        }
+        ManagementForm::ChangeKind {
+            reference,
+            from,
+            to,
+        } => (
+            "Change field kind",
+            vec![
+                key_value("Reference", &reference.to_string()),
+                key_value("Current kind", kind_label(*from)),
+                form_value_line("New kind", kind_label(*to), true, false),
+                Line::from(""),
+                Line::from("Space toggles the target kind."),
+            ],
+        ),
+        ManagementForm::RenameField {
+            source,
+            destination_item,
+            destination_field,
+            focus,
+        } => (
+            "Rename or move field",
+            vec![
+                key_value("Source", &source.to_string()),
+                form_value_line(
+                    "Destination item",
+                    destination_item,
+                    *focus == RenameFieldFocus::Item,
+                    false,
+                ),
+                form_value_line(
+                    "Destination field",
+                    destination_field,
+                    *focus == RenameFieldFocus::Field,
+                    false,
+                ),
+            ],
+        ),
+        ManagementForm::RenameItem {
+            source,
+            destination,
+        } => (
+            "Rename item",
+            vec![
+                key_value("Source", &format!("jig://{source}")),
+                form_value_line("Destination item", destination, true, false),
+            ],
+        ),
+        ManagementForm::ConvertLegacy {
+            source,
+            item,
+            field,
+            kind,
+            focus,
+        } => (
+            "Convert legacy entry",
+            vec![
+                key_value("Legacy source", source),
+                form_value_line("Item", item, *focus == ConvertFocus::Item, false),
+                form_value_line("Field", field, *focus == ConvertFocus::Field, false),
+                form_value_line(
+                    "Kind",
+                    kind_label(*kind),
+                    *focus == ConvertFocus::Kind,
+                    false,
+                ),
+                Line::from(""),
+                Line::from("Conversion atomically moves the existing encrypted value."),
+            ],
+        ),
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Tab switch field   Space toggle kind   Enter save   Esc cancel   Ctrl-U clear",
+    ));
+    if let Some(status) = &app.status {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(match status.kind {
+                StatusKind::Info => GOOD,
+                StatusKind::Error => BAD,
+            }),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel(title))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_delete_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    confirmation: &DeleteConfirmation,
+) {
+    frame.render_widget(Clear, area);
+    let required = confirmation.target.required_confirmation();
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("Permanently remove {}?", confirmation.target.label()),
+            Style::default().fg(BAD).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("There is no trash or undo."),
+        Line::from(format!("Type exactly: {}", sanitize_text(&required))),
+        form_value_line("Confirmation", &confirmation.input, true, false),
+        Line::from(""),
+        Line::from("Enter delete   Esc cancel   Ctrl-U clear"),
+    ];
+    if let Some(status) = &app.status {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(BAD),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Confirm permanent deletion"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn form_value_line(label: &str, value: &str, focused: bool, protected: bool) -> Line<'static> {
+    let marker = if focused { "›" } else { " " };
+    let style = if focused {
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let value = if value.is_empty() && !protected {
+        "(empty)".to_owned()
+    } else {
+        sanitize_text(value)
+    };
+    Line::from(vec![
+        Span::styled(format!("{marker} {label}: "), style),
+        Span::styled(value, style),
+    ])
 }
 
 fn list<'a>(items: Vec<ListItem<'a>>, title: &'a str) -> List<'a> {

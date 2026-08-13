@@ -54,6 +54,7 @@
 - Verify the audit chain before appending new audit events.
 - Vault mutations append audit intent before saving the new state; crashes may leave audit leading state, but state should not lead audit.
 - Field kind changes, field/item renames, item removal, and legacy conversion must remain single-lock atomic mutations. They must never be implemented by exposing plaintext or composing separate public read/remove/set calls.
+- Interactive create, replace, and required-remove operations must recheck their existence precondition inside the same audited vault edit lock. Keep the backwards-compatible CLI setters as explicit upserts; do not emulate stale-state protection with a metadata read followed by a separate mutation.
 - The local HMAC audit chain detects edited records and broken links, but deletion, truncation, or rollback still requires external checkpoints or backups to prove.
 - Brokered env injection must not override the cleaned child process' preserved environment allowlist, such as `PATH`, `HOME`, `TMPDIR`, and locale variables.
 - Child-process environment injection necessarily gives `std::process::Command` a non-zeroizable copy of each injected secret; prefer future OS-specific delivery primitives for stronger isolation.

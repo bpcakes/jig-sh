@@ -7,10 +7,10 @@ use secrecy::SecretString;
 use tempfile::tempdir;
 
 use crate::{
-    VaultDescriptor,
-    model::{App, EntryIdentity, Focus, ItemIdentity, Screen},
+    VaultAction, VaultDescriptor,
+    model::{App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm, Screen},
     render,
-    runtime::{RuntimeAction, handle_key, handle_paste},
+    runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
     secret_input::SecretInput,
 };
 
@@ -94,6 +94,42 @@ fn protected_paste_rejects_the_complete_overflow() {
     let oversized = "x".repeat(MAX_SECRET_VALUE_LEN + 1);
     assert!(input.paste(&oversized).is_err());
     assert!(input.is_empty());
+}
+
+#[test]
+fn protected_input_loads_exact_binary_regular_file_and_rejects_oversize() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("value.bin");
+    let exact = b"binary\0value\xff\n";
+    std::fs::write(&source, exact).unwrap();
+
+    let mut input = SecretInput::from_regular_file(&source).unwrap();
+    assert_eq!(input.take().as_slice(), exact);
+
+    let oversized = temp.path().join("oversized.bin");
+    let file = std::fs::File::create(&oversized).unwrap();
+    file.set_len((MAX_SECRET_VALUE_LEN + 1) as u64).unwrap();
+    let error = SecretInput::from_regular_file(&oversized)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("exceeds"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn protected_input_rejects_symlink_value_sources() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("value.bin");
+    let link = temp.path().join("value-link.bin");
+    std::fs::write(&source, b"safe-size-secret").unwrap();
+    symlink(&source, &link).unwrap();
+
+    let error = SecretInput::from_regular_file(&link)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("must not be a symlink"), "{error}");
 }
 
 #[test]
@@ -270,4 +306,257 @@ fn absent_vault_can_enter_and_cancel_initialization() {
     assert!(matches!(app.screen, Screen::Initialize { .. }));
     handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(matches!(app.screen, Screen::Missing));
+}
+
+fn submit_key(app: &mut App) -> VaultAction {
+    let RuntimeAction::Start(BackendRequest::Execute(action)) =
+        handle_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("form did not produce a backend action: {:?}", app.screen);
+    };
+    action
+}
+
+fn select_legacy(app: &mut App) {
+    app.selected_item = Some(ItemIdentity::Legacy);
+    app.selected_entry = Some(EntryIdentity::Legacy("old_token".to_owned()));
+    app.focus = Focus::Fields;
+}
+
+#[test]
+fn create_field_form_separates_metadata_kind_and_protected_value() {
+    let mut app = browsing_app();
+    app.begin_add();
+    assert!(matches!(
+        app.screen,
+        Screen::Form(ManagementForm::WriteField { .. })
+    ));
+
+    handle_paste(&mut app, "NEW_FIELD");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+
+    let debug = format!("{:?}", app.screen);
+    assert!(
+        !debug.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{debug}"
+    );
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("bytes"), "{rendered}");
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+    let action = submit_key(&mut app);
+    let action_debug = format!("{action:?}");
+    assert!(
+        !action_debug.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{action_debug}"
+    );
+    match action {
+        VaultAction::SetField {
+            reference,
+            kind,
+            mode,
+            value: _,
+        } => {
+            assert_eq!(reference.to_string(), "jig://Production/NEW_FIELD");
+            assert_eq!(kind, FieldKind::Text);
+            assert_eq!(mode, jig_vault::VaultWriteMode::Create);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn create_field_form_can_load_exact_bytes_from_a_regular_file() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("secret.bin");
+    let exact = b"binary\0field-value";
+    std::fs::write(&source, exact).unwrap();
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "BINARY_FIELD");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, &source.to_string_lossy());
+
+    match submit_key(&mut app) {
+        VaultAction::SetField { value, .. } => assert_eq!(value.as_slice(), exact),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn replacement_form_starts_empty_and_does_not_render_existing_value() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_replace();
+    let Screen::Form(ManagementForm::WriteField { value, mode, .. }) = &app.screen else {
+        panic!("expected field replacement form");
+    };
+    assert!(value.is_empty());
+    assert_eq!(*mode, jig_vault::VaultWriteMode::Replace);
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("current value was not loaded"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn kind_rename_and_item_rename_forms_emit_typed_actions() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_change_kind();
+    match submit_key(&mut app) {
+        VaultAction::ChangeFieldKind { reference, kind } => {
+            assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
+            assert_eq!(kind, FieldKind::Text);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    app.focus = Focus::Fields;
+    app.begin_rename();
+    handle_paste(&mut app, "TOKEN_RENAMED");
+    match submit_key(&mut app) {
+        VaultAction::RenameField {
+            source,
+            destination,
+        } => {
+            assert_eq!(source.to_string(), "jig://Production/API_TOKEN");
+            assert_eq!(destination.to_string(), "jig://Production/TOKEN_RENAMED");
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    app.focus = Focus::Items;
+    app.begin_rename();
+    handle_paste(&mut app, "ProdRenamed");
+    match submit_key(&mut app) {
+        VaultAction::RenameItem {
+            source,
+            destination,
+        } => {
+            assert_eq!(source.as_str(), "Production");
+            assert_eq!(destination.as_str(), "ProdRenamed");
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_create_replace_convert_and_delete_are_explicit() {
+    let mut app = browsing_app();
+    app.begin_add_legacy();
+    handle_paste(&mut app, "another_old_token");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "new-legacy-value");
+    match submit_key(&mut app) {
+        VaultAction::SetLegacy { name, mode, .. } => {
+            assert_eq!(name, "another_old_token");
+            assert_eq!(mode, jig_vault::VaultWriteMode::Create);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_replace();
+    handle_paste(&mut app, "replacement-legacy-value");
+    match submit_key(&mut app) {
+        VaultAction::SetLegacy { name, mode, .. } => {
+            assert_eq!(name, "old_token");
+            assert_eq!(mode, jig_vault::VaultWriteMode::Replace);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_convert();
+    handle_paste(&mut app, "Imported");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "TOKEN");
+    match submit_key(&mut app) {
+        VaultAction::ConvertLegacy {
+            name,
+            reference,
+            kind,
+        } => {
+            assert_eq!(name, "old_token");
+            assert_eq!(reference.to_string(), "jig://Imported/TOKEN");
+            assert_eq!(kind, FieldKind::Concealed);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_delete();
+    let Screen::ConfirmDelete(confirmation) = &app.screen else {
+        panic!("expected delete confirmation");
+    };
+    assert!(matches!(confirmation.target, DeleteTarget::Legacy(_)));
+    handle_paste(&mut app, "old_token");
+    match submit_key(&mut app) {
+        VaultAction::RemoveLegacy { name } => assert_eq!(name, "old_token"),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn field_and_item_deletion_require_exact_typed_confirmation() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_delete();
+    handle_paste(&mut app, "wrong");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::ConfirmDelete(_)));
+    if let Some(input) = app.metadata_input_mut() {
+        input.clear();
+    }
+    handle_paste(&mut app, "jig://Production/API_TOKEN");
+    match submit_key(&mut app) {
+        VaultAction::RemoveField { reference } => {
+            assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    app.focus = Focus::Items;
+    app.begin_delete();
+    let Screen::ConfirmDelete(confirmation) = &app.screen else {
+        panic!("expected item delete confirmation");
+    };
+    assert!(confirmation.target.label().contains("2 fields"));
+    handle_paste(&mut app, "DELETE");
+    match submit_key(&mut app) {
+        VaultAction::RemoveItem { item } => assert_eq!(item.as_str(), "Production"),
+        other => panic!("unexpected action: {other:?}"),
+    }
 }

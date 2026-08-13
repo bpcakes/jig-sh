@@ -19,8 +19,10 @@ anyhow.workspace = true
 crossterm.workspace = true
 jig-tui.workspace = true
 jig-vault.workspace = true
+libc.workspace = true
 ratatui.workspace = true
 unicode-width.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 jig-vault = { workspace = true, features = ["test-utils"] }

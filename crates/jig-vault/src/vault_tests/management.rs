@@ -493,3 +493,127 @@ fn management_mutations_require_version_two_without_writing() {
         before_audit
     );
 }
+
+#[test]
+fn conditional_field_writes_reject_concurrent_create_and_remove_without_mutation() {
+    let (temp, vault) = new_vault();
+    let external = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    let reference = field("jig://Production/TOKEN");
+    external
+        .write_field(
+            &passphrase(),
+            reference.clone(),
+            FieldKind::Concealed,
+            SecretBytes::new(b"external-create-sentinel".to_vec()),
+            VaultWriteMode::Create,
+        )
+        .unwrap();
+    let before_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+
+    let collision = vault
+        .write_field(
+            &passphrase(),
+            reference.clone(),
+            FieldKind::Concealed,
+            SecretBytes::new(b"tui-create-sentinel".to_vec()),
+            VaultWriteMode::Create,
+        )
+        .unwrap_err();
+    assert_eq!(collision.kind(), VaultErrorKind::AlreadyExists);
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+
+    external
+        .remove_field(&passphrase(), reference.clone())
+        .unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+    let missing = vault
+        .write_field(
+            &passphrase(),
+            reference,
+            FieldKind::Concealed,
+            SecretBytes::new(b"tui-replace-sentinel".to_vec()),
+            VaultWriteMode::Replace,
+        )
+        .unwrap_err();
+    assert_eq!(missing.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+
+    let missing_remove = vault
+        .remove_field_required(&passphrase(), field("jig://Production/TOKEN"))
+        .unwrap_err();
+    assert_eq!(missing_remove.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+}
+
+#[test]
+fn conditional_legacy_writes_reject_concurrent_create_and_remove_without_mutation() {
+    let (temp, vault) = new_vault();
+    let external = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    external
+        .write_secret(
+            &passphrase(),
+            "old_token",
+            SecretBytes::new(b"external-legacy-sentinel".to_vec()),
+            VaultWriteMode::Create,
+        )
+        .unwrap();
+    let before_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+
+    let collision = vault
+        .write_secret(
+            &passphrase(),
+            "old_token",
+            SecretBytes::new(b"tui-legacy-create-sentinel".to_vec()),
+            VaultWriteMode::Create,
+        )
+        .unwrap_err();
+    assert_eq!(collision.kind(), VaultErrorKind::AlreadyExists);
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+
+    external.remove_secret(&passphrase(), "old_token").unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+    let missing = vault
+        .write_secret(
+            &passphrase(),
+            "old_token",
+            SecretBytes::new(b"tui-legacy-replace-sentinel".to_vec()),
+            VaultWriteMode::Replace,
+        )
+        .unwrap_err();
+    assert_eq!(missing.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+
+    let missing_remove = vault
+        .remove_secret_required(&passphrase(), "old_token")
+        .unwrap_err();
+    assert_eq!(missing_remove.kind(), VaultErrorKind::NotFound);
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+}

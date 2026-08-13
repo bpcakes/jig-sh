@@ -1,9 +1,12 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::Path};
 
 use jig_tui::sanitize_text;
-use jig_vault::{FieldKind, FieldRecord, SecretBytes, SecretRecord, VaultReference, VaultSnapshot};
+use jig_vault::{
+    FieldKind, FieldRecord, SecretBytes, SecretName, SecretRecord, VaultItem, VaultReference,
+    VaultSnapshot, VaultWriteMode,
+};
 
-use crate::{VaultDescriptor, VaultUiError, secret_input::SecretInput};
+use crate::{VaultAction, VaultDescriptor, VaultUiError, secret_input::SecretInput};
 
 #[derive(Debug)]
 pub(crate) struct App {
@@ -17,6 +20,7 @@ pub(crate) struct App {
     pub(crate) searching: bool,
     pub(crate) status: Option<StatusMessage>,
     pub(crate) tick: usize,
+    next_selection: Option<SelectionHint>,
 }
 
 impl App {
@@ -37,6 +41,7 @@ impl App {
             searching: false,
             status: None,
             tick: 0,
+            next_selection: None,
         }
     }
 
@@ -95,36 +100,45 @@ impl App {
     }
 
     pub(crate) fn apply_snapshot(&mut self, snapshot: VaultSnapshot) {
-        let selected_item = self.selected_item.clone();
-        let selected_entry = self.selected_entry.clone();
+        let previous_item = self.selected_item.clone();
+        let previous_entry = self.selected_entry.clone();
         self.descriptor.exists = true;
         self.snapshot = Some(snapshot);
         self.screen = Screen::Browse;
         self.status = None;
-        self.selected_item = selected_item;
-        self.selected_entry = selected_entry;
+        if let Some(hint) = self.next_selection.take() {
+            self.selected_item = Some(hint.item);
+            self.selected_entry = hint.entry;
+        } else {
+            self.selected_item = previous_item;
+            self.selected_entry = previous_entry;
+        }
         self.reconcile_selection();
     }
 
     pub(crate) fn fail_unlock(&mut self, error: &VaultUiError) {
         self.snapshot = None;
+        self.next_selection = None;
         self.screen = Screen::Locked(SecretInput::new());
         self.status = Some(StatusMessage::error(error.message()));
     }
 
     pub(crate) fn fail_initialize(&mut self, error: &VaultUiError) {
         self.snapshot = None;
+        self.next_selection = None;
         self.screen = Screen::Missing;
         self.status = Some(StatusMessage::error(error.message()));
     }
 
     pub(crate) fn fail_action(&mut self, error: &VaultUiError) {
+        self.next_selection = None;
         self.screen = Screen::Browse;
         self.status = Some(StatusMessage::error(error.message()));
     }
 
     pub(crate) fn lock(&mut self) {
         self.snapshot = None;
+        self.next_selection = None;
         self.selected_item = None;
         self.selected_entry = None;
         self.filter.clear();
@@ -142,8 +156,12 @@ impl App {
     }
 
     pub(crate) fn close_overlay(&mut self) {
-        if matches!(self.screen, Screen::Help | Screen::ConfirmMigration) {
+        if matches!(
+            self.screen,
+            Screen::Help | Screen::ConfirmMigration | Screen::Form(_) | Screen::ConfirmDelete(_)
+        ) {
             self.screen = Screen::Browse;
+            self.status = None;
         }
     }
 
@@ -157,7 +175,7 @@ impl App {
         }
     }
 
-    pub(crate) fn input_mut(&mut self) -> Option<&mut SecretInput> {
+    pub(crate) fn protected_input_mut(&mut self) -> Option<&mut SecretInput> {
         match &mut self.screen {
             Screen::Locked(input) => Some(input),
             Screen::Initialize {
@@ -168,6 +186,15 @@ impl App {
                 InitializeFocus::Passphrase => passphrase,
                 InitializeFocus::Confirmation => confirmation,
             }),
+            Screen::Form(form) => form.protected_input_mut(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
+        match &mut self.screen {
+            Screen::Form(form) => form.metadata_input_mut(),
+            Screen::ConfirmDelete(confirmation) => Some(&mut confirmation.input),
             _ => None,
         }
     }
@@ -194,6 +221,258 @@ impl App {
             (Focus::Fields, false) | (Focus::Items, true) => Focus::Details,
             (Focus::Details, false) | (Focus::Fields, true) => Focus::Items,
         };
+    }
+
+    pub(crate) fn begin_add(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let form = match &self.selected_item {
+            Some(ItemIdentity::Legacy) => ManagementForm::WriteLegacy {
+                mode: VaultWriteMode::Create,
+                name: String::new(),
+                value: SecretInput::new(),
+                value_file: String::new(),
+                focus: LegacyWriteFocus::Name,
+            },
+            Some(ItemIdentity::Canonical(item)) => ManagementForm::WriteField {
+                mode: VaultWriteMode::Create,
+                item: item.clone(),
+                field: String::new(),
+                kind: FieldKind::Concealed,
+                value: SecretInput::new(),
+                value_file: String::new(),
+                focus: FieldWriteFocus::Field,
+            },
+            None => ManagementForm::WriteField {
+                mode: VaultWriteMode::Create,
+                item: String::new(),
+                field: String::new(),
+                kind: FieldKind::Concealed,
+                value: SecretInput::new(),
+                value_file: String::new(),
+                focus: FieldWriteFocus::Item,
+            },
+        };
+        self.screen = Screen::Form(form);
+        self.status = None;
+    }
+
+    pub(crate) fn begin_add_legacy(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        self.screen = Screen::Form(ManagementForm::WriteLegacy {
+            mode: VaultWriteMode::Create,
+            name: String::new(),
+            value: SecretInput::new(),
+            value_file: String::new(),
+            focus: LegacyWriteFocus::Name,
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn begin_replace(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let form = match self.selected_entry.clone() {
+            Some(EntryIdentity::Field(reference)) => {
+                let kind = self
+                    .selected_field()
+                    .map_or(FieldKind::Concealed, |field| field.kind);
+                ManagementForm::WriteField {
+                    mode: VaultWriteMode::Replace,
+                    item: reference.item().to_owned(),
+                    field: reference.field().to_owned(),
+                    kind,
+                    value: SecretInput::new(),
+                    value_file: String::new(),
+                    focus: FieldWriteFocus::Value,
+                }
+            }
+            Some(EntryIdentity::Legacy(name)) => ManagementForm::WriteLegacy {
+                mode: VaultWriteMode::Replace,
+                name,
+                value: SecretInput::new(),
+                value_file: String::new(),
+                focus: LegacyWriteFocus::Value,
+            },
+            None => {
+                self.set_error("Select a field or legacy entry to replace.");
+                return;
+            }
+        };
+        self.screen = Screen::Form(form);
+        self.status = None;
+    }
+
+    pub(crate) fn begin_change_kind(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let Some(field) = self.selected_field() else {
+            self.set_error("Select a canonical field to change its kind.");
+            return;
+        };
+        self.screen = Screen::Form(ManagementForm::ChangeKind {
+            reference: field.reference.clone(),
+            from: field.kind,
+            to: toggled_kind(field.kind),
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn begin_rename(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let form = if self.focus == Focus::Items {
+            match self.selected_item.clone() {
+                Some(ItemIdentity::Canonical(source)) => ManagementForm::RenameItem {
+                    source,
+                    destination: String::new(),
+                },
+                Some(ItemIdentity::Legacy) => {
+                    self.set_error(
+                        "Legacy entries are renamed by converting them to canonical fields.",
+                    );
+                    return;
+                }
+                None => {
+                    self.set_error("Select an item to rename.");
+                    return;
+                }
+            }
+        } else {
+            match self.selected_entry.clone() {
+                Some(EntryIdentity::Field(source)) => ManagementForm::RenameField {
+                    destination_item: source.item().to_owned(),
+                    destination_field: String::new(),
+                    source,
+                    focus: RenameFieldFocus::Field,
+                },
+                Some(EntryIdentity::Legacy(_)) => {
+                    self.set_error("Press c to convert the selected legacy entry.");
+                    return;
+                }
+                None => {
+                    self.set_error("Select a field to rename or move.");
+                    return;
+                }
+            }
+        };
+        self.screen = Screen::Form(form);
+        self.status = None;
+    }
+
+    pub(crate) fn begin_convert(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let Some(EntryIdentity::Legacy(source)) = self.selected_entry.clone() else {
+            self.set_error("Select a legacy entry to convert.");
+            return;
+        };
+        self.screen = Screen::Form(ManagementForm::ConvertLegacy {
+            source,
+            item: String::new(),
+            field: String::new(),
+            kind: FieldKind::Concealed,
+            focus: ConvertFocus::Item,
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn begin_delete(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        let target = if self.focus == Focus::Items {
+            match self.selected_item.clone() {
+                Some(ItemIdentity::Canonical(item)) => {
+                    let count = self.snapshot.as_ref().map_or(0, |snapshot| {
+                        snapshot
+                            .fields
+                            .iter()
+                            .filter(|field| field.reference.item() == item)
+                            .count()
+                    });
+                    DeleteTarget::Item { item, count }
+                }
+                Some(ItemIdentity::Legacy) => {
+                    self.set_error("Bulk legacy deletion is disabled; select one legacy entry.");
+                    return;
+                }
+                None => {
+                    self.set_error("Select an item to delete.");
+                    return;
+                }
+            }
+        } else {
+            match self.selected_entry.clone() {
+                Some(EntryIdentity::Field(reference)) => DeleteTarget::Field(reference),
+                Some(EntryIdentity::Legacy(name)) => DeleteTarget::Legacy(name),
+                None => {
+                    self.set_error("Select a field or legacy entry to delete.");
+                    return;
+                }
+            }
+        };
+        self.screen = Screen::ConfirmDelete(DeleteConfirmation {
+            target,
+            input: String::new(),
+        });
+        self.status = None;
+    }
+
+    pub(crate) fn cycle_form_focus(&mut self, backwards: bool) {
+        if let Screen::Form(form) = &mut self.screen {
+            form.cycle_focus(backwards);
+        }
+    }
+
+    pub(crate) fn toggle_form_kind(&mut self) {
+        if let Screen::Form(form) = &mut self.screen {
+            form.toggle_kind();
+        }
+    }
+
+    pub(crate) fn submit_form(&mut self) -> Option<VaultAction> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::Form(mut form) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        match form.submission() {
+            Ok(submission) => {
+                self.next_selection = submission.selection;
+                self.begin_loading(submission.label);
+                Some(submission.action)
+            }
+            Err(message) => {
+                self.screen = Screen::Form(form);
+                self.set_error(&message);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn submit_delete(&mut self) -> Option<VaultAction> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::ConfirmDelete(confirmation) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        if confirmation.input != confirmation.target.required_confirmation() {
+            self.screen = Screen::ConfirmDelete(confirmation);
+            self.set_error("Deletion confirmation did not match the required text.");
+            return None;
+        }
+        let (action, label) = confirmation.target.into_action();
+        self.next_selection = None;
+        self.begin_loading(label);
+        Some(action)
     }
 
     pub(crate) fn visible_items(&self) -> Vec<ItemIdentity> {
@@ -342,6 +621,18 @@ impl App {
         self.status = Some(StatusMessage::info(message));
     }
 
+    fn require_writable_v2(&mut self) -> bool {
+        if self
+            .snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.format_version != 2)
+        {
+            self.set_error("Vault management requires version 2; press m to migrate first.");
+            return false;
+        }
+        true
+    }
+
     fn item_matches(&self, item: &ItemIdentity, query: &str) -> bool {
         if query.is_empty() {
             return true;
@@ -418,6 +709,49 @@ fn legacy_matches(record: &SecretRecord, query: &str) -> bool {
     query.is_empty() || record.name.to_lowercase().contains(query)
 }
 
+fn parse_item(value: &str) -> Result<VaultItem, String> {
+    VaultItem::parse(&format!("jig://{value}")).map_err(|error| sanitize_text(error.message()))
+}
+
+fn parse_reference(item: &str, field: &str) -> Result<VaultReference, String> {
+    VaultReference::parse(&format!("jig://{item}/{field}"))
+        .map_err(|error| sanitize_text(error.message()))
+}
+
+fn parse_legacy_name(value: &str) -> Result<String, String> {
+    let name = SecretName::parse(value).map_err(|error| sanitize_text(error.message()))?;
+    if VaultReference::parse(&format!("jig://{}", name.as_str())).is_ok() {
+        return Err("That name is a canonical ITEM/FIELD; create a field instead.".to_owned());
+    }
+    Ok(name.as_str().to_owned())
+}
+
+fn validate_value(kind: FieldKind, value: &SecretInput) -> Result<(), String> {
+    if kind == FieldKind::Concealed && value.len() < 4 {
+        return Err("Concealed values must contain at least 4 bytes.".to_owned());
+    }
+    Ok(())
+}
+
+fn load_value_file(value: &mut SecretInput, value_file: &str) -> Result<(), String> {
+    if value_file.is_empty() {
+        return Ok(());
+    }
+    if !value.is_empty() {
+        return Err("Choose either protected input or a value file, not both.".to_owned());
+    }
+    *value = SecretInput::from_regular_file(Path::new(value_file))
+        .map_err(|error| sanitize_text(&error.to_string()))?;
+    Ok(())
+}
+
+const fn toggled_kind(kind: FieldKind) -> FieldKind {
+    match kind {
+        FieldKind::Concealed => FieldKind::Text,
+        FieldKind::Text => FieldKind::Concealed,
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum Screen {
     Missing,
@@ -431,6 +765,8 @@ pub(crate) enum Screen {
     Browse,
     Help,
     ConfirmMigration,
+    Form(ManagementForm),
+    ConfirmDelete(DeleteConfirmation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -472,6 +808,398 @@ impl EntryIdentity {
         match self {
             Self::Field(reference) => sanitize_text(reference.field()),
             Self::Legacy(name) => sanitize_text(name),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SelectionHint {
+    item: ItemIdentity,
+    entry: Option<EntryIdentity>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ManagementForm {
+    WriteField {
+        mode: VaultWriteMode,
+        item: String,
+        field: String,
+        kind: FieldKind,
+        value: SecretInput,
+        value_file: String,
+        focus: FieldWriteFocus,
+    },
+    WriteLegacy {
+        mode: VaultWriteMode,
+        name: String,
+        value: SecretInput,
+        value_file: String,
+        focus: LegacyWriteFocus,
+    },
+    ChangeKind {
+        reference: VaultReference,
+        from: FieldKind,
+        to: FieldKind,
+    },
+    RenameField {
+        source: VaultReference,
+        destination_item: String,
+        destination_field: String,
+        focus: RenameFieldFocus,
+    },
+    RenameItem {
+        source: String,
+        destination: String,
+    },
+    ConvertLegacy {
+        source: String,
+        item: String,
+        field: String,
+        kind: FieldKind,
+        focus: ConvertFocus,
+    },
+}
+
+impl ManagementForm {
+    pub(crate) fn protected_input_mut(&mut self) -> Option<&mut SecretInput> {
+        match self {
+            Self::WriteField { value, focus, .. } if *focus == FieldWriteFocus::Value => {
+                Some(value)
+            }
+            Self::WriteLegacy { value, focus, .. } if *focus == LegacyWriteFocus::Value => {
+                Some(value)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::WriteField {
+                item,
+                field,
+                value_file,
+                focus,
+                ..
+            } => match focus {
+                FieldWriteFocus::Item => Some(item),
+                FieldWriteFocus::Field => Some(field),
+                FieldWriteFocus::File => Some(value_file),
+                FieldWriteFocus::Kind | FieldWriteFocus::Value => None,
+            },
+            Self::WriteLegacy {
+                name,
+                value_file,
+                focus,
+                ..
+            } => match focus {
+                LegacyWriteFocus::Name => Some(name),
+                LegacyWriteFocus::File => Some(value_file),
+                LegacyWriteFocus::Value => None,
+            },
+            Self::RenameField {
+                destination_item,
+                destination_field,
+                focus,
+                ..
+            } => match focus {
+                RenameFieldFocus::Item => Some(destination_item),
+                RenameFieldFocus::Field => Some(destination_field),
+            },
+            Self::RenameItem { destination, .. } => Some(destination),
+            Self::ConvertLegacy {
+                item, field, focus, ..
+            } => match focus {
+                ConvertFocus::Item => Some(item),
+                ConvertFocus::Field => Some(field),
+                ConvertFocus::Kind => None,
+            },
+            Self::ChangeKind { .. } => None,
+        }
+    }
+
+    fn cycle_focus(&mut self, backwards: bool) {
+        match self {
+            Self::WriteField { focus, .. } => *focus = focus.cycle(backwards),
+            Self::WriteLegacy { focus, .. } => *focus = focus.cycle(backwards),
+            Self::RenameField { focus, .. } => *focus = focus.cycle(backwards),
+            Self::ConvertLegacy { focus, .. } => *focus = focus.cycle(backwards),
+            Self::ChangeKind { .. } | Self::RenameItem { .. } => {}
+        }
+    }
+
+    fn toggle_kind(&mut self) {
+        match self {
+            Self::WriteField { kind, .. } | Self::ConvertLegacy { kind, .. } => {
+                *kind = toggled_kind(*kind);
+            }
+            Self::ChangeKind { to, .. } => *to = toggled_kind(*to),
+            _ => {}
+        }
+    }
+
+    fn submission(&mut self) -> Result<FormSubmission, String> {
+        match self {
+            Self::WriteField {
+                mode,
+                item,
+                field,
+                kind,
+                value,
+                value_file,
+                ..
+            } => {
+                let reference = parse_reference(item, field)?;
+                load_value_file(value, value_file)?;
+                validate_value(*kind, value)?;
+                let action = VaultAction::SetField {
+                    reference: reference.clone(),
+                    kind: *kind,
+                    value: value.take(),
+                    mode: *mode,
+                };
+                Ok(FormSubmission {
+                    action,
+                    label: match mode {
+                        VaultWriteMode::Create => "Creating vault field",
+                        VaultWriteMode::Replace => "Replacing vault field",
+                        VaultWriteMode::Upsert => "Writing vault field",
+                    },
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Canonical(reference.item().to_owned()),
+                        entry: Some(EntryIdentity::Field(reference)),
+                    }),
+                })
+            }
+            Self::WriteLegacy {
+                mode,
+                name,
+                value,
+                value_file,
+                ..
+            } => {
+                let name = parse_legacy_name(name)?;
+                load_value_file(value, value_file)?;
+                validate_value(FieldKind::Concealed, value)?;
+                Ok(FormSubmission {
+                    action: VaultAction::SetLegacy {
+                        name: name.clone(),
+                        value: value.take(),
+                        mode: *mode,
+                    },
+                    label: match mode {
+                        VaultWriteMode::Create => "Creating legacy vault entry",
+                        VaultWriteMode::Replace => "Replacing legacy vault entry",
+                        VaultWriteMode::Upsert => "Writing legacy vault entry",
+                    },
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Legacy,
+                        entry: Some(EntryIdentity::Legacy(name)),
+                    }),
+                })
+            }
+            Self::ChangeKind { reference, to, .. } => Ok(FormSubmission {
+                action: VaultAction::ChangeFieldKind {
+                    reference: reference.clone(),
+                    kind: *to,
+                },
+                label: "Changing field kind",
+                selection: Some(SelectionHint {
+                    item: ItemIdentity::Canonical(reference.item().to_owned()),
+                    entry: Some(EntryIdentity::Field(reference.clone())),
+                }),
+            }),
+            Self::RenameField {
+                source,
+                destination_item,
+                destination_field,
+                ..
+            } => {
+                let destination = parse_reference(destination_item, destination_field)?;
+                if &destination == source {
+                    return Err("Field rename destination must differ from the source.".to_owned());
+                }
+                Ok(FormSubmission {
+                    action: VaultAction::RenameField {
+                        source: source.clone(),
+                        destination: destination.clone(),
+                    },
+                    label: "Renaming vault field",
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Canonical(destination.item().to_owned()),
+                        entry: Some(EntryIdentity::Field(destination)),
+                    }),
+                })
+            }
+            Self::RenameItem {
+                source,
+                destination,
+            } => {
+                let source = parse_item(source)?;
+                let destination = parse_item(destination)?;
+                if source == destination {
+                    return Err("Item rename destination must differ from the source.".to_owned());
+                }
+                Ok(FormSubmission {
+                    action: VaultAction::RenameItem {
+                        source,
+                        destination: destination.clone(),
+                    },
+                    label: "Renaming vault item",
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Canonical(destination.as_str().to_owned()),
+                        entry: None,
+                    }),
+                })
+            }
+            Self::ConvertLegacy {
+                source,
+                item,
+                field,
+                kind,
+                ..
+            } => {
+                let reference = parse_reference(item, field)?;
+                Ok(FormSubmission {
+                    action: VaultAction::ConvertLegacy {
+                        name: source.clone(),
+                        reference: reference.clone(),
+                        kind: *kind,
+                    },
+                    label: "Converting legacy vault entry",
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Canonical(reference.item().to_owned()),
+                        entry: Some(EntryIdentity::Field(reference)),
+                    }),
+                })
+            }
+        }
+    }
+}
+
+struct FormSubmission {
+    action: VaultAction,
+    label: &'static str,
+    selection: Option<SelectionHint>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FieldWriteFocus {
+    Item,
+    Field,
+    Kind,
+    Value,
+    File,
+}
+
+impl FieldWriteFocus {
+    const fn cycle(self, backwards: bool) -> Self {
+        match (self, backwards) {
+            (Self::Item, false) | (Self::Kind, true) => Self::Field,
+            (Self::Field, false) | (Self::Value, true) => Self::Kind,
+            (Self::Kind, false) | (Self::File, true) => Self::Value,
+            (Self::Value, false) | (Self::Item, true) => Self::File,
+            (Self::File, false) | (Self::Field, true) => Self::Item,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LegacyWriteFocus {
+    Name,
+    Value,
+    File,
+}
+
+impl LegacyWriteFocus {
+    const fn cycle(self, backwards: bool) -> Self {
+        match (self, backwards) {
+            (Self::Name, false) | (Self::File, true) => Self::Value,
+            (Self::Value, false) | (Self::Name, true) => Self::File,
+            (Self::File, false) | (Self::Value, true) => Self::Name,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RenameFieldFocus {
+    Item,
+    Field,
+}
+
+impl RenameFieldFocus {
+    const fn cycle(self, _backwards: bool) -> Self {
+        match self {
+            Self::Item => Self::Field,
+            Self::Field => Self::Item,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConvertFocus {
+    Item,
+    Field,
+    Kind,
+}
+
+impl ConvertFocus {
+    const fn cycle(self, backwards: bool) -> Self {
+        match (self, backwards) {
+            (Self::Item, false) | (Self::Kind, true) => Self::Field,
+            (Self::Field, false) | (Self::Item, true) => Self::Kind,
+            (Self::Kind, false) | (Self::Field, true) => Self::Item,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct DeleteConfirmation {
+    pub(crate) target: DeleteTarget,
+    pub(crate) input: String,
+}
+
+#[derive(Debug)]
+pub(crate) enum DeleteTarget {
+    Field(VaultReference),
+    Item { item: String, count: usize },
+    Legacy(String),
+}
+
+impl DeleteTarget {
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::Field(reference) => format!("field {reference}"),
+            Self::Item { item, count } => format!("item jig://{item} and its {count} fields"),
+            Self::Legacy(name) => format!("legacy entry {name}"),
+        }
+    }
+
+    pub(crate) fn required_confirmation(&self) -> String {
+        match self {
+            Self::Field(reference) => reference.to_string(),
+            Self::Item { .. } => "DELETE".to_owned(),
+            Self::Legacy(name) => name.clone(),
+        }
+    }
+
+    fn into_action(self) -> (VaultAction, &'static str) {
+        match self {
+            Self::Field(reference) => (
+                VaultAction::RemoveField { reference },
+                "Removing vault field",
+            ),
+            Self::Item { item, .. } => (
+                VaultAction::RemoveItem {
+                    item: VaultItem::parse(&format!("jig://{item}"))
+                        .expect("selected item identity remains valid"),
+                },
+                "Removing vault item",
+            ),
+            Self::Legacy(name) => (
+                VaultAction::RemoveLegacy { name },
+                "Removing legacy vault entry",
+            ),
         }
     }
 }

@@ -17,7 +17,7 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - [x] (2026-08-13 21:49Z) Opened structured Jig work `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`, whose body points to this authoritative ExecPlan.
 - [x] (2026-08-13 22:02Z) Milestone 1: added verified, disjoint metadata snapshots; newest-first safe activity projection; and atomic kind-change, field/item rename, item removal, and legacy conversion APIs. All 206 `jig-vault` tests and strict all-target Clippy pass.
 - [x] (2026-08-13 22:26Z) Milestone 2: added the `jig-vault-tui` crate, protected input and paired bracketed-paste lifecycle, explicit CLI entrypoint, fixed-scope session adapter, unlock/lock/init/migrate states, responsive explorer, legacy visibility, and PTY restoration coverage. Focused tests and strict all-target Clippy pass.
-- [ ] Milestone 3: add protected value entry plus canonical and legacy create/replace/change-kind/rename/delete workflows; test and commit the management slice.
+- [x] (2026-08-13 22:53Z) Milestone 3: added bounded protected value entry plus canonical and legacy create/replace/change-kind/rename/delete/convert workflows, atomic stale-state preconditions, exact destructive confirmation, and management PTY coverage. All focused suites and strict all-target Clippy pass.
 - [ ] Milestone 4: add 1Password import, encrypted backup, passphrase change, verified activity, audit verification, and absent-home restore tools; test and commit the lifecycle-tools slice.
 - [ ] Milestone 5: add private-file export, security-reviewed transient Peek, idle locking, signal/concurrency hardening, documentation, PTY acceptance, and sentinel leakage tests; test and commit the controlled-output slice.
 - [ ] Build the development Jig binary and pass formatting, strict Clippy, contract, full repository test, structured evidence, gate, receipt, and final diff audits.
@@ -48,6 +48,15 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 
 - Observation: an environment-provided passphrase can feed an interactive session without using the existing single-operation global capture slot.
   Evidence: the new TUI capture converts the UTF-8 environment value directly into `SecretBytes`, clears both reserved variables before the action worker starts, and transfers ownership into the backend unlock call; tests prove the ordinary captured slot remains empty.
+
+- Observation: refreshing after a successful mutation is insufficient to prevent a stale TUI form from overwriting a destination created by another process while the form was open.
+  Evidence: Milestone 3 added `VaultWriteMode::{Create, Replace, Upsert}` and required-removal APIs whose existence checks run inside the audited vault edit lock. Two-handle tests prove stale creates, replacements, and removals fail without changing state or audit, and the TUI refreshes metadata after collision/not-found errors.
+
+- Observation: exact binary secret input cannot safely use the ordinary text editor path or an unguarded `std::fs::read`.
+  Evidence: `SecretInput::from_regular_file` opens a non-symlink regular file with `O_NOFOLLOW` on Unix, rejects metadata larger than one MiB, reads into a fixed-capacity `SecretBytes` allocation with a zeroizing chunk buffer, and never converts the bytes through UTF-8. Tests cover exact binary bytes, oversized files, and symlinks.
+
+- Observation: the first broad `scripts/jig work check` attempt did not fit within this execution session as one buffered command.
+  Evidence: receipt `receipt_01KZYNKZE3ASCRRK1E9BZ4TKQX` records Nextest status 100 after 317.63 seconds; its captured summary shows all 1,939 tests that ran passed and 18 remained unrun before the configured second vault partition began. Focused vault suites passed separately, the contract gate is fresh, and the required final test gate remains deliberately unresolved until the complete delivery run.
 
 ## Decision Log
 
@@ -91,11 +100,21 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
   Rationale: kind changes, renames, item removal, and legacy conversion do not expose or replace values. Distinct authenticated actions make the Activity view intelligible and allow action-specific safe metadata whitelisting without returning arbitrary audit JSON.
   Date/Author: 2026-08-13 / Codex
 
+- Decision: preserve existing CLI upsert behavior while exposing explicit create and replace modes for interactive forms, and require existence for TUI removals.
+  Rationale: the TUI has a potentially stale metadata snapshot. Lock-scoped preconditions prevent a create from overwriting a concurrent destination and prevent a replace or delete from silently succeeding after its selected entry changed or disappeared, without breaking the established CLI API.
+  Date/Author: 2026-08-13 / Codex
+
+- Decision: require exact typed confirmation for permanent deletion and keep replacement editors empty.
+  Rationale: storage has no trash or version history, so field and legacy deletion use their full identity while item deletion uses `DELETE` and displays the affected count. Empty replacement state preserves the rule that current plaintext never enters the presentation model.
+  Date/Author: 2026-08-13 / Codex
+
 ## Outcomes & Retrospective
 
 Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supplies the complete metadata and atomic domain foundation: one unlock now returns canonical fields, disjoint unrepresentable legacy records, format/identity metadata, and audit verification; verified recent activity contains only whitelisted summaries; and management moves preserve encrypted bytes and creation timestamps under one audited lock/save. Collision, v1, tamper, short-value, timestamp, no-plaintext, and legacy-deduplication tests are included. The complete `jig-vault` suite reports 206 passed in 98.91 seconds.
 
 Milestone 2 adds an explicit TTY-only `jig vault tui`, rejects JSON before scope or credential side effects, fixes scope for the session, and moves a captured environment credential into protected ownership before any worker exists. The CLI-owned backend retains only `SecretString`, reopens current authenticated state for each action, and blocks lock/exit on its one worker. The TUI browses canonical items and disjoint legacy entries in wide three-pane or compact breadcrumb layouts, preserves exact selection across refreshes, supports metadata-only search, makes v1 migration deliberate, and never renders the test sentinel. Focused evidence is 6 `jig-tui` tests, 11 `jig-vault-tui` tests, 92 filtered `jig-sh` vault tests, one end-to-end PTY unlock/resize/lock/quit test, and strict all-target Clippy across the affected crates. Milestones 3–5 and the final repository gates remain.
+
+Milestone 3 completes interactive value management. Canonical fields can be created, replaced from an always-empty editor or exact binary regular file, retyped, renamed or moved, and deleted individually or by item; legacy values can be explicitly created, replaced, converted atomically, and removed. Protected input is capped at one MiB, uses non-growing zeroizing storage, rejects an overflowing paste as a unit, and exposes only bullets and byte counts to rendering. Destructive actions require exact typed confirmation. Create, replace, and required-remove preconditions are enforced under the vault lock so concurrent CLI changes cannot be overwritten from a stale form, and conflict/not-found results trigger a metadata refresh without automatic retry. Evidence is 209 `jig-vault` tests in 95.33 seconds, 19 `jig-vault-tui` tests in 7.68 seconds, 93 filtered `jig-sh` vault tests in 65.30 seconds, one 2.45-second PTY unlock/create/resize/lock/unlock/quit test, and warning-free strict all-target Clippy across all affected crates. Milestones 4–5 and the final repository gates remain.
 
 ## Context and Orientation
 
@@ -348,3 +367,5 @@ Revision note (2026-08-13): Recorded structured work `plan_01KZYHNEMNNN5B80EDBFA
 Revision note (2026-08-13): Recorded Milestone 1 implementation and evidence after adding the metadata-only snapshot/activity boundary and atomic management transformations required by the TUI.
 
 Revision note (2026-08-13): Recorded Milestone 2 implementation and evidence after adding the feature crate, CLI/session boundary, responsive metadata browser, protected credential editor, and PTY terminal-restoration coverage.
+
+Revision note (2026-08-13): Recorded Milestone 3 implementation and evidence after adding protected value forms, complete canonical and legacy management workflows, lock-scoped stale-state preconditions, hardened binary file input, and destructive confirmation.

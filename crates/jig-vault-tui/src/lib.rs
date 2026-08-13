@@ -8,7 +8,7 @@ use std::{fmt, io::Write, path::PathBuf};
 
 use jig_vault::{
     AuditVerification, FieldKind, SecretBytes, VaultActivityRecord, VaultItem, VaultReference,
-    VaultSnapshot,
+    VaultSnapshot, VaultWriteMode,
 };
 
 mod model;
@@ -93,6 +93,7 @@ pub enum VaultAction {
         reference: VaultReference,
         kind: FieldKind,
         value: SecretBytes,
+        mode: VaultWriteMode,
     },
     ChangeFieldKind {
         reference: VaultReference,
@@ -115,6 +116,7 @@ pub enum VaultAction {
     SetLegacy {
         name: String,
         value: SecretBytes,
+        mode: VaultWriteMode,
     },
     RemoveLegacy {
         name: String,

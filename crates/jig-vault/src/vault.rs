@@ -145,7 +145,19 @@ impl Vault {
         name: &str,
         value: SecretBytes,
     ) -> Result<()> {
-        self.store.set_secret(passphrase, name, value)
+        self.write_secret(passphrase, name, value, VaultWriteMode::Upsert)
+    }
+
+    /// Creates or replaces one encrypted legacy secret under an atomic
+    /// existence precondition.
+    pub fn write_secret(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<()> {
+        self.store.write_secret(passphrase, name, value, mode)
     }
 
     /// Removes one encrypted secret when it exists.
@@ -157,6 +169,11 @@ impl Vault {
     /// safely.
     pub fn remove_secret(&self, passphrase: &SecretString, name: &str) -> Result<bool> {
         self.store.remove_secret(passphrase, name)
+    }
+
+    /// Removes one legacy secret and fails if it no longer exists.
+    pub fn remove_secret_required(&self, passphrase: &SecretString, name: &str) -> Result<()> {
+        self.store.remove_secret_required(passphrase, name)
     }
 
     /// Lists secret metadata without returning plaintext values.
@@ -251,8 +268,21 @@ impl Vault {
         kind: FieldKind,
         value: SecretBytes,
     ) -> Result<FieldBatchResult> {
+        self.write_field(passphrase, reference, kind, value, VaultWriteMode::Upsert)
+    }
+
+    /// Creates or replaces one canonical field under an atomic existence
+    /// precondition.
+    pub fn write_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<FieldBatchResult> {
         self.store
-            .apply_field_batch(passphrase, vec![FieldMutation::set(reference, kind, value)])
+            .write_field(passphrase, reference, kind, value, mode)
     }
 
     /// Removes one canonical field when it exists.
@@ -268,6 +298,15 @@ impl Vault {
     ) -> Result<FieldBatchResult> {
         self.store
             .apply_field_batch(passphrase, vec![FieldMutation::remove(reference)])
+    }
+
+    /// Removes one canonical field and fails if it no longer exists.
+    pub fn remove_field_required(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.store.remove_field_required(passphrase, reference)
     }
 
     /// Changes one field's encrypted handling kind without exposing or
@@ -608,6 +647,27 @@ pub struct LegacyConversionResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RevealResult {
     pub bytes_written: usize,
+}
+
+/// Atomic existence policy for protected value writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultWriteMode {
+    /// Fail if the destination already exists.
+    Create,
+    /// Fail if the destination no longer exists.
+    Replace,
+    /// Create or replace for backwards-compatible CLI behavior.
+    Upsert,
+}
+
+impl VaultWriteMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Replace => "replace",
+            Self::Upsert => "upsert",
+        }
+    }
 }
 
 /// One atomic field change.
@@ -1095,22 +1155,34 @@ impl VaultStore {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_secret(
         &self,
         passphrase: &SecretString,
         name: &str,
         value: SecretBytes,
     ) -> Result<()> {
+        self.write_secret(passphrase, name, value, VaultWriteMode::Upsert)
+    }
+
+    pub(crate) fn write_secret(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<()> {
         let name = SecretName::parse(name)?;
-        self.set_secret_inner(passphrase, name, value)
+        self.write_secret_inner(passphrase, name, value, mode)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
-    fn set_secret_inner(
+    fn write_secret_inner(
         &self,
         passphrase: &SecretString,
         name: SecretName,
         value: SecretBytes,
+        mode: VaultWriteMode,
     ) -> AnyResult<()> {
         // Reject too-short values before unlocking; `OpenVault::set_secret`
         // repeats this guard for internal callers that already hold a handle.
@@ -1118,10 +1190,14 @@ impl VaultStore {
         self.edit_with_audit(
             passphrase,
             AuditAction::SecretSet,
-            |vault| vault.set_secret(&name, value),
+            |vault| {
+                vault.ensure_write_mode(&name, mode, "vault secret")?;
+                vault.set_secret(&name, value)
+            },
             |()| {
                 serde_json::json!({
                     "secret_name": name.as_str(),
+                    "write_mode": mode.as_str(),
                 })
             },
         )
@@ -1145,6 +1221,34 @@ impl VaultStore {
                 })
             },
         )
+    }
+
+    pub(crate) fn remove_secret_required(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+    ) -> Result<()> {
+        let name = SecretName::parse(name)?;
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::SecretRemove,
+            |vault| {
+                if !vault.remove_secret(&name) {
+                    return Err(classified(
+                        VaultErrorKind::NotFound,
+                        format!("vault secret '{}' no longer exists", name.as_str()),
+                    ));
+                }
+                Ok(())
+            },
+            |()| {
+                serde_json::json!({
+                    "secret_name": name.as_str(),
+                    "removed": true,
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
     pub(crate) fn list(&self, passphrase: &SecretString) -> Result<Vec<SecretRecord>> {
@@ -1316,6 +1420,61 @@ impl VaultStore {
                 Ok(vault.apply_validated_field_batch(mutations))
             },
             |result| field_batch_audit_details(&audit_sets, &audit_removes, result),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn write_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<FieldBatchResult> {
+        let mutations = vec![FieldMutation::set(reference.clone(), kind, value)];
+        validate_field_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let audit_sets = field_batch_set_audit_metadata(&mutations);
+        let name = reference.to_secret_name();
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.ensure_write_mode(&name, mode, "vault field")?;
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| {
+                let mut details = field_batch_audit_details(&audit_sets, &[], result);
+                details["write_mode"] = serde_json::json!(mode.as_str());
+                details
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn remove_field_required(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        let mutations = vec![FieldMutation::remove(reference.clone())];
+        let name = reference.to_secret_name();
+        self.edit_with_audit(
+            passphrase,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                if !vault.state.secrets.contains_key(name.as_str()) {
+                    return Err(classified(
+                        VaultErrorKind::NotFound,
+                        format!("vault field '{reference}' no longer exists"),
+                    ));
+                }
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| field_batch_audit_details(&[], std::slice::from_ref(&reference), result),
         )
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
@@ -1768,6 +1927,28 @@ pub fn validate_new_vault_passphrase(passphrase: &SecretString) -> Result<()> {
 }
 
 impl OpenVault {
+    fn ensure_write_mode(
+        &self,
+        name: &SecretName,
+        mode: VaultWriteMode,
+        label: &str,
+    ) -> AnyResult<()> {
+        let exists = self.state.secrets.contains_key(name.as_str());
+        match (mode, exists) {
+            (VaultWriteMode::Create, true) => Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!("{label} '{}' already exists", name.as_str()),
+            )),
+            (VaultWriteMode::Replace, false) => Err(classified(
+                VaultErrorKind::NotFound,
+                format!("{label} '{}' no longer exists", name.as_str()),
+            )),
+            (VaultWriteMode::Create, false)
+            | (VaultWriteMode::Replace, true)
+            | (VaultWriteMode::Upsert, _) => Ok(()),
+        }
+    }
+
     pub(crate) fn list(&self) -> Vec<SecretRecord> {
         self.state
             .secrets

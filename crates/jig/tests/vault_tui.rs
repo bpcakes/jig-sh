@@ -17,6 +17,7 @@ use wait_timeout::ChildExt;
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
+const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -62,6 +63,19 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         Duration::from_secs(8),
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
+
+    let create_offset = output.len();
+    master
+        .write_all(format!("aPTY_FIELD\t\t{CREATED_VALUE_SENTINEL}\r").as_bytes())
+        .unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        create_offset,
+        "Vault updated.",
+        Duration::from_secs(8),
+    );
+    assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
@@ -127,6 +141,13 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "bracketed paste not disabled"
     );
     assert!(!output.contains(VALUE_SENTINEL));
+    assert!(!output.contains(CREATED_VALUE_SENTINEL));
+
+    let snapshot = vault.snapshot(&passphrase).unwrap();
+    assert!(snapshot.fields.iter().any(|field| {
+        field.reference.to_string() == "jig://Production/PTY_FIELD"
+            && field.value_len == CREATED_VALUE_SENTINEL.len()
+    }));
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {

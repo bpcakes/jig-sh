@@ -1,6 +1,15 @@
-use std::fmt;
+use std::{
+    fmt,
+    fs::{File, OpenOptions},
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes};
+use zeroize::Zeroizing;
 
 /// A bounded, non-cloneable protected editor backed by preallocated zeroizing
 /// storage.
@@ -24,9 +33,9 @@ impl SecretInput {
     }
 
     pub(crate) fn push_char(&mut self, character: char) -> Result<(), InputTooLong> {
-        let mut encoded = [0_u8; 4];
+        let mut encoded = Zeroizing::new([0_u8; 4]);
         self.bytes
-            .extend_from_slice(character.encode_utf8(&mut encoded).as_bytes())
+            .extend_from_slice(character.encode_utf8(&mut *encoded).as_bytes())
             .map_err(|_| InputTooLong)
     }
 
@@ -63,6 +72,58 @@ impl SecretInput {
             &mut self.bytes,
             SecretBytes::with_capacity(MAX_SECRET_VALUE_LEN),
         )
+    }
+
+    /// Loads exact bytes from a bounded regular file without growing the
+    /// protected allocation. Symlinks and non-regular files are rejected.
+    pub(crate) fn from_regular_file(path: &Path) -> Result<Self, SecretInputFileError> {
+        let path_label = path.to_path_buf();
+        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+            SecretInputFileError::new(path_label.clone(), "inspect", error.kind())
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(SecretInputFileError::invalid(
+                path_label,
+                "value source must be a regular file and must not be a symlink",
+            ));
+        }
+        if metadata.len() > MAX_SECRET_VALUE_LEN as u64 {
+            return Err(SecretInputFileError::invalid(
+                path_label,
+                format!("value source exceeds the {MAX_SECRET_VALUE_LEN} byte vault value limit"),
+            ));
+        }
+        let mut file = open_value_file(path)
+            .map_err(|error| SecretInputFileError::new(path.to_path_buf(), "open", error.kind()))?;
+        let opened = file.metadata().map_err(|error| {
+            SecretInputFileError::new(path.to_path_buf(), "inspect opened", error.kind())
+        })?;
+        if !opened.is_file() {
+            return Err(SecretInputFileError::invalid(
+                path.to_path_buf(),
+                "opened value source is not a regular file",
+            ));
+        }
+
+        let mut input = Self::new();
+        let mut chunk = Zeroizing::new([0_u8; 8 * 1024]);
+        loop {
+            let read = file.read(&mut chunk[..]).map_err(|error| {
+                SecretInputFileError::new(path.to_path_buf(), "read", error.kind())
+            })?;
+            if read == 0 {
+                break;
+            }
+            input.bytes.extend_from_slice(&chunk[..read]).map_err(|_| {
+                SecretInputFileError::invalid(
+                    path.to_path_buf(),
+                    format!(
+                        "value source exceeds the {MAX_SECRET_VALUE_LEN} byte vault value limit"
+                    ),
+                )
+            })?;
+        }
+        Ok(input)
     }
 
     /// Returns bullets and a byte count only. No source character is copied
@@ -102,3 +163,41 @@ impl fmt::Debug for SecretInput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct InputTooLong;
+
+#[derive(Debug)]
+pub(crate) struct SecretInputFileError {
+    path: PathBuf,
+    message: String,
+}
+
+impl SecretInputFileError {
+    fn new(path: PathBuf, operation: &str, kind: std::io::ErrorKind) -> Self {
+        Self {
+            path,
+            message: format!("failed to {operation} value source ({kind:?})"),
+        }
+    }
+
+    fn invalid(path: PathBuf, message: impl Into<String>) -> Self {
+        Self {
+            path,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for SecretInputFileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.path.display(), self.message)
+    }
+}
+
+impl std::error::Error for SecretInputFileError {}
+
+fn open_value_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path)
+}

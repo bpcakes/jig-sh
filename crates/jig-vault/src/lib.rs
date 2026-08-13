@@ -38,5 +38,5 @@ pub use types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 pub use vault::{
     FieldBatchResult, FieldKindChangeResult, FieldMutation, FieldRecord, LegacyConversionResult,
     MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, RevealResult, SecretRecord, Vault,
-    VaultMigration, VaultSnapshot, VaultStatus, validate_new_vault_passphrase,
+    VaultMigration, VaultSnapshot, VaultStatus, VaultWriteMode, validate_new_vault_passphrase,
 };

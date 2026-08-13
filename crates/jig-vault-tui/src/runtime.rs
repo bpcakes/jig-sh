@@ -142,6 +142,7 @@ fn apply_completion(
                 OperationKind::Initialize => "Vault initialized and unlocked.",
                 OperationKind::Refresh => "Vault metadata refreshed.",
                 OperationKind::Migrate => "Vault migrated to version 2.",
+                OperationKind::Mutation => "Vault updated.",
             };
             app.set_info(message);
         }
@@ -155,10 +156,17 @@ fn apply_completion(
                 app.fail_unlock(&error);
                 return;
             }
+            if let Some(Ok(snapshot)) = completion.refreshed_after_error {
+                app.apply_snapshot(snapshot);
+                app.set_error(error.message());
+                return;
+            }
             match completion.kind {
                 OperationKind::Unlock => app.fail_unlock(&error),
                 OperationKind::Initialize => app.fail_initialize(&error),
-                OperationKind::Refresh | OperationKind::Migrate => app.fail_action(&error),
+                OperationKind::Refresh | OperationKind::Migrate | OperationKind::Mutation => {
+                    app.fail_action(&error);
+                }
             }
         }
     }
@@ -186,7 +194,8 @@ impl BackendRequest {
             Self::Unlock(_) => OperationKind::Unlock,
             Self::Initialize(_) => OperationKind::Initialize,
             Self::Execute(VaultAction::MigrateToV2) => OperationKind::Migrate,
-            Self::Execute(_) => OperationKind::Refresh,
+            Self::Execute(VaultAction::Refresh) => OperationKind::Refresh,
+            Self::Execute(_) => OperationKind::Mutation,
         }
     }
 }
@@ -197,11 +206,13 @@ enum OperationKind {
     Initialize,
     Refresh,
     Migrate,
+    Mutation,
 }
 
 struct BackendCompletion {
     kind: OperationKind,
     result: std::result::Result<VaultActionResult, VaultUiError>,
+    refreshed_after_error: Option<std::result::Result<VaultSnapshot, VaultUiError>>,
 }
 
 struct ActionWorker {
@@ -221,7 +232,22 @@ impl ActionWorker {
                     .map(VaultActionResult::Snapshot),
                 BackendRequest::Execute(action) => backend.execute(action),
             };
-            BackendCompletion { kind, result }
+            let refreshed_after_error = if kind == OperationKind::Mutation
+                && result.as_ref().is_err_and(|error| {
+                    matches!(
+                        error.kind(),
+                        VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
+                    )
+                }) {
+                Some(backend.refresh())
+            } else {
+                None
+            };
+            BackendCompletion {
+                kind,
+                result,
+                refreshed_after_error,
+            }
         })?;
         Ok(Self { worker })
     }
@@ -272,6 +298,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 _ => RuntimeAction::Ignore,
             };
         }
+        Screen::Form(_) => return handle_form_key(app, key),
+        Screen::ConfirmDelete(_) => return handle_delete_key(app, key),
         Screen::Browse => {}
     }
 
@@ -369,6 +397,34 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             app.begin_loading("Refreshing vault metadata");
             RuntimeAction::Start(BackendRequest::Execute(VaultAction::Refresh))
         }
+        KeyCode::Char('a') => {
+            app.begin_add();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('A') => {
+            app.begin_add_legacy();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('e') => {
+            app.begin_replace();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('K') => {
+            app.begin_change_kind();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('n') => {
+            app.begin_rename();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('c') => {
+            app.begin_convert();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('D') => {
+            app.begin_delete();
+            RuntimeAction::Redraw
+        }
         KeyCode::Char('m')
             if app
                 .snapshot
@@ -424,13 +480,13 @@ fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> Run
                 RuntimeAction::Start(BackendRequest::Unlock(passphrase))
             }),
         KeyCode::Backspace => {
-            if let Some(input) = app.input_mut() {
+            if let Some(input) = app.protected_input_mut() {
                 input.backspace();
             }
             RuntimeAction::Redraw
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(input) = app.input_mut() {
+            if let Some(input) = app.protected_input_mut() {
                 input.clear();
             }
             RuntimeAction::Redraw
@@ -442,11 +498,13 @@ fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> Run
         {
             if !initializing
                 && character == 'q'
-                && app.input_mut().is_some_and(|input| input.is_empty())
+                && app
+                    .protected_input_mut()
+                    .is_some_and(|input| input.is_empty())
             {
                 return RuntimeAction::Quit;
             }
-            if let Some(input) = app.input_mut() {
+            if let Some(input) = app.protected_input_mut() {
                 if input.push_char(character).is_err() {
                     app.set_error("Protected input exceeds the vault value size limit.");
                 }
@@ -457,13 +515,115 @@ fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> Run
     }
 }
 
+fn handle_form_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Tab => {
+            app.cycle_form_focus(false);
+            RuntimeAction::Redraw
+        }
+        KeyCode::BackTab => {
+            app.cycle_form_focus(true);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(' ') => {
+            if app.metadata_input_mut().is_some() || app.protected_input_mut().is_some() {
+                push_form_character(app, ' ')
+            } else {
+                app.toggle_form_kind();
+                RuntimeAction::Redraw
+            }
+        }
+        KeyCode::Enter => app.submit_form().map_or(RuntimeAction::Redraw, |action| {
+            RuntimeAction::Start(BackendRequest::Execute(action))
+        }),
+        KeyCode::Backspace => {
+            if let Some(input) = app.protected_input_mut() {
+                input.backspace();
+            } else if let Some(input) = app.metadata_input_mut() {
+                input.pop();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(input) = app.protected_input_mut() {
+                input.clear();
+            } else if let Some(input) = app.metadata_input_mut() {
+                input.clear();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            push_form_character(app, character)
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn handle_delete_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => app.submit_delete().map_or(RuntimeAction::Redraw, |action| {
+            RuntimeAction::Start(BackendRequest::Execute(action))
+        }),
+        KeyCode::Backspace => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.pop();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.clear();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if let Some(input) = app.metadata_input_mut() {
+                input.push(character);
+            }
+            RuntimeAction::Redraw
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn push_form_character(app: &mut App, character: char) -> RuntimeAction {
+    if let Some(input) = app.protected_input_mut() {
+        if input.push_char(character).is_err() {
+            app.set_error("Protected input exceeds the vault value size limit.");
+        }
+    } else if let Some(input) = app.metadata_input_mut() {
+        input.push(character);
+    }
+    RuntimeAction::Redraw
+}
+
 pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
-    if let Some(input) = app.input_mut() {
+    if let Some(input) = app.protected_input_mut() {
         if input.paste(value).is_err() {
             app.set_error(
                 "Paste rejected: protected input would exceed the vault value size limit.",
             );
         }
+        return RuntimeAction::Redraw;
+    }
+    if let Some(input) = app.metadata_input_mut() {
+        input.push_str(value);
         return RuntimeAction::Redraw;
     }
     if app.searching {

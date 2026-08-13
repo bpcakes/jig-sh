@@ -1447,10 +1447,12 @@ dependencies = [
  "crossterm",
  "jig-tui",
  "jig-vault",
+ "libc",
  "ratatui",
  "secrecy",
  "tempfile",
  "unicode-width 0.2.0",
+ "zeroize",
 ]
 
 [[package]]
