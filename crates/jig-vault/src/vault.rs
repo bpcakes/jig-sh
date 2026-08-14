@@ -458,7 +458,7 @@ impl Vault {
     /// Captures an opaque precondition for one proposed import field set.
     ///
     /// The precondition records the exact encrypted vault-state generation and
-    /// ordered field presence observed under the vault lock. It can later be
+    /// ordered prior field kinds observed under the vault lock. It can later be
     /// consumed by [`Self::import_fields_if_unchanged`] so an interactive
     /// approval cannot silently widen to a different state.
     ///
@@ -796,11 +796,11 @@ pub enum VaultMutation {
 /// Opaque, one-shot optimistic-concurrency precondition for a field import.
 ///
 /// The encrypted-state generation is intentionally hidden so callers cannot
-/// construct or weaken a plan. Field presence is metadata and remains
+/// construct or weaken a plan. Prior field kinds are metadata and remain
 /// available for rendering a safe preview.
 pub struct VaultImportPrecondition {
     revision: VaultRevision,
-    fields: Vec<ImportFieldPresence>,
+    fields: Vec<ImportFieldObservation>,
 }
 
 impl VaultImportPrecondition {
@@ -808,7 +808,21 @@ impl VaultImportPrecondition {
     pub fn fields(&self) -> impl ExactSizeIterator<Item = (&VaultReference, bool)> {
         self.fields
             .iter()
-            .map(|field| (&field.reference, field.existed))
+            .map(|field| (&field.reference, field.previous_kind.is_some()))
+    }
+
+    /// Iterates over the planned references and their previously stored kinds.
+    ///
+    /// `None` identifies a field that did not exist when the plan was created.
+    /// The observation is bound to the same opaque revision as the commit
+    /// precondition, so an interactive preview can describe kind transitions
+    /// without separately reopening the vault.
+    pub fn fields_with_previous_kinds(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&VaultReference, Option<FieldKind>)> {
+        self.fields
+            .iter()
+            .map(|field| (&field.reference, field.previous_kind))
     }
 }
 
@@ -822,9 +836,9 @@ impl std::fmt::Debug for VaultImportPrecondition {
     }
 }
 
-struct ImportFieldPresence {
+struct ImportFieldObservation {
     reference: VaultReference,
-    existed: bool,
+    previous_kind: Option<FieldKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -2072,7 +2086,7 @@ impl VaultStore {
                 precondition
                     .fields
                     .into_iter()
-                    .map(|field| field.existed)
+                    .map(|field| field.previous_kind.is_some())
                     .collect()
             })
     }
@@ -2098,9 +2112,9 @@ impl VaultStore {
                 revision: vault.revision(),
                 fields: references
                     .iter()
-                    .map(|reference| ImportFieldPresence {
+                    .map(|reference| ImportFieldObservation {
                         reference: reference.clone(),
-                        existed: vault.contains_field(reference),
+                        previous_kind: vault.field_kind(reference),
                     })
                     .collect(),
             })
@@ -2518,9 +2532,14 @@ impl OpenVault {
     }
 
     fn contains_field(&self, reference: &VaultReference) -> bool {
+        self.field_kind(reference).is_some()
+    }
+
+    fn field_kind(&self, reference: &VaultReference) -> Option<FieldKind> {
         self.state
             .secrets
-            .contains_key(reference.to_secret_name().as_str())
+            .get(reference.to_secret_name().as_str())
+            .map(|entry| entry.kind)
     }
 
     fn change_field_kind(
@@ -3186,7 +3205,11 @@ fn enforce_import_precondition(
         "vault state changed since the import preview; preview again",
     )?;
     if !replace {
-        if let Some(field) = precondition.fields.iter().find(|field| field.existed) {
+        if let Some(field) = precondition
+            .fields
+            .iter()
+            .find(|field| field.previous_kind.is_some())
+        {
             return Err(classified(
                 VaultErrorKind::AlreadyExists,
                 format!(

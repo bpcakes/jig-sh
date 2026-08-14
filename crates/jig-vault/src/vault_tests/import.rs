@@ -290,6 +290,15 @@ fn planned_import_applies_only_to_its_exact_ordered_field_set() {
             .collect::<Vec<_>>(),
         vec![(existing.clone(), true), (new.clone(), false)]
     );
+    assert_eq!(
+        plan.fields_with_previous_kinds()
+            .map(|(reference, previous_kind)| (reference.clone(), previous_kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (existing.clone(), Some(FieldKind::Text)),
+            (new.clone(), None)
+        ]
+    );
     vault
         .import_fields_if_unchanged(
             &passphrase(),
