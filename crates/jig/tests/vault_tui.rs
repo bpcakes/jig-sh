@@ -86,11 +86,11 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         tools_offset,
-        "Enter open",
+        "Enter run/open",
         Duration::from_secs(3),
     );
     let activity_offset = output.len();
-    master.write_all(b"\r").unwrap();
+    master.write_all(b"activity\r").unwrap();
     read_until_from(
         &mut master,
         &mut output,
