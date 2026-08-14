@@ -1640,6 +1640,42 @@ fn help_and_footer_render_catalog_backed_action_discovery() {
 }
 
 #[test]
+fn browser_footer_keeps_feedback_visible_while_filtering() {
+    let mut app = browsing_app();
+    app.append_filter("api");
+    app.set_error("Export failed without changing the vault.");
+
+    let backend = TestBackend::new(120, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let failed = terminal.backend().to_string();
+    assert!(failed.contains("/api"), "{failed}");
+    assert!(
+        failed.contains("Export failed without changing the vault."),
+        "{failed}"
+    );
+
+    app.set_info("Vault metadata refreshed.");
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let succeeded = terminal.backend().to_string();
+    assert!(succeeded.contains("/api"), "{succeeded}");
+    assert!(
+        succeeded.contains("Vault metadata refreshed."),
+        "{succeeded}"
+    );
+
+    app.searching = true;
+    app.set_error("Search filter exceeds the interactive size limit.");
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let searching = terminal.backend().to_string();
+    assert!(searching.contains("/api"), "{searching}");
+    assert!(
+        searching.contains("Search filter exceeds the interactive size limit."),
+        "{searching}"
+    );
+}
+
+#[test]
 fn platform_capabilities_gate_private_output_without_disabling_portable_actions() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;

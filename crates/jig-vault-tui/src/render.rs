@@ -236,8 +236,10 @@ fn draw_loading(frame: &mut Frame, area: Rect, app: &App, label: &str) {
 }
 
 fn draw_browser(frame: &mut Frame, area: Rect, app: &App) {
-    let footer_height = if app.searching || !app.filter.is_empty() || app.status.is_some() {
-        5
+    let filter_visible = app.searching || !app.filter.is_empty();
+    let retained_filter_and_status = !app.searching && filter_visible && app.status.is_some();
+    let footer_height = if filter_visible || app.status.is_some() {
+        5 + u16::from(retained_filter_and_status)
     } else {
         4
     };
@@ -528,7 +530,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(ACCENT),
         ));
         lines.push(Line::from(spans));
-    } else if let Some(status) = &app.status {
+    }
+    if let Some(status) = &app.status {
         let color = match status.kind {
             StatusKind::Info => GOOD,
             StatusKind::Error => BAD,
