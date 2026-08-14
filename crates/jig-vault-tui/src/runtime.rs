@@ -557,8 +557,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 
     match &app.screen {
         Screen::Missing => return handle_missing_key(app, key),
-        Screen::Locked(_) => return handle_protected_key(app, key, false),
-        Screen::Initialize { .. } => return handle_protected_key(app, key, true),
+        Screen::Locked(_) => return handle_locked_key(app, key),
+        Screen::Initialize { .. } => return handle_initialize_key(app, key),
         Screen::Loading(_) => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => RuntimeAction::Quit,
@@ -770,27 +770,49 @@ fn handle_missing_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     }
 }
 
-fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> RuntimeAction {
+fn handle_locked_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     match key.code {
-        KeyCode::Esc if initializing => {
-            app.cancel_initialize();
-            RuntimeAction::Redraw
-        }
         KeyCode::Esc => RuntimeAction::Quit,
-        KeyCode::Tab | KeyCode::BackTab if initializing => {
-            app.toggle_initialize_focus();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Enter if initializing => app
-            .begin_initialize()
-            .map_or(RuntimeAction::Redraw, |passphrase| {
-                RuntimeAction::Start(BackendRequest::Initialize(passphrase))
-            }),
         KeyCode::Enter => app
             .begin_unlock()
             .map_or(RuntimeAction::Redraw, |passphrase| {
                 RuntimeAction::Start(BackendRequest::Unlock(passphrase))
             }),
+        KeyCode::Char('q')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && app
+                    .protected_input_mut()
+                    .is_some_and(|input| input.is_empty()) =>
+        {
+            RuntimeAction::Quit
+        }
+        _ => handle_protected_editing_key(app, key),
+    }
+}
+
+fn handle_initialize_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.cancel_initialize();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.toggle_initialize_focus();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => app
+            .begin_initialize()
+            .map_or(RuntimeAction::Redraw, |passphrase| {
+                RuntimeAction::Start(BackendRequest::Initialize(passphrase))
+            }),
+        _ => handle_protected_editing_key(app, key),
+    }
+}
+
+fn handle_protected_editing_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
         KeyCode::Backspace => {
             if let Some(input) = app.protected_input_mut() {
                 input.backspace();
@@ -808,14 +830,6 @@ fn handle_protected_key(app: &mut App, key: KeyEvent, initializing: bool) -> Run
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
-            if !initializing
-                && character == 'q'
-                && app
-                    .protected_input_mut()
-                    .is_some_and(|input| input.is_empty())
-            {
-                return RuntimeAction::Quit;
-            }
             if let Some(input) = app.protected_input_mut() {
                 if input.push_char(character).is_err() {
                     app.set_error("Protected input exceeds the vault value size limit.");
