@@ -31,7 +31,8 @@
 - At most one backend worker may exist. Join a non-cancellable mutation before terminal restoration.
 - Scope is fixed for the session and stays visible.
 - Lock drops credentials, snapshots, and all pending protected inputs.
-- Peek and export consume plaintext inside an immediate caller-selected sink; plaintext never returns through `VaultActionResult`.
+- Authentication and audit failures lock the session; five minutes without terminal key/paste input does the same after joining the owned operation.
+- Peek and export consume plaintext inside an immediate caller-selected sink; plaintext never returns through `VaultActionResult`. Peek bypasses Ratatui, bounds and terminal-escapes its source prefix, and clears direct output before metadata redraw.
 
 ## Common commands
 

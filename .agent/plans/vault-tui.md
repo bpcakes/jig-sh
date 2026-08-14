@@ -19,7 +19,7 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - [x] (2026-08-13 22:26Z) Milestone 2: added the `jig-vault-tui` crate, protected input and paired bracketed-paste lifecycle, explicit CLI entrypoint, fixed-scope session adapter, unlock/lock/init/migrate states, responsive explorer, legacy visibility, and PTY restoration coverage. Focused tests and strict all-target Clippy pass.
 - [x] (2026-08-13 22:53Z) Milestone 3: added bounded protected value entry plus canonical and legacy create/replace/change-kind/rename/delete/convert workflows, atomic stale-state preconditions, exact destructive confirmation, and management PTY coverage. All focused suites and strict all-target Clippy pass.
 - [x] (2026-08-13 23:32Z) Milestone 4: added the Tools palette with metadata-only 1Password preview/dry-run and confirmed import, encrypted backup, passphrase rotation, verified Activity/audit views, and Linux absent-home restore. Focused core, adapter, integration, PTY, formatting, and strict Clippy checks pass.
-- [ ] Milestone 5: add private-file export, security-reviewed transient Peek, idle locking, signal/concurrency hardening, documentation, PTY acceptance, and sentinel leakage tests; test and commit the controlled-output slice.
+- [x] (2026-08-14 00:04Z) Milestone 5: added private-file export, an exact-confirmation bounded terminal-safe Peek, five-minute idle locking, fail-closed authentication/audit handling, direct-output cleanup on normal exit/signal/panic, large-terminal hardening, documentation, and PTY/sentinel coverage. All focused suites and strict all-target Clippy pass.
 - [ ] Build the development Jig binary and pass formatting, strict Clippy, contract, full repository test, structured evidence, gate, receipt, and final diff audits.
 - [ ] Close structured work and record final commit identifiers and outcomes.
 
@@ -63,6 +63,12 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 
 - Observation: raw PTY output is not a stable plain-text snapshot because Ratatui may split visible labels with cursor-positioning escape sequences.
   Evidence: the lifecycle Tools acceptance initially waited for multiword box titles that were visibly present but non-contiguous in the byte stream. It now synchronizes on stable action identifiers and waits for the browser repaint after closing Activity before resizing and locking.
+
+- Observation: Ratatui 0.28 indexes buffer cells using `u16` multiplication, so a valid 608-by-113 terminal can wrap the computed cell offset even though the backing allocation itself fits in memory.
+  Evidence: the required large-terminal regression initially overwrote earlier rows instead of rendering all three metadata headings. The renderer now caps only the active height to `u16::MAX / width`, leaving the already-cleared remainder of the alternate screen unused; the 608-by-113 metadata-only test passes.
+
+- Observation: clearing a transient reveal only on its ordinary return is insufficient because a panic can unwind while direct output is still on the alternate screen.
+  Evidence: `TerminalSession::Drop` now clears and homes the alternate screen before restoring the cursor and terminal mode. A self-spawned PTY test writes a direct-output marker, deliberately panics, and proves a later clear, bracketed-paste disable, alternate-screen leave, and terminal flag restoration.
 
 ## Decision Log
 
@@ -122,6 +128,14 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
   Rationale: the activity projection is explicitly whitelisted domain metadata. MAC material is neither operationally useful in the TUI nor part of the requested management view, and omitting it narrows the render boundary.
   Date/Author: 2026-08-13 / Codex
 
+- Decision: require typing `PEEK`, display at most 4 KiB of source bytes through an immediate escaping writer, and clear after the next key or ten seconds without ever returning plaintext or the escaped copy through TUI model state.
+  Rationale: this makes disclosure deliberate and bounded, prevents terminal-control injection and Ratatui-buffer retention, and keeps the unavoidable scrollback/multiplexer/remote-recording trust boundary visible to the operator.
+  Date/Author: 2026-08-14 / Codex
+
+- Decision: treat only actionable key and paste events as activity, join any owned operation before explicit or idle lock, and lock on both authentication and audit failures.
+  Rationale: resize and focus noise must not keep a credential alive indefinitely, while dropping a credential underneath an audited operation would violate the single-worker lifecycle. Authentication or chain-integrity loss invalidates the complete session rather than only the current action.
+  Date/Author: 2026-08-14 / Codex
+
 ## Outcomes & Retrospective
 
 Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supplies the complete metadata and atomic domain foundation: one unlock now returns canonical fields, disjoint unrepresentable legacy records, format/identity metadata, and audit verification; verified recent activity contains only whitelisted summaries; and management moves preserve encrypted bytes and creation timestamps under one audited lock/save. Collision, v1, tamper, short-value, timestamp, no-plaintext, and legacy-deduplication tests are included. The complete `jig-vault` suite reports 206 passed in 98.91 seconds.
@@ -131,6 +145,8 @@ Milestone 2 adds an explicit TTY-only `jig vault tui`, rejects JSON before scope
 Milestone 3 completes interactive value management. Canonical fields can be created, replaced from an always-empty editor or exact binary regular file, retyped, renamed or moved, and deleted individually or by item; legacy values can be explicitly created, replaced, converted atomically, and removed. Protected input is capped at one MiB, uses non-growing zeroizing storage, rejects an overflowing paste as a unit, and exposes only bullets and byte counts to rendering. Destructive actions require exact typed confirmation. Create, replace, and required-remove preconditions are enforced under the vault lock so concurrent CLI changes cannot be overwritten from a stale form, and conflict/not-found results trigger a metadata refresh without automatic retry. Evidence is 209 `jig-vault` tests in 95.33 seconds, 19 `jig-vault-tui` tests in 7.68 seconds, 93 filtered `jig-sh` vault tests in 65.30 seconds, one 2.45-second PTY unlock/create/resize/lock/unlock/quit test, and warning-free strict all-target Clippy across all affected crates. Milestones 4–5 and the final repository gates remain.
 
 Milestone 4 adds a state-aware Tools palette. Import parses and previews only safe mappings and collisions, supports a true no-`op` dry run, requires exact `IMPORT`, then reparses and rechecks current destinations immediately before the hardened owned resolver. Backup creation is private and no-clobber by default. Passphrase rotation updates the process credential only after the atomic core change. Activity and audit screens render verified whitelisted metadata without MAC material, while Linux restore is available only for an absent target and returns to the ordinary locked flow. Evidence is 209 `jig-vault` tests in 94.12 seconds, 23 `jig-vault-tui` tests in 7.67 seconds, 95 filtered `jig-sh` vault tests in 67.22 seconds, five `vault_import` integration tests in 53.57 seconds, one `vault_lifecycle` integration test in 118.07 seconds, the expanded PTY acceptance in 3.01 seconds, and warning-free strict all-target Clippy. Milestone 5 and the final repository gates remain.
+
+Milestone 5 completes controlled output and session hardening. Canonical fields export through the core owner-only, symlink-refusing, atomic private-file sink with explicit overwrite and a fresh audited metadata snapshot. Peek requires exact confirmation, bypasses Ratatui, escapes controls, invalid UTF-8, directional formatting, and backslashes, emits at most the first 4 KiB, and clears after a key or ten seconds; only source byte count returns. Explicit and five-minute idle lock wait for the sole worker, and authentication or audit failure drops the session. Normal exit, Ctrl-C, SIGTERM, and panic clear the alternate screen before terminal restoration. Evidence is 209 `jig-vault` tests in 93.93 seconds, 6 `jig-tui` unit tests plus its direct-output panic PTY test, 31 `jig-vault-tui` tests in 7.89 seconds, 95 filtered `jig-sh` vault tests in 67.57 seconds, the 50.06-second lifecycle adapter test, two end-to-end Vault PTY tests in 3.36 seconds, and warning-free strict all-target Clippy. Documentation now states the exact disclosure and session boundaries. The final repository gates remain.
 
 ## Context and Orientation
 
@@ -385,3 +401,7 @@ Revision note (2026-08-13): Recorded Milestone 1 implementation and evidence aft
 Revision note (2026-08-13): Recorded Milestone 2 implementation and evidence after adding the feature crate, CLI/session boundary, responsive metadata browser, protected credential editor, and PTY terminal-restoration coverage.
 
 Revision note (2026-08-13): Recorded Milestone 3 implementation and evidence after adding protected value forms, complete canonical and legacy management workflows, lock-scoped stale-state preconditions, hardened binary file input, and destructive confirmation.
+
+Revision note (2026-08-13): Recorded Milestone 4 implementation and evidence after adding import preview/commit, backup, passphrase rotation, verified activity/audit views, and absent-home restore.
+
+Revision note (2026-08-14): Recorded Milestone 5 implementation and evidence after adding controlled export/Peek sinks, idle and fail-closed locking, terminal cleanup hardening, large-terminal protection, PTY coverage, and operator documentation.

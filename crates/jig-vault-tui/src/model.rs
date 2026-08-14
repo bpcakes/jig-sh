@@ -178,6 +178,7 @@ impl App {
                 | Screen::ImportPreview(_)
                 | Screen::Activity(_)
                 | Screen::AuditResult(_)
+                | Screen::ConfirmPeek(_)
         ) {
             self.screen = if self.snapshot.is_some() {
                 Screen::Browse
@@ -221,6 +222,7 @@ impl App {
             Screen::ToolForm(form) => form.metadata_input_mut(),
             Screen::ConfirmDelete(confirmation) => Some(&mut confirmation.input),
             Screen::ImportPreview(preview) => Some(&mut preview.confirmation),
+            Screen::ConfirmPeek(confirmation) => Some(&mut confirmation.input),
             _ => None,
         }
     }
@@ -600,6 +602,35 @@ impl App {
         self.status = None;
     }
 
+    pub(crate) fn begin_export(&mut self) {
+        match self.selected_entry.clone() {
+            Some(EntryIdentity::Field(reference)) => {
+                self.screen = Screen::ToolForm(ToolForm::export_field(reference));
+                self.status = None;
+            }
+            Some(EntryIdentity::Legacy(_)) => self.set_error(
+                "Legacy values cannot be exported directly; convert the entry to a canonical field first.",
+            ),
+            None => self.set_error("Select a canonical field to export."),
+        }
+    }
+
+    pub(crate) fn begin_peek(&mut self) {
+        match self.selected_entry.clone() {
+            Some(EntryIdentity::Field(reference)) => {
+                self.screen = Screen::ConfirmPeek(PeekConfirmation {
+                    reference,
+                    input: String::new(),
+                });
+                self.status = None;
+            }
+            Some(EntryIdentity::Legacy(_)) => self.set_error(
+                "Legacy values cannot be previewed directly; convert the entry to a canonical field first.",
+            ),
+            None => self.set_error("Select a canonical field to preview."),
+        }
+    }
+
     pub(crate) fn cycle_form_focus(&mut self, backwards: bool) {
         match &mut self.screen {
             Screen::Form(form) => form.cycle_focus(backwards),
@@ -675,6 +706,39 @@ impl App {
         self.next_selection = None;
         self.begin_loading(label);
         Some(action)
+    }
+
+    pub(crate) fn submit_peek(&mut self) -> Option<VaultReference> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::ConfirmPeek(confirmation) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        if confirmation.input != "PEEK" {
+            self.screen = Screen::ConfirmPeek(confirmation);
+            self.set_error("Type PEEK exactly to open the controlled terminal preview.");
+            return None;
+        }
+        self.begin_loading("Preparing controlled terminal preview");
+        Some(confirmation.reference)
+    }
+
+    pub(crate) fn complete_peek(&mut self, bytes_written: usize) {
+        self.screen = Screen::Browse;
+        self.status = Some(StatusMessage::info(&format!(
+            "Controlled preview cleared after {bytes_written} source bytes."
+        )));
+    }
+
+    pub(crate) fn lock_after_inactivity(&mut self) {
+        self.lock();
+        self.status = Some(StatusMessage::info(
+            "Vault locked after five minutes without terminal input.",
+        ));
+    }
+
+    pub(crate) fn is_unlocked(&self) -> bool {
+        self.snapshot.is_some()
     }
 
     pub(crate) fn visible_items(&self) -> Vec<ItemIdentity> {
@@ -974,6 +1038,7 @@ pub(crate) enum Screen {
     ImportPreview(ImportPreviewState),
     Activity(ActivityView),
     AuditResult(AuditVerification),
+    ConfirmPeek(PeekConfirmation),
 }
 
 #[derive(Debug)]
@@ -986,6 +1051,12 @@ pub(crate) struct ImportPreviewState {
 pub(crate) struct ActivityView {
     pub(crate) records: Vec<VaultActivityRecord>,
     pub(crate) selected: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct PeekConfirmation {
+    pub(crate) reference: VaultReference,
+    pub(crate) input: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

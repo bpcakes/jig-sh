@@ -10,9 +10,11 @@ use ratatui::{
 use crate::model::{
     ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
     ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
-    RenameFieldFocus, Screen, StatusKind, kind_label,
+    PeekConfirmation, RenameFieldFocus, Screen, StatusKind, kind_label,
 };
-use crate::tools::{BackupFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu};
+use crate::tools::{
+    BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu,
+};
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
@@ -24,7 +26,7 @@ const MIN_HEIGHT: u16 = 12;
 const WIDE_WIDTH: u16 = 104;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
-    let area = frame.area();
+    let area = safe_render_area(frame.area());
     if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         frame.render_widget(
             Paragraph::new(format!(
@@ -63,7 +65,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::ToolForm(_)
         | Screen::ImportPreview(_)
         | Screen::Activity(_)
-        | Screen::AuditResult(_) => {
+        | Screen::AuditResult(_)
+        | Screen::ConfirmPeek(_) => {
             if app.snapshot.is_some() {
                 draw_browser(frame, area, app);
             } else {
@@ -93,10 +96,24 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 Screen::AuditResult(verification) => {
                     draw_audit_result(frame, centered_rect(72, 48, area), verification);
                 }
+                Screen::ConfirmPeek(confirmation) => {
+                    draw_peek_confirmation(frame, centered_rect(82, 58, area), app, confirmation);
+                }
                 _ => {}
             }
         }
     }
+}
+
+/// Ratatui 0.28 indexes cells with a `u16` multiplication. Bound the rendered
+/// height so unusually large terminals cannot wrap later rows over earlier
+/// cells. The unused bottom remains in the already-cleared alternate screen.
+fn safe_render_area(area: Rect) -> Rect {
+    if area.width == 0 {
+        return area;
+    }
+    let safe_height = u16::MAX / area.width;
+    Rect::new(area.x, area.y, area.width, area.height.min(safe_height))
 }
 
 fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
@@ -446,8 +463,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             .is_some_and(|snapshot| snapshot.format_version == 2)
     {
         lines.push(Line::from(
-            "a add  A legacy  e replace  K kind  n rename  c convert  D delete  : tools",
+            "a add  A legacy  e replace  K kind  n rename  c convert  D delete  x export  p peek  : tools",
         ));
+    } else if !app.searching {
+        lines.push(Line::from("x export  p peek  : tools"));
     }
     if app.searching || !app.filter.is_empty() {
         lines.push(Line::from(vec![
@@ -484,8 +503,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
             Line::from("e / K        replace a value / change field kind"),
             Line::from("n / c        rename field or item / convert legacy entry"),
             Line::from("D            delete with exact typed confirmation"),
+            Line::from("x / p        export privately / controlled terminal preview"),
             Line::from(":            lifecycle tools"),
             Line::from("L            lock and wipe process-local session state"),
+            Line::from("             auto-locks after five minutes without terminal input"),
             Line::from("q            quit"),
             Line::from(""),
             Line::from(Span::styled(
@@ -733,6 +754,41 @@ fn draw_delete_confirmation(
     );
 }
 
+fn draw_peek_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    confirmation: &PeekConfirmation,
+) {
+    frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Reveal this field in the alternate terminal screen?",
+            Style::default().fg(BAD).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        key_value("Reference", &confirmation.reference.to_string()),
+        Line::from("The value bypasses Ratatui and is escaped as terminal-safe text."),
+        Line::from(Span::styled(
+            "Terminal scrollback, multiplexers, remote sessions, and screen recording are external sinks.",
+            Style::default().fg(WARN),
+        )),
+        Line::from("The preview is bounded and is cleared after one key or ten seconds."),
+        Line::from(""),
+        Line::from("Type PEEK exactly to accept this disclosure:"),
+        form_value_line("Confirmation", &confirmation.input, true, false),
+        Line::from(""),
+        Line::from("Enter reveal   Esc cancel   Ctrl-U clear"),
+    ];
+    append_status(&mut lines, app);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Controlled terminal preview"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn draw_tools(frame: &mut Frame, area: Rect, menu: &ToolsMenu) {
     frame.render_widget(Clear, area);
     let items = menu
@@ -768,6 +824,28 @@ fn draw_tools(frame: &mut Frame, area: Rect, menu: &ToolsMenu) {
 fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
     frame.render_widget(Clear, area);
     let (title, mut lines) = match form {
+        ToolForm::ExportField {
+            reference,
+            output,
+            overwrite,
+            focus,
+        } => (
+            "Export field to private file",
+            vec![
+                key_value("Reference", &reference.to_string()),
+                form_value_line("Output file", output, *focus == ExportFocus::Output, false),
+                toggle_line(
+                    "Overwrite regular file",
+                    *overwrite,
+                    *focus == ExportFocus::Overwrite,
+                ),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Exact bytes are written directly to a hardened owner-only file.",
+                    Style::default().fg(WARN),
+                )),
+            ],
+        ),
         ToolForm::ImportOnePassword {
             env_file,
             item,

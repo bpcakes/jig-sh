@@ -421,6 +421,22 @@ impl VaultBackend for VaultTuiBackend {
             VaultAction::ChangePassphrase { new_passphrase } => self
                 .change_session_passphrase(new_passphrase)
                 .map(VaultActionResult::Snapshot),
+            VaultAction::ExportField {
+                reference,
+                output,
+                overwrite,
+            } => {
+                PreparedPrivateFile::preflight(&output, overwrite).map_err(map_vault_error)?;
+                let result = self.with_vault(|selected, passphrase| {
+                    selected.read_field_to_file(passphrase, reference, &output, overwrite)
+                })?;
+                let snapshot = self.refresh()?;
+                Ok(VaultActionResult::Exported {
+                    output,
+                    bytes_written: result.bytes_written,
+                    snapshot,
+                })
+            }
             _ => Err(VaultUiError::new(
                 VaultUiErrorKind::Unsupported,
                 "This Vault TUI action is not available in the current milestone.",
@@ -660,6 +676,43 @@ mod tests {
             panic!("expected audit verification");
         };
         assert_eq!(verification.torn_tail_bytes, 0);
+
+        let export = temp.path().join("token.bin");
+        let VaultActionResult::Exported {
+            bytes_written,
+            snapshot,
+            ..
+        } = backend
+            .execute(VaultAction::ExportField {
+                reference: "jig://Production/TOKEN".parse().unwrap(),
+                output: export.clone(),
+                overwrite: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected export result");
+        };
+        assert_eq!(bytes_written, b"lifecycle-secret-sentinel".len());
+        assert_eq!(snapshot.fields.len(), 1);
+        assert_eq!(
+            std::fs::read(&export).unwrap(),
+            b"lifecycle-secret-sentinel"
+        );
+        let export_collision = backend
+            .execute(VaultAction::ExportField {
+                reference: "jig://Production/TOKEN".parse().unwrap(),
+                output: export,
+                overwrite: false,
+            })
+            .unwrap_err();
+        assert_eq!(export_collision.kind(), VaultUiErrorKind::Conflict);
+
+        let mut peeked = zeroize::Zeroizing::new(Vec::new());
+        let peeked_len = backend
+            .peek(&"jig://Production/TOKEN".parse().unwrap(), &mut *peeked)
+            .unwrap();
+        assert_eq!(peeked_len, b"lifecycle-secret-sentinel".len());
+        assert_eq!(&peeked[..], b"lifecycle-secret-sentinel");
 
         let backup = temp.path().join("vault.backup");
         let VaultActionResult::BackupCreated {

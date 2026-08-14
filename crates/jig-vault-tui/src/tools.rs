@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use jig_vault::{MIN_MASTER_PASSPHRASE_LEN, VaultItem};
+use jig_vault::{MIN_MASTER_PASSPHRASE_LEN, VaultItem, VaultReference};
 
 use crate::{VaultAction, secret_input::SecretInput};
 
@@ -74,6 +74,12 @@ impl ToolsMenu {
 
 #[derive(Debug)]
 pub(crate) enum ToolForm {
+    ExportField {
+        reference: VaultReference,
+        output: String,
+        overwrite: bool,
+        focus: ExportFocus,
+    },
     ImportOnePassword {
         env_file: String,
         item: String,
@@ -102,6 +108,15 @@ pub(crate) enum ToolForm {
 }
 
 impl ToolForm {
+    pub(crate) fn export_field(reference: VaultReference) -> Self {
+        Self::ExportField {
+            reference,
+            output: String::new(),
+            overwrite: false,
+            focus: ExportFocus::Output,
+        }
+    }
+
     pub(crate) fn for_choice(choice: ToolChoice) -> Option<Self> {
         match choice {
             ToolChoice::ImportOnePassword => Some(Self::ImportOnePassword {
@@ -146,12 +161,19 @@ impl ToolForm {
             Self::RestoreBackup {
                 passphrase, focus, ..
             } if *focus == RestoreFocus::Passphrase => Some(passphrase),
-            _ => None,
+            Self::ExportField { .. }
+            | Self::ImportOnePassword { .. }
+            | Self::CreateBackup { .. }
+            | Self::RestoreBackup { .. } => None,
         }
     }
 
     pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
         match self {
+            Self::ExportField { output, focus, .. } => match focus {
+                ExportFocus::Output => Some(output),
+                ExportFocus::Overwrite => None,
+            },
             Self::ImportOnePassword {
                 env_file,
                 item,
@@ -184,6 +206,7 @@ impl ToolForm {
 
     pub(crate) fn cycle_focus(&mut self, backwards: bool) {
         match self {
+            Self::ExportField { focus, .. } => *focus = focus.cycle(backwards),
             Self::ImportOnePassword { focus, .. } => *focus = focus.cycle(backwards),
             Self::CreateBackup { focus, .. } => *focus = focus.cycle(backwards),
             Self::ChangePassphrase { focus, .. } => *focus = focus.cycle(),
@@ -193,6 +216,9 @@ impl ToolForm {
 
     pub(crate) fn toggle_choice(&mut self) {
         match self {
+            Self::ExportField {
+                overwrite, focus, ..
+            } if *focus == ExportFocus::Overwrite => *overwrite = !*overwrite,
             Self::ImportOnePassword {
                 replace,
                 overwrite,
@@ -214,6 +240,19 @@ impl ToolForm {
 
     pub(crate) fn submission(&mut self) -> Result<ToolSubmission, String> {
         match self {
+            Self::ExportField {
+                reference,
+                output,
+                overwrite,
+                ..
+            } => Ok(ToolSubmission {
+                action: VaultAction::ExportField {
+                    reference: reference.clone(),
+                    output: required_file_path(output, "Export output")?,
+                    overwrite: *overwrite,
+                },
+                label: "Exporting vault field to private file",
+            }),
             Self::ImportOnePassword {
                 env_file,
                 item,
@@ -312,6 +351,21 @@ fn required_file_path(value: &str, label: &str) -> Result<PathBuf, String> {
 pub(crate) struct ToolSubmission {
     pub(crate) action: VaultAction,
     pub(crate) label: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExportFocus {
+    Output,
+    Overwrite,
+}
+
+impl ExportFocus {
+    const fn cycle(self, _backwards: bool) -> Self {
+        match self {
+            Self::Output => Self::Overwrite,
+            Self::Overwrite => Self::Output,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -6,6 +6,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     os::fd::{AsRawFd, FromRawFd},
+    os::unix::process::ExitStatusExt,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -18,6 +19,8 @@ const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
+const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
+const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -107,6 +110,42 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         Duration::from_secs(3),
     );
 
+    let confirmation_offset = output.len();
+    master.write_all(b"p").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        confirmation_offset,
+        "PEEK",
+        Duration::from_secs(3),
+    );
+    let peek_offset = output.len();
+    master.write_all(b"PEEK\r").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        peek_offset,
+        PEEK_END_MARKER,
+        Duration::from_secs(8),
+    );
+    assert!(
+        String::from_utf8_lossy(&output[peek_offset..]).contains(CREATED_VALUE_SENTINEL),
+        "controlled Peek did not emit the selected field"
+    );
+    let cleared_offset = output.len();
+    master.write_all(b" ").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        cleared_offset,
+        "Value hidden.",
+        Duration::from_secs(3),
+    );
+    assert!(
+        !String::from_utf8_lossy(&output[cleared_offset..]).contains(CREATED_VALUE_SENTINEL),
+        "controlled Peek value survived into the metadata redraw"
+    );
+
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
     // resize meaning.
@@ -132,7 +171,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "API_TOKEN",
         Duration::from_secs(8),
     );
-    master.write_all(b"q").unwrap();
+    master.write_all(b"\x03").unwrap();
 
     let status = child
         .wait_timeout(Duration::from_secs(5))
@@ -171,13 +210,123 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "bracketed paste not disabled"
     );
     assert!(!output.contains(VALUE_SENTINEL));
-    assert!(!output.contains(CREATED_VALUE_SENTINEL));
+    assert_only_between_controlled_peek(&output, CREATED_VALUE_SENTINEL);
 
     let snapshot = vault.snapshot(&passphrase).unwrap();
     assert!(snapshot.fields.iter().any(|field| {
         field.reference.to_string() == "jig://Production/PTY_FIELD"
             && field.value_len == CREATED_VALUE_SENTINEL.len()
     }));
+}
+
+#[test]
+fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
+    let temp = support::tempdir().unwrap();
+    let home = temp.path().join("vault");
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    let passphrase = SecretString::from(PASSPHRASE.to_owned());
+    vault.init(&passphrase).unwrap();
+    vault
+        .set_field(
+            &passphrase,
+            "jig://Production/API_TOKEN".parse().unwrap(),
+            FieldKind::Concealed,
+            SecretBytes::new(VALUE_SENTINEL.as_bytes().to_vec()),
+        )
+        .unwrap();
+
+    let Some((mut master, slave)) = required_pseudo_terminal("vault tui signal") else {
+        return;
+    };
+    let stdin = slave.try_clone().unwrap();
+    let stdout = slave.try_clone().unwrap();
+    let stderr = slave.try_clone().unwrap();
+    let original = terminal_attributes(&slave);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+        .args(["vault", "tui", "--home"])
+        .arg(&home)
+        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    set_nonblocking(&master);
+
+    let mut output = Vec::new();
+    read_until(
+        &mut master,
+        &mut output,
+        "API_TOKEN",
+        Duration::from_secs(8),
+    );
+    // SAFETY: the child PID is live and the runtime's signal session owns
+    // structured SIGTERM restoration and redelivery.
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    let status = child
+        .wait_timeout(Duration::from_secs(8))
+        .unwrap()
+        .unwrap_or_else(|| {
+            let _ = child.kill();
+            panic!(
+                "vault TUI did not exit after SIGTERM; output: {}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+    read_available(&mut master, &mut output);
+    assert!(
+        status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
+        "vault TUI exited with {status}; output: {}",
+        String::from_utf8_lossy(&output)
+    );
+    let restored = terminal_attributes(&slave);
+    assert_eq!(
+        restored.c_lflag & (libc::ECHO | libc::ICANON),
+        original.c_lflag & (libc::ECHO | libc::ICANON),
+        "terminal echo/canonical flags were not restored after SIGTERM"
+    );
+    let output = String::from_utf8_lossy(&output);
+    assert!(
+        output.contains("\u{1b}[2J"),
+        "alternate screen was not cleared"
+    );
+    assert!(
+        output.contains("\u{1b}[?1049l"),
+        "alternate screen was not left"
+    );
+    assert!(
+        output.contains("\u{1b}[?2004l"),
+        "bracketed paste was not disabled"
+    );
+    assert!(!output.contains(VALUE_SENTINEL));
+}
+
+fn assert_only_between_controlled_peek(output: &str, sentinel: &str) {
+    let mut cursor = 0;
+    let mut occurrences = 0;
+    while let Some(relative) = output[cursor..].find(sentinel) {
+        let position = cursor + relative;
+        let begin = output[..position]
+            .rfind(PEEK_BEGIN_MARKER)
+            .expect("revealed value appeared without a controlled Peek start marker");
+        if let Some(previous_end) = output[..position].rfind(PEEK_END_MARKER) {
+            assert!(
+                previous_end < begin,
+                "revealed value appeared after the controlled Peek end marker"
+            );
+        }
+        assert!(
+            output[position + sentinel.len()..].contains(PEEK_END_MARKER),
+            "revealed value appeared without a controlled Peek end marker"
+        );
+        occurrences += 1;
+        cursor = position + sentinel.len();
+    }
+    assert!(occurrences > 0, "controlled Peek never emitted the value");
 }
 
 fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {

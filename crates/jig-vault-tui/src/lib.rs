@@ -12,6 +12,7 @@ use jig_vault::{
 };
 
 mod model;
+mod peek;
 mod render;
 mod runtime;
 mod secret_input;
@@ -202,6 +203,7 @@ pub enum VaultActionResult {
     Exported {
         output: PathBuf,
         bytes_written: usize,
+        snapshot: VaultSnapshot,
     },
 }
 

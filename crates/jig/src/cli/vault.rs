@@ -159,6 +159,26 @@ provide the required atomic absent-directory installation path.
 Example:
   jig vault backup restore --in ./project-vault.backup --home ./restored-vault";
 
+const VAULT_TUI_AFTER_HELP: &str = "\
+Opens one fixed repo, global, or explicit-home vault in a full-screen keyboard
+manager. The TUI browses metadata without decrypting on selection; manages
+canonical and legacy entries; imports a 1Password dotenv bundle; creates and
+restores encrypted backups; rotates the passphrase; and verifies safe activity.
+
+Canonical fields can be exported directly to a hardened private file. The
+explicit Peek action bypasses Ratatui, shows a bounded terminal-safe escaped
+preview after a warning and exact confirmation, then clears it after one key or
+ten seconds. Terminal scrollback, multiplexers, remote sessions, and recording
+remain external sinks. There is no clipboard integration or unlock daemon.
+
+The process-local credential is dropped by L, after five minutes without
+terminal input, on authentication or audit failure, and before terminal exit.
+Operational exec, run, and inject workflows remain separate CLI commands.
+This command requires terminal input/output and rejects --json.
+
+Example:
+  jig vault tui";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -177,7 +197,10 @@ pub(crate) enum VaultCommand {
     #[command(name = tool_defs::cli_command::VAULT_STATUS)]
     Status(VaultStatusOpts),
     /// Open the keyboard-first full-screen vault manager.
-    #[command(name = tool_defs::cli_command::VAULT_TUI)]
+    #[command(
+        name = tool_defs::cli_command::VAULT_TUI,
+        after_help = VAULT_TUI_AFTER_HELP
+    )]
     Tui(VaultTuiOpts),
     /// Explicitly upgrade an existing vault format.
     #[command(

@@ -500,6 +500,7 @@ At a glance:
 - `--home` is an explicit physical vault-home override for diagnostics and tests; it bypasses repo scoping and `[vault].allow_global`.
 - Canonical references are `jig://ITEM/FIELD`; the selected vault supplies the project context.
 - Concealed and text fields are both encrypted. Only concealed fields are output-redaction needles.
+- `vault tui` is the keyboard-first management plane for one fixed scope; it keeps ordinary frames metadata-only and auto-locks after five minutes without terminal input.
 - `vault read` and `vault inject` are controlled exact-byte reveal paths and never produce JSON values.
 - `vault exec` is a transparent streaming developer wrapper; the compatible `vault run` remains a constrained, buffered broker.
 - `vault secret` remains compatible vocabulary for concealed fields.
@@ -538,9 +539,17 @@ If automatic vault initialization fails after `jig init` or `jig adopt --write` 
 
 Jig creates or tightens vault directories to owner-only permissions, so do not point `JIG_VAULT_HOME` at a shared directory. The vault derives its passphrase wrapping key with Argon2id using 128 MiB memory, 3 iterations, 4 lanes, and a 32-byte output. New vault passphrases must be at least 12 bytes; Jig enforces a floor, not a password-strength meter, so operators are still responsible for choosing high-entropy passphrases. Passphrases are byte-exact after UTF-8 capture: Jig does not trim whitespace, strip trailing newlines, normalize Unicode, or otherwise rewrite prompt or environment input. Terminal use prompts for hidden passphrase entry. Non-interactive use reads the unlock passphrase from `JIG_VAULT_PASSPHRASE`; `vault passphrase change` requires both that variable and `JIG_VAULT_NEW_PASSPHRASE`, with no environment/prompt mixing. Successful capture removes both reserved variables before vault children can start. This is best-effort process hygiene and does not prove the OS or C runtime overwrote every previous environment backing byte. Command-line passphrases are intentionally unsupported because they leak through shell history and process listings.
 
-Keep `JIG_VAULT_PASSPHRASE` exported or re-export it for every non-interactive command that unlocks the vault, including list, read, inject, exec, run, audit, import, rotation, and backup/restore; `vault status` is the only vault command that does not require the passphrase. `vault status` is a non-creating probe: it refuses a symlinked vault home, but it does not create missing directories or tighten permissions. Its `exists` and `vault_file_exists` fields report whether `vault.json` exists, not whether the home directory exists.
+Keep `JIG_VAULT_PASSPHRASE` exported or re-export it for every non-interactive command that unlocks the vault, including list, read, inject, exec, run, audit, import, rotation, and backup/restore. `vault tui` may consume it once as its initial interactive credential; successful capture removes it before the TUI worker starts. `vault status` is the only vault command that does not require the passphrase. `vault status` is a non-creating probe: it refuses a symlinked vault home, but it does not create missing directories or tighten permissions. Its `exists` and `vault_file_exists` fields report whether `vault.json` exists, not whether the vault home directory exists.
 
 `scripts/jig vault passphrase change` fully reseals a version 2 vault with a new salt, current KDF parameters, and fresh nonces while retaining the vault ID, data-encryption key, fields, and timestamps. Interactive use asks for current, new, and confirmation; automation sets both reserved environment variables. If a crash makes the reported result uncertain, try the new passphrase first and then the old before attempting another mutation; atomic replacement leaves one complete envelope authoritative.
+
+### Keyboard-first Vault manager
+
+`scripts/jig vault tui` opens one resolved repo, global, or explicit-home scope for the lifetime of the process. It requires terminal stdin/stdout, rejects `--json`, and keeps the selected scope visible. The browser shows canonical items/fields and unrepresentable legacy entries using authenticated metadata only; selecting or filtering an entry never decrypts its value. Version 1 vaults remain browsable and revealable but are read-only until the deliberate `m` migration. Version 2 supports create/replace, kind changes, field and item renames, typed-confirmation deletion, legacy conversion, 1Password import preview/commit, private backup, passphrase rotation, verified Activity/audit views, and Linux absent-home restore from the Tools palette.
+
+`x` exports the selected canonical field through the same hardened private-file sink as `vault read --out-file`; an existing regular file requires explicit overwrite. Legacy values must first be converted because the core has no legacy plaintext accessor. `p` is an explicit controlled Peek: after a warning and exact `PEEK` confirmation, Ratatui drawing stops and the audited reveal writes directly to a terminal-safe escaping sink. It displays at most the first 4 KiB of source bytes, escapes controls, invalid UTF-8, backslashes, and directional-format characters, waits for one key or ten seconds, clears the alternate screen, and then redraws metadata. Printable bytes in that window are intentionally disclosed; terminal scrollback, tmux/screen, SSH infrastructure, and screen recording remain external sinks that Jig cannot revoke.
+
+The TUI retains only a process-local credential, reopens and authenticates current state for every operation, permits one owned operation at a time, and joins in-flight work before lock or terminal restoration. `L`, five minutes without keyboard/paste input, authentication loss, audit failure, signal shutdown, and ordinary exit drop the credential and pending protected forms. There is no clipboard/OSC52 integration, unlock daemon, remote synchronization, or cross-scope navigation. `vault exec`, `vault run`, and `vault inject` remain separate CLI workflows because they own child-process and raw streaming semantics.
 
 ### Reveal, injection, transparent execution, and import
 
@@ -575,6 +584,7 @@ This is a blast-radius reducer, not a sandbox. Once a child process receives a s
 Useful commands:
 
 - `scripts/jig vault init`
+- `scripts/jig vault tui`
 - `scripts/jig vault status`
 - `scripts/jig vault migrate --to 2`
 - `scripts/jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt`

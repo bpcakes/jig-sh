@@ -1,7 +1,7 @@
 //! Shared terminal lifecycle and cooperative worker foundations for Jig TUIs.
 
 use std::{
-    io::{self, IsTerminal, Stdout},
+    io::{self, IsTerminal, Stdout, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -12,10 +12,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    cursor::{Hide, Show},
+    cursor::{Hide, MoveTo, Show},
     event::{DisableBracketedPaste, EnableBracketedPaste, KeyEvent, KeyEventKind},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
@@ -139,6 +142,32 @@ impl TerminalSession {
     pub fn draw(&mut self, draw: impl FnOnce(&mut ratatui::Frame)) -> io::Result<()> {
         self.terminal.draw(draw).map(|_| ())
     }
+
+    /// Clears Ratatui's frame and lends the alternate-screen writer to one
+    /// immediate output operation. The caller must not retain the writer.
+    pub fn with_direct_output<T>(
+        &mut self,
+        operation: impl FnOnce(&mut dyn io::Write) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.terminal.clear()?;
+        execute!(self.terminal.backend_mut(), MoveTo(0, 0), Show)?;
+        let result = operation(self.terminal.backend_mut())?;
+        self.terminal.backend_mut().flush()?;
+        Ok(result)
+    }
+
+    /// Erases direct alternate-screen output and invalidates Ratatui's back
+    /// buffer so the next frame is redrawn in full.
+    pub fn clear_direct_output(&mut self) -> io::Result<()> {
+        execute!(
+            self.terminal.backend_mut(),
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            Hide
+        )?;
+        self.terminal.clear()?;
+        self.terminal.backend_mut().flush()
+    }
 }
 
 impl Drop for TerminalSession {
@@ -148,11 +177,19 @@ impl Drop for TerminalSession {
             let _ = execute!(
                 self.terminal.backend_mut(),
                 DisableBracketedPaste,
+                Clear(ClearType::All),
+                MoveTo(0, 0),
                 Show,
                 LeaveAlternateScreen
             );
         } else {
-            let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                Clear(ClearType::All),
+                MoveTo(0, 0),
+                Show,
+                LeaveAlternateScreen
+            );
         }
         let _ = disable_raw_mode();
     }

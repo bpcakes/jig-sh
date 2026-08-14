@@ -6,16 +6,19 @@ use std::{
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_terminal};
-use jig_vault::{SecretBytes, VaultSnapshot};
+use jig_vault::{SecretBytes, VaultReference, VaultSnapshot};
 
 use crate::{
     VaultAction, VaultActionResult, VaultBackend, VaultUiError, VaultUiErrorKind,
     model::{App, Focus, Screen},
+    peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_IDLE_LOCK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PEEK_DISPLAY_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) fn run(
     backend: impl VaultBackend,
@@ -42,6 +45,7 @@ pub(crate) fn run(
     }
     let mut dirty = true;
     let mut next_spinner = Instant::now() + SPINNER_INTERVAL;
+    let mut idle = IdleTimer::new(Instant::now(), DEFAULT_IDLE_LOCK_TIMEOUT);
 
     loop {
         if external_cancellation() {
@@ -57,6 +61,11 @@ pub(crate) fn run(
         }
 
         let now = Instant::now();
+        if idle.expired(now, app.is_unlocked()) {
+            lock_after_inactivity(&mut terminal, &mut worker, &backend, &mut app)?;
+            idle.record(now);
+            dirty = true;
+        }
         if matches!(app.screen, Screen::Loading(_)) && now >= next_spinner {
             app.tick = app.tick.wrapping_add(1);
             next_spinner = now + SPINNER_INTERVAL;
@@ -71,7 +80,13 @@ pub(crate) fn run(
         }
 
         if event::poll(EVENT_POLL_INTERVAL).context("failed to poll Vault TUI input")? {
-            let action = match event::read().context("failed to read Vault TUI input")? {
+            let input = event::read().context("failed to read Vault TUI input")?;
+            if matches!(&input, Event::Key(key) if is_actionable_key(*key))
+                || matches!(&input, Event::Paste(_))
+            {
+                idle.record(Instant::now());
+            }
+            let action = match input {
                 Event::Key(key) if is_actionable_key(key) => handle_key(&mut app, key),
                 Event::Paste(value) => handle_paste(&mut app, &value),
                 Event::Resize(_, _) => RuntimeAction::Redraw,
@@ -81,15 +96,29 @@ pub(crate) fn run(
                 RuntimeAction::Ignore => {}
                 RuntimeAction::Redraw => dirty = true,
                 RuntimeAction::Lock => {
-                    if worker.is_none() {
-                        backend.lock();
-                        app.lock();
-                        dirty = true;
-                    }
+                    lock_session(&mut terminal, &mut worker, &backend, &mut app)?;
+                    idle.record(Instant::now());
+                    dirty = true;
                 }
                 RuntimeAction::Start(request) => {
                     if worker.is_none() {
                         worker = Some(ActionWorker::spawn(Arc::clone(&backend), request)?);
+                        dirty = true;
+                    }
+                }
+                RuntimeAction::Peek(reference) => {
+                    if worker.is_none() {
+                        terminal
+                            .draw(|frame| render::draw(frame, &app))
+                            .context("failed to draw the Vault TUI preview state")?;
+                        let result = run_controlled_peek(
+                            &mut terminal,
+                            &backend,
+                            &reference,
+                            &external_cancellation,
+                        )?;
+                        apply_peek_result(&mut app, &backend, result);
+                        idle.record(Instant::now());
                         dirty = true;
                     }
                 }
@@ -121,6 +150,131 @@ fn finish(
     Ok(())
 }
 
+fn lock_after_inactivity(
+    terminal: &mut TerminalSession,
+    worker: &mut Option<ActionWorker>,
+    backend: &Arc<dyn VaultBackend>,
+    app: &mut App,
+) -> Result<()> {
+    if let Some(mut active) = worker.take() {
+        app.begin_loading("Finishing current vault operation before idle lock");
+        terminal
+            .draw(|frame| render::draw(frame, app))
+            .context("failed to draw the Vault TUI idle-lock state")?;
+        active.cancel_and_join();
+    }
+    backend.lock();
+    app.lock_after_inactivity();
+    Ok(())
+}
+
+fn lock_session(
+    terminal: &mut TerminalSession,
+    worker: &mut Option<ActionWorker>,
+    backend: &Arc<dyn VaultBackend>,
+    app: &mut App,
+) -> Result<()> {
+    if let Some(mut active) = worker.take() {
+        app.begin_loading("Finishing current vault operation before lock");
+        terminal
+            .draw(|frame| render::draw(frame, app))
+            .context("failed to draw the Vault TUI lock state")?;
+        active.cancel_and_join();
+    }
+    backend.lock();
+    app.lock();
+    Ok(())
+}
+
+fn run_controlled_peek(
+    terminal: &mut TerminalSession,
+    backend: &Arc<dyn VaultBackend>,
+    reference: &VaultReference,
+    external_cancellation: &Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<std::result::Result<usize, VaultUiError>> {
+    let direct_result = terminal
+        .with_direct_output(|output| {
+            write!(
+                output,
+                "{PEEK_BEGIN_MARKER}\r\nReference: {reference}\r\n\
+                 This controlled preview may be captured by terminal scrollback, multiplexers, or screen recording.\r\n\r\n"
+            )?;
+            let result = {
+                let mut writer = TerminalSafePreviewWriter::new(output);
+                let result = backend.peek(reference, &mut writer);
+                writer.finish()?;
+                result
+            };
+            if result.is_err() {
+                write!(
+                    output,
+                    "\r\n\r\nThe field could not be previewed. Details will be shown after this screen is cleared."
+                )?;
+            }
+            write!(
+                output,
+                "\r\n\r\n{PEEK_END_MARKER}\r\nPress any key to clear now; otherwise this screen clears in ten seconds."
+            )?;
+            output.flush()?;
+            Ok(result)
+        })
+        .context("failed to write the controlled Vault preview");
+
+    let wait_result = if direct_result.is_ok() {
+        wait_for_peek_dismissal(external_cancellation)
+    } else {
+        Ok(())
+    };
+    let clear_result = terminal
+        .clear_direct_output()
+        .context("failed to clear the controlled Vault preview");
+    clear_result?;
+    wait_result?;
+    direct_result
+}
+
+fn wait_for_peek_dismissal(
+    external_cancellation: &Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<()> {
+    let deadline = Instant::now() + PEEK_DISPLAY_TIMEOUT;
+    loop {
+        if external_cancellation() || Instant::now() >= deadline {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !event::poll(remaining.min(EVENT_POLL_INTERVAL))
+            .context("failed to poll controlled Vault preview input")?
+        {
+            continue;
+        }
+        match event::read().context("failed to read controlled Vault preview input")? {
+            Event::Key(key) if is_actionable_key(key) => return Ok(()),
+            Event::Paste(_) => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+fn apply_peek_result(
+    app: &mut App,
+    backend: &Arc<dyn VaultBackend>,
+    result: std::result::Result<usize, VaultUiError>,
+) {
+    match result {
+        Ok(bytes_written) => app.complete_peek(bytes_written),
+        Err(error)
+            if matches!(
+                error.kind(),
+                VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+            ) =>
+        {
+            backend.lock();
+            app.fail_unlock(&error);
+        }
+        Err(error) => app.fail_action(&error),
+    }
+}
+
 fn apply_completion(
     app: &mut App,
     backend: &Arc<dyn VaultBackend>,
@@ -149,7 +303,8 @@ fn apply_completion(
                 | OperationKind::VerifyAudit
                 | OperationKind::ImportPreview
                 | OperationKind::Backup
-                | OperationKind::Restore => "Vault operation completed.",
+                | OperationKind::Restore
+                | OperationKind::Export => "Vault operation completed.",
             };
             app.set_info(message);
         }
@@ -169,12 +324,22 @@ fn apply_completion(
             ));
         }
         Ok(VaultActionResult::Restored { .. }) => app.apply_restore(),
-        Ok(_) => app.fail_action(&VaultUiError::new(
-            VaultUiErrorKind::Other,
-            "Vault backend returned an unexpected action result.",
-        )),
+        Ok(VaultActionResult::Exported {
+            output,
+            bytes_written,
+            snapshot,
+        }) => {
+            app.apply_snapshot(snapshot);
+            app.set_info(&format!(
+                "Exported {bytes_written} bytes to private file {}.",
+                output.display()
+            ));
+        }
         Err(error) => {
-            if error.kind() == VaultUiErrorKind::Authentication {
+            if matches!(
+                error.kind(),
+                VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+            ) {
                 backend.lock();
                 if completion.kind == OperationKind::Restore {
                     app.fail_restore(&error);
@@ -200,7 +365,8 @@ fn apply_completion(
                 | OperationKind::ImportPreview
                 | OperationKind::Import
                 | OperationKind::Backup
-                | OperationKind::Passphrase => app.fail_action(&error),
+                | OperationKind::Passphrase
+                | OperationKind::Export => app.fail_action(&error),
             }
         }
     }
@@ -212,6 +378,7 @@ pub(crate) enum RuntimeAction {
     Redraw,
     Lock,
     Start(BackendRequest),
+    Peek(VaultReference),
     Quit,
 }
 
@@ -238,6 +405,7 @@ impl BackendRequest {
             Self::Execute(VaultAction::CreateBackup { .. }) => OperationKind::Backup,
             Self::Execute(VaultAction::ChangePassphrase { .. }) => OperationKind::Passphrase,
             Self::Execute(VaultAction::RestoreBackup { .. }) => OperationKind::Restore,
+            Self::Execute(VaultAction::ExportField { .. }) => OperationKind::Export,
             Self::Execute(_) => OperationKind::Mutation,
         }
     }
@@ -257,6 +425,7 @@ enum OperationKind {
     Backup,
     Passphrase,
     Restore,
+    Export,
 }
 
 struct BackendCompletion {
@@ -282,19 +451,19 @@ impl ActionWorker {
                     .map(VaultActionResult::Snapshot),
                 BackendRequest::Execute(action) => backend.execute(action),
             };
-            let refreshed_after_error =
-                if matches!(kind, OperationKind::Mutation | OperationKind::Import)
-                    && result.as_ref().is_err_and(|error| {
-                        matches!(
-                            error.kind(),
-                            VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
-                        )
-                    })
-                {
-                    Some(backend.refresh())
-                } else {
-                    None
-                };
+            let refreshed_after_error = if matches!(
+                kind,
+                OperationKind::Mutation | OperationKind::Import | OperationKind::Export
+            ) && result.as_ref().is_err_and(|error| {
+                matches!(
+                    error.kind(),
+                    VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
+                )
+            }) {
+                Some(backend.refresh())
+            } else {
+                None
+            };
             BackendCompletion {
                 kind,
                 result,
@@ -325,6 +494,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         Screen::Loading(_) => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => RuntimeAction::Quit,
+                KeyCode::Char('L') => RuntimeAction::Lock,
                 _ => RuntimeAction::Ignore,
             };
         }
@@ -356,6 +526,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         Screen::ToolForm(_) => return handle_tool_form_key(app, key),
         Screen::ImportPreview(_) => return handle_import_preview_key(app, key),
         Screen::Activity(_) => return handle_activity_key(app, key),
+        Screen::ConfirmPeek(_) => return handle_peek_confirmation_key(app, key),
         Screen::AuditResult(_) => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
@@ -488,6 +659,14 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         KeyCode::Char('D') => {
             app.begin_delete();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('x') => {
+            app.begin_export();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('p') => {
+            app.begin_peek();
             RuntimeAction::Redraw
         }
         KeyCode::Char('m')
@@ -771,6 +950,41 @@ fn handle_delete_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     }
 }
 
+fn handle_peek_confirmation_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    match key.code {
+        KeyCode::Esc => {
+            app.close_overlay();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => app
+            .submit_peek()
+            .map_or(RuntimeAction::Redraw, RuntimeAction::Peek),
+        KeyCode::Backspace => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.pop();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(input) = app.metadata_input_mut() {
+                input.clear();
+            }
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            if let Some(input) = app.metadata_input_mut() {
+                input.push(character);
+            }
+            RuntimeAction::Redraw
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
 fn push_form_character(app: &mut App, character: char) -> RuntimeAction {
     if let Some(input) = app.protected_input_mut() {
         if input.push_char(character).is_err() {
@@ -804,5 +1018,201 @@ pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
     RuntimeAction::Ignore
 }
 
+#[derive(Clone, Copy, Debug)]
+struct IdleTimer {
+    last_input: Instant,
+    timeout: Duration,
+}
+
+impl IdleTimer {
+    const fn new(last_input: Instant, timeout: Duration) -> Self {
+        Self {
+            last_input,
+            timeout,
+        }
+    }
+
+    fn record(&mut self, now: Instant) {
+        self.last_input = now;
+    }
+
+    fn expired(self, now: Instant, unlocked: bool) -> bool {
+        unlocked && now.saturating_duration_since(self.last_input) >= self.timeout
+    }
+}
+
 #[allow(dead_code)]
 fn _snapshot_is_metadata_only(_: &VaultSnapshot) {}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    use jig_vault::{FieldKind, SecretBytes, Vault};
+    use secrecy::SecretString;
+
+    use super::*;
+    use crate::VaultDescriptor;
+
+    struct TrackingBackend {
+        locks: AtomicUsize,
+        events: Mutex<Vec<&'static str>>,
+        started: Mutex<Option<mpsc::Sender<()>>>,
+        release: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl TrackingBackend {
+        fn immediate() -> Self {
+            Self {
+                locks: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
+                started: Mutex::new(None),
+                release: Mutex::new(None),
+            }
+        }
+
+        fn blocking(started: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
+            Self {
+                locks: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
+                started: Mutex::new(Some(started)),
+                release: Mutex::new(Some(release)),
+            }
+        }
+    }
+
+    impl VaultBackend for TrackingBackend {
+        fn descriptor(&self) -> VaultDescriptor {
+            VaultDescriptor {
+                scope: "test".to_owned(),
+                scope_id: None,
+                repo_name: None,
+                home: std::path::PathBuf::from("/tmp/test-vault"),
+                exists: true,
+            }
+        }
+
+        fn unlock(&self, _: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "unused"))
+        }
+
+        fn initialize(&self, _: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "unused"))
+        }
+
+        fn lock(&self) {
+            self.events.lock().unwrap().push("lock");
+            self.locks.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn refresh(&self) -> std::result::Result<VaultSnapshot, VaultUiError> {
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "unused"))
+        }
+
+        fn execute(&self, _: VaultAction) -> std::result::Result<VaultActionResult, VaultUiError> {
+            self.events.lock().unwrap().push("operation-started");
+            if let Some(started) = self.started.lock().unwrap().take() {
+                started.send(()).unwrap();
+            }
+            if let Some(release) = self.release.lock().unwrap().take() {
+                release.recv().unwrap();
+            }
+            self.events.lock().unwrap().push("operation-finished");
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "expected"))
+        }
+
+        fn peek(
+            &self,
+            _: &VaultReference,
+            _: &mut dyn std::io::Write,
+        ) -> std::result::Result<usize, VaultUiError> {
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "unused"))
+        }
+    }
+
+    fn unlocked_app() -> App {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = Vault::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/TOKEN".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"runtime-test-secret".to_vec()),
+            )
+            .unwrap();
+        let mut app = App::new(VaultDescriptor {
+            scope: "test".to_owned(),
+            scope_id: None,
+            repo_name: None,
+            home: temp.path().join("vault"),
+            exists: true,
+        });
+        app.apply_snapshot(vault.snapshot(&passphrase).unwrap());
+        app
+    }
+
+    #[test]
+    fn idle_timer_resets_and_expires_only_while_unlocked() {
+        let start = Instant::now();
+        let timeout = Duration::from_secs(300);
+        let mut timer = IdleTimer::new(start, timeout);
+        assert!(!timer.expired(start + timeout, false));
+        assert!(timer.expired(start + timeout, true));
+
+        timer.record(start + Duration::from_secs(299));
+        assert!(!timer.expired(start + timeout, true));
+        assert!(timer.expired(start + Duration::from_secs(599), true));
+    }
+
+    #[test]
+    fn authentication_and_audit_failures_drop_the_session() {
+        for kind in [VaultUiErrorKind::Authentication, VaultUiErrorKind::Audit] {
+            let backend = Arc::new(TrackingBackend::immediate());
+            let erased: Arc<dyn VaultBackend> = backend.clone();
+            let mut app = unlocked_app();
+            apply_completion(
+                &mut app,
+                &erased,
+                Ok(BackendCompletion {
+                    kind: OperationKind::VerifyAudit,
+                    result: Err(VaultUiError::new(kind, "safe failure")),
+                    refreshed_after_error: None,
+                }),
+            );
+            assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+            assert!(app.snapshot.is_none());
+            assert!(matches!(app.screen, Screen::Locked(_)));
+        }
+    }
+
+    #[test]
+    fn worker_join_finishes_the_operation_before_backend_lock() {
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let backend = Arc::new(TrackingBackend::blocking(started_sender, release_receiver));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut worker = ActionWorker::spawn(
+            Arc::clone(&erased),
+            BackendRequest::Execute(VaultAction::Refresh),
+        )
+        .unwrap();
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        release_sender.send(()).unwrap();
+        worker.cancel_and_join();
+        erased.lock();
+
+        assert_eq!(
+            *backend.events.lock().unwrap(),
+            ["operation-started", "operation-finished", "lock"]
+        );
+    }
+}

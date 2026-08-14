@@ -230,6 +230,20 @@ fn wide_browser_renders_three_metadata_panes_without_values() {
 }
 
 #[test]
+fn very_large_browser_frame_remains_metadata_only() {
+    let backend = TestBackend::new(608, 113);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let app = browsing_app();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+
+    assert!(rendered.contains("Items"), "{rendered}");
+    assert!(rendered.contains("Fields"), "{rendered}");
+    assert!(rendered.contains("Details"), "{rendered}");
+    assert!(!rendered.contains(std::str::from_utf8(SENTINEL).unwrap()));
+}
+
+#[test]
 fn compact_browser_uses_focused_pane_and_breadcrumb() {
     let backend = TestBackend::new(70, 22);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -741,4 +755,83 @@ fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
     let action = submit_key(&mut app);
     assert!(!format!("{action:?}").contains(std::str::from_utf8(SENTINEL).unwrap()));
     assert!(matches!(action, VaultAction::RestoreBackup { .. }));
+}
+
+#[test]
+fn export_and_peek_are_canonical_controlled_sinks() {
+    let mut app = browsing_app();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    assert!(matches!(app.screen, Screen::ToolForm(_)));
+    handle_paste(&mut app, "/tmp/private-export.bin");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    match submit_key(&mut app) {
+        VaultAction::ExportField {
+            reference,
+            output,
+            overwrite,
+        } => {
+            assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
+            assert_eq!(output, PathBuf::from("/tmp/private-export.bin"));
+            assert!(overwrite);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+
+    app.apply_snapshot(snapshot());
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    );
+    assert!(matches!(app.screen, Screen::ConfirmPeek(_)));
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Controlled terminal preview"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains(std::str::from_utf8(SENTINEL).unwrap()));
+
+    handle_paste(&mut app, "PEEK");
+    let RuntimeAction::Peek(reference) =
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("peek confirmation did not produce direct output action");
+    };
+    assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
+
+    app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_export();
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(app.status.as_ref().unwrap().text.contains("convert"));
+    app.begin_peek();
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(app.status.as_ref().unwrap().text.contains("convert"));
+}
+
+#[test]
+fn locking_drops_pending_protected_tool_inputs_and_metadata() {
+    let mut app = browsing_app();
+    app.open_tools();
+    app.move_tool_selection(4);
+    app.activate_tool();
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+    assert!(matches!(app.screen, Screen::ToolForm(_)));
+
+    app.lock();
+
+    assert!(app.snapshot.is_none());
+    assert!(app.selected_entry.is_none());
+    assert!(app.filter.is_empty());
+    assert!(matches!(app.screen, Screen::Locked(_)));
+    assert!(!format!("{:?}", app.screen).contains(std::str::from_utf8(SENTINEL).unwrap()));
 }
