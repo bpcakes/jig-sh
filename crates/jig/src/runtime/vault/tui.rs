@@ -58,6 +58,13 @@ struct VaultTuiSession {
     pending_import: Option<PendingImportPlan>,
 }
 
+impl VaultTuiSession {
+    fn erase(&mut self) {
+        self.credential = None;
+        self.pending_import = None;
+    }
+}
+
 struct PendingImportPlan {
     token: ImportPlanToken,
     environment: VaultImportEnvironment,
@@ -353,10 +360,14 @@ impl VaultBackend for VaultTuiBackend {
     }
 
     fn lock(&self) {
-        if let Ok(mut session) = self.session.lock() {
-            session.credential = None;
-            session.pending_import = None;
-        }
+        // Poisoning means a previous operation panicked while holding the
+        // session mutex. Normal operations fail closed through `session()`,
+        // but explicit erasure must still recover the guard and drop secrets.
+        let mut session = match self.session.lock() {
+            Ok(session) => session,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        session.erase();
     }
 
     fn refresh(&self) -> std::result::Result<VaultSnapshot, VaultUiError> {
@@ -575,6 +586,34 @@ mod tests {
             backend.refresh().unwrap_err().kind(),
             VaultUiErrorKind::Authentication
         );
+    }
+
+    #[test]
+    fn lock_erases_credentials_even_when_the_session_mutex_is_poisoned() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        let backend = VaultTuiBackend::new(request(home)).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _session = backend.session.lock().unwrap();
+            panic!("poison the vault TUI session mutex");
+        }));
+        assert!(panic.is_err());
+
+        backend.lock();
+
+        let session = match backend.session.lock() {
+            Ok(_) => panic!("session mutex unexpectedly lost its poisoned state"),
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        assert!(session.credential.is_none());
+        assert!(session.pending_import.is_none());
     }
 
     #[test]
