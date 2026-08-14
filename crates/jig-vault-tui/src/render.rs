@@ -1071,7 +1071,7 @@ fn draw_quick_access(frame: &mut Frame, area: Rect, app: &App, access: &QuickAcc
 
     let mut query = vec![Span::styled("Find: ", Style::default().fg(ACCENT))];
     query.extend(editor_spans(
-        &access.query,
+        access.query(),
         true,
         usize::from(outer[1].width.saturating_sub(8)),
         Style::default().fg(ACCENT),
@@ -1101,10 +1101,8 @@ fn draw_quick_access(frame: &mut Frame, area: Rect, app: &App, access: &QuickAcc
 }
 
 fn draw_quick_access_list(frame: &mut Frame, area: Rect, access: &QuickAccess) {
-    let visible = access.visible_indices();
-    let mut items = visible
-        .iter()
-        .filter_map(|index| access.targets.get(*index))
+    let mut items = access
+        .visible_targets()
         .map(|target| {
             ListItem::new(Line::from(vec![
                 Span::styled(
@@ -1121,12 +1119,11 @@ fn draw_quick_access_list(frame: &mut Frame, area: Rect, access: &QuickAccess) {
             Style::default().fg(MUTED),
         ))));
     }
-    let selected = (!visible.is_empty()).then_some(access.selected);
     let mut state = ListState::default()
         .with_offset(access.list_offset_for_viewport(area.height))
-        .with_selected(selected);
+        .with_selected(access.selected_row());
     frame.render_stateful_widget(
-        list(items, &format!("Quick Access · {}", visible.len())),
+        list(items, &format!("Quick Access · {}", access.visible_len())),
         area,
         &mut state,
     );

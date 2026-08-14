@@ -455,7 +455,7 @@ fn quick_access_rejects_query_overflow_and_recovers_from_no_matches() {
     let Screen::QuickAccess(access) = &app.screen else {
         panic!("expected Quick Access");
     };
-    assert_eq!(access.query.as_str(), "api");
+    assert_eq!(access.query().as_str(), "api");
     assert!(
         app.status
             .as_ref()

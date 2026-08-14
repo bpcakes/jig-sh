@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::BTreeMap};
 
-use jig_tui::{FuzzyMatchScore, fuzzy_match_score};
+use jig_tui::{FuzzyMatchScore, PreparedFuzzyText};
 use jig_vault::{FieldKind, VaultReference};
 
 use crate::{
@@ -45,39 +45,6 @@ impl QuickAccessTarget {
         }
     }
 
-    fn match_score(&self, query: &str) -> Option<(usize, FuzzyMatchScore)> {
-        let fields = match self {
-            Self::Item { item, .. } => vec![
-                (0, item.clone()),
-                (1, format!("jig://{item}")),
-                (2, "item".to_owned()),
-            ],
-            Self::Field { reference, kind } => vec![
-                (0, reference.field().to_owned()),
-                (1, reference.item().to_owned()),
-                (2, reference.to_string()),
-                (3, kind.as_str().to_owned()),
-                (4, "field".to_owned()),
-            ],
-            Self::LegacyGroup { .. } => vec![
-                (0, "legacy".to_owned()),
-                (1, "legacy entries".to_owned()),
-                (2, "group".to_owned()),
-            ],
-            Self::LegacyEntry { name } => vec![
-                (0, name.clone()),
-                (1, "legacy".to_owned()),
-                (2, "legacy entry".to_owned()),
-            ],
-        };
-        fields
-            .into_iter()
-            .filter_map(|(priority, field)| {
-                fuzzy_match_score(&field, query).map(|score| (priority, score))
-            })
-            .min()
-    }
-
     fn matches_app_selection(&self, app: &App) -> bool {
         match (self, app.focus) {
             (Self::Item { item, .. }, Focus::Items) => {
@@ -114,6 +81,71 @@ impl QuickAccessTarget {
     }
 }
 
+#[derive(Debug)]
+struct SearchTerm {
+    priority: usize,
+    text: PreparedFuzzyText,
+}
+
+impl SearchTerm {
+    fn new(priority: usize, text: &str) -> Self {
+        Self {
+            priority,
+            text: PreparedFuzzyText::new(text),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct QuickAccessEntry {
+    target: QuickAccessTarget,
+    search_terms: Vec<SearchTerm>,
+}
+
+impl QuickAccessEntry {
+    fn new(target: QuickAccessTarget) -> Self {
+        let search_terms = match &target {
+            QuickAccessTarget::Item { item, .. } => vec![
+                SearchTerm::new(0, item),
+                SearchTerm::new(1, &format!("jig://{item}")),
+                SearchTerm::new(2, "item"),
+            ],
+            QuickAccessTarget::Field { reference, kind } => vec![
+                SearchTerm::new(0, reference.field()),
+                SearchTerm::new(1, reference.item()),
+                SearchTerm::new(2, &reference.to_string()),
+                SearchTerm::new(3, kind.as_str()),
+                SearchTerm::new(4, "field"),
+            ],
+            QuickAccessTarget::LegacyGroup { .. } => vec![
+                SearchTerm::new(0, "legacy"),
+                SearchTerm::new(1, "legacy entries"),
+                SearchTerm::new(2, "group"),
+            ],
+            QuickAccessTarget::LegacyEntry { name } => vec![
+                SearchTerm::new(0, name),
+                SearchTerm::new(1, "legacy"),
+                SearchTerm::new(2, "legacy entry"),
+            ],
+        };
+        Self {
+            target,
+            search_terms,
+        }
+    }
+
+    fn match_score(&self, query: &PreparedFuzzyText) -> Option<(usize, FuzzyMatchScore)> {
+        self.search_terms
+            .iter()
+            .filter_map(|term| {
+                term.text
+                    .match_score(query)
+                    .map(|score| (term.priority, score))
+            })
+            .min()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum QuickAccessSelection {
     Item(ItemIdentity),
@@ -125,9 +157,10 @@ pub(crate) enum QuickAccessSelection {
 
 #[derive(Debug)]
 pub(crate) struct QuickAccess {
-    pub(crate) targets: Vec<QuickAccessTarget>,
-    pub(crate) query: LineEditor,
-    pub(crate) selected: usize,
+    entries: Vec<QuickAccessEntry>,
+    query: LineEditor,
+    visible_indices: Vec<usize>,
+    selected: usize,
     list_offset: Cell<usize>,
     list_viewport_height: Cell<u16>,
 }
@@ -170,42 +203,51 @@ impl QuickAccess {
                 );
             }
         }
-        let selected = targets
+        let entries = targets
+            .into_iter()
+            .map(QuickAccessEntry::new)
+            .collect::<Vec<_>>();
+        let selected = entries
             .iter()
-            .position(|target| target.matches_app_selection(app))
+            .position(|entry| entry.target.matches_app_selection(app))
             .unwrap_or(0);
+        let visible_indices = (0..entries.len()).collect();
         Self {
-            targets,
+            entries,
             query: LineEditor::search(),
+            visible_indices,
             selected,
             list_offset: Cell::new(0),
             list_viewport_height: Cell::new(0),
         }
     }
 
-    pub(crate) fn visible_indices(&self) -> Vec<usize> {
-        let query = self.query.as_str();
-        if query.is_empty() {
-            return (0..self.targets.len()).collect();
-        }
-        let mut matches = self
-            .targets
+    pub(crate) fn query(&self) -> &LineEditor {
+        &self.query
+    }
+
+    pub(crate) fn visible_targets(&self) -> impl Iterator<Item = &QuickAccessTarget> {
+        self.visible_indices
             .iter()
-            .enumerate()
-            .filter_map(|(index, target)| target.match_score(query).map(|score| (score, index)))
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|(score, index)| (*score, *index));
-        matches.into_iter().map(|(_, index)| index).collect()
+            .map(|index| &self.entries[*index].target)
+    }
+
+    pub(crate) fn visible_len(&self) -> usize {
+        self.visible_indices.len()
+    }
+
+    pub(crate) fn selected_row(&self) -> Option<usize> {
+        (!self.visible_indices.is_empty()).then_some(self.selected)
     }
 
     pub(crate) fn selected_target(&self) -> Option<&QuickAccessTarget> {
-        self.visible_indices()
+        self.visible_indices
             .get(self.selected)
-            .and_then(|index| self.targets.get(*index))
+            .map(|index| &self.entries[*index].target)
     }
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
-        let len = self.visible_indices().len();
+        let len = self.visible_indices.len();
         if len == 0 {
             self.selected = 0;
         } else {
@@ -214,26 +256,26 @@ impl QuickAccess {
     }
 
     pub(crate) fn move_to_edge(&mut self, end: bool) {
-        let len = self.visible_indices().len();
+        let len = self.visible_indices.len();
         self.selected = if end { len.saturating_sub(1) } else { 0 };
     }
 
     pub(crate) fn append_query(&mut self, value: &str) -> bool {
+        let previous_len = self.query.as_str().len();
         if !self.query.insert(value) {
             return false;
         }
-        self.selected = 0;
-        self.list_offset.set(0);
+        if self.query.as_str().len() != previous_len {
+            self.refresh_query_results();
+        }
         true
     }
 
     pub(crate) fn edit_query(&mut self, edit: LineEdit) {
+        let previous_len = self.query.as_str().len();
         self.query.apply(edit);
-        if edit.changes_text() {
-            self.selected = 0;
-            self.list_offset.set(0);
-        } else {
-            self.reconcile_selection();
+        if edit.changes_text() && self.query.as_str().len() != previous_len {
+            self.refresh_query_results();
         }
     }
 
@@ -248,9 +290,21 @@ impl QuickAccess {
         self.list_offset.set(offset);
     }
 
-    fn reconcile_selection(&mut self) {
-        self.selected = self
-            .selected
-            .min(self.visible_indices().len().saturating_sub(1));
+    fn refresh_query_results(&mut self) {
+        self.visible_indices = if self.query.is_empty() {
+            (0..self.entries.len()).collect()
+        } else {
+            let query = PreparedFuzzyText::new(self.query.as_str());
+            let mut matches = self
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| entry.match_score(&query).map(|score| (score, index)))
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|(score, index)| (*score, *index));
+            matches.into_iter().map(|(_, index)| index).collect()
+        };
+        self.selected = 0;
+        self.list_offset.set(0);
     }
 }
