@@ -13,13 +13,13 @@ commands cannot silently acquire incomplete dispatch behavior.
   principles and catalogs.
 - [x] Run the changed-code heuristic scanner and reject metric-only candidates.
 - [x] Record a clean formatting, focused-test, and strict-Clippy baseline.
-- [ ] Centralize vault-owned output-path policy without changing behavior.
-- [ ] Enforce that policy at every private/plaintext file sink.
-- [ ] Model durable completion separately from post-operation snapshot refresh.
-- [ ] Report committed actions accurately when snapshot refresh fails.
-- [ ] Centralize missing-vault reconciliation for all backend operations.
-- [ ] Make tool dispatch exhaustive and require unmodified preview shortcuts.
-- [ ] Run focused checks, configured gates, and inspect final evidence.
+- [x] Centralize vault-owned output-path policy without changing behavior.
+- [x] Enforce that policy at every private/plaintext file sink.
+- [x] Model durable completion separately from post-operation snapshot refresh.
+- [x] Report committed actions accurately when snapshot refresh fails.
+- [x] Centralize missing-vault reconciliation for all backend operations.
+- [x] Make tool dispatch exhaustive and require unmodified preview shortcuts.
+- [x] Run focused checks, configured gates, and inspect final evidence.
 
 ## Surprises & Discoveries
 
@@ -68,9 +68,47 @@ commands cannot silently acquire incomplete dispatch behavior.
 
 ## Outcomes & Retrospective
 
-Work is in progress. This section will record the final root-cause assessment,
-commit boundaries, verification receipts, compatibility effects, and any
-deferred risks once every slice is green.
+Three findings were symptoms of deeper boundary design problems, not isolated
+typos. Raw destination paths had lost the store-ownership invariant; durable
+commit and trailing refresh were collapsed into one fallible result; and vault
+presence recovery was scattered by operation name. The fixes move each policy
+to one authoritative boundary and make invalid outcomes harder to represent.
+
+The modifier and tool-dispatch findings were local omissions. The modifier fix
+is intentionally narrow and regression-tested. Tool dispatch received a small
+preparatory refactor because `Option<ToolForm>` plus `expect` made an omission a
+runtime panic; a total `ToolActivation` mapping now makes new choices fail to
+compile until their behavior is declared.
+
+The independently green commit slices are:
+
+- `7aee87c` moves external-output ownership validation to `VaultStore` without
+  changing backup behavior.
+- `1f37ff1` binds private-file preconditions to the selected vault namespace.
+- `decfabc` enforces the bound policy across core reveal/injection, CLI
+  read/inject/import, and TUI import/export paths.
+- `48407f0` introduces a metadata-only committed-action outcome distinct from a
+  refreshed snapshot.
+- `1e8a61c` preserves primary success when only session installation or trailing
+  refresh fails.
+- `01dc51b` centralizes authoritative missing-vault reconciliation for worker
+  failures and direct Peek.
+- `afe1c07` replaces partial tool-form lookup and `expect` with total activation.
+- `2eefef0` requires modifier-free import-preview toggle shortcuts.
+
+No vault format, audit schema, dependency, CLI JSON, or platform-support contract
+changed. Core output-policy and backend-completion interfaces were introduced
+additively where compatibility mattered. Failed attempts against audit-owned
+paths can still append authenticated audit records; the audit chain itself is
+never replaced by output data.
+
+Final verification is green. `scripts/jig work check` passed contract and the
+full two-part test command in batch receipt
+`receipt_01M00MEDKBTPQ229VBXXNQE8X7`; `scripts/jig check fmt` passed in
+`receipt_01M00MEX72ADAD9VP4NEP5EWRC`; full Clippy passed in
+`receipt_01M00MFNJ2Y8MDZN469MS3SVWP`; and the required final direct
+`scripts/jig check test` passed 1,929 tests in
+`receipt_01M00NAE8EQ5E87ZF7G8Z5KM7G`. No known reviewed risk remains deferred.
 
 ## Context and Orientation
 
@@ -124,8 +162,8 @@ are compatibility-sensitive. There is no async, FFI, or new unsafe work in scope
 ## Validation and Acceptance
 
 - Every plaintext/private destination under the selected vault home is rejected
-  before installation; reserved vault, audit, and lock bytes/identity remain
-  intact even with overwrite enabled.
+  before installation; vault and lock state remain intact, and the authenticated
+  audit chain is never replaced by output data, even with overwrite enabled.
 - External destinations preserve existing private-file overwrite, symlink,
   identity, permission, and atomicity behavior.
 - A committed operation followed by refresh failure displays a committed/success
@@ -135,8 +173,7 @@ are compatibility-sensitive. There is no async, FFI, or new unsafe work in scope
   credential and authenticated snapshot and shows `Missing`; a missing field in a
   present vault remains an ordinary action error.
 - `Ctrl`/`Alt` variants of import-preview toggle keys have no effect.
-- Adding a new closed tool/action variant without dispatch behavior fails to
-  compile.
+- Adding a new closed tool choice without activation behavior fails to compile.
 - Formatting, focused tests, strict Clippy, configured tests, contract, and work
   gates pass.
 
