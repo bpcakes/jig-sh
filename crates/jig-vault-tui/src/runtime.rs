@@ -1168,9 +1168,6 @@ impl IdleTimer {
     }
 }
 
-#[allow(dead_code)]
-fn _snapshot_is_metadata_only(_: &VaultSnapshot) {}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
