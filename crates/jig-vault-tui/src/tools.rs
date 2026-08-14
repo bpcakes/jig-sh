@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use jig_vault::{MIN_MASTER_PASSPHRASE_LEN, VaultItem, VaultReference};
 
-use crate::{VaultAction, secret_input::SecretInput};
+use crate::{VaultAction, line_editor::LineEditor, secret_input::SecretInput};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ToolChoice {
@@ -26,16 +26,16 @@ impl ToolChoice {
                 loading_label: "Verifying vault audit chain",
             },
             Self::ImportOnePassword => ToolActivation::Form(ToolForm::ImportOnePassword {
-                env_file: String::new(),
-                item: String::new(),
-                out_env: String::new(),
+                env_file: LineEditor::metadata(),
+                item: LineEditor::metadata(),
+                out_env: LineEditor::metadata(),
                 replace: false,
                 overwrite: false,
                 dry_run: false,
                 focus: ImportFocus::EnvFile,
             }),
             Self::CreateBackup => ToolActivation::Form(ToolForm::CreateBackup {
-                output: String::new(),
+                output: LineEditor::metadata(),
                 overwrite: false,
                 focus: BackupFocus::Output,
             }),
@@ -45,9 +45,9 @@ impl ToolChoice {
                 focus: PassphraseFocus::New,
             }),
             Self::RestoreBackup => ToolActivation::Form(ToolForm::RestoreBackup {
-                input: String::new(),
+                input: LineEditor::metadata(),
                 passphrase: SecretInput::new(),
-                confirmation: String::new(),
+                confirmation: LineEditor::metadata(),
                 focus: RestoreFocus::Input,
             }),
         }
@@ -66,21 +66,21 @@ pub(crate) enum ToolActivation {
 pub(crate) enum ToolForm {
     ExportField {
         reference: VaultReference,
-        output: String,
+        output: LineEditor,
         overwrite: bool,
         focus: ExportFocus,
     },
     ImportOnePassword {
-        env_file: String,
-        item: String,
-        out_env: String,
+        env_file: LineEditor,
+        item: LineEditor,
+        out_env: LineEditor,
         replace: bool,
         overwrite: bool,
         dry_run: bool,
         focus: ImportFocus,
     },
     CreateBackup {
-        output: String,
+        output: LineEditor,
         overwrite: bool,
         focus: BackupFocus,
     },
@@ -90,9 +90,9 @@ pub(crate) enum ToolForm {
         focus: PassphraseFocus,
     },
     RestoreBackup {
-        input: String,
+        input: LineEditor,
         passphrase: SecretInput,
-        confirmation: String,
+        confirmation: LineEditor,
         focus: RestoreFocus,
     },
 }
@@ -101,7 +101,7 @@ impl ToolForm {
     pub(crate) fn export_field(reference: VaultReference) -> Self {
         Self::ExportField {
             reference,
-            output: String::new(),
+            output: LineEditor::metadata(),
             overwrite: false,
             focus: ExportFocus::Output,
         }
@@ -127,7 +127,7 @@ impl ToolForm {
         }
     }
 
-    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
+    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut LineEditor> {
         match self {
             Self::ExportField { output, focus, .. } => match focus {
                 ExportFocus::Output => Some(output),
@@ -207,7 +207,7 @@ impl ToolForm {
             } => Ok(ToolSubmission {
                 action: VaultAction::ExportField {
                     reference: reference.clone(),
-                    output: required_file_path(output, "Export output")?,
+                    output: required_file_path(output.as_str(), "Export output")?,
                     overwrite: *overwrite,
                 },
                 label: "Exporting vault field to private file",
@@ -221,9 +221,9 @@ impl ToolForm {
                 dry_run,
                 ..
             } => {
-                let env_file = required_file_path(env_file, "Import source")?;
-                let out_env = required_file_path(out_env, "Generated dotenv destination")?;
-                let item = VaultItem::parse(&format!("jig://{item}"))
+                let env_file = required_file_path(env_file.as_str(), "Import source")?;
+                let out_env = required_file_path(out_env.as_str(), "Generated dotenv destination")?;
+                let item = VaultItem::parse(&format!("jig://{}", item.as_str()))
                     .map_err(|error| jig_tui::sanitize_text(error.message()))?;
                 Ok(ToolSubmission {
                     action: VaultAction::PreviewOnePasswordImport {
@@ -245,7 +245,7 @@ impl ToolForm {
                 output, overwrite, ..
             } => Ok(ToolSubmission {
                 action: VaultAction::CreateBackup {
-                    output: required_file_path(output, "Backup output")?,
+                    output: required_file_path(output.as_str(), "Backup output")?,
                     overwrite: *overwrite,
                 },
                 label: "Creating encrypted vault backup",
@@ -279,12 +279,12 @@ impl ToolForm {
                 if passphrase.is_empty() {
                     return Err("Enter the backup vault passphrase first.".to_owned());
                 }
-                if confirmation != "RESTORE" {
+                if confirmation.as_str() != "RESTORE" {
                     return Err("Type RESTORE exactly to install the absent vault.".to_owned());
                 }
                 Ok(ToolSubmission {
                     action: VaultAction::RestoreBackup {
-                        input: required_file_path(input, "Backup input")?,
+                        input: required_file_path(input.as_str(), "Backup input")?,
                         passphrase: passphrase.take(),
                     },
                     label: "Restoring encrypted vault backup",

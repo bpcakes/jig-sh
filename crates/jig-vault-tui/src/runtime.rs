@@ -12,6 +12,7 @@ use crate::{
     VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction, VaultPresence,
     VaultUiError, VaultUiErrorKind,
     commands::{CommandOutcome, CommandPaletteScope, UiCommand},
+    line_editor::LineEdit,
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
@@ -831,19 +832,29 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     }
 
     if app.searching {
-        return match key.code {
+        let action = match key.code {
             KeyCode::Esc | KeyCode::Enter => {
                 app.searching = false;
-                RuntimeAction::Redraw
+                Some(RuntimeAction::Redraw)
             }
-            KeyCode::Backspace => {
-                app.pop_filter();
-                RuntimeAction::Redraw
+            KeyCode::Up => {
+                app.move_selection(-1);
+                Some(RuntimeAction::Redraw)
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                app.clear_filter();
-                RuntimeAction::Redraw
+            KeyCode::Down => {
+                app.move_selection(1);
+                Some(RuntimeAction::Redraw)
             }
+            _ => None,
+        };
+        if let Some(action) = action {
+            return action;
+        }
+        if let Some(edit) = line_edit_from_key(key) {
+            app.edit_filter(edit);
+            return RuntimeAction::Redraw;
+        }
+        return match key.code {
             KeyCode::Char(character)
                 if !key
                     .modifiers
@@ -851,14 +862,6 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             {
                 let mut encoded = [0; 4];
                 app.append_filter(character.encode_utf8(&mut encoded));
-                RuntimeAction::Redraw
-            }
-            KeyCode::Up => {
-                app.move_selection(-1);
-                RuntimeAction::Redraw
-            }
-            KeyCode::Down => {
-                app.move_selection(1);
                 RuntimeAction::Redraw
             }
             _ => RuntimeAction::Ignore,
@@ -1026,6 +1029,26 @@ fn handle_edit_form_key(
     key: KeyEvent,
     submit: fn(&mut App) -> Option<VaultAction>,
 ) -> RuntimeAction {
+    if let Some(edit) = line_edit_from_key(key) {
+        if let Some(input) = app.protected_input_mut() {
+            match edit {
+                LineEdit::Backspace => input.backspace(),
+                LineEdit::Clear => input.clear(),
+                LineEdit::Delete
+                | LineEdit::Left
+                | LineEdit::Right
+                | LineEdit::Home
+                | LineEdit::End
+                | LineEdit::WordLeft
+                | LineEdit::WordRight
+                | LineEdit::DeleteWordLeft => return RuntimeAction::Ignore,
+            }
+            return RuntimeAction::Redraw;
+        }
+        if app.edit_metadata_input(edit) {
+            return RuntimeAction::Redraw;
+        }
+    }
     match key.code {
         KeyCode::Esc => {
             app.close_overlay();
@@ -1050,22 +1073,6 @@ fn handle_edit_form_key(
         KeyCode::Enter => submit(app).map_or(RuntimeAction::Redraw, |action| {
             RuntimeAction::Start(BackendRequest::Execute(action))
         }),
-        KeyCode::Backspace => {
-            if let Some(input) = app.protected_input_mut() {
-                input.backspace();
-            } else {
-                app.pop_metadata_input();
-            }
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(input) = app.protected_input_mut() {
-                input.clear();
-            } else {
-                app.clear_metadata_input();
-            }
-            RuntimeAction::Redraw
-        }
         KeyCode::Char(character)
             if !key
                 .modifiers
@@ -1078,36 +1085,38 @@ fn handle_edit_form_key(
 }
 
 fn handle_command_palette_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
-    match key.code {
+    let action = match key.code {
         KeyCode::Esc => {
             app.close_overlay();
-            RuntimeAction::Redraw
+            Some(RuntimeAction::Redraw)
         }
         KeyCode::Down => {
             app.move_command_selection(1);
-            RuntimeAction::Redraw
+            Some(RuntimeAction::Redraw)
         }
         KeyCode::Up => {
             app.move_command_selection(-1);
-            RuntimeAction::Redraw
+            Some(RuntimeAction::Redraw)
         }
         KeyCode::PageDown => {
             app.move_command_selection(10);
-            RuntimeAction::Redraw
+            Some(RuntimeAction::Redraw)
         }
         KeyCode::PageUp => {
             app.move_command_selection(-10);
-            RuntimeAction::Redraw
+            Some(RuntimeAction::Redraw)
         }
-        KeyCode::Enter => command_outcome(app.activate_selected_command()),
-        KeyCode::Backspace => {
-            app.pop_command_filter();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.clear_command_filter();
-            RuntimeAction::Redraw
-        }
+        KeyCode::Enter => Some(command_outcome(app.activate_selected_command())),
+        _ => None,
+    };
+    if let Some(action) = action {
+        return action;
+    }
+    if let Some(edit) = line_edit_from_key(key) {
+        app.edit_command_filter(edit);
+        return RuntimeAction::Redraw;
+    }
+    match key.code {
         KeyCode::Char(character)
             if !key
                 .modifiers
@@ -1156,6 +1165,10 @@ fn handle_activity_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 }
 
 fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    if let Some(edit) = line_edit_from_key(key) {
+        app.edit_metadata_input(edit);
+        return RuntimeAction::Redraw;
+    }
     match key.code {
         KeyCode::Esc => app
             .discard_import_preview()
@@ -1175,14 +1188,6 @@ fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             .map_or(RuntimeAction::Redraw, |action| {
                 RuntimeAction::Start(BackendRequest::Execute(action))
             }),
-        KeyCode::Backspace => {
-            app.pop_metadata_input();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.clear_metadata_input();
-            RuntimeAction::Redraw
-        }
         KeyCode::Char(character)
             if !key
                 .modifiers
@@ -1224,20 +1229,16 @@ fn handle_metadata_confirmation_key(
     key: KeyEvent,
     submit: impl FnOnce(&mut App) -> RuntimeAction,
 ) -> RuntimeAction {
+    if let Some(edit) = line_edit_from_key(key) {
+        app.edit_metadata_input(edit);
+        return RuntimeAction::Redraw;
+    }
     match key.code {
         KeyCode::Esc => {
             app.close_overlay();
             RuntimeAction::Redraw
         }
         KeyCode::Enter => submit(app),
-        KeyCode::Backspace => {
-            app.pop_metadata_input();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.clear_metadata_input();
-            RuntimeAction::Redraw
-        }
         KeyCode::Char(character)
             if !key
                 .modifiers
@@ -1247,6 +1248,36 @@ fn handle_metadata_confirmation_key(
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
+    }
+}
+
+fn line_edit_from_key(key: KeyEvent) -> Option<LineEdit> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Backspace, KeyModifiers::NONE) => Some(LineEdit::Backspace),
+        (KeyCode::Delete, KeyModifiers::NONE) => Some(LineEdit::Delete),
+        (KeyCode::Left, KeyModifiers::NONE) => Some(LineEdit::Left),
+        (KeyCode::Right, KeyModifiers::NONE) => Some(LineEdit::Right),
+        (KeyCode::Home, KeyModifiers::NONE) => Some(LineEdit::Home),
+        (KeyCode::End, KeyModifiers::NONE) => Some(LineEdit::End),
+        (KeyCode::Left, modifiers)
+            if modifiers == KeyModifiers::CONTROL
+                || modifiers == KeyModifiers::ALT
+                || modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT =>
+        {
+            Some(LineEdit::WordLeft)
+        }
+        (KeyCode::Char('b'), KeyModifiers::ALT) => Some(LineEdit::WordLeft),
+        (KeyCode::Right, modifiers)
+            if modifiers == KeyModifiers::CONTROL
+                || modifiers == KeyModifiers::ALT
+                || modifiers == KeyModifiers::CONTROL | KeyModifiers::ALT =>
+        {
+            Some(LineEdit::WordRight)
+        }
+        (KeyCode::Char('f'), KeyModifiers::ALT) => Some(LineEdit::WordRight),
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => Some(LineEdit::DeleteWordLeft),
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => Some(LineEdit::Clear),
+        _ => None,
     }
 }
 

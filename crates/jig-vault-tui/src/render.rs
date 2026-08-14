@@ -10,6 +10,7 @@ use ratatui::{
 use crate::{
     ImportFieldChange,
     commands::{CommandAvailability, CommandPalette, CommandSafety, UiCommand},
+    line_editor::LineEditor,
     model::{
         ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus,
         FieldWriteIntent, Focus, ImportPreviewState, InitializeFocus, ItemIdentity,
@@ -492,7 +493,8 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
     let controls = if app.searching {
-        "Type to filter metadata  Backspace edit  Ctrl-U clear  Enter/Esc finish".to_owned()
+        "Type to filter  ←/→ cursor  Ctrl-←/→ words  Ctrl-W delete word  Enter/Esc finish"
+            .to_owned()
     } else if app
         .snapshot
         .as_ref()
@@ -513,10 +515,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(context_action_hints(app, frame.area().width)));
     }
     if app.searching || !app.filter.is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("/", Style::default().fg(ACCENT)),
-            Span::raw(sanitize_text(&app.filter)),
-        ]));
+        let mut spans = vec![Span::styled("/", Style::default().fg(ACCENT))];
+        spans.extend(editor_spans(
+            &app.filter,
+            app.searching,
+            usize::from(area.width.saturating_sub(3)),
+            Style::default().fg(ACCENT),
+        ));
+        lines.push(Line::from(spans));
     } else if let Some(status) = &app.status {
         let color = match status.kind {
             StatusKind::Info => GOOD,
@@ -593,6 +599,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::from("/            filter item, field, reference, or legacy metadata"),
         Line::from("Enter        actions for the current selection"),
         Line::from(":            search every available vault action"),
+        Line::from("Text inputs  ←/→ cursor · Home/End · Ctrl-←/→ words · Ctrl-W delete word"),
         Line::from("?            close this help"),
         Line::from("q            quit"),
         Line::from("             auto-locks after five minutes without terminal input"),
@@ -655,8 +662,8 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
         } => {
             let action = intent.title();
             let mut lines = vec![
-                form_value_line("Item", item, *focus == FieldWriteFocus::Item, false),
-                form_value_line("Field", field, *focus == FieldWriteFocus::Field, false),
+                editor_value_line("Item", item, *focus == FieldWriteFocus::Item, area.width),
+                editor_value_line("Field", field, *focus == FieldWriteFocus::Field, area.width),
                 form_value_line(
                     "Kind",
                     kind_label(*kind),
@@ -669,11 +676,11 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                     *focus == FieldWriteFocus::Value,
                     true,
                 ),
-                form_value_line(
+                editor_value_line(
                     "Value file",
                     value_file,
                     *focus == FieldWriteFocus::File,
-                    false,
+                    area.width,
                 ),
                 Line::from(""),
             ];
@@ -703,18 +710,18 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                 jig_vault::VaultWriteMode::Upsert => "Write legacy entry",
             };
             let mut lines = vec![
-                form_value_line("Name", name, *focus == LegacyWriteFocus::Name, false),
+                editor_value_line("Name", name, *focus == LegacyWriteFocus::Name, area.width),
                 form_value_line(
                     "Value",
                     &value.render_label(),
                     *focus == LegacyWriteFocus::Value,
                     true,
                 ),
-                form_value_line(
+                editor_value_line(
                     "Value file",
                     value_file,
                     *focus == LegacyWriteFocus::File,
-                    false,
+                    area.width,
                 ),
                 Line::from(""),
             ];
@@ -749,17 +756,17 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
             "Rename or move field",
             vec![
                 key_value("Source", &source.to_string()),
-                form_value_line(
+                editor_value_line(
                     "Destination item",
                     destination_item,
                     *focus == RenameFieldFocus::Item,
-                    false,
+                    area.width,
                 ),
-                form_value_line(
+                editor_value_line(
                     "Destination field",
                     destination_field,
                     *focus == RenameFieldFocus::Field,
-                    false,
+                    area.width,
                 ),
             ],
         ),
@@ -770,7 +777,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
             "Rename item",
             vec![
                 key_value("Source", &format!("jig://{source}")),
-                form_value_line("Destination item", destination, true, false),
+                editor_value_line("Destination item", destination, true, area.width),
             ],
         ),
         ManagementForm::ConvertLegacy {
@@ -783,8 +790,8 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
             "Convert legacy entry",
             vec![
                 key_value("Legacy source", source),
-                form_value_line("Item", item, *focus == ConvertFocus::Item, false),
-                form_value_line("Field", field, *focus == ConvertFocus::Field, false),
+                editor_value_line("Item", item, *focus == ConvertFocus::Item, area.width),
+                editor_value_line("Field", field, *focus == ConvertFocus::Field, area.width),
                 form_value_line(
                     "Kind",
                     kind_label(*kind),
@@ -799,6 +806,9 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
     lines.push(Line::from(""));
     lines.push(Line::from(
         "Tab switch field   Space toggle kind   Enter save   Esc cancel   Ctrl-U clear",
+    ));
+    lines.push(Line::from(
+        "←/→ cursor   Home/End   Ctrl-←/→ words   Backspace/Delete edit   Ctrl-W delete word",
     ));
     if let Some(status) = &app.status {
         lines.push(Line::from(""));
@@ -872,7 +882,7 @@ fn draw_mutation_confirmation(
         ),
     };
     lines.extend([
-        form_value_line("Confirmation", &confirmation.input, true, false),
+        editor_value_line("Confirmation", &confirmation.input, true, area.width),
         Line::from(""),
         Line::from("Enter confirm   Esc cancel   Ctrl-U clear"),
     ]);
@@ -901,7 +911,7 @@ fn draw_delete_confirmation(
         Line::from(""),
         Line::from("There is no trash or undo."),
         Line::from(format!("Type exactly: {}", sanitize_text(&required))),
-        form_value_line("Confirmation", &confirmation.input, true, false),
+        editor_value_line("Confirmation", &confirmation.input, true, area.width),
         Line::from(""),
         Line::from("Enter delete   Esc cancel   Ctrl-U clear"),
     ];
@@ -942,7 +952,7 @@ fn draw_peek_confirmation(
         Line::from("The preview is bounded and is cleared after one key or ten seconds."),
         Line::from(""),
         Line::from("Type PEEK exactly to accept this disclosure:"),
-        form_value_line("Confirmation", &confirmation.input, true, false),
+        editor_value_line("Confirmation", &confirmation.input, true, area.width),
         Line::from(""),
         Line::from("Enter reveal   Esc cancel   Ctrl-U clear"),
     ];
@@ -957,7 +967,7 @@ fn draw_peek_confirmation(
 
 fn draw_command_palette(frame: &mut Frame, area: Rect, app: &App, palette: &CommandPalette) {
     frame.render_widget(Clear, area);
-    let footer_height = if app.status.is_some() { 5 } else { 4 };
+    let footer_height = if app.status.is_some() { 6 } else { 5 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(4), Constraint::Length(footer_height)])
@@ -1004,14 +1014,20 @@ fn draw_command_palette(frame: &mut Frame, area: Rect, app: &App, palette: &Comm
     let selected = (!visible.is_empty()).then_some(palette.selected);
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list(items, palette.scope.title()), chunks[0], &mut state);
-    let filter = if palette.filter.is_empty() {
-        "Type to filter actions".to_owned()
-    } else {
-        format!("Filter: {}", sanitize_text(&palette.filter))
-    };
+    let mut filter = vec![Span::styled("Filter: ", Style::default().fg(ACCENT))];
+    filter.extend(editor_spans(
+        &palette.filter,
+        true,
+        usize::from(chunks[1].width.saturating_sub(10)),
+        Style::default().fg(ACCENT),
+    ));
     let mut lines = vec![
-        Line::from(filter).style(Style::default().fg(ACCENT)),
-        Line::from("↑/↓ move   Enter run/open   Backspace edit   Ctrl-U clear   Esc close")
+        Line::from(filter),
+        Line::from("↑/↓ choose   ←/→ cursor   Ctrl-←/→ words")
+            .style(Style::default().fg(MUTED)),
+        Line::from(
+            "Enter run/open   Backspace/Delete edit   Ctrl-W delete word   Ctrl-U clear   Esc close",
+        )
             .style(Style::default().fg(MUTED)),
     ];
     if let Some(status) = &app.status {
@@ -1038,7 +1054,12 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
             "Export field to private file",
             vec![
                 key_value("Reference", &reference.to_string()),
-                form_value_line("Output file", output, *focus == ExportFocus::Output, false),
+                editor_value_line(
+                    "Output file",
+                    output,
+                    *focus == ExportFocus::Output,
+                    area.width,
+                ),
                 toggle_line(
                     "Overwrite regular file",
                     *overwrite,
@@ -1062,18 +1083,18 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
         } => (
             "1Password dotenv import",
             vec![
-                form_value_line(
+                editor_value_line(
                     "Source .env",
                     env_file,
                     *focus == ImportFocus::EnvFile,
-                    false,
+                    area.width,
                 ),
-                form_value_line("Item", item, *focus == ImportFocus::Item, false),
-                form_value_line(
+                editor_value_line("Item", item, *focus == ImportFocus::Item, area.width),
+                editor_value_line(
                     "Generated .env",
                     out_env,
                     *focus == ImportFocus::OutEnv,
-                    false,
+                    area.width,
                 ),
                 toggle_line("Replace fields", *replace, *focus == ImportFocus::Replace),
                 toggle_line(
@@ -1096,11 +1117,11 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
         } => (
             "Create encrypted backup",
             vec![
-                form_value_line(
+                editor_value_line(
                     "Backup output",
                     output,
                     *focus == BackupFocus::Output,
-                    false,
+                    area.width,
                 ),
                 toggle_line(
                     "Overwrite regular file",
@@ -1148,18 +1169,23 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
         } => (
             "Restore encrypted backup",
             vec![
-                form_value_line("Backup input", input, *focus == RestoreFocus::Input, false),
+                editor_value_line(
+                    "Backup input",
+                    input,
+                    *focus == RestoreFocus::Input,
+                    area.width,
+                ),
                 form_value_line(
                     "Backup vault passphrase",
                     &passphrase.render_label(),
                     *focus == RestoreFocus::Passphrase,
                     true,
                 ),
-                form_value_line(
+                editor_value_line(
                     "Type RESTORE",
                     confirmation,
                     *focus == RestoreFocus::Confirmation,
-                    false,
+                    area.width,
                 ),
                 Line::from(""),
                 Line::from(Span::styled(
@@ -1172,6 +1198,9 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
     lines.push(Line::from(""));
     lines.push(Line::from(
         "Tab switch field   Space toggle option   Enter continue   Esc cancel   Ctrl-U clear",
+    ));
+    lines.push(Line::from(
+        "←/→ cursor   Home/End   Ctrl-←/→ words   Backspace/Delete edit   Ctrl-W delete word",
     ));
     append_status(&mut lines, app);
     frame.render_widget(
@@ -1245,11 +1274,11 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
             "Commit will invoke `op`, atomically import fields, then install the private dotenv file.",
             Style::default().fg(WARN),
         )));
-        lines.push(form_value_line(
+        lines.push(editor_value_line(
             &format!("Type {}", state.required_confirmation()),
             &state.confirmation,
             true,
-            false,
+            area.width,
         ));
         lines.push(Line::from(
             "r/o toggle permissions   Enter commit   Esc cancel   Ctrl-U clear",
@@ -1408,6 +1437,64 @@ fn form_value_line(label: &str, value: &str, focused: bool, protected: bool) -> 
         Span::styled(format!("{marker} {label}: "), style),
         Span::styled(value, style),
     ])
+}
+
+fn editor_value_line(
+    label: &str,
+    editor: &LineEditor,
+    focused: bool,
+    area_width: u16,
+) -> Line<'static> {
+    let marker = if focused { "›" } else { " " };
+    let style = if focused {
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let prefix = format!("{marker} {label}: ");
+    let prefix_width = Line::from(prefix.as_str()).width();
+    let available = usize::from(area_width)
+        .saturating_sub(prefix_width)
+        .saturating_sub(2)
+        .max(1);
+    let mut spans = vec![Span::styled(prefix, style)];
+    spans.extend(editor_spans(editor, focused, available, style));
+    Line::from(spans)
+}
+
+fn editor_spans(
+    editor: &LineEditor,
+    focused: bool,
+    max_width: usize,
+    style: Style,
+) -> Vec<Span<'static>> {
+    if !focused {
+        let value = if editor.is_empty() {
+            "(empty)".to_owned()
+        } else {
+            sanitize_text(editor.as_str())
+        };
+        return vec![Span::styled(value, style)];
+    }
+
+    let window = editor.window(max_width.max(1));
+    let mut spans = Vec::with_capacity(5);
+    if window.clipped_left {
+        spans.push(Span::styled("‹", Style::default().fg(MUTED)));
+    }
+    spans.push(Span::styled(sanitize_text(&window.before), style));
+    spans.push(Span::styled(
+        "▌",
+        Style::default()
+            .fg(Color::Black)
+            .bg(ACCENT)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(sanitize_text(&window.after), style));
+    if window.clipped_right {
+        spans.push(Span::styled("›", Style::default().fg(MUTED)));
+    }
+    spans
 }
 
 fn list<'a>(items: Vec<ListItem<'a>>, title: &'a str) -> List<'a> {

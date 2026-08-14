@@ -10,12 +10,10 @@ use crate::{
     ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
     VaultPresence, VaultUiError,
     commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
+    line_editor::{LineEdit, LineEditor},
     secret_input::SecretInput,
     tools::{ToolActivation, ToolChoice, ToolForm},
 };
-
-pub(crate) const MAX_METADATA_INPUT_BYTES: usize = 128 * 1024;
-pub(crate) const MAX_FILTER_INPUT_BYTES: usize = 256;
 
 #[derive(Debug)]
 pub(crate) struct App {
@@ -25,7 +23,7 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) selected_item: Option<ItemIdentity>,
     pub(crate) selected_entry: Option<EntryIdentity>,
-    pub(crate) filter: String,
+    pub(crate) filter: LineEditor,
     pub(crate) searching: bool,
     pub(crate) status: Option<StatusMessage>,
     pub(crate) tick: usize,
@@ -46,7 +44,7 @@ impl App {
             focus: Focus::Items,
             selected_item: None,
             selected_entry: None,
-            filter: String::new(),
+            filter: LineEditor::search(),
             searching: false,
             status: None,
             tick: 0,
@@ -227,7 +225,7 @@ impl App {
         }
     }
 
-    fn metadata_input_mut(&mut self) -> Option<&mut String> {
+    fn metadata_input_mut(&mut self) -> Option<&mut LineEditor> {
         match &mut self.screen {
             Screen::Form(form) => form.metadata_input_mut(),
             Screen::ToolForm(form) => form.metadata_input_mut(),
@@ -247,23 +245,26 @@ impl App {
         let Some(input) = self.metadata_input_mut() else {
             return false;
         };
-        let accepted = append_bounded(input, value, MAX_METADATA_INPUT_BYTES);
+        let accepted = input.insert(value);
         if !accepted {
             self.set_error("Metadata input exceeds the interactive size limit.");
         }
         true
     }
 
-    pub(crate) fn pop_metadata_input(&mut self) {
-        if let Some(input) = self.metadata_input_mut() {
-            input.pop();
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn clear_metadata_input(&mut self) {
         if let Some(input) = self.metadata_input_mut() {
             input.clear();
         }
+    }
+
+    pub(crate) fn edit_metadata_input(&mut self, edit: LineEdit) -> bool {
+        let Some(input) = self.metadata_input_mut() else {
+            return false;
+        };
+        input.apply(edit);
+        true
     }
 
     pub(crate) fn toggle_initialize_focus(&mut self) {
@@ -313,15 +314,9 @@ impl App {
         true
     }
 
-    pub(crate) fn pop_command_filter(&mut self) {
+    pub(crate) fn edit_command_filter(&mut self, edit: LineEdit) {
         if let Screen::Commands(palette) = &mut self.screen {
-            palette.pop_filter();
-        }
-    }
-
-    pub(crate) fn clear_command_filter(&mut self) {
-        if let Screen::Commands(palette) = &mut self.screen {
-            palette.clear_filter();
+            palette.edit_filter(edit);
         }
     }
 
@@ -435,7 +430,7 @@ impl App {
     pub(crate) fn apply_import_preview(&mut self, preview: ImportPreview) {
         self.screen = Screen::ImportPreview(ImportPreviewState {
             preview,
-            confirmation: String::new(),
+            confirmation: LineEditor::metadata(),
         });
         self.status = None;
     }
@@ -500,7 +495,7 @@ impl App {
             return None;
         }
         let required_confirmation = state.required_confirmation();
-        if state.confirmation != required_confirmation {
+        if state.confirmation.as_str() != required_confirmation {
             let message = state.invalid_confirmation_message();
             self.screen = Screen::ImportPreview(state);
             self.set_error(message);
@@ -544,8 +539,8 @@ impl App {
         };
         self.screen = Screen::Form(ManagementForm::write_field(
             FieldWriteIntent::AddField,
-            item.clone(),
-            String::new(),
+            LineEditor::prefilled_metadata(item.clone()),
+            LineEditor::metadata(),
             FieldKind::Concealed,
             FieldWriteFocus::Field,
         ));
@@ -558,8 +553,8 @@ impl App {
         }
         self.screen = Screen::Form(ManagementForm::write_field(
             FieldWriteIntent::CreateItem,
-            String::new(),
-            String::new(),
+            LineEditor::metadata(),
+            LineEditor::metadata(),
             FieldKind::Concealed,
             FieldWriteFocus::Item,
         ));
@@ -572,9 +567,9 @@ impl App {
         }
         self.screen = Screen::Form(ManagementForm::WriteLegacy {
             mode: VaultWriteMode::Create,
-            name: String::new(),
+            name: LineEditor::metadata(),
             value: SecretInput::new(),
-            value_file: String::new(),
+            value_file: LineEditor::metadata(),
             focus: LegacyWriteFocus::Name,
         });
         self.status = None;
@@ -591,17 +586,17 @@ impl App {
                     .map_or(FieldKind::Concealed, |field| field.kind);
                 ManagementForm::write_field(
                     FieldWriteIntent::ReplaceValue,
-                    reference.item().to_owned(),
-                    reference.field().to_owned(),
+                    LineEditor::prefilled_metadata(reference.item().to_owned()),
+                    LineEditor::prefilled_metadata(reference.field().to_owned()),
                     kind,
                     FieldWriteFocus::Value,
                 )
             }
             Some(EntryIdentity::Legacy(name)) => ManagementForm::WriteLegacy {
                 mode: VaultWriteMode::Replace,
-                name,
+                name: LineEditor::prefilled_metadata(name),
                 value: SecretInput::new(),
-                value_file: String::new(),
+                value_file: LineEditor::metadata(),
                 focus: LegacyWriteFocus::Value,
             },
             None => {
@@ -637,7 +632,7 @@ impl App {
             match self.selected_item.clone() {
                 Some(ItemIdentity::Canonical(source)) => ManagementForm::RenameItem {
                     source,
-                    destination: String::new(),
+                    destination: LineEditor::metadata(),
                 },
                 Some(ItemIdentity::Legacy) => {
                     self.set_error(
@@ -653,8 +648,8 @@ impl App {
         } else {
             match self.selected_entry.clone() {
                 Some(EntryIdentity::Field(source)) => ManagementForm::RenameField {
-                    destination_item: source.item().to_owned(),
-                    destination_field: String::new(),
+                    destination_item: LineEditor::prefilled_metadata(source.item().to_owned()),
+                    destination_field: LineEditor::metadata(),
                     source,
                     focus: RenameFieldFocus::Field,
                 },
@@ -682,8 +677,8 @@ impl App {
         };
         self.screen = Screen::Form(ManagementForm::ConvertLegacy {
             source,
-            item: String::new(),
-            field: String::new(),
+            item: LineEditor::metadata(),
+            field: LineEditor::metadata(),
             kind: FieldKind::Concealed,
             focus: ConvertFocus::Item,
         });
@@ -727,7 +722,7 @@ impl App {
         };
         self.screen = Screen::ConfirmDelete(DeleteConfirmation {
             target,
-            input: String::new(),
+            input: LineEditor::metadata(),
         });
         self.status = None;
     }
@@ -750,7 +745,7 @@ impl App {
             Some(EntryIdentity::Field(reference)) => {
                 self.screen = Screen::ConfirmPeek(PeekConfirmation {
                     reference,
-                    input: String::new(),
+                    input: LineEditor::metadata(),
                 });
                 self.status = None;
             }
@@ -801,7 +796,7 @@ impl App {
                     self.screen = Screen::ConfirmMutation(MutationConfirmation {
                         kind,
                         submission,
-                        input: String::new(),
+                        input: LineEditor::metadata(),
                     });
                     self.status = None;
                     None
@@ -823,7 +818,7 @@ impl App {
             self.screen = screen;
             return None;
         };
-        if confirmation.input != confirmation.kind.required_input() {
+        if confirmation.input.as_str() != confirmation.kind.required_input() {
             let message = confirmation.kind.invalid_message();
             self.screen = Screen::ConfirmMutation(confirmation);
             self.set_error(message);
@@ -878,7 +873,7 @@ impl App {
             self.screen = screen;
             return None;
         };
-        if confirmation.input != confirmation.target.required_confirmation() {
+        if confirmation.input.as_str() != confirmation.target.required_confirmation() {
             self.screen = Screen::ConfirmDelete(confirmation);
             self.set_error("Deletion confirmation did not match the required text.");
             return None;
@@ -896,7 +891,7 @@ impl App {
             self.screen = screen;
             return None;
         };
-        if confirmation.input != "PEEK" {
+        if confirmation.input.as_str() != "PEEK" {
             self.screen = Screen::ConfirmPeek(confirmation);
             self.set_error("Type PEEK exactly to open the controlled terminal preview.");
             return None;
@@ -927,7 +922,7 @@ impl App {
         let Some(snapshot) = &self.snapshot else {
             return Vec::new();
         };
-        let query = self.filter.to_lowercase();
+        let query = self.filter.as_str().to_lowercase();
         let mut items = snapshot
             .fields
             .iter()
@@ -950,7 +945,7 @@ impl App {
         let Some(snapshot) = &self.snapshot else {
             return Vec::new();
         };
-        let query = self.filter.to_lowercase();
+        let query = self.filter.as_str().to_lowercase();
         match &self.selected_item {
             Some(ItemIdentity::Canonical(item)) => snapshot
                 .fields
@@ -1032,31 +1027,20 @@ impl App {
     }
 
     pub(crate) fn append_filter(&mut self, value: &str) {
-        let remaining = MAX_FILTER_INPUT_BYTES.saturating_sub(self.filter.len());
-        let mut appended_bytes = 0usize;
-        for character in value.chars().filter(|character| !character.is_control()) {
-            let Some(next) = appended_bytes.checked_add(character.len_utf8()) else {
-                self.set_error("Search filter exceeds the interactive size limit.");
-                return;
-            };
-            if next > remaining {
-                self.set_error("Search filter exceeds the interactive size limit.");
-                return;
-            }
-            appended_bytes = next;
+        if !self.filter.insert(value) {
+            self.set_error("Search filter exceeds the interactive size limit.");
+            return;
         }
-        self.filter
-            .extend(value.chars().filter(|character| !character.is_control()));
-        self.reconcile_selection();
-    }
-
-    pub(crate) fn pop_filter(&mut self) {
-        self.filter.pop();
         self.reconcile_selection();
     }
 
     pub(crate) fn clear_filter(&mut self) {
         self.filter.clear();
+        self.reconcile_selection();
+    }
+
+    pub(crate) fn edit_filter(&mut self, edit: LineEdit) {
+        self.filter.apply(edit);
         self.reconcile_selection();
     }
 
@@ -1140,17 +1124,6 @@ impl App {
             self.selected_entry = entries.first().cloned();
         }
     }
-}
-
-fn append_bounded(input: &mut String, value: &str, limit: usize) -> bool {
-    let Some(next_len) = input.len().checked_add(value.len()) else {
-        return false;
-    };
-    if next_len > limit {
-        return false;
-    }
-    input.push_str(value);
-    true
 }
 
 fn move_identity<T: Clone + PartialEq>(
@@ -1256,7 +1229,7 @@ pub(crate) enum Screen {
 #[derive(Debug)]
 pub(crate) struct ImportPreviewState {
     pub(crate) preview: ImportPreview,
-    pub(crate) confirmation: String,
+    pub(crate) confirmation: LineEditor,
 }
 
 impl ImportPreviewState {
@@ -1286,14 +1259,14 @@ pub(crate) struct ActivityView {
 #[derive(Debug)]
 pub(crate) struct PeekConfirmation {
     pub(crate) reference: VaultReference,
-    pub(crate) input: String,
+    pub(crate) input: LineEditor,
 }
 
 #[derive(Debug)]
 pub(crate) struct MutationConfirmation {
     pub(crate) kind: MutationConfirmationKind,
     submission: FormSubmission,
-    pub(crate) input: String,
+    pub(crate) input: LineEditor,
 }
 
 #[derive(Debug)]
@@ -1378,18 +1351,18 @@ struct SelectionHint {
 pub(crate) enum ManagementForm {
     WriteField {
         intent: FieldWriteIntent,
-        item: String,
-        field: String,
+        item: LineEditor,
+        field: LineEditor,
         kind: FieldKind,
         value: SecretInput,
-        value_file: String,
+        value_file: LineEditor,
         focus: FieldWriteFocus,
     },
     WriteLegacy {
         mode: VaultWriteMode,
-        name: String,
+        name: LineEditor,
         value: SecretInput,
-        value_file: String,
+        value_file: LineEditor,
         focus: LegacyWriteFocus,
     },
     ChangeKind {
@@ -1399,18 +1372,18 @@ pub(crate) enum ManagementForm {
     },
     RenameField {
         source: VaultReference,
-        destination_item: String,
-        destination_field: String,
+        destination_item: LineEditor,
+        destination_field: LineEditor,
         focus: RenameFieldFocus,
     },
     RenameItem {
         source: String,
-        destination: String,
+        destination: LineEditor,
     },
     ConvertLegacy {
         source: String,
-        item: String,
-        field: String,
+        item: LineEditor,
+        field: LineEditor,
         kind: FieldKind,
         focus: ConvertFocus,
     },
@@ -1419,8 +1392,8 @@ pub(crate) enum ManagementForm {
 impl ManagementForm {
     fn write_field(
         intent: FieldWriteIntent,
-        item: String,
-        field: String,
+        item: LineEditor,
+        field: LineEditor,
         kind: FieldKind,
         focus: FieldWriteFocus,
     ) -> Self {
@@ -1430,7 +1403,7 @@ impl ManagementForm {
             field,
             kind,
             value: SecretInput::new(),
-            value_file: String::new(),
+            value_file: LineEditor::metadata(),
             focus,
         }
     }
@@ -1447,7 +1420,7 @@ impl ManagementForm {
         }
     }
 
-    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
+    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut LineEditor> {
         match self {
             Self::WriteField {
                 item,
@@ -1523,9 +1496,9 @@ impl ManagementForm {
                 value_file,
                 ..
             } => {
-                let reference = parse_reference(item, field)?;
+                let reference = parse_reference(item.as_str(), field.as_str())?;
                 intent.validate_destination(&reference, snapshot)?;
-                let value = take_validated_value(value, value_file, *kind)?;
+                let value = take_validated_value(value, value_file.as_str(), *kind)?;
                 let mutation = VaultMutation::SetField {
                     reference: reference.clone(),
                     kind: *kind,
@@ -1548,8 +1521,8 @@ impl ManagementForm {
                 value_file,
                 ..
             } => {
-                let name = parse_legacy_name(name)?;
-                let value = take_validated_value(value, value_file, FieldKind::Concealed)?;
+                let name = parse_legacy_name(name.as_str())?;
+                let value = take_validated_value(value, value_file.as_str(), FieldKind::Concealed)?;
                 Ok(FormSubmission {
                     mutation: VaultMutation::SetLegacy {
                         name: name.clone(),
@@ -1593,7 +1566,8 @@ impl ManagementForm {
                 destination_field,
                 ..
             } => {
-                let destination = parse_reference(destination_item, destination_field)?;
+                let destination =
+                    parse_reference(destination_item.as_str(), destination_field.as_str())?;
                 if &destination == source {
                     return Err("Field rename destination must differ from the source.".to_owned());
                 }
@@ -1614,7 +1588,7 @@ impl ManagementForm {
                 destination,
             } => {
                 let source = parse_item(source)?;
-                let destination = parse_item(destination)?;
+                let destination = parse_item(destination.as_str())?;
                 if source == destination {
                     return Err("Item rename destination must differ from the source.".to_owned());
                 }
@@ -1637,7 +1611,7 @@ impl ManagementForm {
                 kind,
                 ..
             } => {
-                let reference = parse_reference(item, field)?;
+                let reference = parse_reference(item.as_str(), field.as_str())?;
                 Ok(FormSubmission {
                     mutation: VaultMutation::ConvertLegacy {
                         name: source.clone(),
@@ -1827,7 +1801,7 @@ impl ConvertFocus {
 #[derive(Debug)]
 pub(crate) struct DeleteConfirmation {
     pub(crate) target: DeleteTarget,
-    pub(crate) input: String,
+    pub(crate) input: LineEditor,
 }
 
 #[derive(Debug)]

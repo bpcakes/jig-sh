@@ -17,7 +17,7 @@ controls, and find any item or field quickly without exposing a value.
   catalog-derived action help/footer rendering.
 - [x] Add an explicit Create item + first field flow, contextual empty states,
   and Enter-driven actions.
-- [ ] Add a metadata-only line editor with cursor movement, deletion, word
+- [x] Add a metadata-only line editor with cursor movement, deletion, word
   editing, bounded insertion, visible cursor, and horizontal viewport behavior.
 - [ ] Add metadata-only Quick Access with shared fuzzy ranking, result preview,
   scrolling, and action handoff.

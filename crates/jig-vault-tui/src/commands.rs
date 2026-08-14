@@ -2,11 +2,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     VaultAction,
+    line_editor::{LineEdit, LineEditor},
     model::{App, EntryIdentity, Focus, ItemIdentity},
     tools::ToolChoice,
 };
-
-const MAX_COMMAND_FILTER_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UiCommand {
@@ -459,7 +458,7 @@ pub(crate) struct CommandPalette {
     pub(crate) scope: CommandPaletteScope,
     pub(crate) entries: Vec<CommandEntry>,
     pub(crate) selected: usize,
-    pub(crate) filter: String,
+    pub(crate) filter: LineEditor,
 }
 
 impl CommandPalette {
@@ -479,12 +478,12 @@ impl CommandPalette {
             scope,
             entries,
             selected: 0,
-            filter: String::new(),
+            filter: LineEditor::command(),
         }
     }
 
     pub(crate) fn visible_entries(&self) -> Vec<CommandEntry> {
-        let filter = self.filter.to_lowercase();
+        let filter = self.filter.as_str().to_lowercase();
         self.entries
             .iter()
             .copied()
@@ -514,29 +513,17 @@ impl CommandPalette {
     }
 
     pub(crate) fn append_filter(&mut self, value: &str) -> bool {
-        let value = value
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect::<String>();
-        let Some(next_len) = self.filter.len().checked_add(value.len()) else {
-            return false;
-        };
-        if next_len > MAX_COMMAND_FILTER_BYTES {
+        let accepted = self.filter.insert(value);
+        if !accepted {
             return false;
         }
-        self.filter.push_str(&value);
         self.reconcile_selection();
         true
     }
 
-    pub(crate) fn pop_filter(&mut self) {
-        self.filter.pop();
+    pub(crate) fn edit_filter(&mut self, edit: LineEdit) {
+        self.filter.apply(edit);
         self.reconcile_selection();
-    }
-
-    pub(crate) fn clear_filter(&mut self) {
-        self.filter.clear();
-        self.selected = 0;
     }
 
     fn reconcile_selection(&mut self) {

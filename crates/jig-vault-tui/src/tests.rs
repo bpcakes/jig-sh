@@ -10,10 +10,10 @@ use crate::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
     ImportPreviewRow, VaultAction, VaultDescriptor, VaultMutation,
     commands::{CommandAvailability, CommandOutcome, CommandPaletteScope, UiCommand},
+    line_editor::{METADATA_INPUT_LIMIT, SEARCH_INPUT_LIMIT},
     model::{
         App, DeleteTarget, EntryIdentity, FieldWriteFocus, FieldWriteIntent, Focus, ItemIdentity,
-        MAX_FILTER_INPUT_BYTES, MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation,
-        MutationConfirmationKind, Screen,
+        ManagementForm, MutationConfirmation, MutationConfirmationKind, Screen,
     },
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
@@ -214,11 +214,11 @@ fn metadata_and_search_pastes_are_bounded_and_rejected_atomically() {
     let mut app = browsing_app();
     app.begin_add();
     handle_paste(&mut app, "PREFIX");
-    handle_paste(&mut app, &"x".repeat(MAX_METADATA_INPUT_BYTES));
+    handle_paste(&mut app, &"x".repeat(METADATA_INPUT_LIMIT));
     let Screen::Form(ManagementForm::WriteField { field, .. }) = &app.screen else {
         panic!("expected field form");
     };
-    assert_eq!(field, "PREFIX");
+    assert_eq!(field.as_str(), "PREFIX");
     assert!(
         app.status
             .as_ref()
@@ -228,13 +228,159 @@ fn metadata_and_search_pastes_are_bounded_and_rejected_atomically() {
     app.close_overlay();
     app.searching = true;
     app.append_filter("api");
-    handle_paste(&mut app, &"x".repeat(MAX_FILTER_INPUT_BYTES));
-    assert_eq!(app.filter, "api");
+    handle_paste(&mut app, &"x".repeat(SEARCH_INPUT_LIMIT));
+    assert_eq!(app.filter.as_str(), "api");
     assert!(
         app.status
             .as_ref()
             .is_some_and(|status| status.text.contains("interactive size limit"))
     );
+}
+
+#[test]
+fn metadata_editor_supports_cursor_delete_and_word_editing() {
+    let mut app = browsing_app();
+    app.begin_create_item();
+    handle_paste(&mut app, "ac");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+    );
+    let Screen::Form(ManagementForm::WriteField { item, .. }) = &app.screen else {
+        panic!("expected create-item form");
+    };
+    assert_eq!(item.as_str(), "abc");
+    assert_eq!(item.cursor(), 2);
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    let Screen::Form(ManagementForm::WriteField { item, .. }) = &app.screen else {
+        panic!("expected create-item form");
+    };
+    assert_eq!(item.as_str(), "b");
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "alpha beta gamma");
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+    );
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "new ");
+    let Screen::Form(ManagementForm::WriteField { item, .. }) = &app.screen else {
+        panic!("expected create-item form");
+    };
+    assert_eq!(item.as_str(), "alpha new gamma");
+}
+
+#[test]
+fn search_and_command_palette_share_insertion_cursor_behavior() {
+    let mut app = browsing_app();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+    );
+    handle_paste(&mut app, "api token");
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "new ");
+    assert_eq!(app.filter.as_str(), "api new token");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.clear_filter();
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
+    );
+    handle_paste(&mut app, "backp");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+    );
+    let Screen::Commands(palette) = &app.screen else {
+        panic!("expected command palette");
+    };
+    assert_eq!(palette.filter.as_str(), "backup");
+    assert_eq!(
+        palette.selected_entry().map(|entry| entry.command),
+        Some(UiCommand::CreateBackup)
+    );
+}
+
+#[test]
+fn active_metadata_editor_renders_a_cursor_and_horizontal_window() {
+    let mut app = browsing_app();
+    app.begin_create_item();
+    handle_paste(&mut app, &format!("START-{}-END", "x".repeat(180)));
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let at_end = terminal.backend().to_string();
+    assert!(at_end.contains('‹'), "{at_end}");
+    assert!(at_end.contains("-END▌"), "{at_end}");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let at_home = terminal.backend().to_string();
+    assert!(at_home.contains("▌START-"), "{at_home}");
+}
+
+#[test]
+fn protected_values_remain_append_only_and_outside_the_metadata_editor() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_replace();
+    handle_paste(&mut app, "protected-value");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        RuntimeAction::Ignore
+    ));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
+    );
+    match submit_key(&mut app) {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetField { value, .. },
+            ..
+        } => assert_eq!(value.as_slice(), b"protected-value!"),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn typed_confirmations_can_be_corrected_at_the_cursor() {
+    let mut app = browsing_app();
+    app.focus = Focus::Items;
+    app.begin_delete();
+    handle_paste(&mut app, "DELEE");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
+    );
+    assert!(matches!(
+        submit_key(&mut app),
+        VaultAction::Mutate {
+            mutation: VaultMutation::RemoveItem { .. },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -685,7 +831,7 @@ fn invalid_concealed_value_file_can_be_corrected_and_retried() {
         panic!("expected field form after validation failure");
     };
     assert!(value.is_empty());
-    assert_eq!(value_file, &source.to_string_lossy());
+    assert_eq!(value_file.as_str(), source.to_string_lossy());
     assert_eq!(
         app.status.as_ref().unwrap().text,
         "Concealed values must contain at least 4 bytes."
@@ -926,8 +1072,10 @@ fn replacement_and_legacy_conversion_share_the_redaction_downgrade_policy() {
     else {
         panic!("expected legacy conversion form");
     };
-    *item = "Imported".to_owned();
-    *field = "TOKEN".to_owned();
+    item.clear();
+    field.clear();
+    assert!(item.insert("Imported"));
+    assert!(field.insert("TOKEN"));
     *kind = FieldKind::Text;
     assert!(matches!(
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
