@@ -697,7 +697,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                app.push_filter(character);
+                let mut encoded = [0; 4];
+                app.append_filter(character.encode_utf8(&mut encoded));
                 RuntimeAction::Redraw
             }
             KeyCode::Up => {
@@ -929,7 +930,7 @@ fn handle_edit_form_key(
             RuntimeAction::Redraw
         }
         KeyCode::Char(' ') => {
-            if app.metadata_input_mut().is_some() || app.protected_input_mut().is_some() {
+            if app.metadata_input_is_active() || app.protected_input_mut().is_some() {
                 push_form_character(app, ' ')
             } else {
                 app.toggle_form_choice();
@@ -942,16 +943,16 @@ fn handle_edit_form_key(
         KeyCode::Backspace => {
             if let Some(input) = app.protected_input_mut() {
                 input.backspace();
-            } else if let Some(input) = app.metadata_input_mut() {
-                input.pop();
+            } else {
+                app.pop_metadata_input();
             }
             RuntimeAction::Redraw
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(input) = app.protected_input_mut() {
                 input.clear();
-            } else if let Some(input) = app.metadata_input_mut() {
-                input.clear();
+            } else {
+                app.clear_metadata_input();
             }
             RuntimeAction::Redraw
         }
@@ -1034,15 +1035,11 @@ fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 RuntimeAction::Start(BackendRequest::Execute(action))
             }),
         KeyCode::Backspace => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.pop();
-            }
+            app.pop_metadata_input();
             RuntimeAction::Redraw
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.clear();
-            }
+            app.clear_metadata_input();
             RuntimeAction::Redraw
         }
         KeyCode::Char(character)
@@ -1050,9 +1047,7 @@ fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
-            if let Some(input) = app.metadata_input_mut() {
-                input.push(character);
-            }
+            append_metadata_character(app, character);
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -1095,15 +1090,11 @@ fn handle_metadata_confirmation_key(
         }
         KeyCode::Enter => submit(app),
         KeyCode::Backspace => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.pop();
-            }
+            app.pop_metadata_input();
             RuntimeAction::Redraw
         }
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.clear();
-            }
+            app.clear_metadata_input();
             RuntimeAction::Redraw
         }
         KeyCode::Char(character)
@@ -1111,9 +1102,7 @@ fn handle_metadata_confirmation_key(
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
-            if let Some(input) = app.metadata_input_mut() {
-                input.push(character);
-            }
+            append_metadata_character(app, character);
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -1125,10 +1114,15 @@ fn push_form_character(app: &mut App, character: char) -> RuntimeAction {
         if input.push_char(character).is_err() {
             app.set_error("Protected input exceeds the vault value size limit.");
         }
-    } else if let Some(input) = app.metadata_input_mut() {
-        input.push(character);
+    } else {
+        append_metadata_character(app, character);
     }
     RuntimeAction::Redraw
+}
+
+fn append_metadata_character(app: &mut App, character: char) {
+    let mut encoded = [0; 4];
+    app.handle_metadata_append(character.encode_utf8(&mut encoded));
 }
 
 pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
@@ -1140,14 +1134,11 @@ pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
         }
         return RuntimeAction::Redraw;
     }
-    if let Some(input) = app.metadata_input_mut() {
-        input.push_str(value);
+    if app.handle_metadata_append(value) {
         return RuntimeAction::Redraw;
     }
     if app.searching {
-        for character in value.chars() {
-            app.push_filter(character);
-        }
+        app.append_filter(value);
         return RuntimeAction::Redraw;
     }
     RuntimeAction::Ignore

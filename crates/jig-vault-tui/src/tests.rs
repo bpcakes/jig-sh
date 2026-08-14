@@ -10,8 +10,9 @@ use crate::{
     ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
     VaultDescriptor, VaultMutation,
     model::{
-        App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm,
-        MutationConfirmation, MutationConfirmationKind, Screen,
+        App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, MAX_FILTER_INPUT_BYTES,
+        MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation, MutationConfirmationKind,
+        Screen,
     },
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
@@ -183,9 +184,7 @@ fn snapshot_keeps_canonical_and_legacy_entries_separate() {
 #[test]
 fn metadata_filter_searches_reference_kind_and_legacy_name() {
     let mut app = browsing_app();
-    for character in "api_url".chars() {
-        app.push_filter(character);
-    }
+    app.append_filter("api_url");
     assert_eq!(
         app.visible_items(),
         vec![ItemIdentity::Canonical("Production".to_owned())]
@@ -193,13 +192,39 @@ fn metadata_filter_searches_reference_kind_and_legacy_name() {
     assert_eq!(app.visible_entries().len(), 1);
 
     app.clear_filter();
-    for character in "old_token".chars() {
-        app.push_filter(character);
-    }
+    app.append_filter("old_token");
     assert_eq!(app.visible_items(), vec![ItemIdentity::Legacy]);
     assert_eq!(
         app.selected_entry,
         Some(EntryIdentity::Legacy("old_token".to_owned()))
+    );
+}
+
+#[test]
+fn metadata_and_search_pastes_are_bounded_and_rejected_atomically() {
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "PREFIX");
+    handle_paste(&mut app, &"x".repeat(MAX_METADATA_INPUT_BYTES));
+    let Screen::Form(ManagementForm::WriteField { field, .. }) = &app.screen else {
+        panic!("expected field form");
+    };
+    assert_eq!(field, "PREFIX");
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("interactive size limit"))
+    );
+
+    app.close_overlay();
+    app.searching = true;
+    app.append_filter("api");
+    handle_paste(&mut app, &"x".repeat(MAX_FILTER_INPUT_BYTES));
+    assert_eq!(app.filter, "api");
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("interactive size limit"))
     );
 }
 
@@ -919,9 +944,7 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
         RuntimeAction::Redraw
     ));
     assert!(matches!(app.screen, Screen::ConfirmDelete(_)));
-    if let Some(input) = app.metadata_input_mut() {
-        input.clear();
-    }
+    app.clear_metadata_input();
     handle_paste(&mut app, "jig://Production/API_TOKEN");
     match submit_key(&mut app) {
         VaultAction::Mutate {

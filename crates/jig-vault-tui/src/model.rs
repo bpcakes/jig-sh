@@ -13,6 +13,9 @@ use crate::{
     tools::{ToolChoice, ToolForm, ToolsMenu},
 };
 
+pub(crate) const MAX_METADATA_INPUT_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_FILTER_INPUT_BYTES: usize = 256;
+
 #[derive(Debug)]
 pub(crate) struct App {
     pub(crate) descriptor: VaultDescriptor,
@@ -214,7 +217,7 @@ impl App {
         }
     }
 
-    pub(crate) fn metadata_input_mut(&mut self) -> Option<&mut String> {
+    fn metadata_input_mut(&mut self) -> Option<&mut String> {
         match &mut self.screen {
             Screen::Form(form) => form.metadata_input_mut(),
             Screen::ToolForm(form) => form.metadata_input_mut(),
@@ -223,6 +226,33 @@ impl App {
             Screen::ImportPreview(preview) => Some(&mut preview.confirmation),
             Screen::ConfirmPeek(confirmation) => Some(&mut confirmation.input),
             _ => None,
+        }
+    }
+
+    pub(crate) fn metadata_input_is_active(&mut self) -> bool {
+        self.metadata_input_mut().is_some()
+    }
+
+    pub(crate) fn handle_metadata_append(&mut self, value: &str) -> bool {
+        let Some(input) = self.metadata_input_mut() else {
+            return false;
+        };
+        let accepted = append_bounded(input, value, MAX_METADATA_INPUT_BYTES);
+        if !accepted {
+            self.set_error("Metadata input exceeds the interactive size limit.");
+        }
+        true
+    }
+
+    pub(crate) fn pop_metadata_input(&mut self) {
+        if let Some(input) = self.metadata_input_mut() {
+            input.pop();
+        }
+    }
+
+    pub(crate) fn clear_metadata_input(&mut self) {
+        if let Some(input) = self.metadata_input_mut() {
+            input.clear();
         }
     }
 
@@ -911,11 +941,23 @@ impl App {
         }
     }
 
-    pub(crate) fn push_filter(&mut self, character: char) {
-        if !character.is_control() {
-            self.filter.push(character);
-            self.reconcile_selection();
+    pub(crate) fn append_filter(&mut self, value: &str) {
+        let remaining = MAX_FILTER_INPUT_BYTES.saturating_sub(self.filter.len());
+        let mut appended_bytes = 0usize;
+        for character in value.chars().filter(|character| !character.is_control()) {
+            let Some(next) = appended_bytes.checked_add(character.len_utf8()) else {
+                self.set_error("Search filter exceeds the interactive size limit.");
+                return;
+            };
+            if next > remaining {
+                self.set_error("Search filter exceeds the interactive size limit.");
+                return;
+            }
+            appended_bytes = next;
         }
+        self.filter
+            .extend(value.chars().filter(|character| !character.is_control()));
+        self.reconcile_selection();
     }
 
     pub(crate) fn pop_filter(&mut self) {
@@ -1008,6 +1050,17 @@ impl App {
             self.selected_entry = entries.first().cloned();
         }
     }
+}
+
+fn append_bounded(input: &mut String, value: &str, limit: usize) -> bool {
+    let Some(next_len) = input.len().checked_add(value.len()) else {
+        return false;
+    };
+    if next_len > limit {
+        return false;
+    }
+    input.push_str(value);
+    true
 }
 
 fn move_identity<T: Clone + PartialEq>(
