@@ -11,6 +11,7 @@ use jig_vault::{SecretBytes, VaultReference, VaultSnapshot};
 use crate::{
     VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction, VaultPresence,
     VaultUiError, VaultUiErrorKind,
+    commands::{CommandOutcome, CommandPaletteScope, UiCommand},
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
@@ -812,7 +813,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             return handle_mutation_confirmation_key(app, key);
         }
         Screen::ConfirmDelete(_) => return handle_delete_key(app, key),
-        Screen::Tools(_) => return handle_tools_key(app, key),
+        Screen::Commands(_) => return handle_command_palette_key(app, key),
         Screen::ToolForm(_) => return handle_tool_form_key(app, key),
         Screen::ImportPreview(_) => return handle_import_preview_key(app, key),
         Screen::Activity(_) => return handle_activity_key(app, key),
@@ -862,6 +863,10 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             }
             _ => RuntimeAction::Ignore,
         };
+    }
+
+    if let Some(command) = UiCommand::from_key(key) {
+        return command_outcome(app.activate_direct_command(command));
     }
 
     match key.code {
@@ -920,58 +925,12 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             app.move_to_edge(true);
             RuntimeAction::Redraw
         }
-        KeyCode::Char('r') => {
-            app.begin_loading("Refreshing vault metadata");
-            RuntimeAction::Start(BackendRequest::Execute(VaultAction::Refresh))
-        }
-        KeyCode::Char('a') => {
-            app.begin_add();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('A') => {
-            app.begin_add_legacy();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('e') => {
-            app.begin_replace();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('K') => {
-            app.begin_change_kind();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('n') => {
-            app.begin_rename();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('c') => {
-            app.begin_convert();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('D') => {
-            app.begin_delete();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('x') => {
-            app.begin_export();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('p') => {
-            app.begin_peek();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('m')
-            if app
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.format_version == 1) =>
-        {
-            app.confirm_migration();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('L') => RuntimeAction::Lock,
         KeyCode::Char(':') => {
-            app.open_tools();
+            app.open_command_palette(CommandPaletteScope::Universal);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => {
+            app.open_command_palette(CommandPaletteScope::Context);
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -986,7 +945,7 @@ fn handle_missing_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         KeyCode::Esc | KeyCode::Char('q') => RuntimeAction::Quit,
         KeyCode::Char(':') => {
-            app.open_tools();
+            app.open_command_palette(CommandPaletteScope::Universal);
             RuntimeAction::Redraw
         }
         _ => RuntimeAction::Ignore,
@@ -1118,24 +1077,55 @@ fn handle_edit_form_key(
     }
 }
 
-fn handle_tools_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+fn handle_command_palette_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => {
+        KeyCode::Esc => {
             app.close_overlay();
             RuntimeAction::Redraw
         }
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.move_tool_selection(1);
+        KeyCode::Down => {
+            app.move_command_selection(1);
             RuntimeAction::Redraw
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.move_tool_selection(-1);
+        KeyCode::Up => {
+            app.move_command_selection(-1);
             RuntimeAction::Redraw
         }
-        KeyCode::Enter => app.activate_tool().map_or(RuntimeAction::Redraw, |action| {
-            RuntimeAction::Start(BackendRequest::Execute(action))
-        }),
+        KeyCode::PageDown => {
+            app.move_command_selection(10);
+            RuntimeAction::Redraw
+        }
+        KeyCode::PageUp => {
+            app.move_command_selection(-10);
+            RuntimeAction::Redraw
+        }
+        KeyCode::Enter => command_outcome(app.activate_selected_command()),
+        KeyCode::Backspace => {
+            app.pop_command_filter();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.clear_command_filter();
+            RuntimeAction::Redraw
+        }
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            let mut encoded = [0; 4];
+            app.append_command_filter(character.encode_utf8(&mut encoded));
+            RuntimeAction::Redraw
+        }
         _ => RuntimeAction::Ignore,
+    }
+}
+
+fn command_outcome(outcome: CommandOutcome) -> RuntimeAction {
+    match outcome {
+        CommandOutcome::Redraw => RuntimeAction::Redraw,
+        CommandOutcome::Start(action) => RuntimeAction::Start(BackendRequest::Execute(action)),
+        CommandOutcome::Lock => RuntimeAction::Lock,
     }
 }
 
@@ -1286,6 +1276,9 @@ pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
         return RuntimeAction::Redraw;
     }
     if app.handle_metadata_append(value) {
+        return RuntimeAction::Redraw;
+    }
+    if app.append_command_filter(value) {
         return RuntimeAction::Redraw;
     }
     if app.searching {

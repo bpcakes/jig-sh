@@ -13,7 +13,7 @@ controls, and find any item or field quickly without exposing a value.
   patterns and research comparable keyboard-first interfaces.
 - [x] Open structured work `plan_01M00SZ5VVZGTY6JGSN8VTKQ9V` and record the
   four delivery boundaries.
-- [ ] Introduce a total command catalog, contextual and universal palettes, and
+- [x] Introduce a total command catalog, contextual and universal palettes, and
   catalog-derived action help/footer rendering.
 - [ ] Add an explicit Create item + first field flow, contextual empty states,
   and Enter-driven actions.

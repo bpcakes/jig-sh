@@ -9,6 +9,7 @@ use tempfile::tempdir;
 use crate::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
     ImportPreviewRow, VaultAction, VaultDescriptor, VaultMutation,
+    commands::{CommandAvailability, CommandOutcome, CommandPaletteScope, UiCommand},
     model::{
         App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, MAX_FILTER_INPUT_BYTES,
         MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation, MutationConfirmationKind,
@@ -976,13 +977,17 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
 }
 
 #[test]
-fn tools_palette_opens_verified_activity_and_audit_results() {
+fn universal_palette_filters_and_opens_verified_activity() {
     let mut app = browsing_app();
     handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
     );
-    assert!(matches!(app.screen, Screen::Tools(_)));
+    assert!(matches!(
+        app.screen,
+        Screen::Commands(ref palette) if palette.scope == CommandPaletteScope::Universal
+    ));
+    handle_paste(&mut app, "activity");
     match submit_key(&mut app) {
         VaultAction::Activity { limit } => assert_eq!(limit, 100),
         other => panic!("unexpected action: {other:?}"),
@@ -1031,14 +1036,129 @@ fn tools_palette_opens_verified_activity_and_audit_results() {
 }
 
 #[test]
+fn enter_opens_context_actions_and_disabled_reasons_remain_visible() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Commands(palette) = &app.screen else {
+        panic!("expected contextual command palette");
+    };
+    assert_eq!(palette.scope, CommandPaletteScope::Context);
+    assert!(
+        palette
+            .entries
+            .iter()
+            .any(|entry| entry.command == UiCommand::ReplaceValue)
+    );
+    assert!(
+        palette
+            .entries
+            .iter()
+            .all(|entry| entry.command.relevant_to_context(&app))
+    );
+
+    app.close_overlay();
+    select_legacy(&mut app);
+    app.open_command_palette(CommandPaletteScope::Context);
+    let Screen::Commands(palette) = &app.screen else {
+        panic!("expected contextual command palette");
+    };
+    let export_index = palette
+        .entries
+        .iter()
+        .position(|entry| entry.command == UiCommand::ExportField)
+        .expect("legacy context should explain why export is unavailable");
+    assert!(matches!(
+        palette.entries[export_index].availability,
+        CommandAvailability::Disabled(_)
+    ));
+    app.move_command_selection(export_index as isize);
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::Commands(_)));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("canonical field"))
+    );
+
+    let backend = TestBackend::new(110, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("canonical field"), "{rendered}");
+}
+
+#[test]
+fn direct_action_bindings_require_exact_modifiers() {
+    assert_eq!(
+        UiCommand::from_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+        None
+    );
+    assert_eq!(
+        UiCommand::from_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT)),
+        None
+    );
+
+    let mut app = browsing_app();
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT)
+        ),
+        RuntimeAction::Ignore
+    ));
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)
+        ),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::Form(_)));
+}
+
+#[test]
+fn help_and_footer_render_catalog_backed_action_discovery() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    let backend = TestBackend::new(140, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let footer = terminal.backend().to_string();
+    assert!(footer.contains("e replace"), "{footer}");
+    assert!(footer.contains("Enter actions"), "{footer}");
+    assert!(footer.contains(": all"), "{footer}");
+
+    app.show_help();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let help = terminal.backend().to_string();
+    for command in UiCommand::ALL
+        .into_iter()
+        .filter(|command| command.visible_in_state(&app))
+        .filter(|command| command.binding().is_some())
+    {
+        assert!(
+            help.contains(command.label()),
+            "missing {command:?}: {help}"
+        );
+    }
+}
+
+#[test]
 fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
     let mut app = browsing_app();
     handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE),
     );
-    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-    handle_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    handle_paste(&mut app, "1password");
     handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert!(matches!(app.screen, Screen::ToolForm(_)));
 
@@ -1240,9 +1360,10 @@ fn import_preview_escape_emits_a_token_scoped_discard_action() {
 #[test]
 fn backup_and_passphrase_forms_emit_metadata_only_actions() {
     let mut app = browsing_app();
-    app.open_tools();
-    app.move_tool_selection(3);
-    app.activate_tool();
+    assert!(matches!(
+        app.activate_direct_command(UiCommand::CreateBackup),
+        CommandOutcome::Redraw
+    ));
     handle_paste(&mut app, "/tmp/vault-backup.jig");
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_key(
@@ -1258,9 +1379,10 @@ fn backup_and_passphrase_forms_emit_metadata_only_actions() {
     }
 
     app.apply_snapshot(snapshot());
-    app.open_tools();
-    app.move_tool_selection(4);
-    app.activate_tool();
+    assert!(matches!(
+        app.activate_direct_command(UiCommand::ChangePassphrase),
+        CommandOutcome::Redraw
+    ));
     handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
@@ -1273,8 +1395,10 @@ fn backup_and_passphrase_forms_emit_metadata_only_actions() {
 #[test]
 fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
     let mut app = App::new(descriptor(false));
-    app.open_tools();
-    app.activate_tool();
+    assert!(matches!(
+        app.activate_direct_command(UiCommand::RestoreBackup),
+        CommandOutcome::Redraw
+    ));
     handle_paste(&mut app, "/tmp/vault-backup.jig");
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
@@ -1354,9 +1478,10 @@ fn export_and_peek_are_canonical_controlled_sinks() {
 #[test]
 fn locking_drops_pending_protected_tool_inputs_and_metadata() {
     let mut app = browsing_app();
-    app.open_tools();
-    app.move_tool_selection(4);
-    app.activate_tool();
+    assert!(matches!(
+        app.activate_direct_command(UiCommand::ChangePassphrase),
+        CommandOutcome::Redraw
+    ));
     handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
     assert!(matches!(app.screen, Screen::ToolForm(_)));
 

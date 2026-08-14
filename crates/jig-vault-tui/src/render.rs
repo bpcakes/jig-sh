@@ -7,17 +7,16 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::tools::{
-    BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu,
-};
 use crate::{
     ImportFieldChange,
+    commands::{CommandAvailability, CommandPalette, CommandSafety, UiCommand},
     model::{
         ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
         ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
         MutationConfirmation, MutationConfirmationKind, PeekConfirmation, RenameFieldFocus, Screen,
         StatusKind, kind_label,
     },
+    tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -66,7 +65,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::Form(_)
         | Screen::ConfirmMutation(_)
         | Screen::ConfirmDelete(_)
-        | Screen::Tools(_)
+        | Screen::Commands(_)
         | Screen::ToolForm(_)
         | Screen::ImportPreview(_)
         | Screen::Activity(_)
@@ -78,7 +77,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 draw_missing(frame, area, app);
             }
             match &app.screen {
-                Screen::Help => draw_help(frame, centered_rect(78, 74, area)),
+                Screen::Help => draw_help(frame, centered_rect(82, 82, area), app),
                 Screen::ConfirmMigration => {
                     draw_migration_confirmation(frame, centered_rect(72, 42, area));
                 }
@@ -96,7 +95,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 Screen::ConfirmDelete(confirmation) => {
                     draw_delete_confirmation(frame, centered_rect(78, 52, area), app, confirmation);
                 }
-                Screen::Tools(menu) => draw_tools(frame, centered_rect(70, 60, area), menu),
+                Screen::Commands(palette) => {
+                    draw_command_palette(frame, centered_rect(84, 76, area), app, palette)
+                }
                 Screen::ToolForm(form) => {
                     draw_tool_form(frame, centered_rect(82, 72, area), app, form);
                 }
@@ -142,7 +143,7 @@ fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
             Line::from("Press i to initialize a new encrypted vault."),
             Line::from("Restore from an encrypted backup is available from this screen."),
             Line::from(""),
-            Line::from("i initialize   : tools/restore   q quit"),
+            Line::from("i initialize   : actions/restore   q quit"),
         ])
         .alignment(Alignment::Center)
         .block(panel("Vault not initialized"))
@@ -458,28 +459,25 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         String::new()
     };
     let controls = if app.searching {
-        "Type to filter metadata  Backspace edit  Ctrl-U clear  Enter finish  Esc finish"
+        "Type to filter metadata  Backspace edit  Ctrl-U clear  Enter/Esc finish".to_owned()
     } else if app
         .snapshot
         .as_ref()
         .is_some_and(|snapshot| snapshot.format_version == 1)
     {
-        "READ-ONLY v1  m migrate  / filter  Tab/h/l focus  j/k move  r refresh  L lock  ? help  q quit"
+        format!(
+            "READ-ONLY v1  / filter  Tab/h/l focus  j/k move  {}  ? help  q quit",
+            common_action_hints(app)
+        )
     } else {
-        "/ filter  Tab/h/l focus  j/k move  r refresh  L lock  ? help  q quit"
+        format!(
+            "/ filter  Tab/h/l focus  j/k move  {}  ? help  q quit",
+            common_action_hints(app)
+        )
     };
     let mut lines = vec![Line::from(format!("{breadcrumb}{controls}"))];
-    if !app.searching
-        && app
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.format_version == 2)
-    {
-        lines.push(Line::from(
-            "a add  A legacy  e replace  K kind  n rename  c convert  D delete  x export  p peek  : tools",
-        ));
-    } else if !app.searching {
-        lines.push(Line::from("x export  p peek  : tools"));
+    if !app.searching {
+        lines.push(Line::from(context_action_hints(app, frame.area().width)));
     }
     if app.searching || !app.filter.is_empty() {
         lines.push(Line::from(vec![
@@ -499,38 +497,92 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(lines).block(panel("Keys")), area);
 }
 
-fn draw_help(frame: &mut Frame, area: Rect) {
+fn common_action_hints(app: &App) -> String {
+    [UiCommand::MigrateToV2, UiCommand::Refresh, UiCommand::Lock]
+        .into_iter()
+        .filter(|command| command.visible_in_state(app))
+        .filter(|command| command.availability(app).is_enabled())
+        .map(UiCommand::hint)
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn context_action_hints(app: &App, width: u16) -> String {
+    let limit = if width < WIDE_WIDTH { 3 } else { 7 };
+    let mut hints = UiCommand::ALL
+        .into_iter()
+        .filter(|command| command.relevant_to_context(app))
+        .filter(|command| command.availability(app).is_enabled())
+        .filter(|command| command.binding().is_some())
+        .take(limit)
+        .map(UiCommand::hint)
+        .collect::<Vec<_>>();
+    hints.push("Enter actions".to_owned());
+    hints.push(": all".to_owned());
+    hints.join("  ")
+}
+
+fn command_help_lines(app: &App) -> Vec<Line<'static>> {
+    let commands = UiCommand::ALL
+        .into_iter()
+        .filter(|command| command.visible_in_state(app))
+        .filter_map(|command| {
+            command
+                .binding()
+                .map(|binding| format!("{}  {}", binding.label, command.label()))
+        })
+        .collect::<Vec<_>>();
+    commands
+        .chunks(3)
+        .map(|chunk| {
+            Line::from(
+                chunk
+                    .iter()
+                    .map(|entry| format!("{entry:<24}"))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Navigation",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("j/k or ↑/↓  move selection"),
+        Line::from("h/l or Tab   change focused pane"),
+        Line::from("Home/End     first or last row"),
+        Line::from("/            filter item, field, reference, or legacy metadata"),
+        Line::from("Enter        actions for the current selection"),
+        Line::from(":            search every available vault action"),
+        Line::from("?            close this help"),
+        Line::from("q            quit"),
+        Line::from("             auto-locks after five minutes without terminal input"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Direct actions",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    lines.extend(command_help_lines(app));
+    lines.extend([
+        Line::from(""),
+        Line::from(Span::styled(
+            "Values remain hidden. Operational exec/run/inject workflows stay in the CLI.",
+            Style::default().fg(MUTED),
+        )),
+        Line::from(""),
+        Line::from("Esc or ? closes help."),
+    ]);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(
-                "Keyboard",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            )),
-            Line::from("j/k or ↑/↓  move selection"),
-            Line::from("h/l or Tab   change focused pane"),
-            Line::from("/            filter item, field, reference, or legacy metadata"),
-            Line::from("r            reopen and refresh authenticated metadata"),
-            Line::from("m            explicitly migrate a version 1 vault"),
-            Line::from("a / A        add a field / explicit legacy entry"),
-            Line::from("e / K        replace a value / change field kind"),
-            Line::from("n / c        rename field or item / convert legacy entry"),
-            Line::from("D            delete with exact typed confirmation"),
-            Line::from("x / p        export privately / controlled terminal preview"),
-            Line::from(":            lifecycle tools"),
-            Line::from("L            lock and wipe process-local session state"),
-            Line::from("             auto-locks after five minutes without terminal input"),
-            Line::from("q            quit"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Values remain hidden. Operational exec/run/inject workflows stay in the CLI.",
-                Style::default().fg(MUTED),
-            )),
-            Line::from(""),
-            Line::from("Esc or ? closes help."),
-        ])
-        .block(panel("Vault help"))
-        .wrap(Wrap { trim: true }),
+        Paragraph::new(lines)
+            .block(panel("Vault help"))
+            .wrap(Wrap { trim: true }),
         area,
     );
 }
@@ -869,36 +921,75 @@ fn draw_peek_confirmation(
     );
 }
 
-fn draw_tools(frame: &mut Frame, area: Rect, menu: &ToolsMenu) {
+fn draw_command_palette(frame: &mut Frame, area: Rect, app: &App, palette: &CommandPalette) {
     frame.render_widget(Clear, area);
-    let items = menu
-        .choices
+    let footer_height = if app.status.is_some() { 5 } else { 4 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(footer_height)])
+        .split(area);
+    let visible = palette.visible_entries();
+    let mut items = visible
         .iter()
-        .map(|choice| ListItem::new(choice.label()))
+        .map(|entry| {
+            let binding = entry.command.binding().map_or_else(
+                || "    ".to_owned(),
+                |binding| format!("[{}] ", binding.label),
+            );
+            let style = match entry.availability {
+                CommandAvailability::Disabled(_) => Style::default().fg(MUTED),
+                CommandAvailability::Enabled => match entry.command.safety() {
+                    CommandSafety::Ordinary => Style::default(),
+                    CommandSafety::Disclosure => Style::default().fg(WARN),
+                    CommandSafety::Destructive => Style::default().fg(BAD),
+                },
+            };
+            let mut spans = vec![
+                Span::styled(binding, Style::default().fg(ACCENT)),
+                Span::styled(entry.command.label(), style),
+                Span::styled(
+                    format!("  {}", entry.command.category()),
+                    Style::default().fg(MUTED),
+                ),
+            ];
+            if let CommandAvailability::Disabled(reason) = entry.availability {
+                spans.push(Span::styled(
+                    format!("  — {reason}"),
+                    Style::default().fg(MUTED),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
         .collect::<Vec<_>>();
-    let mut state = ListState::default().with_selected(Some(menu.selected));
-    frame.render_stateful_widget(
-        list(items, "Vault tools")
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("› "),
-        area,
-        &mut state,
-    );
-    let footer = Rect::new(
-        area.x.saturating_add(2),
-        area.bottom().saturating_sub(2),
-        area.width.saturating_sub(4),
-        1,
-    );
-    frame.render_widget(
-        Paragraph::new("j/k move   Enter open   Esc close").style(Style::default().fg(MUTED)),
-        footer,
-    );
+    if items.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "No matching actions.",
+            Style::default().fg(MUTED),
+        ))));
+    }
+    let selected = (!visible.is_empty()).then_some(palette.selected);
+    let mut state = ListState::default().with_selected(selected);
+    frame.render_stateful_widget(list(items, palette.scope.title()), chunks[0], &mut state);
+    let filter = if palette.filter.is_empty() {
+        "Type to filter actions".to_owned()
+    } else {
+        format!("Filter: {}", sanitize_text(&palette.filter))
+    };
+    let mut lines = vec![
+        Line::from(filter).style(Style::default().fg(ACCENT)),
+        Line::from("↑/↓ move   Enter run/open   Backspace edit   Ctrl-U clear   Esc close")
+            .style(Style::default().fg(MUTED)),
+    ];
+    if let Some(status) = &app.status {
+        lines.push(Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(match status.kind {
+                StatusKind::Info => GOOD,
+                StatusKind::Error => BAD,
+            }),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines).block(panel("Command")), chunks[1]);
 }
 
 fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {

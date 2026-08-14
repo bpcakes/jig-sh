@@ -13,6 +13,7 @@ use jig_vault::{
 };
 use ulid::Ulid;
 
+mod commands;
 mod model;
 mod peek;
 mod render;

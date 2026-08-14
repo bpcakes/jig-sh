@@ -9,8 +9,9 @@ use jig_vault::{
 use crate::{
     ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
     VaultPresence, VaultUiError,
+    commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
     secret_input::SecretInput,
-    tools::{ToolActivation, ToolForm, ToolsMenu},
+    tools::{ToolActivation, ToolChoice, ToolForm},
 };
 
 pub(crate) const MAX_METADATA_INPUT_BYTES: usize = 128 * 1024;
@@ -184,7 +185,7 @@ impl App {
                 | Screen::Form(_)
                 | Screen::ConfirmMutation(_)
                 | Screen::ConfirmDelete(_)
-                | Screen::Tools(_)
+                | Screen::Commands(_)
                 | Screen::ToolForm(_)
                 | Screen::Activity(_)
                 | Screen::AuditResult(_)
@@ -289,45 +290,117 @@ impl App {
         };
     }
 
-    pub(crate) fn open_tools(&mut self) {
-        if self.snapshot.is_none() && !cfg!(target_os = "linux") {
-            self.set_error("Encrypted backup restore is currently supported only on Linux.");
-            return;
-        }
-        let menu = self
-            .snapshot
-            .as_ref()
-            .map_or_else(ToolsMenu::missing, |snapshot| {
-                ToolsMenu::unlocked(snapshot.format_version)
-            });
-        self.screen = Screen::Tools(menu);
+    pub(crate) fn open_command_palette(&mut self, scope: CommandPaletteScope) {
+        let palette = CommandPalette::for_app(self, scope);
+        self.screen = Screen::Commands(palette);
         self.searching = false;
         self.status = None;
     }
 
-    pub(crate) fn move_tool_selection(&mut self, delta: isize) {
-        if let Screen::Tools(menu) = &mut self.screen {
-            menu.move_selection(delta);
+    pub(crate) fn move_command_selection(&mut self, delta: isize) {
+        if let Screen::Commands(palette) = &mut self.screen {
+            palette.move_selection(delta);
         }
     }
 
-    pub(crate) fn activate_tool(&mut self) -> Option<VaultAction> {
-        let Screen::Tools(menu) = &self.screen else {
-            return None;
+    pub(crate) fn append_command_filter(&mut self, value: &str) -> bool {
+        let Screen::Commands(palette) = &mut self.screen else {
+            return false;
         };
-        let choice = menu.selected()?;
+        if !palette.append_filter(value) {
+            self.set_error("Action filter exceeds the interactive size limit.");
+        }
+        true
+    }
+
+    pub(crate) fn pop_command_filter(&mut self) {
+        if let Screen::Commands(palette) = &mut self.screen {
+            palette.pop_filter();
+        }
+    }
+
+    pub(crate) fn clear_command_filter(&mut self) {
+        if let Screen::Commands(palette) = &mut self.screen {
+            palette.clear_filter();
+        }
+    }
+
+    pub(crate) fn activate_selected_command(&mut self) -> CommandOutcome {
+        let Screen::Commands(palette) = &self.screen else {
+            return CommandOutcome::Redraw;
+        };
+        let Some(entry) = palette.selected_entry() else {
+            self.set_error("No action matches the current filter.");
+            return CommandOutcome::Redraw;
+        };
+        if let crate::commands::CommandAvailability::Disabled(reason) = entry.availability {
+            self.set_error(reason);
+            return CommandOutcome::Redraw;
+        }
+        self.screen = if self.snapshot.is_some() {
+            Screen::Browse
+        } else {
+            Screen::Missing
+        };
+        self.status = None;
+        self.activate_command(entry.command)
+    }
+
+    pub(crate) fn activate_direct_command(&mut self, command: UiCommand) -> CommandOutcome {
+        match command.availability(self) {
+            crate::commands::CommandAvailability::Enabled => self.activate_command(command),
+            crate::commands::CommandAvailability::Disabled(reason) => {
+                self.set_error(reason);
+                CommandOutcome::Redraw
+            }
+        }
+    }
+
+    fn activate_command(&mut self, command: UiCommand) -> CommandOutcome {
+        if let Some(choice) = command.tool_choice() {
+            return self.activate_tool_choice(choice);
+        }
+        match command {
+            UiCommand::AddField => self.begin_add(),
+            UiCommand::AddLegacy => self.begin_add_legacy(),
+            UiCommand::ReplaceValue => self.begin_replace(),
+            UiCommand::ChangeKind => self.begin_change_kind(),
+            UiCommand::RenameSelection => self.begin_rename(),
+            UiCommand::ConvertLegacy => self.begin_convert(),
+            UiCommand::DeleteSelection => self.begin_delete(),
+            UiCommand::ExportField => self.begin_export(),
+            UiCommand::PeekField => self.begin_peek(),
+            UiCommand::Refresh => {
+                self.begin_loading("Refreshing vault metadata");
+                return CommandOutcome::Start(VaultAction::Refresh);
+            }
+            UiCommand::MigrateToV2 => self.confirm_migration(),
+            UiCommand::Lock => return CommandOutcome::Lock,
+            UiCommand::Activity
+            | UiCommand::VerifyAudit
+            | UiCommand::ImportOnePassword
+            | UiCommand::CreateBackup
+            | UiCommand::ChangePassphrase
+            | UiCommand::RestoreBackup => {
+                unreachable!("tool commands returned before ordinary activation")
+            }
+        }
+        CommandOutcome::Redraw
+    }
+
+    fn activate_tool_choice(&mut self, choice: ToolChoice) -> CommandOutcome {
         match choice.activation() {
             ToolActivation::Immediate {
                 action,
                 loading_label,
             } => {
                 self.begin_loading(loading_label);
-                Some(action)
+                CommandOutcome::Start(action)
             }
             ToolActivation::Form(form) => {
                 self.screen = Screen::ToolForm(form);
                 self.status = None;
-                None
+                CommandOutcome::Redraw
             }
         }
     }
@@ -1169,7 +1242,7 @@ pub(crate) enum Screen {
     Form(ManagementForm),
     ConfirmMutation(MutationConfirmation),
     ConfirmDelete(DeleteConfirmation),
-    Tools(ToolsMenu),
+    Commands(CommandPalette),
     ToolForm(ToolForm),
     ImportPreview(ImportPreviewState),
     Activity(ActivityView),

@@ -15,17 +15,6 @@ pub(crate) enum ToolChoice {
 }
 
 impl ToolChoice {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Activity => "Verified activity",
-            Self::VerifyAudit => "Verify audit chain",
-            Self::ImportOnePassword => "Import 1Password dotenv",
-            Self::CreateBackup => "Create encrypted backup",
-            Self::ChangePassphrase => "Change vault passphrase",
-            Self::RestoreBackup => "Restore encrypted backup",
-        }
-    }
-
     pub(crate) fn activation(self) -> ToolActivation {
         match self {
             Self::Activity => ToolActivation::Immediate {
@@ -71,51 +60,6 @@ pub(crate) enum ToolActivation {
         loading_label: &'static str,
     },
     Form(ToolForm),
-}
-
-#[derive(Debug)]
-pub(crate) struct ToolsMenu {
-    pub(crate) choices: Vec<ToolChoice>,
-    pub(crate) selected: usize,
-}
-
-impl ToolsMenu {
-    pub(crate) fn unlocked(format_version: u32) -> Self {
-        let mut choices = vec![ToolChoice::Activity, ToolChoice::VerifyAudit];
-        if format_version == 2 {
-            choices.extend([
-                ToolChoice::ImportOnePassword,
-                ToolChoice::CreateBackup,
-                ToolChoice::ChangePassphrase,
-            ]);
-        }
-        Self {
-            choices,
-            selected: 0,
-        }
-    }
-
-    pub(crate) fn missing() -> Self {
-        Self {
-            choices: vec![ToolChoice::RestoreBackup],
-            selected: 0,
-        }
-    }
-
-    pub(crate) fn move_selection(&mut self, delta: isize) {
-        if self.choices.is_empty() {
-            self.selected = 0;
-            return;
-        }
-        self.selected = self
-            .selected
-            .saturating_add_signed(delta)
-            .min(self.choices.len() - 1);
-    }
-
-    pub(crate) fn selected(&self) -> Option<ToolChoice> {
-        self.choices.get(self.selected).copied()
-    }
 }
 
 #[derive(Debug)]
