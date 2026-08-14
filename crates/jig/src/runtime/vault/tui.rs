@@ -204,8 +204,6 @@ impl VaultTuiBackend {
             .map(|entry| entry.reference.clone())
             .collect::<Vec<_>>();
         super::super::vault_import::preflight_destination(&out_env).map_err(map_anyhow_error)?;
-        let destination = PreparedPrivateFile::preview(&out_env).map_err(map_vault_error)?;
-        let destination_exists = destination.destination_exists();
         let recovery_command = super::super::vault_import::recovery_command(
             &env_file,
             &item,
@@ -213,9 +211,12 @@ impl VaultTuiBackend {
             &self.descriptor.home,
         )
         .map_err(map_anyhow_error)?;
-        let vault = self.with_vault(|selected, passphrase| {
-            selected.plan_import_fields(passphrase, &references)
+        let (destination, vault) = self.with_vault(|selected, passphrase| {
+            let destination = selected.preview_private_output(&out_env)?;
+            let vault = selected.plan_import_fields(passphrase, &references)?;
+            Ok((destination, vault))
         })?;
+        let destination_exists = destination.destination_exists();
         let rows = entries
             .into_iter()
             .zip(vault.fields_with_previous_kinds())
@@ -457,8 +458,8 @@ impl VaultBackend for VaultTuiBackend {
                 output,
                 overwrite,
             } => {
-                PreparedPrivateFile::preflight(&output, overwrite).map_err(map_vault_error)?;
                 let result = self.with_vault(|selected, passphrase| {
+                    selected.preflight_private_output(&output, overwrite)?;
                     selected.read_field_to_file(passphrase, reference, &output, overwrite)
                 })?;
                 let snapshot = self.refresh()?;
@@ -625,6 +626,65 @@ mod tests {
         };
         assert!(session.credential.is_none());
         assert!(session.pending_import.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_output_actions_reject_the_vault_home_before_sink_work() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/TOKEN".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"reserved-tui-output-sentinel".to_vec()),
+            )
+            .unwrap();
+        let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+        let vault_path = home.join("vault.json");
+        let audit_path = home.join("audit.jsonl");
+        let before_vault = std::fs::read(&vault_path).unwrap();
+        let before_audit = std::fs::read(&audit_path).unwrap();
+
+        let export_error = backend
+            .execute(VaultAction::ExportField {
+                reference: "jig://Production/TOKEN".parse().unwrap(),
+                output: vault_path.clone(),
+                overwrite: true,
+            })
+            .unwrap_err();
+        assert_eq!(export_error.kind(), VaultUiErrorKind::InvalidInput);
+
+        let source = temp.path().join("source.env");
+        std::fs::write(&source, b"MODE=production\n").unwrap();
+        let import_error = backend
+            .execute(VaultAction::PreviewOnePasswordImport {
+                env_file: source,
+                item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+                out_env: audit_path.clone(),
+                replace: true,
+                overwrite: true,
+                dry_run: false,
+            })
+            .unwrap_err();
+        assert_eq!(import_error.kind(), VaultUiErrorKind::InvalidInput);
+
+        assert_eq!(std::fs::read(&vault_path).unwrap(), before_vault);
+        assert_eq!(std::fs::read(&audit_path).unwrap(), before_audit);
+        assert!(backend.session().unwrap().pending_import.is_none());
+        assert!(
+            !format!("{export_error:?}{import_error:?}").contains("reserved-tui-output-sentinel")
+        );
     }
 
     #[cfg(unix)]

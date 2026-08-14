@@ -1107,6 +1107,16 @@ impl PreparedReveal {
     fn write_to_file(self, path: &Path, overwrite: bool) -> Result<RevealResult> {
         let Self { lifecycle, value } = self;
         let bytes_written = value.len();
+        if let Err(error) = lifecycle
+            .store
+            .validate_external_output(path, lifecycle.operation.label())
+        {
+            return Err(lifecycle.output_error(
+                "sink_preflight",
+                VaultErrorKind::InvalidInput,
+                error,
+            ));
+        }
         if let Err(OutputInstallFailure { stage, kind, error }) =
             install_private_bytes(path, value.as_slice(), overwrite)
         {

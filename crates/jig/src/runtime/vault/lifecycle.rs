@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 
 use crate::command::{
     VaultBackupCommand, VaultBackupCreateRequest, VaultBackupRestoreRequest, VaultCommand,
-    VaultPassphraseChangeRequest, VaultPassphraseCommand,
+    VaultImportCommand, VaultPassphraseChangeRequest, VaultPassphraseCommand,
 };
 
 use super::{
@@ -65,6 +65,28 @@ pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()>
             let resolved = resolve_vault_runtime(&request.vault)?;
             let home = concrete_vault_home(&resolved)?;
             Vault::preflight_passphrase_change(home)?;
+            Ok(())
+        }
+        VaultCommand::Import(VaultImportCommand::OnePassword(request)) => {
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            let selected = vault(&resolved)?;
+            request.destination = Some(selected.preview_private_output(&request.out_env)?);
+            Ok(())
+        }
+        VaultCommand::Inject(request) => {
+            let Some(output) = &request.out_file else {
+                return Ok(());
+            };
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            vault(&resolved)?.preflight_private_output(output, request.overwrite)?;
+            Ok(())
+        }
+        VaultCommand::Read(request) => {
+            let Some(output) = &request.out_file else {
+                return Ok(());
+            };
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            vault(&resolved)?.preflight_private_output(output, request.overwrite)?;
             Ok(())
         }
         _ => Ok(()),

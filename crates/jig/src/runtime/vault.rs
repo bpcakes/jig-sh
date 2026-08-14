@@ -128,7 +128,6 @@ pub(crate) fn prepare_raw_input(command: &mut VaultCommand) -> Result<()> {
                 &request.out_env,
                 request.overwrite || (request.dry_run && destination_exists),
             )?;
-            request.destination_exists = Some(destination_exists);
             Ok(())
         }
         VaultCommand::Read(_) => Ok(()),
@@ -140,9 +139,10 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     let environment = request.environment.take().ok_or_else(|| {
         anyhow!("internal error: vault onepassword import input was not prepared")
     })?;
-    let destination_exists = request.destination_exists.ok_or_else(|| {
-        anyhow!("internal error: vault onepassword import destination was not preflighted")
+    let destination = request.destination.take().ok_or_else(|| {
+        anyhow!("internal error: vault onepassword import destination was not scope-bound")
     })?;
+    let destination_exists = destination.destination_exists();
     let entries = super::vault_import::import_entries(&environment);
     let references = entries
         .iter()
@@ -201,8 +201,11 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     }
 
     let imported = super::vault_import::resolve_import(environment)?;
-    let prepared =
-        PreparedPrivateFile::prepare(&request.out_env, imported.destination, request.overwrite)?;
+    let prepared = PreparedPrivateFile::prepare_if_unchanged(
+        destination,
+        imported.destination,
+        request.overwrite,
+    )?;
     let result = vault.import_fields(&passphrase, imported.mutations, request.replace)?;
     if let Err(error) = prepared.install() {
         bail!(

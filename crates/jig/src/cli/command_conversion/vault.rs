@@ -89,7 +89,7 @@ impl From<VaultImportOnePasswordOpts> for command::VaultImportOnePasswordRequest
         Self {
             env_file: opts.env_file,
             environment: None,
-            destination_exists: None,
+            destination: None,
             item: opts.item,
             out_env: opts.out_env,
             replace: opts.replace,
