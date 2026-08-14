@@ -20,7 +20,7 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - [x] (2026-08-13 22:53Z) Milestone 3: added bounded protected value entry plus canonical and legacy create/replace/change-kind/rename/delete/convert workflows, atomic stale-state preconditions, exact destructive confirmation, and management PTY coverage. All focused suites and strict all-target Clippy pass.
 - [x] (2026-08-13 23:32Z) Milestone 4: added the Tools palette with metadata-only 1Password preview/dry-run and confirmed import, encrypted backup, passphrase rotation, verified Activity/audit views, and Linux absent-home restore. Focused core, adapter, integration, PTY, formatting, and strict Clippy checks pass.
 - [x] (2026-08-14 00:04Z) Milestone 5: added private-file export, an exact-confirmation bounded terminal-safe Peek, five-minute idle locking, fail-closed authentication/audit handling, direct-output cleanup on normal exit/signal/panic, large-terminal hardening, documentation, and PTY/sentinel coverage. All focused suites and strict all-target Clippy pass.
-- [ ] Build the development Jig binary and pass formatting, strict Clippy, contract, full repository test, structured evidence, gate, receipt, and final diff audits.
+- [x] (2026-08-14 00:39Z) Built the development Jig binary and forced the harness through it. Formatting, workspace-wide locked strict Clippy, contract, the complete 1,960-test non-Vault partition, the complete 317-test Vault/crypto partition, structured evidence, both required gates, and final diff/leakage/placeholder audits pass.
 - [ ] Close structured work and record final commit identifiers and outcomes.
 
 ## Surprises & Discoveries
@@ -55,8 +55,8 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
 - Observation: exact binary secret input cannot safely use the ordinary text editor path or an unguarded `std::fs::read`.
   Evidence: `SecretInput::from_regular_file` opens a non-symlink regular file with `O_NOFOLLOW` on Unix, rejects metadata larger than one MiB, reads into a fixed-capacity `SecretBytes` allocation with a zeroizing chunk buffer, and never converts the bytes through UTF-8. Tests cover exact binary bytes, oversized files, and symlinks.
 
-- Observation: the first broad `scripts/jig work check` attempt did not fit within this execution session as one buffered command.
-  Evidence: receipt `receipt_01KZYNKZE3ASCRRK1E9BZ4TKQX` records Nextest status 100 after 317.63 seconds; its captured summary shows all 1,939 tests that ran passed and 18 remained unrun before the configured second vault partition began. Focused vault suites passed separately, the contract gate is fresh, and the required final test gate remains deliberately unresolved until the complete delivery run.
+- Observation: the configured Vault split used `test(vault)`, which matches test names but not `jig-sh` integration binaries such as `vault_import`, `vault_lifecycle`, `vault_reveal`, and `vault_tui`.
+  Evidence: three broad attempts ended with every executed test passing but the same 18 frontend cases unrun because expensive/process-owning Vault integrations were still mixed into the first partition. Replacing that boundary with `test(vault) | binary(/vault_.*/)` in both `.jig.toml` commands and the matching Nextest group produces a proven disjoint union of 1,960 and 317 non-ignored tests. Receipt `receipt_01KZYV949AVVHT08FCCGN3BX39` records both complete partitions passing in 826.568 seconds.
 
 - Observation: a safe 1Password preview can validate mappings, output hardening, recovery-command encodability, and current field collisions without spawning `op` or retaining values.
   Evidence: the TUI adapter reuses the existing dotenv parser and import-entry projection, calls the core metadata-only collision preview, and invokes the owned resolver only after exact `IMPORT` confirmation. A fake-`op` test proves preview and dry-run do not create its log, while commit strips both reserved passphrase variables and writes the expected private reference file.
@@ -136,6 +136,10 @@ A user can see the completed feature by running `cargo build -p jig-sh --bin jig
   Rationale: resize and focus noise must not keep a credential alive indefinitely, while dropping a credential underneath an audited operation would violate the single-worker lifecycle. Authentication or chain-integrity loss invalidates the complete session rather than only the current action.
   Date/Author: 2026-08-14 / Codex
 
+- Decision: partition Vault-heavy tests by both unit-test name and `vault_*` integration-binary identity, retain sequential execution, and apply the same boundary to ordinary, locked, and test-group configuration.
+  Rationale: the old name-only filter neither expressed nor enforced its intended isolation. The corrected complementary filters cover every one of the 2,277 non-ignored workspace tests exactly once and allow signal/process-heavy Vault integration tests to complete without canceling the frontend fixture tail.
+  Date/Author: 2026-08-14 / Codex
+
 ## Outcomes & Retrospective
 
 Structured work is active as `plan_01KZYHNEMNNN5B80EDBFA2WDJ9`. Milestone 1 supplies the complete metadata and atomic domain foundation: one unlock now returns canonical fields, disjoint unrepresentable legacy records, format/identity metadata, and audit verification; verified recent activity contains only whitelisted summaries; and management moves preserve encrypted bytes and creation timestamps under one audited lock/save. Collision, v1, tamper, short-value, timestamp, no-plaintext, and legacy-deduplication tests are included. The complete `jig-vault` suite reports 206 passed in 98.91 seconds.
@@ -146,7 +150,9 @@ Milestone 3 completes interactive value management. Canonical fields can be crea
 
 Milestone 4 adds a state-aware Tools palette. Import parses and previews only safe mappings and collisions, supports a true no-`op` dry run, requires exact `IMPORT`, then reparses and rechecks current destinations immediately before the hardened owned resolver. Backup creation is private and no-clobber by default. Passphrase rotation updates the process credential only after the atomic core change. Activity and audit screens render verified whitelisted metadata without MAC material, while Linux restore is available only for an absent target and returns to the ordinary locked flow. Evidence is 209 `jig-vault` tests in 94.12 seconds, 23 `jig-vault-tui` tests in 7.67 seconds, 95 filtered `jig-sh` vault tests in 67.22 seconds, five `vault_import` integration tests in 53.57 seconds, one `vault_lifecycle` integration test in 118.07 seconds, the expanded PTY acceptance in 3.01 seconds, and warning-free strict all-target Clippy. Milestone 5 and the final repository gates remain.
 
-Milestone 5 completes controlled output and session hardening. Canonical fields export through the core owner-only, symlink-refusing, atomic private-file sink with explicit overwrite and a fresh audited metadata snapshot. Peek requires exact confirmation, bypasses Ratatui, escapes controls, invalid UTF-8, directional formatting, and backslashes, emits at most the first 4 KiB, and clears after a key or ten seconds; only source byte count returns. Explicit and five-minute idle lock wait for the sole worker, and authentication or audit failure drops the session. Normal exit, Ctrl-C, SIGTERM, and panic clear the alternate screen before terminal restoration. Evidence is 209 `jig-vault` tests in 93.93 seconds, 6 `jig-tui` unit tests plus its direct-output panic PTY test, 31 `jig-vault-tui` tests in 7.89 seconds, 95 filtered `jig-sh` vault tests in 67.57 seconds, the 50.06-second lifecycle adapter test, two end-to-end Vault PTY tests in 3.36 seconds, and warning-free strict all-target Clippy. Documentation now states the exact disclosure and session boundaries. The final repository gates remain.
+Milestone 5 completes controlled output and session hardening. Canonical fields export through the core owner-only, symlink-refusing, atomic private-file sink with explicit overwrite and a fresh audited metadata snapshot. Peek requires exact confirmation, bypasses Ratatui, escapes controls, invalid UTF-8, directional formatting, and backslashes, emits at most the first 4 KiB, and clears after a key or ten seconds; only source byte count returns. Explicit and five-minute idle lock wait for the sole worker, and authentication or audit failure drops the session. Normal exit, Ctrl-C, SIGTERM, and panic clear the alternate screen before terminal restoration. Evidence is 209 `jig-vault` tests in 93.93 seconds, 6 `jig-tui` unit tests plus its direct-output panic PTY test, 31 `jig-vault-tui` tests in 7.89 seconds, 95 filtered `jig-sh` vault tests in 67.57 seconds, the 50.06-second lifecycle adapter test, two end-to-end Vault PTY tests in 3.36 seconds, and warning-free strict all-target Clippy. Documentation now states the exact disclosure and session boundaries. Final repository evidence follows.
+
+Final verification uses development binary `target/debug/jig` from the committed source. `jig.fmt_check` passes as `receipt_01KZYV9GAHZ7X9CNVW937AJZQT`; workspace-wide locked `jig.clippy` passes as `receipt_01KZYV9TZCBJBHGYFA316XR4SD`; plan-linked contract passes as `receipt_01KZYV9EAPBX72PCQX5ZDSEXF8`; and the full two-part test command passes all 2,277 selected non-ignored tests as `receipt_01KZYV949AVVHT08FCCGN3BX39` in 826.568 seconds. Gate evidence is fresh through batch receipts `receipt_01KZYV9EBTSB5ZKY98TB368KXZ` and `receipt_01KZYV94B1SJZ1CK91H94RJC82`, with no unresolved gate. The completion scan finds no added ignored test, unfinished implementation macro, diff whitespace error, or fixture-value occurrence in Jig receipts/state; the only sentinel literals are deliberately local to tests that assert their absence from frames, errors, debug, audit projections, and PTY output outside the confirmed Peek window.
 
 ## Context and Orientation
 
@@ -381,10 +387,16 @@ In `crates/jig-vault-tui/src/lib.rs`, define a same-release boundary equivalent 
         fn lock(&self);
         fn refresh(&self) -> Result<VaultSnapshot, VaultUiError>;
         fn execute(&self, action: VaultAction) -> Result<VaultActionResult, VaultUiError>;
+        fn peek(
+            &self,
+            reference: &VaultReference,
+            output: &mut dyn Write,
+        ) -> Result<usize, VaultUiError>;
     }
 
     pub fn run(
         backend: impl VaultBackend,
+        initial_passphrase: Option<SecretBytes>,
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
     ) -> anyhow::Result<()>;
 
@@ -405,3 +417,5 @@ Revision note (2026-08-13): Recorded Milestone 3 implementation and evidence aft
 Revision note (2026-08-13): Recorded Milestone 4 implementation and evidence after adding import preview/commit, backup, passphrase rotation, verified activity/audit views, and absent-home restore.
 
 Revision note (2026-08-14): Recorded Milestone 5 implementation and evidence after adding controlled export/Peek sinks, idle and fail-closed locking, terminal cleanup hardening, large-terminal protection, PTY coverage, and operator documentation.
+
+Revision note (2026-08-14): Corrected the Vault integration-binary partition, recorded the complete 2,277-test run and final fresh gate receipts, and completed the diff, placeholder, and fixture-leakage audits.
