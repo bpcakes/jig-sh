@@ -12,8 +12,8 @@ use jig_vault::{
 };
 use jig_vault_tui::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
-    ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultDescriptor, VaultMutation,
-    VaultPresence, VaultUiError, VaultUiErrorKind,
+    ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction,
+    VaultDescriptor, VaultMutation, VaultPresence, VaultUiError, VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
@@ -152,6 +152,10 @@ impl VaultTuiBackend {
         self.with_vault(Vault::snapshot)
     }
 
+    fn finish_committed(&self, action: VaultCommittedAction) -> VaultActionResult {
+        committed_action_result(action, self.refresh())
+    }
+
     fn clear_pending_import(&self) -> std::result::Result<(), VaultUiError> {
         self.session()?.pending_import = None;
         Ok(())
@@ -260,7 +264,7 @@ impl VaultTuiBackend {
         token: ImportPlanToken,
         replace: bool,
         overwrite: bool,
-    ) -> std::result::Result<VaultSnapshot, VaultUiError> {
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
         let PendingImportPlan {
             token: _,
             environment,
@@ -312,13 +316,13 @@ impl VaultTuiBackend {
                 ),
             ));
         }
-        self.refresh()
+        Ok(self.finish_committed(VaultCommittedAction::Imported))
     }
 
     fn change_session_passphrase(
         &self,
         new_passphrase: SecretBytes,
-    ) -> std::result::Result<VaultSnapshot, VaultUiError> {
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
         let new_passphrase = Self::passphrase_from_bytes(new_passphrase)?;
         let mut session = self.session()?;
         let current = session.credential.as_ref().ok_or_else(|| {
@@ -329,14 +333,40 @@ impl VaultTuiBackend {
             .change_passphrase(current, &new_passphrase)
             .map_err(map_vault_error)?;
         session.credential = Some(new_passphrase);
-        selected
-            .snapshot(
-                session
-                    .credential
-                    .as_ref()
-                    .expect("new credential was installed"),
-            )
-            .map_err(map_vault_error)
+        drop(session);
+        Ok(self.finish_committed(VaultCommittedAction::PassphraseChanged))
+    }
+
+    fn initialize_with_outcome(
+        &self,
+        passphrase: SecretBytes,
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
+        let passphrase = Self::passphrase_from_bytes(passphrase)?;
+        let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
+        selected.init(&passphrase).map_err(map_vault_error)?;
+        match self.session() {
+            Ok(mut session) => session.credential = Some(passphrase),
+            Err(refresh_error) => {
+                return Ok(committed_action_result(
+                    VaultCommittedAction::Initialized,
+                    Err(refresh_error),
+                ));
+            }
+        }
+        Ok(self.finish_committed(VaultCommittedAction::Initialized))
+    }
+}
+
+fn committed_action_result(
+    action: VaultCommittedAction,
+    refresh: std::result::Result<VaultSnapshot, VaultUiError>,
+) -> VaultActionResult {
+    match refresh {
+        Ok(snapshot) => action.with_snapshot(snapshot),
+        Err(refresh_error) => VaultActionResult::Committed {
+            action,
+            refresh_error,
+        },
     }
 }
 
@@ -363,12 +393,21 @@ impl VaultBackend for VaultTuiBackend {
         &self,
         passphrase: SecretBytes,
     ) -> std::result::Result<VaultSnapshot, VaultUiError> {
-        let passphrase = Self::passphrase_from_bytes(passphrase)?;
-        let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
-        selected.init(&passphrase).map_err(map_vault_error)?;
-        let snapshot = selected.snapshot(&passphrase).map_err(map_vault_error)?;
-        self.session()?.credential = Some(passphrase);
-        Ok(snapshot)
+        match self.initialize_with_outcome(passphrase)? {
+            VaultActionResult::Snapshot(snapshot) => Ok(snapshot),
+            VaultActionResult::Committed { refresh_error, .. } => Err(refresh_error),
+            _ => Err(VaultUiError::new(
+                VaultUiErrorKind::Other,
+                "Vault initialization returned an unexpected result.",
+            )),
+        }
+    }
+
+    fn initialize_with_completion(
+        &self,
+        passphrase: SecretBytes,
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
+        self.initialize_with_outcome(passphrase)
     }
 
     fn lock(&self) {
@@ -391,7 +430,7 @@ impl VaultBackend for VaultTuiBackend {
             VaultAction::Refresh => self.refresh().map(VaultActionResult::Snapshot),
             VaultAction::MigrateToV2 => {
                 self.with_vault(|selected, passphrase| selected.migrate(passphrase, 2))?;
-                self.refresh().map(VaultActionResult::Snapshot)
+                Ok(self.finish_committed(VaultCommittedAction::Migrated))
             }
             VaultAction::Mutate { revision, mutation } => self.execute_mutation(revision, mutation),
             VaultAction::Activity { limit } => self
@@ -414,9 +453,7 @@ impl VaultBackend for VaultTuiBackend {
                 plan,
                 replace,
                 overwrite,
-            } => self
-                .commit_onepassword_import(plan, replace, overwrite)
-                .map(VaultActionResult::Snapshot),
+            } => self.commit_onepassword_import(plan, replace, overwrite),
             VaultAction::DiscardOnePasswordImport { plan } => {
                 self.discard_pending_import(&plan)?;
                 Ok(VaultActionResult::ImportDiscarded)
@@ -430,13 +467,11 @@ impl VaultBackend for VaultTuiBackend {
                     )?;
                     Vault::create_backup(passphrase, request)
                 })?;
-                let snapshot = self.refresh()?;
-                Ok(VaultActionResult::BackupCreated {
+                Ok(self.finish_committed(VaultCommittedAction::BackupCreated {
                     output,
                     bytes_written: result.bytes_written,
                     backup_version: result.backup_version,
-                    snapshot,
-                })
+                }))
             }
             VaultAction::RestoreBackup { input, passphrase } => {
                 let passphrase = Self::passphrase_from_bytes(passphrase)?;
@@ -450,9 +485,9 @@ impl VaultBackend for VaultTuiBackend {
                     format_version: restored.format_version,
                 })
             }
-            VaultAction::ChangePassphrase { new_passphrase } => self
-                .change_session_passphrase(new_passphrase)
-                .map(VaultActionResult::Snapshot),
+            VaultAction::ChangePassphrase { new_passphrase } => {
+                self.change_session_passphrase(new_passphrase)
+            }
             VaultAction::ExportField {
                 reference,
                 output,
@@ -462,12 +497,10 @@ impl VaultBackend for VaultTuiBackend {
                     selected.preflight_private_output(&output, overwrite)?;
                     selected.read_field_to_file(passphrase, reference, &output, overwrite)
                 })?;
-                let snapshot = self.refresh()?;
-                Ok(VaultActionResult::Exported {
+                Ok(self.finish_committed(VaultCommittedAction::Exported {
                     output,
                     bytes_written: result.bytes_written,
-                    snapshot,
-                })
+                }))
             }
         }
     }
@@ -494,7 +527,7 @@ impl VaultTuiBackend {
         self.with_vault(|selected, passphrase| {
             selected.mutate_if_unchanged(passphrase, revision, mutation)
         })?;
-        self.refresh().map(VaultActionResult::Snapshot)
+        Ok(self.finish_committed(VaultCommittedAction::Mutated))
     }
 }
 
@@ -597,6 +630,25 @@ mod tests {
         assert_eq!(
             backend.refresh().unwrap_err().kind(),
             VaultUiErrorKind::Authentication
+        );
+    }
+
+    #[test]
+    fn committed_action_result_preserves_success_when_refresh_fails() {
+        let action = VaultCommittedAction::Exported {
+            output: "/tmp/private-export".into(),
+            bytes_written: 17,
+        };
+        let refresh_error = VaultUiError::new(VaultUiErrorKind::Io, "safe refresh failure");
+
+        let result = committed_action_result(action.clone(), Err(refresh_error.clone()));
+
+        assert_eq!(
+            result,
+            VaultActionResult::Committed {
+                action,
+                refresh_error,
+            }
         );
     }
 
