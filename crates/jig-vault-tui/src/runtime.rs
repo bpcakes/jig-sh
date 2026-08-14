@@ -272,7 +272,15 @@ fn apply_peek_result(
             backend.lock();
             app.fail_unlock(&error);
         }
-        Err(error) => app.fail_action(&error),
+        Err(error) => match presence_for_not_found(&error, backend.as_ref()) {
+            Some(Ok(VaultPresence::Missing)) => {
+                apply_lifecycle_failure(app, backend, error, Ok(VaultPresence::Missing));
+            }
+            Some(Err(presence_error)) => {
+                apply_lifecycle_failure(app, backend, error, Err(presence_error));
+            }
+            Some(Ok(VaultPresence::Present)) | None => app.fail_action(&error),
+        },
     }
 }
 
@@ -642,7 +650,27 @@ impl BackendCompletion {
                 }
             }
             Ok(result) => BackendOutcome::Success(result),
-            Err(error) => match kind.failure_recovery(&error) {
+            Err(error) => Self::failure_outcome(kind, error, backend),
+        };
+        Self { kind, outcome }
+    }
+
+    fn failure_outcome(
+        kind: OperationKind,
+        error: VaultUiError,
+        backend: &dyn VaultBackend,
+    ) -> BackendOutcome {
+        let not_found_presence = presence_for_not_found(&error, backend);
+        match not_found_presence {
+            Some(Ok(VaultPresence::Missing)) => BackendOutcome::LifecycleFailure {
+                error,
+                presence: Ok(VaultPresence::Missing),
+            },
+            Some(Err(presence_error)) => BackendOutcome::LifecycleFailure {
+                error,
+                presence: Err(presence_error),
+            },
+            known_presence => match kind.failure_recovery(&error) {
                 FailureRecovery::Primary => BackendOutcome::Failure(BackendFailure::Primary(error)),
                 FailureRecovery::RefreshSnapshot => {
                     let failure = match backend.refresh() {
@@ -657,12 +685,18 @@ impl BackendCompletion {
                 }
                 FailureRecovery::ReconcilePresence => BackendOutcome::LifecycleFailure {
                     error,
-                    presence: backend.presence(),
+                    presence: known_presence.unwrap_or_else(|| backend.presence()),
                 },
             },
-        };
-        Self { kind, outcome }
+        }
     }
+}
+
+fn presence_for_not_found(
+    error: &VaultUiError,
+    backend: &dyn VaultBackend,
+) -> Option<Result<VaultPresence, VaultUiError>> {
+    (error.kind() == VaultUiErrorKind::NotFound).then(|| backend.presence())
 }
 
 enum BackendOutcome {
@@ -1604,6 +1638,95 @@ mod tests {
                 }
                 assert_eq!(app.status.as_ref().unwrap().text, "safe missing failure");
             }
+        }
+    }
+
+    #[test]
+    fn read_only_not_found_reconciles_a_vanished_vault() {
+        for kind in [
+            OperationKind::Activity,
+            OperationKind::VerifyAudit,
+            OperationKind::ImportPreview,
+        ] {
+            let backend = Arc::new(TrackingBackend::with_presence(Ok(VaultPresence::Missing)));
+            let erased: Arc<dyn VaultBackend> = backend.clone();
+            let mut app = unlocked_app();
+            let completion = BackendCompletion::new(
+                kind,
+                Err(VaultUiError::new(
+                    VaultUiErrorKind::NotFound,
+                    "safe missing vault failure",
+                )),
+                erased.as_ref(),
+            );
+
+            apply_completion(&mut app, &erased, Ok(completion));
+
+            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+            assert!(app.snapshot.is_none());
+            assert!(!app.descriptor.exists);
+            assert!(matches!(app.screen, Screen::Missing));
+            assert_eq!(
+                app.status.as_ref().unwrap().text,
+                "safe missing vault failure"
+            );
+        }
+    }
+
+    #[test]
+    fn entity_not_found_in_a_present_vault_remains_an_action_error() {
+        let backend = Arc::new(TrackingBackend::with_presence(Ok(VaultPresence::Present)));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut app = unlocked_app();
+        let completion = BackendCompletion::new(
+            OperationKind::Activity,
+            Err(VaultUiError::new(
+                VaultUiErrorKind::NotFound,
+                "safe entity failure",
+            )),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
+        assert!(app.snapshot.is_some());
+        assert!(matches!(app.screen, Screen::Browse));
+        assert_eq!(app.status.unwrap().text, "safe entity failure");
+    }
+
+    #[test]
+    fn peek_not_found_uses_the_same_presence_reconciliation() {
+        for presence in [VaultPresence::Missing, VaultPresence::Present] {
+            let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+            let erased: Arc<dyn VaultBackend> = backend.clone();
+            let mut app = unlocked_app();
+
+            apply_peek_result(
+                &mut app,
+                &erased,
+                Err(VaultUiError::new(
+                    VaultUiErrorKind::NotFound,
+                    "safe peek failure",
+                )),
+            );
+
+            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+            match presence {
+                VaultPresence::Missing => {
+                    assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+                    assert!(app.snapshot.is_none());
+                    assert!(matches!(app.screen, Screen::Missing));
+                }
+                VaultPresence::Present => {
+                    assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
+                    assert!(app.snapshot.is_some());
+                    assert!(matches!(app.screen, Screen::Browse));
+                }
+            }
+            assert_eq!(app.status.unwrap().text, "safe peek failure");
         }
     }
 
