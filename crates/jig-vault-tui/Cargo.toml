@@ -22,7 +22,6 @@ jig-vault.workspace = true
 libc.workspace = true
 ratatui.workspace = true
 ulid.workspace = true
-unicode-width.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
