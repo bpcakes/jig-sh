@@ -1049,49 +1049,31 @@ fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 }
 
 fn handle_delete_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
-    match key.code {
-        KeyCode::Esc => {
-            app.close_overlay();
-            RuntimeAction::Redraw
-        }
-        KeyCode::Enter => app.submit_delete().map_or(RuntimeAction::Redraw, |action| {
+    handle_metadata_confirmation_key(app, key, |app| {
+        app.submit_delete().map_or(RuntimeAction::Redraw, |action| {
             RuntimeAction::Start(BackendRequest::Execute(action))
-        }),
-        KeyCode::Backspace => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.pop();
-            }
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(input) = app.metadata_input_mut() {
-                input.clear();
-            }
-            RuntimeAction::Redraw
-        }
-        KeyCode::Char(character)
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            if let Some(input) = app.metadata_input_mut() {
-                input.push(character);
-            }
-            RuntimeAction::Redraw
-        }
-        _ => RuntimeAction::Ignore,
-    }
+        })
+    })
 }
 
 fn handle_peek_confirmation_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    handle_metadata_confirmation_key(app, key, |app| {
+        app.submit_peek()
+            .map_or(RuntimeAction::Redraw, RuntimeAction::Peek)
+    })
+}
+
+fn handle_metadata_confirmation_key(
+    app: &mut App,
+    key: KeyEvent,
+    submit: impl FnOnce(&mut App) -> RuntimeAction,
+) -> RuntimeAction {
     match key.code {
         KeyCode::Esc => {
             app.close_overlay();
             RuntimeAction::Redraw
         }
-        KeyCode::Enter => app
-            .submit_peek()
-            .map_or(RuntimeAction::Redraw, RuntimeAction::Peek),
+        KeyCode::Enter => submit(app),
         KeyCode::Backspace => {
             if let Some(input) = app.metadata_input_mut() {
                 input.pop();
