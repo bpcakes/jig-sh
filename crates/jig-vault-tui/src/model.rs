@@ -10,7 +10,7 @@ use crate::{
     ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
     VaultPresence, VaultUiError,
     secret_input::SecretInput,
-    tools::{ToolChoice, ToolForm, ToolsMenu},
+    tools::{ToolActivation, ToolForm, ToolsMenu},
 };
 
 pub(crate) const MAX_METADATA_INPUT_BYTES: usize = 128 * 1024;
@@ -316,19 +316,16 @@ impl App {
             return None;
         };
         let choice = menu.selected()?;
-        match choice {
-            ToolChoice::Activity => {
-                self.begin_loading("Loading verified vault activity");
-                Some(VaultAction::Activity { limit: 100 })
+        match choice.activation() {
+            ToolActivation::Immediate {
+                action,
+                loading_label,
+            } => {
+                self.begin_loading(loading_label);
+                Some(action)
             }
-            ToolChoice::VerifyAudit => {
-                self.begin_loading("Verifying vault audit chain");
-                Some(VaultAction::VerifyAudit)
-            }
-            _ => {
-                self.screen = Screen::ToolForm(
-                    ToolForm::for_choice(choice).expect("form-backed tool has a form"),
-                );
+            ToolActivation::Form(form) => {
+                self.screen = Screen::ToolForm(form);
                 self.status = None;
                 None
             }

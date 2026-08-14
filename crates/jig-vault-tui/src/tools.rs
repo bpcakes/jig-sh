@@ -25,6 +25,52 @@ impl ToolChoice {
             Self::RestoreBackup => "Restore encrypted backup",
         }
     }
+
+    pub(crate) fn activation(self) -> ToolActivation {
+        match self {
+            Self::Activity => ToolActivation::Immediate {
+                action: VaultAction::Activity { limit: 100 },
+                loading_label: "Loading verified vault activity",
+            },
+            Self::VerifyAudit => ToolActivation::Immediate {
+                action: VaultAction::VerifyAudit,
+                loading_label: "Verifying vault audit chain",
+            },
+            Self::ImportOnePassword => ToolActivation::Form(ToolForm::ImportOnePassword {
+                env_file: String::new(),
+                item: String::new(),
+                out_env: String::new(),
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+                focus: ImportFocus::EnvFile,
+            }),
+            Self::CreateBackup => ToolActivation::Form(ToolForm::CreateBackup {
+                output: String::new(),
+                overwrite: false,
+                focus: BackupFocus::Output,
+            }),
+            Self::ChangePassphrase => ToolActivation::Form(ToolForm::ChangePassphrase {
+                new_passphrase: SecretInput::new(),
+                confirmation: SecretInput::new(),
+                focus: PassphraseFocus::New,
+            }),
+            Self::RestoreBackup => ToolActivation::Form(ToolForm::RestoreBackup {
+                input: String::new(),
+                passphrase: SecretInput::new(),
+                confirmation: String::new(),
+                focus: RestoreFocus::Input,
+            }),
+        }
+    }
+}
+
+pub(crate) enum ToolActivation {
+    Immediate {
+        action: VaultAction,
+        loading_label: &'static str,
+    },
+    Form(ToolForm),
 }
 
 #[derive(Debug)]
@@ -114,37 +160,6 @@ impl ToolForm {
             output: String::new(),
             overwrite: false,
             focus: ExportFocus::Output,
-        }
-    }
-
-    pub(crate) fn for_choice(choice: ToolChoice) -> Option<Self> {
-        match choice {
-            ToolChoice::ImportOnePassword => Some(Self::ImportOnePassword {
-                env_file: String::new(),
-                item: String::new(),
-                out_env: String::new(),
-                replace: false,
-                overwrite: false,
-                dry_run: false,
-                focus: ImportFocus::EnvFile,
-            }),
-            ToolChoice::CreateBackup => Some(Self::CreateBackup {
-                output: String::new(),
-                overwrite: false,
-                focus: BackupFocus::Output,
-            }),
-            ToolChoice::ChangePassphrase => Some(Self::ChangePassphrase {
-                new_passphrase: SecretInput::new(),
-                confirmation: SecretInput::new(),
-                focus: PassphraseFocus::New,
-            }),
-            ToolChoice::RestoreBackup => Some(Self::RestoreBackup {
-                input: String::new(),
-                passphrase: SecretInput::new(),
-                confirmation: String::new(),
-                focus: RestoreFocus::Input,
-            }),
-            ToolChoice::Activity | ToolChoice::VerifyAudit => None,
         }
     }
 
