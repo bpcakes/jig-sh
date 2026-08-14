@@ -6,13 +6,13 @@ This ExecPlan follows up the comprehensive review of branch `feat/vault-tui`. It
 
 - [x] (2026-08-14) Read the repository and crate guidance plus the complete Fowler Rust refactoring skill and references.
 - [x] (2026-08-14) Established a green focused baseline and ran the Fowler heuristic scanner against `master...HEAD`.
-- [x] (2026-08-14) Prepared this plan and structured-work records as the planning slice.
-- [ ] Refactor backend completion and failure recovery into closed enums without changing behavior.
-- [ ] Refactor locked/initializing protected-key routing into explicit handlers without changing behavior.
-- [ ] Fix failure recovery so state-changing actions refresh after any non-fatal failure and any failed recovery locks the session.
-- [ ] Fix keyboard behavior so lowercase `q` is valid protected input and loading does not expose the unsafe hidden lock transition.
-- [ ] Stage value-file loading and validation in a temporary protected buffer so failed validation does not mutate the form.
-- [ ] Measure production-KDF latency and record whether the existing credential-only session design remains usable.
+- [x] (2026-08-14) Committed this plan and structured-work records as `d17c229`.
+- [x] (2026-08-14) Refactored backend completion and failure recovery into closed enums without changing behavior (`9af7762`).
+- [x] (2026-08-14) Refactored locked/initializing protected-key routing into explicit handlers without changing behavior (`a04b4e7`).
+- [x] (2026-08-14) Fixed failure recovery so state-changing actions refresh after any non-fatal failure and any failed recovery locks the session (`8cc28af`).
+- [x] (2026-08-14) Fixed keyboard behavior so lowercase `q` is valid protected input and loading does not expose the unsafe hidden lock transition (`f1a22af`).
+- [x] (2026-08-14) Staged value-file loading and validation in a temporary protected buffer so failed validation does not mutate the form (`437b135`).
+- [x] (2026-08-14) Measured production-KDF latency and retained the existing credential-only session design.
 - [ ] Run the configured Jig gates, inspect receipts and the final diff, and close structured work.
 
 ## Surprises & Discoveries
@@ -23,6 +23,7 @@ This ExecPlan follows up the comprehensive review of branch `feat/vault-tui`. It
 - The value-file retry defect is a phase-order problem: file bytes are moved into live form state before validation finishes. A temporary `SecretInput` can encode load -> validate -> consume without exposing plaintext or adding allocation beyond the existing one-MiB protected buffer.
 - Scanner reports about file length, exhaustive matches, DTO public fields, and test `unwrap` calls are non-findings for this change. The modules are cohesive, the matches cover closed enums, the records are presentation DTOs, and the panics are test/proven-invariant paths.
 - The initial repository-wide `work check` reached the 1,960-test Nextest suite but returned the harness's generic exit 100 after roughly twelve minutes without a vault-related failure in its captured preview. The focused vault/TUI baseline, workspace formatting, targeted all-target check, and targeted strict Clippy run were all green; final acceptance will rerun the configured gates after the changes.
+- Production Argon2id parameters are 131,072 KiB memory, 3 iterations, parallelism 4. On this host, an optimized fresh binary measured init at 0.32 s, five metadata snapshots at 0.28/0.29/0.29/0.28/0.28 s (0.28 s median), and five mutations at 0.31/0.33/0.33/0.34/0.32 s (0.33 s median). A TUI mutation plus its snapshot therefore costs roughly 0.61 s median. The unoptimized dev binary took about 5.9-6.0 s per KDF, which is a build-profile artifact rather than deployed latency.
 
 ## Decision Log
 
@@ -44,6 +45,10 @@ This ExecPlan follows up the comprehensive review of branch `feat/vault-tui`. It
 
 - Decision: remove the undocumented `L` action from `Screen::Loading`.
   Rationale: loading already supports quit, which joins the worker and exits safely. Locking discards the completion and cannot distinguish successful from failed absent-vault initialization or restore.
+  Date/Author: 2026-08-14 / Codex
+
+- Decision: retain only the passphrase in the process-local backend session; do not add a derived-key cache in this change.
+  Rationale: the optimized production-parameter path keeps ordinary reads near 0.28 s and two-KDF TUI writes near 0.61 s while the operation runs off-thread with visible progress. Caching a derived key would expand the secret lifetime and vault public API for insufficient user-visible benefit.
   Date/Author: 2026-08-14 / Codex
 
 ## Outcomes & Retrospective
