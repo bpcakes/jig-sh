@@ -37,6 +37,25 @@ pub struct VaultDescriptor {
     pub exists: bool,
 }
 
+/// Authoritative presence of initialized vault state at the fixed scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultPresence {
+    Missing,
+    Present,
+}
+
+impl VaultPresence {
+    /// Converts a protected-state existence result into the typed UI state.
+    pub const fn from_exists(exists: bool) -> Self {
+        if exists { Self::Present } else { Self::Missing }
+    }
+
+    /// Returns whether initialized vault state is present.
+    pub const fn is_present(self) -> bool {
+        matches!(self, Self::Present)
+    }
+}
+
 /// Stable classification used by the UI to fail closed on authentication loss.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VaultUiErrorKind {
@@ -249,6 +268,9 @@ pub enum VaultActionResult {
 pub trait VaultBackend: Send + Sync + 'static {
     /// Returns scope and existence metadata without unlocking or creating a home.
     fn descriptor(&self) -> VaultDescriptor;
+
+    /// Rechecks initialized state without unlocking or creating a home.
+    fn presence(&self) -> Result<VaultPresence, VaultUiError>;
 
     /// Authenticates and returns a complete metadata snapshot.
     fn unlock(&self, passphrase: SecretBytes) -> Result<VaultSnapshot, VaultUiError>;

@@ -7,7 +7,8 @@ use jig_vault::{
 };
 
 use crate::{
-    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultUiError,
+    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultPresence,
+    VaultUiError,
     secret_input::SecretInput,
     tools::{ToolChoice, ToolForm, ToolsMenu},
 };
@@ -127,23 +128,20 @@ impl App {
         self.status = Some(StatusMessage::error(error.message()));
     }
 
-    pub(crate) fn fail_initialize(&mut self, error: &VaultUiError) {
-        self.snapshot = None;
-        self.next_selection = None;
-        self.screen = Screen::Missing;
-        self.status = Some(StatusMessage::error(error.message()));
-    }
-
     pub(crate) fn fail_action(&mut self, error: &VaultUiError) {
         self.next_selection = None;
         self.screen = Screen::Browse;
         self.status = Some(StatusMessage::error(error.message()));
     }
 
-    pub(crate) fn fail_restore(&mut self, error: &VaultUiError) {
+    pub(crate) fn fail_lifecycle(&mut self, error: &VaultUiError, presence: VaultPresence) {
         self.snapshot = None;
         self.next_selection = None;
-        self.screen = Screen::Missing;
+        self.descriptor.exists = presence.is_present();
+        self.screen = match presence {
+            VaultPresence::Missing => Screen::Missing,
+            VaultPresence::Present => Screen::Locked(SecretInput::new()),
+        };
         self.status = Some(StatusMessage::error(error.message()));
     }
 

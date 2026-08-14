@@ -12,7 +12,8 @@ use jig_vault::{
 };
 use jig_vault_tui::{
     ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
-    VaultActionResult, VaultBackend, VaultDescriptor, VaultUiError, VaultUiErrorKind,
+    VaultActionResult, VaultBackend, VaultDescriptor, VaultPresence, VaultUiError,
+    VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
@@ -325,6 +326,12 @@ impl VaultBackend for VaultTuiBackend {
         self.descriptor.clone()
     }
 
+    fn presence(&self) -> std::result::Result<VaultPresence, VaultUiError> {
+        Vault::status(Some(self.descriptor.home.clone()))
+            .map(|status| VaultPresence::from_exists(status.exists))
+            .map_err(map_vault_error)
+    }
+
     fn unlock(&self, passphrase: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
         let passphrase = Self::passphrase_from_bytes(passphrase)?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
@@ -571,7 +578,12 @@ mod tests {
         let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
 
         assert!(!backend.descriptor().exists);
+        assert_eq!(backend.presence().unwrap(), VaultPresence::Missing);
         assert!(!home.exists());
+
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("vault.json"), b"installed").unwrap();
+        assert_eq!(backend.presence().unwrap(), VaultPresence::Present);
     }
 
     #[test]

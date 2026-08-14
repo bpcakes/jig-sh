@@ -9,7 +9,7 @@ use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_ter
 use jig_vault::{SecretBytes, VaultReference, VaultSnapshot};
 
 use crate::{
-    VaultAction, VaultActionResult, VaultBackend, VaultUiError, VaultUiErrorKind,
+    VaultAction, VaultActionResult, VaultBackend, VaultPresence, VaultUiError, VaultUiErrorKind,
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
@@ -290,6 +290,9 @@ fn apply_completion(
     };
     match completion.outcome {
         BackendOutcome::Success(result) => apply_success(app, completion.kind, result),
+        BackendOutcome::LifecycleFailure { error, presence } => {
+            apply_lifecycle_failure(app, backend, error, presence);
+        }
         BackendOutcome::Failure(failure) => {
             apply_failure(app, backend, completion.kind, failure);
         }
@@ -358,11 +361,7 @@ fn apply_failure(
         VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
     ) {
         backend.lock();
-        if kind == OperationKind::Restore {
-            app.fail_restore(failure.error());
-        } else {
-            app.fail_unlock(failure.error());
-        }
+        app.fail_unlock(failure.error());
         return;
     }
 
@@ -390,11 +389,44 @@ fn apply_failure(
     }
 }
 
+fn apply_lifecycle_failure(
+    app: &mut App,
+    backend: &Arc<dyn VaultBackend>,
+    error: VaultUiError,
+    presence: Result<VaultPresence, VaultUiError>,
+) {
+    let session_invalid = matches!(
+        error.kind(),
+        VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+    );
+    match presence {
+        Ok(presence) => {
+            if session_invalid {
+                backend.lock();
+            }
+            app.fail_lifecycle(&error, presence);
+        }
+        Err(presence_error) => {
+            backend.lock();
+            let error = VaultUiError::new(
+                presence_error.kind(),
+                format!(
+                    "{} Vault presence reconciliation also failed: {}",
+                    error.message(),
+                    presence_error.message()
+                ),
+            );
+            app.fail_lifecycle(&error, VaultPresence::Present);
+        }
+    }
+}
+
 fn apply_primary_failure(app: &mut App, kind: OperationKind, error: &VaultUiError) {
     match kind {
         OperationKind::Unlock => app.fail_unlock(error),
-        OperationKind::Initialize => app.fail_initialize(error),
-        OperationKind::Restore => app.fail_restore(error),
+        OperationKind::Initialize | OperationKind::Restore => {
+            app.fail_lifecycle(error, VaultPresence::Present);
+        }
         OperationKind::Refresh
         | OperationKind::Migrate
         | OperationKind::Mutation
@@ -465,6 +497,10 @@ enum OperationKind {
 }
 
 impl OperationKind {
+    const fn should_reconcile_presence(self) -> bool {
+        matches!(self, Self::Initialize | Self::Restore)
+    }
+
     fn should_refresh_after_error(self, error: &VaultUiError) -> bool {
         matches!(
             self,
@@ -494,6 +530,10 @@ impl BackendCompletion {
     ) -> Self {
         let outcome = match result {
             Ok(result) => BackendOutcome::Success(result),
+            Err(error) if kind.should_reconcile_presence() => BackendOutcome::LifecycleFailure {
+                error,
+                presence: backend.presence(),
+            },
             Err(error) if kind.should_refresh_after_error(&error) => {
                 let failure = match backend.refresh() {
                     Ok(snapshot) => BackendFailure::Refreshed { error, snapshot },
@@ -512,6 +552,10 @@ impl BackendCompletion {
 
 enum BackendOutcome {
     Success(VaultActionResult),
+    LifecycleFailure {
+        error: VaultUiError,
+        presence: Result<VaultPresence, VaultUiError>,
+    },
     Failure(BackendFailure),
 }
 
@@ -1149,7 +1193,9 @@ mod tests {
 
     struct TrackingBackend {
         locks: AtomicUsize,
+        presence_reads: AtomicUsize,
         refreshes: AtomicUsize,
+        presence_result: Mutex<Option<std::result::Result<VaultPresence, VaultUiError>>>,
         refresh_result: Mutex<Option<std::result::Result<VaultSnapshot, VaultUiError>>>,
         events: Mutex<Vec<&'static str>>,
         started: Mutex<Option<mpsc::Sender<()>>>,
@@ -1160,7 +1206,9 @@ mod tests {
         fn immediate() -> Self {
             Self {
                 locks: AtomicUsize::new(0),
+                presence_reads: AtomicUsize::new(0),
                 refreshes: AtomicUsize::new(0),
+                presence_result: Mutex::new(None),
                 refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(None),
@@ -1174,10 +1222,18 @@ mod tests {
             backend
         }
 
+        fn with_presence(result: std::result::Result<VaultPresence, VaultUiError>) -> Self {
+            let backend = Self::immediate();
+            *backend.presence_result.lock().unwrap() = Some(result);
+            backend
+        }
+
         fn blocking(started: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
             Self {
                 locks: AtomicUsize::new(0),
+                presence_reads: AtomicUsize::new(0),
                 refreshes: AtomicUsize::new(0),
+                presence_result: Mutex::new(None),
                 refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(Some(started)),
@@ -1195,6 +1251,15 @@ mod tests {
                 home: std::path::PathBuf::from("/tmp/test-vault"),
                 exists: true,
             }
+        }
+
+        fn presence(&self) -> std::result::Result<VaultPresence, VaultUiError> {
+            self.presence_reads.fetch_add(1, Ordering::SeqCst);
+            self.presence_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Ok(VaultPresence::Present))
         }
 
         fn unlock(&self, _: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
@@ -1328,6 +1393,76 @@ mod tests {
             let fatal = VaultUiError::new(fatal_kind, "safe fatal failure");
             assert!(!OperationKind::Import.should_refresh_after_error(&fatal));
         }
+    }
+
+    #[test]
+    fn lifecycle_failures_reconcile_authoritative_presence() {
+        for kind in [OperationKind::Initialize, OperationKind::Restore] {
+            for presence in [VaultPresence::Missing, VaultPresence::Present] {
+                let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+                let erased: Arc<dyn VaultBackend> = backend.clone();
+                let mut app = App::new(VaultDescriptor {
+                    scope: "test".to_owned(),
+                    scope_id: None,
+                    repo_name: None,
+                    home: std::path::PathBuf::from("/tmp/test-vault"),
+                    exists: !presence.is_present(),
+                });
+                let completion = BackendCompletion::new(
+                    kind,
+                    Err(VaultUiError::new(
+                        VaultUiErrorKind::Io,
+                        "safe lifecycle failure",
+                    )),
+                    erased.as_ref(),
+                );
+
+                apply_completion(&mut app, &erased, Ok(completion));
+
+                assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+                assert_eq!(app.descriptor.exists, presence.is_present());
+                match presence {
+                    VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
+                    VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
+                }
+                assert_eq!(app.status.as_ref().unwrap().text, "safe lifecycle failure");
+            }
+        }
+    }
+
+    #[test]
+    fn failed_lifecycle_presence_check_fails_closed() {
+        let backend = Arc::new(TrackingBackend::with_presence(Err(VaultUiError::new(
+            VaultUiErrorKind::Io,
+            "safe presence failure",
+        ))));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut app = App::new(VaultDescriptor {
+            scope: "test".to_owned(),
+            scope_id: None,
+            repo_name: None,
+            home: std::path::PathBuf::from("/tmp/test-vault"),
+            exists: false,
+        });
+        let completion = BackendCompletion::new(
+            OperationKind::Restore,
+            Err(VaultUiError::new(
+                VaultUiErrorKind::Audit,
+                "safe restore failure",
+            )),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+        assert!(app.descriptor.exists);
+        assert!(matches!(app.screen, Screen::Locked(_)));
+        assert_eq!(
+            app.status.unwrap().text,
+            "safe restore failure Vault presence reconciliation also failed: safe presence failure"
+        );
     }
 
     #[test]
