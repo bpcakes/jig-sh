@@ -375,8 +375,8 @@ fn apply_failure(
         BackendFailure::RefreshFailed {
             error,
             refresh_error,
+            presence,
         } => {
-            backend.lock();
             let error = VaultUiError::new(
                 refresh_error.kind(),
                 format!(
@@ -385,7 +385,7 @@ fn apply_failure(
                     refresh_error.message()
                 ),
             );
-            app.fail_unlock(&error);
+            apply_lifecycle_failure(app, backend, error, presence);
         }
         BackendFailure::Primary(error) => apply_primary_failure(app, kind, &error),
     }
@@ -397,19 +397,12 @@ fn apply_lifecycle_failure(
     error: VaultUiError,
     presence: Result<VaultPresence, VaultUiError>,
 ) {
-    let session_invalid = matches!(
-        error.kind(),
-        VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
-    );
+    backend.lock();
     match presence {
         Ok(presence) => {
-            if session_invalid {
-                backend.lock();
-            }
             app.fail_lifecycle(&error, presence);
         }
         Err(presence_error) => {
-            backend.lock();
             let error = VaultUiError::new(
                 presence_error.kind(),
                 format!(
@@ -507,6 +500,9 @@ impl OperationKind {
     const fn failure_recovery(self, error: &VaultUiError) -> FailureRecovery {
         match self {
             Self::Initialize | Self::Restore => FailureRecovery::ReconcilePresence,
+            Self::Unlock | Self::Refresh if matches!(error.kind(), VaultUiErrorKind::NotFound) => {
+                FailureRecovery::ReconcilePresence
+            }
             Self::Migrate
             | Self::Mutation
             | Self::Import
@@ -564,6 +560,7 @@ impl BackendCompletion {
                         Err(refresh_error) => BackendFailure::RefreshFailed {
                             error,
                             refresh_error,
+                            presence: backend.presence(),
                         },
                     };
                     BackendOutcome::Failure(failure)
@@ -596,6 +593,7 @@ enum BackendFailure {
     RefreshFailed {
         error: VaultUiError,
         refresh_error: VaultUiError,
+        presence: Result<VaultPresence, VaultUiError>,
     },
 }
 
@@ -1242,6 +1240,15 @@ mod tests {
             backend
         }
 
+        fn with_refresh_and_presence(
+            refresh: std::result::Result<VaultSnapshot, VaultUiError>,
+            presence: std::result::Result<VaultPresence, VaultUiError>,
+        ) -> Self {
+            let backend = Self::with_refresh(refresh);
+            *backend.presence_result.lock().unwrap() = Some(presence);
+            backend
+        }
+
         fn blocking(started: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
             Self {
                 locks: AtomicUsize::new(0),
@@ -1370,17 +1377,14 @@ mod tests {
             let backend = Arc::new(TrackingBackend::immediate());
             let erased: Arc<dyn VaultBackend> = backend.clone();
             let mut app = unlocked_app();
-            apply_completion(
-                &mut app,
-                &erased,
-                Ok(BackendCompletion {
-                    kind: OperationKind::VerifyAudit,
-                    outcome: BackendOutcome::Failure(BackendFailure::Primary(VaultUiError::new(
-                        kind,
-                        "safe failure",
-                    ))),
-                }),
+            let completion = BackendCompletion::new(
+                OperationKind::Import,
+                Err(VaultUiError::new(kind, "safe failure")),
+                erased.as_ref(),
             );
+            apply_completion(&mut app, &erased, Ok(completion));
+            assert_eq!(backend.refreshes.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot.is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
@@ -1422,6 +1426,13 @@ mod tests {
                 FailureRecovery::ReconcilePresence
             );
         }
+        let missing = VaultUiError::new(VaultUiErrorKind::NotFound, "safe missing failure");
+        for kind in [OperationKind::Unlock, OperationKind::Refresh] {
+            assert_eq!(
+                kind.failure_recovery(&missing),
+                FailureRecovery::ReconcilePresence
+            );
+        }
         for fatal_kind in [VaultUiErrorKind::Authentication, VaultUiErrorKind::Audit] {
             let fatal = VaultUiError::new(fatal_kind, "safe fatal failure");
             assert_eq!(
@@ -1456,12 +1467,44 @@ mod tests {
                 apply_completion(&mut app, &erased, Ok(completion));
 
                 assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+                assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
                 assert_eq!(app.descriptor.exists, presence.is_present());
                 match presence {
                     VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
                     VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
                 }
                 assert_eq!(app.status.as_ref().unwrap().text, "safe lifecycle failure");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_unlock_and_refresh_reconcile_authoritative_presence() {
+        for kind in [OperationKind::Unlock, OperationKind::Refresh] {
+            for presence in [VaultPresence::Missing, VaultPresence::Present] {
+                let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+                let erased: Arc<dyn VaultBackend> = backend.clone();
+                let mut app = unlocked_app();
+                let completion = BackendCompletion::new(
+                    kind,
+                    Err(VaultUiError::new(
+                        VaultUiErrorKind::NotFound,
+                        "safe missing failure",
+                    )),
+                    erased.as_ref(),
+                );
+
+                apply_completion(&mut app, &erased, Ok(completion));
+
+                assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+                assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+                assert_eq!(app.descriptor.exists, presence.is_present());
+                assert!(app.snapshot.is_none());
+                match presence {
+                    VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
+                    VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
+                }
+                assert_eq!(app.status.as_ref().unwrap().text, "safe missing failure");
             }
         }
     }
@@ -1562,6 +1605,7 @@ mod tests {
             apply_completion(&mut app, &erased, Ok(completion));
 
             assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot.is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
@@ -1570,6 +1614,40 @@ mod tests {
                 "safe import failure Vault metadata recovery also failed: safe recovery failure"
             );
         }
+    }
+
+    #[test]
+    fn failed_recovery_refresh_transitions_to_missing_when_vault_vanished() {
+        let backend = Arc::new(TrackingBackend::with_refresh_and_presence(
+            Err(VaultUiError::new(
+                VaultUiErrorKind::NotFound,
+                "safe recovery failure",
+            )),
+            Ok(VaultPresence::Missing),
+        ));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut app = unlocked_app();
+        let completion = BackendCompletion::new(
+            OperationKind::Mutation,
+            Err(VaultUiError::new(
+                VaultUiErrorKind::Conflict,
+                "safe mutation failure",
+            )),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+        assert!(!app.descriptor.exists);
+        assert!(app.snapshot.is_none());
+        assert!(matches!(app.screen, Screen::Missing));
+        assert_eq!(
+            app.status.unwrap().text,
+            "safe mutation failure Vault metadata recovery also failed: safe recovery failure"
+        );
     }
 
     #[test]
