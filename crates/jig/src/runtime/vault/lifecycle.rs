@@ -141,12 +141,15 @@ pub(crate) fn capture_passphrase() -> Result<()> {
 }
 
 pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
-    let Some(value) = std::env::var_os(PASSPHRASE_ENV) else {
-        strip_passphrase_environment();
+    let value = std::env::var_os(PASSPHRASE_ENV);
+    // Unlike retryable non-interactive capture, the TUI immediately owns its
+    // optional credential and must never leave malformed process copies for
+    // later workers or child processes to inherit.
+    strip_passphrase_environment();
+    let Some(value) = value else {
         return Ok(None);
     };
     let passphrase = passphrase_from_os(value, PASSPHRASE_ENV)?;
-    strip_passphrase_environment();
     Ok(Some(SecretBytes::new(
         passphrase.expose_secret().as_bytes().to_vec(),
     )))
@@ -454,6 +457,21 @@ mod tests {
         let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
 
         assert!(take_optional_tui_passphrase().unwrap().is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_tui_passphrase_still_strips_both_environment_values() {
+        let _env = lock_env();
+        let invalid = OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+        let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, invalid);
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        let error = take_optional_tui_passphrase().unwrap_err().to_string();
+
+        assert!(error.contains("valid UTF-8"));
+        assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
     }
 
