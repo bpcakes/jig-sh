@@ -1105,6 +1105,71 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
 }
 
 #[test]
+fn import_redaction_downgrade_requires_specific_confirmation() {
+    let mut app = browsing_app();
+    app.apply_import_preview(ImportPreview {
+        env_file: PathBuf::from("/tmp/source.env"),
+        item: "jig://Production".parse().unwrap(),
+        out_env: PathBuf::from("/tmp/generated.env"),
+        replace: true,
+        overwrite: false,
+        authorization: ImportPreviewAuthorization::Commit(ImportPlanToken::generate()),
+        rows: vec![
+            ImportPreviewRow {
+                variable: "TOKEN".to_owned(),
+                reference: "jig://Production/TOKEN".parse().unwrap(),
+                change: ImportFieldChange::Replace {
+                    previous_kind: FieldKind::Concealed,
+                    kind: FieldKind::Text,
+                },
+            },
+            ImportPreviewRow {
+                variable: "MODE".to_owned(),
+                reference: "jig://Production/MODE".parse().unwrap(),
+                change: ImportFieldChange::Create {
+                    kind: FieldKind::Text,
+                },
+            },
+        ],
+        destination_exists: false,
+    });
+
+    let backend = TestBackend::new(110, 32);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("concealed → text"), "{rendered}");
+    assert!(rendered.contains("redaction needles"), "{rendered}");
+    assert!(rendered.contains("Type IMPORT TEXT"), "{rendered}");
+
+    handle_paste(&mut app, "IMPORT");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::ImportPreview(_)));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("IMPORT TEXT exactly"))
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "IMPORT TEXT");
+    assert!(matches!(
+        submit_key(&mut app),
+        VaultAction::CommitOnePasswordImport {
+            replace: true,
+            overwrite: false,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn import_preview_escape_emits_a_token_scoped_discard_action() {
     let mut app = browsing_app();
     let plan = ImportPlanToken::generate();

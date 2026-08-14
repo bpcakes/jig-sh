@@ -1123,7 +1123,7 @@ printf '%s' 'resolved-tui-import-secret'
 
         std::fs::write(
             temp.path().join("source.env"),
-            b"TOKEN=op://Test/Login/TOKEN\nMODE=production\n",
+            b"TOKEN=literal-token\nMODE=op://Test/Login/MODE\n",
         )
         .unwrap();
         let log_len = log_text.len();
@@ -1146,6 +1146,20 @@ printf '%s' 'resolved-tui-import-secret'
                 .rows
                 .iter()
                 .all(|row| row.change.replaces_existing())
+        );
+        assert_eq!(
+            existing.rows[0].change,
+            ImportFieldChange::Replace {
+                previous_kind: FieldKind::Concealed,
+                kind: FieldKind::Text,
+            }
+        );
+        assert_eq!(
+            existing.rows[1].change,
+            ImportFieldChange::Replace {
+                previous_kind: FieldKind::Text,
+                kind: FieldKind::Concealed,
+            }
         );
         assert!(matches!(
             existing.authorization,

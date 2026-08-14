@@ -7,14 +7,17 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use crate::model::{
-    ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
-    ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
-    MutationConfirmation, MutationConfirmationKind, PeekConfirmation, RenameFieldFocus, Screen,
-    StatusKind, kind_label,
-};
 use crate::tools::{
     BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu,
+};
+use crate::{
+    ImportFieldChange,
+    model::{
+        ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
+        ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
+        MutationConfirmation, MutationConfirmationKind, PeekConfirmation, RenameFieldFocus, Screen,
+        StatusKind, kind_label,
+    },
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -1057,7 +1060,9 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
 fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportPreviewState) {
     frame.render_widget(Clear, area);
     let preview = &state.preview;
-    let max_rows = usize::from(area.height.saturating_sub(13));
+    let has_redaction_downgrade = preview.has_redaction_downgrade();
+    let reserved_rows = if has_redaction_downgrade { 15 } else { 13 };
+    let max_rows = usize::from(area.height.saturating_sub(reserved_rows));
     let mut lines = vec![
         key_value("Source", &preview.env_file.to_string_lossy()),
         key_value("Item", &format!("jig://{}", preview.item.as_str())),
@@ -1067,16 +1072,24 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
         Line::from(""),
     ];
     for row in preview.rows.iter().take(max_rows) {
+        let change = match row.change {
+            ImportFieldChange::Create { kind } => {
+                format!("[{}]  create", kind_label(kind))
+            }
+            ImportFieldChange::Replace {
+                previous_kind,
+                kind,
+            } => format!(
+                "[{} → {}]  replace",
+                kind_label(previous_kind),
+                kind_label(kind)
+            ),
+        };
         lines.push(Line::from(format!(
-            "{} → {}  [{}]  {}",
+            "{} → {}  {}",
             sanitize_text(&row.variable),
             sanitize_text(&row.reference.to_string()),
-            kind_label(row.change.kind()),
-            if row.change.replaces_existing() {
-                "replace"
-            } else {
-                "create"
-            }
+            change
         )));
     }
     if preview.rows.len() > max_rows {
@@ -1086,6 +1099,16 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
         )));
     }
     lines.push(Line::from(""));
+    if has_redaction_downgrade {
+        lines.push(Line::from(Span::styled(
+            "Redaction downgrade: concealed fields will become text.",
+            Style::default().fg(BAD).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Text fields are not output-redaction needles and may appear unmasked in command output.",
+            Style::default().fg(WARN),
+        )));
+    }
     if preview.is_dry_run() {
         lines.push(Line::from(Span::styled(
             "Dry run: no 1Password values were resolved and no files or fields will change.",
@@ -1098,7 +1121,7 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
             Style::default().fg(WARN),
         )));
         lines.push(form_value_line(
-            "Type IMPORT",
+            &format!("Type {}", state.required_confirmation()),
             &state.confirmation,
             true,
             false,

@@ -419,9 +419,11 @@ impl App {
             self.set_error("The dotenv destination requires Overwrite; press o to enable it.");
             return None;
         }
-        if state.confirmation != "IMPORT" {
+        let required_confirmation = state.required_confirmation();
+        if state.confirmation != required_confirmation {
+            let message = state.invalid_confirmation_message();
             self.screen = Screen::ImportPreview(state);
-            self.set_error("Type IMPORT exactly to resolve and commit the previewed import.");
+            self.set_error(message);
             return None;
         }
         if let Some(first) = state.preview.rows.first() {
@@ -1173,6 +1175,24 @@ pub(crate) enum Screen {
 pub(crate) struct ImportPreviewState {
     pub(crate) preview: ImportPreview,
     pub(crate) confirmation: String,
+}
+
+impl ImportPreviewState {
+    pub(crate) fn required_confirmation(&self) -> &'static str {
+        if self.preview.has_redaction_downgrade() {
+            "IMPORT TEXT"
+        } else {
+            "IMPORT"
+        }
+    }
+
+    fn invalid_confirmation_message(&self) -> &'static str {
+        if self.preview.has_redaction_downgrade() {
+            "Type IMPORT TEXT exactly to acknowledge the redaction downgrade and commit the previewed import."
+        } else {
+            "Type IMPORT exactly to resolve and commit the previewed import."
+        }
+    }
 }
 
 #[derive(Debug)]

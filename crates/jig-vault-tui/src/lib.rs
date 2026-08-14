@@ -254,6 +254,13 @@ impl ImportPreview {
     pub const fn is_dry_run(&self) -> bool {
         matches!(self.authorization, ImportPreviewAuthorization::DryRun)
     }
+
+    /// Returns whether any replacement removes output-redaction treatment.
+    pub fn has_redaction_downgrade(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.change.is_redaction_downgrade())
+    }
 }
 
 /// Metadata-only completion returned by [`VaultBackend::execute`].
