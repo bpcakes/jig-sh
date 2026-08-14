@@ -34,7 +34,9 @@ use crate::exec_process::{
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
 use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
-use crate::output::{OutputInstallFailure, install_private_bytes};
+use crate::output::{
+    OutputInstallFailure, PreparedPrivateFile, PrivateFilePrecondition, install_private_bytes,
+};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::RunOutput;
 use crate::store::VaultStore;
@@ -541,6 +543,36 @@ impl Vault {
         self.store
             .prepare_field_read(passphrase, reference)?
             .write_to(writer)
+    }
+
+    /// Validates a private file destination outside this vault's owned home.
+    ///
+    /// The generic private-output checks are combined with the selected vault's
+    /// namespace ownership policy. Callers that separate preview from writing
+    /// should use [`Self::preview_private_output`] so the policy is retained and
+    /// rechecked by the consumed precondition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination is inside the vault home, aliases
+    /// a vault-owned source file, cannot be hardened, or conflicts with the
+    /// requested overwrite policy.
+    pub fn preflight_private_output(&self, path: &Path, overwrite: bool) -> Result<()> {
+        PreparedPrivateFile::preflight_for_vault(&self.store, path, "private", overwrite)
+    }
+
+    /// Captures a hardened private destination outside this vault's owned home.
+    ///
+    /// The opaque result retains the vault namespace policy. Passing it to
+    /// [`PreparedPrivateFile::prepare_if_unchanged`] rechecks that policy both
+    /// before staging bytes and immediately before installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination is inside the vault home, aliases
+    /// a vault-owned source file, or cannot be hardened and inspected.
+    pub fn preview_private_output(&self, path: &Path) -> Result<PrivateFilePrecondition> {
+        PreparedPrivateFile::preview_for_vault(self.store.clone(), path, "private")
     }
 
     /// Atomically writes one canonical field to a hardened private file.

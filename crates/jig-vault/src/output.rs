@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Error;
 
+use crate::store::VaultStore;
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
 /// A fully written and synced private sibling file awaiting atomic install.
@@ -14,6 +15,7 @@ pub struct PreparedPrivateFile {
     destination: PathBuf,
     overwrite: bool,
     byte_len: usize,
+    vault_output: Option<VaultOutputPolicy>,
 }
 
 /// Opaque observation of one private output destination.
@@ -25,6 +27,20 @@ pub struct PrivateFilePrecondition {
     inner: PrivateDestinationPrecondition,
     destination: PathBuf,
     destination_exists: bool,
+    vault_output: Option<VaultOutputPolicy>,
+}
+
+struct VaultOutputPolicy {
+    store: VaultStore,
+    operation_label: &'static str,
+}
+
+impl VaultOutputPolicy {
+    fn validate(&self, destination: &Path) -> Result<()> {
+        self.store
+            .validate_external_output(destination, self.operation_label)
+            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::InvalidInput, error))
+    }
 }
 
 impl PrivateFilePrecondition {
@@ -62,7 +78,23 @@ impl PreparedPrivateFile {
             destination: destination.to_path_buf(),
             destination_exists: private_destination_exists(&inner),
             inner,
+            vault_output: None,
         })
+    }
+
+    pub(crate) fn preview_for_vault(
+        store: VaultStore,
+        destination: &Path,
+        operation_label: &'static str,
+    ) -> Result<PrivateFilePrecondition> {
+        let vault_output = VaultOutputPolicy {
+            store,
+            operation_label,
+        };
+        vault_output.validate(destination)?;
+        let mut precondition = Self::preview(destination)?;
+        precondition.vault_output = Some(vault_output);
+        Ok(precondition)
     }
 
     /// Validates a destination and overwrite policy without creating a file.
@@ -77,6 +109,18 @@ impl PreparedPrivateFile {
     /// leaf conflicts with `overwrite`.
     pub fn preflight(destination: &Path, overwrite: bool) -> Result<()> {
         preflight_private_destination(destination, overwrite).map_err(output_failure_to_vault_error)
+    }
+
+    pub(crate) fn preflight_for_vault(
+        store: &VaultStore,
+        destination: &Path,
+        operation_label: &'static str,
+        overwrite: bool,
+    ) -> Result<()> {
+        store
+            .validate_external_output(destination, operation_label)
+            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        Self::preflight(destination, overwrite)
     }
 
     /// Writes and syncs an owner-only temporary file beside `destination`.
@@ -95,6 +139,7 @@ impl PreparedPrivateFile {
             destination: destination.to_path_buf(),
             overwrite,
             byte_len,
+            vault_output: None,
         })
     }
 
@@ -120,7 +165,11 @@ impl PreparedPrivateFile {
             inner,
             destination,
             destination_exists,
+            vault_output,
         } = precondition;
+        if let Some(policy) = &vault_output {
+            policy.validate(&destination)?;
+        }
         let byte_len = contents.len();
         let prepared =
             prepare_private_bytes_if_unchanged(inner, contents.as_slice(), allow_replace)
@@ -130,6 +179,7 @@ impl PreparedPrivateFile {
             destination,
             overwrite: destination_exists,
             byte_len,
+            vault_output,
         })
     }
 
@@ -140,7 +190,16 @@ impl PreparedPrivateFile {
     /// Returns an error when close-to-install path checks or the atomic
     /// namespace operation fail.
     pub fn install(self) -> Result<()> {
-        install_prepared_private(self.inner).map_err(output_failure_to_vault_error)
+        let Self {
+            inner,
+            destination,
+            vault_output,
+            ..
+        } = self;
+        if let Some(policy) = vault_output {
+            policy.validate(&destination)?;
+        }
+        install_prepared_private(inner).map_err(output_failure_to_vault_error)
     }
 }
 

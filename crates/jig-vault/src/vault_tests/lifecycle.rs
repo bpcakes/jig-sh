@@ -239,3 +239,32 @@ fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
     assert_eq!(events.last().unwrap().action, "field_read_failed");
     assert_eq!(events.last().unwrap().details["stage"], "sink_preflight");
 }
+
+#[cfg(unix)]
+#[test]
+fn vault_bound_private_output_precondition_rechecks_namespace_ownership() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+
+    let reserved = vault.root().join("vault.json");
+    let error = vault.preview_private_output(&reserved).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+    assert!(error.to_string().contains("outside the source vault home"));
+
+    let destination = temp.path().join("generated.env");
+    let precondition = vault.preview_private_output(&destination).unwrap();
+    assert!(!precondition.destination_exists());
+    crate::PreparedPrivateFile::prepare_if_unchanged(
+        precondition,
+        SecretBytes::new(b"MODE=production\n".to_vec()),
+        false,
+    )
+    .unwrap()
+    .install()
+    .unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), b"MODE=production\n");
+}
