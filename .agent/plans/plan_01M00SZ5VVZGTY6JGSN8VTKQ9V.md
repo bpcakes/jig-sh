@@ -21,7 +21,7 @@ controls, and find any item or field quickly without exposing a value.
   editing, bounded insertion, visible cursor, and horizontal viewport behavior.
 - [x] Add metadata-only Quick Access with shared fuzzy ranking, result preview,
   scrolling, and action handoff.
-- [ ] Build the development Jig binary, run configured gates, inspect evidence,
+- [x] Build the development Jig binary, run configured gates, inspect evidence,
   update this plan, close structured work, and push the commits to PR #4.
 
 ## Surprises & Discoveries
@@ -65,9 +65,31 @@ controls, and find any item or field quickly without exposing a value.
 
 ## Outcomes & Retrospective
 
-Work is in progress. At completion this section will record the four commit
-boundaries, behavior and compatibility effects, focused and full verification
-receipts, and any intentionally deferred polish.
+Delivered four independently green implementation slices:
+
+- `16aef57` centralizes contextual and universal actions in one exhaustive
+  command catalog.
+- `092acc9` adds explicit item creation through the atomic first-field flow.
+- `bf66ce1` adds conventional bounded metadata editing while keeping protected
+  values in the separate zeroizing input type.
+- `7eac7f2` adds metadata-only Quick Access and shares the characterized fuzzy
+  matcher with the Codex picker.
+
+The final workspace gate exposed one stale PTY script that still assumed the
+old activity-only picker. `a303a78` updates that integration path to search the
+new universal palette, preserving the implementation commits as separate
+revert boundaries.
+
+No vault format, domain API, dependency, plaintext boundary, or direct shortcut
+changed. Focused tests passed across `jig-tui`, `jig-codex-tui`, and
+`jig-vault-tui`; both Vault TUI PTY lifecycle tests passed. Required test and
+contract gates are fresh with batch receipts `receipt_01M00YRARG9NJDDKMY3YVGC1SJ`
+and `receipt_01M00YRRBDKEQWGGXPDVM39KEF`. Direct format, strict Clippy,
+contract, and complete test checks passed; the final test receipt is
+`receipt_01M00ZMXZG2D9FKTP8AD0HCQSQ`.
+
+Clipboard/OSC52 integration, persisted recency, cross-scope navigation, and
+vault-format changes remain intentionally deferred.
 
 ## Context and Orientation
 
