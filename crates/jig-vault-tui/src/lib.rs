@@ -262,6 +262,61 @@ impl ImportPreview {
     }
 }
 
+/// Metadata proving which durable action completed before snapshot refresh.
+///
+/// This closed value never contains protected field bytes. It lets a backend
+/// distinguish a committed primary operation from a later presentation refresh
+/// failure so the UI cannot suggest that retrying the primary action is harmless.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum VaultCommittedAction {
+    Initialized,
+    Migrated,
+    Mutated,
+    Imported,
+    PassphraseChanged,
+    BackupCreated {
+        output: PathBuf,
+        bytes_written: usize,
+        backup_version: u32,
+    },
+    Exported {
+        output: PathBuf,
+        bytes_written: usize,
+    },
+}
+
+impl VaultCommittedAction {
+    /// Attaches a verified current snapshot to this completed action.
+    pub fn with_snapshot(self, snapshot: VaultSnapshot) -> VaultActionResult {
+        match self {
+            Self::Initialized
+            | Self::Migrated
+            | Self::Mutated
+            | Self::Imported
+            | Self::PassphraseChanged => VaultActionResult::Snapshot(snapshot),
+            Self::BackupCreated {
+                output,
+                bytes_written,
+                backup_version,
+            } => VaultActionResult::BackupCreated {
+                output,
+                bytes_written,
+                backup_version,
+                snapshot,
+            },
+            Self::Exported {
+                output,
+                bytes_written,
+            } => VaultActionResult::Exported {
+                output,
+                bytes_written,
+                snapshot,
+            },
+        }
+    }
+}
+
 /// Metadata-only completion returned by [`VaultBackend::execute`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -287,6 +342,11 @@ pub enum VaultActionResult {
         bytes_written: usize,
         snapshot: VaultSnapshot,
     },
+    /// The primary action committed, but its trailing snapshot refresh failed.
+    Committed {
+        action: VaultCommittedAction,
+        refresh_error: VaultUiError,
+    },
 }
 
 /// Fixed-scope bridge from terminal interaction to vault/runtime policy.
@@ -302,6 +362,19 @@ pub trait VaultBackend: Send + Sync + 'static {
 
     /// Creates a new vault and enters an unlocked session.
     fn initialize(&self, passphrase: SecretBytes) -> Result<VaultSnapshot, VaultUiError>;
+
+    /// Creates a new vault while preserving split commit/refresh outcomes.
+    ///
+    /// The default preserves compatibility for backends whose initialization is
+    /// one indivisible operation. A backend that persists the vault before a
+    /// fallible snapshot refresh should override this method and return
+    /// [`VaultActionResult::Committed`] after persistence succeeds.
+    fn initialize_with_completion(
+        &self,
+        passphrase: SecretBytes,
+    ) -> Result<VaultActionResult, VaultUiError> {
+        self.initialize(passphrase).map(VaultActionResult::Snapshot)
+    }
 
     /// Drops all backend credential state.
     fn lock(&self);

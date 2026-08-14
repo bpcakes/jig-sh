@@ -9,7 +9,8 @@ use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_ter
 use jig_vault::{SecretBytes, VaultReference, VaultSnapshot};
 
 use crate::{
-    VaultAction, VaultActionResult, VaultBackend, VaultPresence, VaultUiError, VaultUiErrorKind,
+    VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction, VaultPresence,
+    VaultUiError, VaultUiErrorKind,
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
@@ -293,6 +294,9 @@ fn apply_completion(
         BackendOutcome::LifecycleFailure { error, presence } => {
             apply_lifecycle_failure(app, backend, error, presence);
         }
+        BackendOutcome::CommittedWithoutSnapshot(committed) => {
+            apply_committed_without_snapshot(app, backend, committed);
+        }
         BackendOutcome::Failure(failure) => {
             apply_failure(app, backend, completion.kind, failure);
         }
@@ -348,6 +352,62 @@ fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) 
                 "Exported {bytes_written} bytes to private file {}.",
                 output.display()
             ));
+        }
+        VaultActionResult::Committed { .. } => {
+            unreachable!("committed results are normalized by BackendCompletion")
+        }
+    }
+}
+
+fn apply_committed_without_snapshot(
+    app: &mut App,
+    backend: &Arc<dyn VaultBackend>,
+    committed: CommittedWithoutSnapshot,
+) {
+    let message = committed.action.completion_message();
+    let error = match committed.retry_error {
+        Some(retry_error) => VaultUiError::new(
+            retry_error.kind(),
+            format!(
+                "{message}, but its metadata refresh failed: {} The automatic retry also failed: {}",
+                committed.refresh_error.message(),
+                retry_error.message()
+            ),
+        ),
+        None => VaultUiError::new(
+            committed.refresh_error.kind(),
+            format!(
+                "{message}, but its metadata refresh failed: {}",
+                committed.refresh_error.message()
+            ),
+        ),
+    };
+    apply_lifecycle_failure(app, backend, error, committed.presence);
+}
+
+impl VaultCommittedAction {
+    fn completion_message(&self) -> String {
+        match self {
+            Self::Initialized => "Vault initialization completed".to_owned(),
+            Self::Migrated => "Vault migration to version 2 completed".to_owned(),
+            Self::Mutated => "Vault update completed".to_owned(),
+            Self::Imported => "1Password import completed".to_owned(),
+            Self::PassphraseChanged => "Vault passphrase change completed".to_owned(),
+            Self::BackupCreated {
+                output,
+                bytes_written,
+                backup_version,
+            } => format!(
+                "Encrypted backup v{backup_version} was written to {} ({bytes_written} bytes)",
+                output.display()
+            ),
+            Self::Exported {
+                output,
+                bytes_written,
+            } => format!(
+                "Private export wrote {bytes_written} bytes to {}",
+                output.display()
+            ),
         }
     }
 }
@@ -551,6 +611,36 @@ impl BackendCompletion {
         backend: &dyn VaultBackend,
     ) -> Self {
         let outcome = match result {
+            Ok(VaultActionResult::Committed {
+                action,
+                refresh_error,
+            }) => {
+                let retry = if matches!(
+                    refresh_error.kind(),
+                    VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+                ) {
+                    None
+                } else {
+                    Some(backend.refresh())
+                };
+                match retry {
+                    Some(Ok(snapshot)) => BackendOutcome::Success(action.with_snapshot(snapshot)),
+                    Some(Err(retry_error)) => {
+                        BackendOutcome::CommittedWithoutSnapshot(CommittedWithoutSnapshot {
+                            action,
+                            refresh_error,
+                            retry_error: Some(retry_error),
+                            presence: backend.presence(),
+                        })
+                    }
+                    None => BackendOutcome::CommittedWithoutSnapshot(CommittedWithoutSnapshot {
+                        action,
+                        refresh_error,
+                        retry_error: None,
+                        presence: backend.presence(),
+                    }),
+                }
+            }
             Ok(result) => BackendOutcome::Success(result),
             Err(error) => match kind.failure_recovery(&error) {
                 FailureRecovery::Primary => BackendOutcome::Failure(BackendFailure::Primary(error)),
@@ -577,11 +667,19 @@ impl BackendCompletion {
 
 enum BackendOutcome {
     Success(VaultActionResult),
+    CommittedWithoutSnapshot(CommittedWithoutSnapshot),
     LifecycleFailure {
         error: VaultUiError,
         presence: Result<VaultPresence, VaultUiError>,
     },
     Failure(BackendFailure),
+}
+
+struct CommittedWithoutSnapshot {
+    action: VaultCommittedAction,
+    refresh_error: VaultUiError,
+    retry_error: Option<VaultUiError>,
+    presence: Result<VaultPresence, VaultUiError>,
 }
 
 enum BackendFailure {
@@ -619,9 +717,9 @@ impl ActionWorker {
                 BackendRequest::Unlock(passphrase) => {
                     backend.unlock(passphrase).map(VaultActionResult::Snapshot)
                 }
-                BackendRequest::Initialize(passphrase) => backend
-                    .initialize(passphrase)
-                    .map(VaultActionResult::Snapshot),
+                BackendRequest::Initialize(passphrase) => {
+                    backend.initialize_with_completion(passphrase)
+                }
                 BackendRequest::Execute(action) => backend.execute(action),
             };
             BackendCompletion::new(kind, result, backend.as_ref())
@@ -1578,6 +1676,70 @@ mod tests {
             "failed mutation must preserve the operator's prior selection"
         );
         assert_eq!(app.status.unwrap().text, "safe mutation failure");
+    }
+
+    #[test]
+    fn committed_result_recovers_a_snapshot_and_reports_primary_success() {
+        let mut app = unlocked_app();
+        let refreshed = app.snapshot.clone().unwrap();
+        let backend = Arc::new(TrackingBackend::with_refresh(Ok(refreshed.clone())));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let completion = BackendCompletion::new(
+            OperationKind::Mutation,
+            Ok(VaultActionResult::Committed {
+                action: VaultCommittedAction::Mutated,
+                refresh_error: VaultUiError::new(
+                    VaultUiErrorKind::Io,
+                    "safe initial refresh failure",
+                ),
+            }),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
+        assert_eq!(app.snapshot, Some(refreshed));
+        assert!(matches!(app.screen, Screen::Browse));
+        assert_eq!(app.status.unwrap().text, "Vault updated.");
+    }
+
+    #[test]
+    fn committed_result_remains_successful_when_snapshot_recovery_fails() {
+        let backend = Arc::new(TrackingBackend::with_refresh_and_presence(
+            Err(VaultUiError::new(
+                VaultUiErrorKind::Io,
+                "safe retry failure",
+            )),
+            Ok(VaultPresence::Present),
+        ));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut app = unlocked_app();
+        let completion = BackendCompletion::new(
+            OperationKind::Mutation,
+            Ok(VaultActionResult::Committed {
+                action: VaultCommittedAction::Mutated,
+                refresh_error: VaultUiError::new(
+                    VaultUiErrorKind::Io,
+                    "safe initial refresh failure",
+                ),
+            }),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+        assert!(app.snapshot.is_none());
+        assert!(matches!(app.screen, Screen::Locked(_)));
+        assert_eq!(
+            app.status.unwrap().text,
+            "Vault update completed, but its metadata refresh failed: safe initial refresh failure The automatic retry also failed: safe retry failure"
+        );
     }
 
     #[test]
