@@ -662,11 +662,33 @@ pub struct FieldRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VaultSnapshot {
     pub vault_id: String,
+    /// Opaque identity of the exact encrypted state represented here.
+    pub revision: VaultRevision,
     pub created_at_ms: i128,
     pub format_version: u32,
     pub fields: Vec<FieldRecord>,
     pub legacy_secrets: Vec<SecretRecord>,
     pub audit: AuditVerification,
+}
+
+/// Opaque identity of one authenticated encrypted vault-state generation.
+///
+/// Revisions are value-like capabilities created only by authenticated vault
+/// reads. Their representation remains private so callers cannot construct or
+/// weaken an interactive state precondition.
+#[derive(Clone, Eq, PartialEq)]
+pub struct VaultRevision {
+    vault_id: String,
+    state_nonce_b64: String,
+}
+
+impl std::fmt::Debug for VaultRevision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultRevision")
+            .field("state_generation", &"[OPAQUE]")
+            .finish_non_exhaustive()
+    }
 }
 
 /// Metadata-only result of changing one field kind.
@@ -712,8 +734,7 @@ pub enum VaultWriteMode {
 /// construct or weaken a plan. Field presence is metadata and remains
 /// available for rendering a safe preview.
 pub struct VaultImportPrecondition {
-    vault_id: String,
-    state_nonce_b64: String,
+    revision: VaultRevision,
     fields: Vec<ImportFieldPresence>,
 }
 
@@ -1760,8 +1781,7 @@ impl VaultStore {
             })?;
             vault.ensure_field_format_v2()?;
             Ok(VaultImportPrecondition {
-                vault_id: vault.file.header.vault_id.clone(),
-                state_nonce_b64: vault.file.state_nonce_b64.clone(),
+                revision: vault.revision(),
                 fields: references
                     .iter()
                     .map(|reference| ImportFieldPresence {
@@ -2145,6 +2165,7 @@ impl OpenVault {
             .collect();
         VaultSnapshot {
             vault_id: self.file.header.vault_id.clone(),
+            revision: self.revision(),
             created_at_ms: self.file.header.created_at_ms,
             format_version: self.format_version(),
             fields: self.list_fields(),
@@ -2155,6 +2176,18 @@ impl OpenVault {
 
     fn format_version(&self) -> u32 {
         self.file.header.version
+    }
+
+    fn revision(&self) -> VaultRevision {
+        VaultRevision {
+            vault_id: self.file.header.vault_id.clone(),
+            state_nonce_b64: self.file.state_nonce_b64.clone(),
+        }
+    }
+
+    fn matches_revision(&self, revision: &VaultRevision) -> bool {
+        self.file.header.vault_id == revision.vault_id
+            && self.file.state_nonce_b64 == revision.state_nonce_b64
     }
 
     fn ensure_field_format_v2(&self) -> AnyResult<()> {
@@ -2833,9 +2866,7 @@ fn enforce_import_precondition(
     precondition: &VaultImportPrecondition,
     replace: bool,
 ) -> AnyResult<()> {
-    if vault.file.header.vault_id != precondition.vault_id
-        || vault.file.state_nonce_b64 != precondition.state_nonce_b64
-    {
+    if !vault.matches_revision(&precondition.revision) {
         return Err(classified(
             VaultErrorKind::AlreadyExists,
             "vault state changed since the import preview; preview again",

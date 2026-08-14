@@ -73,6 +73,30 @@ fn snapshot_is_a_verified_disjoint_canonical_and_legacy_view() {
 }
 
 #[test]
+fn snapshot_revision_is_opaque_and_tracks_encrypted_state_generation() {
+    let (_temp, vault) = new_vault();
+    let initial = vault.snapshot(&passphrase()).unwrap();
+    let unchanged = vault.snapshot(&passphrase()).unwrap();
+
+    assert_eq!(initial.revision, unchanged.revision);
+    let debug = format!("{:?}", initial.revision);
+    assert!(debug.contains("[OPAQUE]"));
+    assert!(!debug.contains(&initial.vault_id));
+
+    vault
+        .set_field(
+            &passphrase(),
+            field("jig://Production/TOKEN"),
+            FieldKind::Concealed,
+            SecretBytes::new(b"initial-secret".to_vec()),
+        )
+        .unwrap();
+    let changed = vault.snapshot(&passphrase()).unwrap();
+
+    assert_ne!(initial.revision, changed.revision);
+}
+
+#[test]
 fn version_one_snapshot_remains_readable_and_reports_its_format() {
     let temp = tempfile::tempdir().unwrap();
     let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
