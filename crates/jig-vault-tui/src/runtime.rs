@@ -580,7 +580,6 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         Screen::Loading(_) => {
             return match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => RuntimeAction::Quit,
-                KeyCode::Char('L') => RuntimeAction::Lock,
                 _ => RuntimeAction::Ignore,
             };
         }
@@ -796,16 +795,6 @@ fn handle_locked_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             .map_or(RuntimeAction::Redraw, |passphrase| {
                 RuntimeAction::Start(BackendRequest::Unlock(passphrase))
             }),
-        KeyCode::Char('q')
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                && app
-                    .protected_input_mut()
-                    .is_some_and(|input| input.is_empty()) =>
-        {
-            RuntimeAction::Quit
-        }
         _ => handle_protected_editing_key(app, key),
     }
 }

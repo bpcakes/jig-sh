@@ -201,10 +201,47 @@ fn locked_typing_and_paste_never_put_plaintext_in_a_frame() {
     let rendered = terminal.backend().to_string();
 
     assert!(rendered.contains("Vault passphrase"), "{rendered}");
+    assert!(rendered.contains("Esc quit"), "{rendered}");
     assert!(
         !rendered.contains("vault-tui-plaintext-sentinel"),
         "{rendered}"
     );
+}
+
+#[test]
+fn locked_q_is_protected_input_and_escape_remains_quit() {
+    let mut app = App::new(descriptor(true));
+
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)
+        ),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Locked(input) = &app.screen else {
+        panic!("expected locked input");
+    };
+    assert_eq!(input.len(), 1);
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        RuntimeAction::Quit
+    ));
+}
+
+#[test]
+fn loading_ignores_lock_shortcut_without_discarding_the_worker_result() {
+    let mut app = browsing_app();
+    app.begin_loading("Testing operation");
+
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT)
+        ),
+        RuntimeAction::Ignore
+    ));
+    assert!(matches!(app.screen, Screen::Loading("Testing operation")));
 }
 
 #[test]

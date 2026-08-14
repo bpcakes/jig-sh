@@ -155,7 +155,7 @@ fn draw_locked(frame: &mut Frame, area: Rect, app: &App, input: String) {
                 "Input is protected; only bullets and byte count are rendered.",
                 Style::default().fg(MUTED),
             )),
-            Line::from("Enter unlock   Ctrl-U clear   q quit"),
+            Line::from("Enter unlock   Ctrl-U clear   Esc quit"),
         ])
         .alignment(Alignment::Center)
         .block(panel("Unlock"))
