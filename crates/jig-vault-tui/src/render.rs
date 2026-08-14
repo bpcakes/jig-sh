@@ -8,10 +8,10 @@ use ratatui::{
 };
 
 use crate::model::{
-    ActivityView, App, ConvertFocus, DeleteConfirmation, EmptyTextReplacementConfirmation,
-    EntryIdentity, FieldWriteFocus, Focus, ImportPreviewState, InitializeFocus, ItemIdentity,
-    LegacyWriteFocus, ManagementForm, PeekConfirmation, RenameFieldFocus, Screen, StatusKind,
-    kind_label,
+    ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
+    ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
+    MutationConfirmation, MutationConfirmationKind, PeekConfirmation, RenameFieldFocus, Screen,
+    StatusKind, kind_label,
 };
 use crate::tools::{
     BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu,
@@ -61,7 +61,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::Help
         | Screen::ConfirmMigration
         | Screen::Form(_)
-        | Screen::ConfirmEmptyTextReplacement(_)
+        | Screen::ConfirmMutation(_)
         | Screen::ConfirmDelete(_)
         | Screen::Tools(_)
         | Screen::ToolForm(_)
@@ -82,8 +82,8 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 Screen::Form(form) => {
                     draw_management_form(frame, centered_rect(78, 68, area), app, form);
                 }
-                Screen::ConfirmEmptyTextReplacement(confirmation) => {
-                    draw_empty_text_replacement_confirmation(
+                Screen::ConfirmMutation(confirmation) => {
+                    draw_mutation_confirmation(
                         frame,
                         centered_rect(78, 54, area),
                         app,
@@ -729,32 +729,68 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
     );
 }
 
-fn draw_empty_text_replacement_confirmation(
+fn draw_mutation_confirmation(
     frame: &mut Frame,
     area: Rect,
     app: &App,
-    confirmation: &EmptyTextReplacementConfirmation,
+    confirmation: &MutationConfirmation,
 ) {
     frame.render_widget(Clear, area);
-    let mut lines = vec![
-        Line::from(Span::styled(
-            "Replace this encrypted field with an empty text value?",
-            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        key_value("Reference", &confirmation.reference.to_string()),
-        Line::from(""),
-        Line::from("This clears the current value; the existing value was not loaded."),
-        Line::from(""),
-        Line::from("Type CLEAR exactly, then press Enter."),
+    let (title, mut lines) = match &confirmation.kind {
+        MutationConfirmationKind::EmptyTextReplacement {
+            reference,
+            redaction_downgrade,
+        } => ("Confirm empty text replacement", {
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    "Replace this encrypted field with an empty text value?",
+                    Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                key_value("Reference", &reference.to_string()),
+                Line::from(""),
+                Line::from("This clears the current value; the existing value was not loaded."),
+            ];
+            if *redaction_downgrade {
+                lines.push(Line::from(Span::styled(
+                    "It also stops treating the field as an output-redaction needle.",
+                    Style::default().fg(BAD),
+                )));
+            }
+            lines.extend([
+                Line::from(""),
+                Line::from("Type CLEAR exactly, then press Enter."),
+            ]);
+            lines
+        }),
+        MutationConfirmationKind::RedactionDowngrade { reference } => (
+            "Confirm redaction downgrade",
+            vec![
+                Line::from(Span::styled(
+                    "Change this field from concealed to text?",
+                    Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                key_value("Reference", &reference.to_string()),
+                Line::from("The value remains encrypted at rest."),
+                Line::from(Span::styled(
+                    "Text fields are not output-redaction needles and may appear unmasked in command output.",
+                    Style::default().fg(BAD),
+                )),
+                Line::from(""),
+                Line::from("Type TEXT exactly, then press Enter."),
+            ],
+        ),
+    };
+    lines.extend([
         form_value_line("Confirmation", &confirmation.input, true, false),
         Line::from(""),
         Line::from("Enter confirm   Esc cancel   Ctrl-U clear"),
-    ];
+    ]);
     append_status(&mut lines, app);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel("Confirm empty text replacement"))
+            .block(panel(title))
             .wrap(Wrap { trim: true }),
         area,
     );

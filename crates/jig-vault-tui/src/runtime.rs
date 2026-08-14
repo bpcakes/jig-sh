@@ -650,8 +650,8 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             };
         }
         Screen::Form(_) => return handle_form_key(app, key),
-        Screen::ConfirmEmptyTextReplacement(_) => {
-            return handle_empty_text_replacement_key(app, key);
+        Screen::ConfirmMutation(_) => {
+            return handle_mutation_confirmation_key(app, key);
         }
         Screen::ConfirmDelete(_) => return handle_delete_key(app, key),
         Screen::Tools(_) => return handle_tools_key(app, key),
@@ -1059,9 +1059,9 @@ fn handle_delete_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     })
 }
 
-fn handle_empty_text_replacement_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+fn handle_mutation_confirmation_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     handle_metadata_confirmation_key(app, key, |app| {
-        app.submit_empty_text_replacement()
+        app.submit_mutation_confirmation()
             .map_or(RuntimeAction::Redraw, |action| {
                 RuntimeAction::Start(BackendRequest::Execute(action))
             })

@@ -170,7 +170,7 @@ impl App {
             Screen::Help
                 | Screen::ConfirmMigration
                 | Screen::Form(_)
-                | Screen::ConfirmEmptyTextReplacement(_)
+                | Screen::ConfirmMutation(_)
                 | Screen::ConfirmDelete(_)
                 | Screen::Tools(_)
                 | Screen::ToolForm(_)
@@ -219,7 +219,7 @@ impl App {
         match &mut self.screen {
             Screen::Form(form) => form.metadata_input_mut(),
             Screen::ToolForm(form) => form.metadata_input_mut(),
-            Screen::ConfirmEmptyTextReplacement(confirmation) => Some(&mut confirmation.input),
+            Screen::ConfirmMutation(confirmation) => Some(&mut confirmation.input),
             Screen::ConfirmDelete(confirmation) => Some(&mut confirmation.input),
             Screen::ImportPreview(preview) => Some(&mut preview.confirmation),
             Screen::ConfirmPeek(confirmation) => Some(&mut confirmation.input),
@@ -654,13 +654,17 @@ impl App {
         };
         match form.submission() {
             Ok(submission) => {
-                if let Some(reference) = submission.empty_text_replacement_reference().cloned() {
-                    self.screen =
-                        Screen::ConfirmEmptyTextReplacement(EmptyTextReplacementConfirmation {
-                            reference,
-                            submission,
-                            input: String::new(),
-                        });
+                let confirmation = self
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| submission.confirmation(snapshot))
+                    .expect("management submissions require an unlocked vault snapshot");
+                if let Some(kind) = confirmation {
+                    self.screen = Screen::ConfirmMutation(MutationConfirmation {
+                        kind,
+                        submission,
+                        input: String::new(),
+                    });
                     self.status = None;
                     None
                 } else {
@@ -675,15 +679,16 @@ impl App {
         }
     }
 
-    pub(crate) fn submit_empty_text_replacement(&mut self) -> Option<VaultAction> {
+    pub(crate) fn submit_mutation_confirmation(&mut self) -> Option<VaultAction> {
         let screen = std::mem::replace(&mut self.screen, Screen::Browse);
-        let Screen::ConfirmEmptyTextReplacement(confirmation) = screen else {
+        let Screen::ConfirmMutation(confirmation) = screen else {
             self.screen = screen;
             return None;
         };
-        if confirmation.input != "CLEAR" {
-            self.screen = Screen::ConfirmEmptyTextReplacement(confirmation);
-            self.set_error("Empty replacement confirmation must be CLEAR exactly.");
+        if confirmation.input != confirmation.kind.required_input() {
+            let message = confirmation.kind.invalid_message();
+            self.screen = Screen::ConfirmMutation(confirmation);
+            self.set_error(message);
             return None;
         }
         Some(self.start_form_submission(confirmation.submission))
@@ -1077,7 +1082,7 @@ pub(crate) enum Screen {
     Help,
     ConfirmMigration,
     Form(ManagementForm),
-    ConfirmEmptyTextReplacement(EmptyTextReplacementConfirmation),
+    ConfirmMutation(MutationConfirmation),
     ConfirmDelete(DeleteConfirmation),
     Tools(ToolsMenu),
     ToolForm(ToolForm),
@@ -1106,10 +1111,39 @@ pub(crate) struct PeekConfirmation {
 }
 
 #[derive(Debug)]
-pub(crate) struct EmptyTextReplacementConfirmation {
-    pub(crate) reference: VaultReference,
+pub(crate) struct MutationConfirmation {
+    pub(crate) kind: MutationConfirmationKind,
     submission: FormSubmission,
     pub(crate) input: String,
+}
+
+#[derive(Debug)]
+pub(crate) enum MutationConfirmationKind {
+    EmptyTextReplacement {
+        reference: VaultReference,
+        redaction_downgrade: bool,
+    },
+    RedactionDowngrade {
+        reference: VaultReference,
+    },
+}
+
+impl MutationConfirmationKind {
+    const fn required_input(&self) -> &'static str {
+        match self {
+            Self::EmptyTextReplacement { .. } => "CLEAR",
+            Self::RedactionDowngrade { .. } => "TEXT",
+        }
+    }
+
+    const fn invalid_message(&self) -> &'static str {
+        match self {
+            Self::EmptyTextReplacement { .. } => {
+                "Empty replacement confirmation must be CLEAR exactly."
+            }
+            Self::RedactionDowngrade { .. } => "Redaction downgrade must be TEXT exactly.",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1435,15 +1469,42 @@ struct FormSubmission {
 }
 
 impl FormSubmission {
-    fn empty_text_replacement_reference(&self) -> Option<&VaultReference> {
+    fn confirmation(&self, snapshot: &VaultSnapshot) -> Option<MutationConfirmationKind> {
+        let redaction_downgrade = match &self.mutation {
+            VaultMutation::SetField {
+                reference,
+                kind: FieldKind::Text,
+                ..
+            } if snapshot.fields.iter().any(|field| {
+                field.reference == *reference && field.kind == FieldKind::Concealed
+            }) =>
+            {
+                Some(reference.clone())
+            }
+            VaultMutation::ChangeFieldKind {
+                reference,
+                kind: FieldKind::Text,
+            }
+            | VaultMutation::ConvertLegacy {
+                reference,
+                kind: FieldKind::Text,
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        };
+
         match &self.mutation {
             VaultMutation::SetField {
                 reference,
                 kind: FieldKind::Text,
                 value,
                 mode: VaultWriteMode::Replace,
-            } if value.is_empty() => Some(reference),
-            _ => None,
+            } if value.is_empty() => Some(MutationConfirmationKind::EmptyTextReplacement {
+                reference: reference.clone(),
+                redaction_downgrade: redaction_downgrade.is_some(),
+            }),
+            _ => redaction_downgrade
+                .map(|reference| MutationConfirmationKind::RedactionDowngrade { reference }),
         }
     }
 }

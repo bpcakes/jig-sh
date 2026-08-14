@@ -9,7 +9,10 @@ use tempfile::tempdir;
 use crate::{
     ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
     VaultDescriptor, VaultMutation,
-    model::{App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm, Screen},
+    model::{
+        App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm,
+        MutationConfirmation, MutationConfirmationKind, Screen,
+    },
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
     secret_input::SecretInput,
@@ -563,13 +566,14 @@ fn empty_text_replacement_requires_exact_clear_confirmation() {
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         RuntimeAction::Redraw
     ));
-    let Screen::ConfirmEmptyTextReplacement(confirmation) = &app.screen else {
+    let Screen::ConfirmMutation(confirmation) = &app.screen else {
         panic!("expected empty text replacement confirmation");
     };
-    assert_eq!(
-        confirmation.reference.to_string(),
-        "jig://Production/API_URL"
-    );
+    let MutationConfirmationKind::EmptyTextReplacement { reference, .. } = &confirmation.kind
+    else {
+        panic!("expected empty text replacement confirmation");
+    };
+    assert_eq!(reference.to_string(), "jig://Production/API_URL");
 
     let backend = TestBackend::new(100, 28);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -587,10 +591,7 @@ fn empty_text_replacement_requires_exact_clear_confirmation() {
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         RuntimeAction::Redraw
     ));
-    assert!(matches!(
-        &app.screen,
-        Screen::ConfirmEmptyTextReplacement(_)
-    ));
+    assert!(matches!(&app.screen, Screen::ConfirmMutation(_)));
     assert!(
         app.status
             .as_ref()
@@ -644,10 +645,54 @@ fn non_empty_text_replacement_does_not_require_clear_confirmation() {
 }
 
 #[test]
-fn kind_rename_and_item_rename_forms_emit_typed_actions() {
+fn concealed_to_text_requires_exact_warning_confirmation_but_upgrade_does_not() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;
     app.begin_change_kind();
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::ConfirmMutation(confirmation) = &app.screen else {
+        panic!("expected redaction downgrade confirmation");
+    };
+    let MutationConfirmationKind::RedactionDowngrade { reference } = &confirmation.kind else {
+        panic!("expected concealed-to-text confirmation");
+    };
+    assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Confirm redaction downgrade"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("not output-redaction needles"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Type TEXT exactly"), "{rendered}");
+
+    handle_paste(&mut app, "text");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::ConfirmMutation(_)));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("TEXT exactly"))
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "TEXT");
     match submit_key(&mut app) {
         VaultAction::Mutate {
             mutation: VaultMutation::ChangeFieldKind { reference, kind },
@@ -659,6 +704,71 @@ fn kind_rename_and_item_rename_forms_emit_typed_actions() {
         other => panic!("unexpected action: {other:?}"),
     }
 
+    app.apply_snapshot(snapshot());
+    let text_reference = "jig://Production/API_URL".parse().unwrap();
+    app.selected_item = Some(ItemIdentity::Canonical("Production".to_owned()));
+    app.selected_entry = Some(EntryIdentity::Field(text_reference));
+    app.focus = Focus::Fields;
+    app.begin_change_kind();
+    match submit_key(&mut app) {
+        VaultAction::Mutate {
+            mutation: VaultMutation::ChangeFieldKind { kind, .. },
+            ..
+        } => assert_eq!(kind, FieldKind::Concealed),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
+fn replacement_and_legacy_conversion_share_the_redaction_downgrade_policy() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_replace();
+    let Screen::Form(ManagementForm::WriteField { kind, .. }) = &mut app.screen else {
+        panic!("expected field replacement form");
+    };
+    *kind = FieldKind::Text;
+    handle_paste(&mut app, "replacement text");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(
+        app.screen,
+        Screen::ConfirmMutation(MutationConfirmation {
+            kind: MutationConfirmationKind::RedactionDowngrade { .. },
+            ..
+        })
+    ));
+
+    app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_convert();
+    let Screen::Form(ManagementForm::ConvertLegacy {
+        item, field, kind, ..
+    }) = &mut app.screen
+    else {
+        panic!("expected legacy conversion form");
+    };
+    *item = "Imported".to_owned();
+    *field = "TOKEN".to_owned();
+    *kind = FieldKind::Text;
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(
+        app.screen,
+        Screen::ConfirmMutation(MutationConfirmation {
+            kind: MutationConfirmationKind::RedactionDowngrade { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn field_and_item_rename_forms_emit_typed_actions() {
+    let mut app = browsing_app();
     app.apply_snapshot(snapshot());
     app.focus = Focus::Fields;
     app.begin_rename();
