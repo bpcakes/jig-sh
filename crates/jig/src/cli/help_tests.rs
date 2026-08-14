@@ -300,6 +300,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_tui_help, "five minutes");
     assert_help_contains(&vault_tui_help, "terminal-safe escaped");
     assert_help_contains(&vault_tui_help, "preview after a warning");
+    assert_help_contains(&vault_tui_help, "available only on Unix");
     assert_help_contains(&vault_tui_help, "There is no clipboard integration");
     assert_help_contains(&vault_tui_help, "exec, run, and inject");
 

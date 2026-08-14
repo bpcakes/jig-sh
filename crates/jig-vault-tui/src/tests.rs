@@ -9,7 +9,9 @@ use tempfile::tempdir;
 use crate::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
     ImportPreviewRow, VaultAction, VaultDescriptor, VaultMutation,
-    commands::{CommandAvailability, CommandOutcome, CommandPaletteScope, UiCommand},
+    commands::{
+        CommandAvailability, CommandOutcome, CommandPaletteScope, PlatformCapabilities, UiCommand,
+    },
     line_editor::{METADATA_INPUT_LIMIT, SEARCH_INPUT_LIMIT},
     model::{
         App, DeleteTarget, EntryIdentity, FieldWriteFocus, FieldWriteIntent, Focus, ItemIdentity,
@@ -1638,6 +1640,53 @@ fn help_and_footer_render_catalog_backed_action_discovery() {
 }
 
 #[test]
+fn platform_capabilities_gate_private_output_without_disabling_portable_actions() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.selected_entry = Some(EntryIdentity::Field(
+        "jig://Production/API_TOKEN".parse().unwrap(),
+    ));
+
+    for command in [
+        UiCommand::ExportField,
+        UiCommand::ImportOnePassword,
+        UiCommand::CreateBackup,
+    ] {
+        assert_eq!(
+            command.availability_with_capabilities(&app, PlatformCapabilities::PORTABLE_ONLY),
+            CommandAvailability::Disabled(
+                "Private file output is currently supported only on Unix."
+            ),
+            "{command:?}"
+        );
+        assert_eq!(command.availability(&app).is_enabled(), cfg!(unix));
+    }
+
+    for command in [UiCommand::PeekField, UiCommand::ChangePassphrase] {
+        assert_eq!(
+            command.availability_with_capabilities(&app, PlatformCapabilities::PORTABLE_ONLY),
+            CommandAvailability::Enabled,
+            "{command:?}"
+        );
+    }
+
+    app.selected_entry = None;
+    assert_eq!(
+        UiCommand::ExportField
+            .availability_with_capabilities(&app, PlatformCapabilities::PORTABLE_ONLY),
+        CommandAvailability::Disabled("Select a canonical field first.")
+    );
+
+    let absent = App::new(descriptor(false));
+    assert_eq!(
+        UiCommand::RestoreBackup
+            .availability_with_capabilities(&absent, PlatformCapabilities::PORTABLE_ONLY),
+        CommandAvailability::Disabled("Restore is currently supported only on Linux.")
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
     let mut app = browsing_app();
     handle_key(
@@ -1843,8 +1892,9 @@ fn import_preview_escape_emits_a_token_scoped_discard_action() {
     assert!(matches!(app.screen, Screen::Browse));
 }
 
+#[cfg(unix)]
 #[test]
-fn backup_and_passphrase_forms_emit_metadata_only_actions() {
+fn backup_form_emits_metadata_only_action() {
     let mut app = browsing_app();
     assert!(matches!(
         app.activate_direct_command(UiCommand::CreateBackup),
@@ -1863,8 +1913,11 @@ fn backup_and_passphrase_forms_emit_metadata_only_actions() {
         }
         other => panic!("unexpected action: {other:?}"),
     }
+}
 
-    app.apply_snapshot(snapshot());
+#[test]
+fn passphrase_form_emits_metadata_only_action() {
+    let mut app = browsing_app();
     assert!(matches!(
         app.activate_direct_command(UiCommand::ChangePassphrase),
         CommandOutcome::Redraw
@@ -1878,6 +1931,7 @@ fn backup_and_passphrase_forms_emit_metadata_only_actions() {
     assert!(matches!(action, VaultAction::ChangePassphrase { .. }));
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
     let mut app = App::new(descriptor(false));
@@ -1900,8 +1954,9 @@ fn absent_restore_form_protects_passphrase_and_requires_restore_text() {
     assert!(matches!(action, VaultAction::RestoreBackup { .. }));
 }
 
+#[cfg(unix)]
 #[test]
-fn export_and_peek_are_canonical_controlled_sinks() {
+fn export_form_emits_a_canonical_private_sink() {
     let mut app = browsing_app();
     handle_key(
         &mut app,
@@ -1928,6 +1983,15 @@ fn export_and_peek_are_canonical_controlled_sinks() {
     }
 
     app.apply_snapshot(snapshot());
+    select_legacy(&mut app);
+    app.begin_export();
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(app.status.as_ref().unwrap().text.contains("convert"));
+}
+
+#[test]
+fn peek_is_a_canonical_controlled_terminal_sink() {
+    let mut app = browsing_app();
     handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
@@ -1953,9 +2017,6 @@ fn export_and_peek_are_canonical_controlled_sinks() {
 
     app.apply_snapshot(snapshot());
     select_legacy(&mut app);
-    app.begin_export();
-    assert!(matches!(app.screen, Screen::Browse));
-    assert!(app.status.as_ref().unwrap().text.contains("convert"));
     app.begin_peek();
     assert!(matches!(app.screen, Screen::Browse));
     assert!(app.status.as_ref().unwrap().text.contains("convert"));

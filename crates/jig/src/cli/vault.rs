@@ -165,6 +165,10 @@ manager. The TUI browses metadata without decrypting on selection; manages
 canonical and legacy entries; imports a 1Password dotenv bundle; creates and
 restores encrypted backups; rotates the passphrase; and verifies safe activity.
 
+Private-output actions (field export, 1Password destination installation, and
+backup creation) are available only on Unix. Peek and passphrase rotation remain
+portable; restore remains Linux-only.
+
 Canonical fields can be exported directly to a hardened private file. The
 explicit Peek action bypasses Ratatui, shows a bounded terminal-safe escaped
 preview after a warning and exact confirmation, then clears it after one key or

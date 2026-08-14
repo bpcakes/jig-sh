@@ -39,12 +39,16 @@ pub(crate) struct PlatformCapabilities {
 impl PlatformCapabilities {
     const fn current() -> Self {
         Self {
-            // Preserve existing command availability until the platform policy
-            // change lands independently from this structural refactor.
-            private_output: true,
+            private_output: cfg!(unix),
             backup_restore: cfg!(target_os = "linux"),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) const PORTABLE_ONLY: Self = Self {
+        private_output: false,
+        backup_restore: false,
+    };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
