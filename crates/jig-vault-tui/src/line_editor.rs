@@ -26,6 +26,15 @@ pub(crate) enum LineEdit {
     Clear,
 }
 
+impl LineEdit {
+    pub(crate) const fn changes_text(self) -> bool {
+        matches!(
+            self,
+            Self::Backspace | Self::Delete | Self::DeleteWordLeft | Self::Clear
+        )
+    }
+}
+
 impl LineEditor {
     pub(crate) const fn new(max_bytes: usize) -> Self {
         Self {

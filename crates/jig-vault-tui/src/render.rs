@@ -17,6 +17,7 @@ use crate::{
         LegacyWriteFocus, ManagementForm, MutationConfirmation, MutationConfirmationKind,
         PeekConfirmation, RenameFieldFocus, Screen, StatusKind, kind_label,
     },
+    quick_access::{QuickAccess, QuickAccessTarget},
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
 };
 
@@ -67,6 +68,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::ConfirmMutation(_)
         | Screen::ConfirmDelete(_)
         | Screen::Commands(_)
+        | Screen::QuickAccess(_)
         | Screen::ToolForm(_)
         | Screen::ImportPreview(_)
         | Screen::Activity(_)
@@ -98,6 +100,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 }
                 Screen::Commands(palette) => {
                     draw_command_palette(frame, centered_rect(84, 76, area), app, palette)
+                }
+                Screen::QuickAccess(access) => {
+                    draw_quick_access(frame, centered_rect(92, 84, area), app, access)
                 }
                 Screen::ToolForm(form) => {
                     draw_tool_form(frame, centered_rect(82, 72, area), app, form);
@@ -501,12 +506,12 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         .is_some_and(|snapshot| snapshot.format_version == 1)
     {
         format!(
-            "READ-ONLY v1  / filter  Tab/h/l focus  j/k move  {}  ? help  q quit",
+            "READ-ONLY v1  / filter  Ctrl-P find  Tab/h/l focus  j/k move  {}  ? help  q quit",
             common_action_hints(app)
         )
     } else {
         format!(
-            "/ filter  Tab/h/l focus  j/k move  {}  ? help  q quit",
+            "/ filter  Ctrl-P find  Tab/h/l focus  j/k move  {}  ? help  q quit",
             common_action_hints(app)
         )
     };
@@ -597,6 +602,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
         Line::from("h/l or Tab   change focused pane"),
         Line::from("Home/End     first or last row"),
         Line::from("/            filter item, field, reference, or legacy metadata"),
+        Line::from("Ctrl-P       Quick Access for items, fields, and legacy metadata"),
         Line::from("Enter        actions for the current selection"),
         Line::from(":            search every available vault action"),
         Line::from("Text inputs  ←/→ cursor · Home/End · Ctrl-←/→ words · Ctrl-W delete word"),
@@ -1040,6 +1046,144 @@ fn draw_command_palette(frame: &mut Frame, area: Rect, app: &App, palette: &Comm
         )));
     }
     frame.render_widget(Paragraph::new(lines).block(panel("Command")), chunks[1]);
+}
+
+fn draw_quick_access(frame: &mut Frame, area: Rect, app: &App, access: &QuickAccess) {
+    frame.render_widget(Clear, area);
+    let footer_height = if app.status.is_some() { 6 } else { 5 };
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(footer_height)])
+        .split(area);
+    if outer[0].width >= 70 && outer[0].height >= 10 {
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+            .split(outer[0]);
+        draw_quick_access_list(frame, body[0], access);
+        draw_quick_access_preview(frame, body[1], access.selected_target());
+    } else {
+        draw_quick_access_list(frame, outer[0], access);
+    }
+
+    let mut query = vec![Span::styled("Find: ", Style::default().fg(ACCENT))];
+    query.extend(editor_spans(
+        &access.query,
+        true,
+        usize::from(outer[1].width.saturating_sub(8)),
+        Style::default().fg(ACCENT),
+    ));
+    let mut lines = vec![
+        Line::from(query),
+        Line::from("↑/↓ choose   PgUp/PgDn move   ←/→ cursor   Ctrl-←/→ words")
+            .style(Style::default().fg(MUTED)),
+        Line::from(
+            "Enter actions   Backspace/Delete edit   Ctrl-W word   Ctrl-U clear   Esc close",
+        )
+        .style(Style::default().fg(MUTED)),
+    ];
+    if let Some(status) = &app.status {
+        lines.push(Line::from(Span::styled(
+            status.text.clone(),
+            Style::default().fg(match status.kind {
+                StatusKind::Info => GOOD,
+                StatusKind::Error => BAD,
+            }),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines).block(panel("Metadata-only search")),
+        outer[1],
+    );
+}
+
+fn draw_quick_access_list(frame: &mut Frame, area: Rect, access: &QuickAccess) {
+    let visible = access.visible_indices();
+    let mut items = visible
+        .iter()
+        .filter_map(|index| access.targets.get(*index))
+        .map(|target| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{:<7} ", target.badge()),
+                    Style::default().fg(MUTED),
+                ),
+                Span::raw(sanitize_text(target.title())),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "No metadata matches.",
+            Style::default().fg(MUTED),
+        ))));
+    }
+    let selected = (!visible.is_empty()).then_some(access.selected);
+    let mut state = ListState::default()
+        .with_offset(access.list_offset_for_viewport(area.height))
+        .with_selected(selected);
+    frame.render_stateful_widget(
+        list(items, &format!("Quick Access · {}", visible.len())),
+        area,
+        &mut state,
+    );
+    access.set_list_offset(state.offset());
+}
+
+fn draw_quick_access_preview(frame: &mut Frame, area: Rect, target: Option<&QuickAccessTarget>) {
+    let lines = match target {
+        Some(QuickAccessTarget::Item { item, field_count }) => vec![
+            key_value("Type", "Item"),
+            key_value("Reference", &format!("jig://{item}")),
+            key_value("Fields", &field_count.to_string()),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Quick Access uses metadata only.",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        Some(QuickAccessTarget::Field { reference, kind }) => vec![
+            key_value("Type", "Field"),
+            key_value("Reference", &reference.to_string()),
+            key_value("Item", reference.item()),
+            key_value("Field", reference.field()),
+            key_value("Kind", kind_label(*kind)),
+            Line::from(""),
+            Line::from(Span::styled(
+                "The encrypted value is never loaded.",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        Some(QuickAccessTarget::LegacyGroup { entry_count }) => vec![
+            key_value("Type", "Legacy group"),
+            key_value("Entries", &entry_count.to_string()),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Legacy values remain encrypted and hidden.",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        Some(QuickAccessTarget::LegacyEntry { name }) => vec![
+            key_value("Type", "Legacy entry"),
+            key_value("Name", name),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Convert this entry before field-only actions.",
+                Style::default().fg(WARN),
+            )),
+            Line::from(Span::styled(
+                "The encrypted value is never loaded.",
+                Style::default().fg(MUTED),
+            )),
+        ],
+        None => vec![Line::from("No result selected.")],
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Selected metadata"))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {

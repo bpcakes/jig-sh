@@ -815,6 +815,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
         }
         Screen::ConfirmDelete(_) => return handle_delete_key(app, key),
         Screen::Commands(_) => return handle_command_palette_key(app, key),
+        Screen::QuickAccess(_) => return handle_quick_access_key(app, key),
         Screen::ToolForm(_) => return handle_tool_form_key(app, key),
         Screen::ImportPreview(_) => return handle_import_preview_key(app, key),
         Screen::Activity(_) => return handle_activity_key(app, key),
@@ -829,6 +830,11 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             };
         }
         Screen::Browse => {}
+    }
+
+    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
+        app.open_quick_access();
+        return RuntimeAction::Redraw;
     }
 
     if app.searching {
@@ -1138,6 +1144,63 @@ fn command_outcome(outcome: CommandOutcome) -> RuntimeAction {
     }
 }
 
+fn handle_quick_access_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
+    let action = match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => {
+            app.close_overlay();
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::Down, KeyModifiers::NONE) => {
+            app.move_quick_access_selection(1);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::Up, KeyModifiers::NONE) => {
+            app.move_quick_access_selection(-1);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::PageDown, KeyModifiers::NONE) => {
+            app.move_quick_access_selection(10);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::PageUp, KeyModifiers::NONE) => {
+            app.move_quick_access_selection(-10);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::Home, KeyModifiers::CONTROL) => {
+            app.move_quick_access_to_edge(false);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::End, KeyModifiers::CONTROL) => {
+            app.move_quick_access_to_edge(true);
+            Some(RuntimeAction::Redraw)
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            app.activate_quick_access();
+            Some(RuntimeAction::Redraw)
+        }
+        _ => None,
+    };
+    if let Some(action) = action {
+        return action;
+    }
+    if let Some(edit) = line_edit_from_key(key) {
+        app.edit_quick_access_query(edit);
+        return RuntimeAction::Redraw;
+    }
+    match key.code {
+        KeyCode::Char(character)
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            let mut encoded = [0; 4];
+            app.append_quick_access_query(character.encode_utf8(&mut encoded));
+            RuntimeAction::Redraw
+        }
+        _ => RuntimeAction::Ignore,
+    }
+}
+
 fn handle_activity_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
@@ -1310,6 +1373,9 @@ pub(crate) fn handle_paste(app: &mut App, value: &str) -> RuntimeAction {
         return RuntimeAction::Redraw;
     }
     if app.append_command_filter(value) {
+        return RuntimeAction::Redraw;
+    }
+    if app.append_quick_access_query(value) {
         return RuntimeAction::Redraw;
     }
     if app.searching {

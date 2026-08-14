@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::sanitize_text;
+use jig_tui::{FuzzyMatchScore, fuzzy_match_score, sanitize_text};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
@@ -284,9 +284,9 @@ impl HomeRow {
         }
     }
 
-    fn match_score(&self, needle: &str) -> Option<(usize, TextMatchScore)> {
+    fn match_score(&self, needle: &str) -> Option<(usize, FuzzyMatchScore)> {
         let mut matches = Vec::with_capacity(5);
-        if let Some(score) = field_match_score(&self.display_name, needle) {
+        if let Some(score) = fuzzy_match_score(&self.display_name, needle) {
             matches.push((0, score));
         }
         if let Inspection::Ready(details) = &self.inspection {
@@ -295,12 +295,12 @@ impl HomeRow {
                 (2, details.plan.clone()),
                 (3, details.status.clone()),
             ] {
-                if let Some(score) = field_match_score(&field, needle) {
+                if let Some(score) = fuzzy_match_score(&field, needle) {
                     matches.push((priority, score));
                 }
             }
         }
-        if let Some(score) = field_match_score(&self.display_path, needle) {
+        if let Some(score) = fuzzy_match_score(&self.display_path, needle) {
             matches.push((4, score));
         }
         matches.into_iter().min()
@@ -593,55 +593,4 @@ fn sanitize_value(value: &mut Value) {
         Value::Object(values) => values.values_mut().for_each(sanitize_value),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct TextMatchScore {
-    kind: u8,
-    span: usize,
-    start: usize,
-}
-
-fn field_match_score(haystack: &str, needle: &str) -> Option<TextMatchScore> {
-    let haystack = haystack.to_lowercase();
-    if haystack == needle {
-        return Some(TextMatchScore {
-            kind: 0,
-            span: 0,
-            start: 0,
-        });
-    }
-    if haystack.starts_with(needle) {
-        return Some(TextMatchScore {
-            kind: 1,
-            span: haystack.chars().count(),
-            start: 0,
-        });
-    }
-    if let Some(start) = haystack.find(needle) {
-        return Some(TextMatchScore {
-            kind: 2,
-            span: needle.chars().count(),
-            start,
-        });
-    }
-
-    let mut needle = needle.chars();
-    let mut expected = needle.next();
-    let mut start = None;
-    for (index, character) in haystack.chars().enumerate() {
-        if Some(character) == expected {
-            start.get_or_insert(index);
-            expected = needle.next();
-            if expected.is_none() {
-                let start = start.unwrap_or_default();
-                return Some(TextMatchScore {
-                    kind: 3,
-                    span: index.saturating_sub(start).saturating_add(1),
-                    start,
-                });
-            }
-        }
-    }
-    None
 }

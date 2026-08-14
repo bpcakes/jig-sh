@@ -15,6 +15,7 @@ use crate::{
         App, DeleteTarget, EntryIdentity, FieldWriteFocus, FieldWriteIntent, Focus, ItemIdentity,
         ManagementForm, MutationConfirmation, MutationConfirmationKind, Screen,
     },
+    quick_access::QuickAccessTarget,
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
     secret_input::SecretInput,
@@ -320,6 +321,193 @@ fn search_and_command_palette_share_insertion_cursor_behavior() {
         palette.selected_entry().map(|entry| entry.command),
         Some(UiCommand::CreateBackup)
     );
+}
+
+#[test]
+fn quick_access_fuzzy_searches_metadata_without_rendering_values() {
+    let mut app = browsing_app();
+    app.searching = true;
+    app.append_filter("old");
+
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        ),
+        RuntimeAction::Redraw
+    ));
+    assert!(!app.searching);
+    handle_paste(&mut app, "apiurl");
+
+    let Screen::QuickAccess(access) = &app.screen else {
+        panic!("expected Quick Access");
+    };
+    assert!(matches!(
+        access.selected_target(),
+        Some(QuickAccessTarget::Field { reference, kind })
+            if reference.to_string() == "jig://Production/API_URL"
+                && *kind == FieldKind::Text
+    ));
+
+    let backend = TestBackend::new(110, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Quick Access"), "{rendered}");
+    assert!(rendered.contains("jig://Production/API_URL"), "{rendered}");
+    assert!(
+        rendered.contains("encrypted value is never loaded"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn quick_access_searches_item_kind_and_legacy_metadata() {
+    let mut app = browsing_app();
+    app.open_quick_access();
+    handle_paste(&mut app, "staging");
+    let Screen::QuickAccess(access) = &app.screen else {
+        panic!("expected Quick Access");
+    };
+    assert!(matches!(
+        access.selected_target(),
+        Some(QuickAccessTarget::Item { item, .. }) if item == "Staging"
+    ));
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "concealed");
+    let Screen::QuickAccess(access) = &app.screen else {
+        panic!("expected Quick Access");
+    };
+    assert!(matches!(
+        access.selected_target(),
+        Some(QuickAccessTarget::Field { kind, .. }) if *kind == FieldKind::Concealed
+    ));
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "oldtoken");
+    let Screen::QuickAccess(access) = &app.screen else {
+        panic!("expected Quick Access");
+    };
+    assert!(matches!(
+        access.selected_target(),
+        Some(QuickAccessTarget::LegacyEntry { name }) if name == "old_token"
+    ));
+}
+
+#[test]
+fn quick_access_hands_the_exact_target_to_context_actions() {
+    let mut app = browsing_app();
+    app.open_quick_access();
+    handle_paste(&mut app, "apiurl");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+
+    assert_eq!(
+        app.selected_item,
+        Some(ItemIdentity::Canonical("Production".to_owned()))
+    );
+    assert_eq!(
+        app.selected_entry,
+        Some(EntryIdentity::Field(
+            "jig://Production/API_URL".parse().unwrap()
+        ))
+    );
+    assert_eq!(app.focus, Focus::Fields);
+    let Screen::Commands(palette) = &app.screen else {
+        panic!("expected contextual actions");
+    };
+    assert_eq!(palette.scope, CommandPaletteScope::Context);
+    assert!(
+        palette
+            .entries
+            .iter()
+            .any(|entry| entry.command == UiCommand::ReplaceValue)
+    );
+    assert!(
+        palette
+            .entries
+            .iter()
+            .any(|entry| entry.command == UiCommand::ChangeKind)
+    );
+}
+
+#[test]
+fn quick_access_rejects_query_overflow_and_recovers_from_no_matches() {
+    let mut app = browsing_app();
+    app.open_quick_access();
+    handle_paste(&mut app, "api");
+    handle_paste(&mut app, &"x".repeat(SEARCH_INPUT_LIMIT));
+    let Screen::QuickAccess(access) = &app.screen else {
+        panic!("expected Quick Access");
+    };
+    assert_eq!(access.query.as_str(), "api");
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("interactive size limit"))
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "no-such-metadata");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(app.screen, Screen::QuickAccess(_)));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("No metadata matches"))
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    assert!(app.status.is_none());
+}
+
+#[test]
+fn compact_quick_access_keeps_far_selection_visible_when_navigation_reverses() {
+    let mut expanded = snapshot();
+    let template = expanded.fields[0].clone();
+    expanded.fields = (0..40)
+        .map(|index| {
+            let mut field = template.clone();
+            field.reference = format!("jig://Bulk/FIELD_{index:02}").parse().unwrap();
+            field
+        })
+        .collect();
+    expanded.legacy_secrets.clear();
+    let mut app = App::new(descriptor(true));
+    app.apply_snapshot(expanded);
+    app.open_quick_access();
+    handle_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL));
+
+    let backend = TestBackend::new(64, 16);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let at_end = terminal.backend().to_string();
+    assert!(at_end.contains("FIELD_39"), "{at_end}");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let reversed = terminal.backend().to_string();
+    assert!(reversed.contains("FIELD_38"), "{reversed}");
+    assert!(reversed.contains("FIELD_39"), "{reversed}");
 }
 
 #[test]

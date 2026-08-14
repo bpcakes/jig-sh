@@ -70,6 +70,64 @@ pub fn sanitize_text(text: &str) -> String {
         .collect()
 }
 
+/// Deterministic quality score for a case-insensitive fuzzy text match.
+///
+/// Exact, prefix, substring, and ordered-subsequence matches sort in that
+/// order. Lower scores are better; `None` means the query is not a subsequence
+/// of the candidate.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FuzzyMatchScore {
+    kind: u8,
+    span: usize,
+    start: usize,
+}
+
+/// Scores a case-insensitive fuzzy match without retaining either input.
+pub fn fuzzy_match_score(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
+    let candidate = candidate.to_lowercase();
+    let query = query.to_lowercase();
+    if candidate == query {
+        return Some(FuzzyMatchScore {
+            kind: 0,
+            span: 0,
+            start: 0,
+        });
+    }
+    if candidate.starts_with(&query) {
+        return Some(FuzzyMatchScore {
+            kind: 1,
+            span: candidate.chars().count(),
+            start: 0,
+        });
+    }
+    if let Some(start) = candidate.find(&query) {
+        return Some(FuzzyMatchScore {
+            kind: 2,
+            span: query.chars().count(),
+            start,
+        });
+    }
+
+    let mut query = query.chars();
+    let mut expected = query.next();
+    let mut start = None;
+    for (index, character) in candidate.chars().enumerate() {
+        if Some(character) == expected {
+            start.get_or_insert(index);
+            expected = query.next();
+            if expected.is_none() {
+                let start = start.unwrap_or_default();
+                return Some(FuzzyMatchScore {
+                    kind: 3,
+                    span: index.saturating_sub(start).saturating_add(1),
+                    start,
+                });
+            }
+        }
+    }
+    None
+}
+
 fn is_unsafe_format_character(character: char) -> bool {
     matches!(
         character,
@@ -335,6 +393,27 @@ mod tests {
             sanitize_text("safe\u{1b}[31m\u{202e}text\u{2069}\u{200c}\u{200d}"),
             "safe\u{fffd}[31m\u{fffd}text\u{fffd}\u{200c}\u{200d}"
         );
+    }
+
+    #[test]
+    fn fuzzy_match_scores_exact_prefix_substring_and_subsequence_in_order() {
+        let exact = fuzzy_match_score("Vault", "vault").unwrap();
+        let prefix = fuzzy_match_score("vault item", "vault").unwrap();
+        let substring = fuzzy_match_score("open vault item", "vault").unwrap();
+        let subsequence = fuzzy_match_score("very agile useful local tool", "vault").unwrap();
+        assert!(exact < prefix);
+        assert!(prefix < substring);
+        assert!(substring < subsequence);
+        assert!(fuzzy_match_score("secret", "vault").is_none());
+    }
+
+    #[test]
+    fn fuzzy_subsequence_prefers_tighter_and_earlier_matches() {
+        let tight = fuzzy_match_score("a-b-c", "abc").unwrap();
+        let broad = fuzzy_match_score("a---b---c", "abc").unwrap();
+        let late = fuzzy_match_score("xxa-b-c", "abc").unwrap();
+        assert!(tight < broad);
+        assert!(tight < late);
     }
 
     #[test]

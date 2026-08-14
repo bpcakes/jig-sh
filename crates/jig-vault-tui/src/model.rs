@@ -11,6 +11,7 @@ use crate::{
     VaultPresence, VaultUiError,
     commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
     line_editor::{LineEdit, LineEditor},
+    quick_access::{QuickAccess, QuickAccessSelection},
     secret_input::SecretInput,
     tools::{ToolActivation, ToolChoice, ToolForm},
 };
@@ -184,6 +185,7 @@ impl App {
                 | Screen::ConfirmMutation(_)
                 | Screen::ConfirmDelete(_)
                 | Screen::Commands(_)
+                | Screen::QuickAccess(_)
                 | Screen::ToolForm(_)
                 | Screen::Activity(_)
                 | Screen::AuditResult(_)
@@ -318,6 +320,75 @@ impl App {
         if let Screen::Commands(palette) = &mut self.screen {
             palette.edit_filter(edit);
         }
+    }
+
+    pub(crate) fn open_quick_access(&mut self) {
+        if self.snapshot.is_none() {
+            return;
+        }
+        self.screen = Screen::QuickAccess(QuickAccess::for_app(self));
+        self.searching = false;
+        self.status = None;
+    }
+
+    pub(crate) fn move_quick_access_selection(&mut self, delta: isize) {
+        if let Screen::QuickAccess(access) = &mut self.screen {
+            access.move_selection(delta);
+        }
+    }
+
+    pub(crate) fn move_quick_access_to_edge(&mut self, end: bool) {
+        if let Screen::QuickAccess(access) = &mut self.screen {
+            access.move_to_edge(end);
+        }
+    }
+
+    pub(crate) fn append_quick_access_query(&mut self, value: &str) -> bool {
+        let Screen::QuickAccess(access) = &mut self.screen else {
+            return false;
+        };
+        if !access.append_query(value) {
+            self.set_error("Quick Access query exceeds the interactive size limit.");
+        } else {
+            self.status = None;
+        }
+        true
+    }
+
+    pub(crate) fn edit_quick_access_query(&mut self, edit: LineEdit) {
+        if let Screen::QuickAccess(access) = &mut self.screen {
+            access.edit_query(edit);
+            self.status = None;
+        }
+    }
+
+    pub(crate) fn activate_quick_access(&mut self) {
+        let selection = match &self.screen {
+            Screen::QuickAccess(access) => {
+                access.selected_target().map(|target| target.selection())
+            }
+            _ => None,
+        };
+        let Some(selection) = selection else {
+            self.set_error("No metadata matches the current Quick Access query.");
+            return;
+        };
+        self.filter.clear();
+        match selection {
+            QuickAccessSelection::Item(item) => {
+                self.selected_item = Some(item);
+                self.selected_entry = None;
+                self.focus = Focus::Items;
+                self.reconcile_entry();
+            }
+            QuickAccessSelection::Entry { item, entry } => {
+                self.selected_item = Some(item);
+                self.selected_entry = Some(entry);
+                self.focus = Focus::Fields;
+            }
+        }
+        self.screen = Screen::Browse;
+        self.open_command_palette(CommandPaletteScope::Context);
     }
 
     pub(crate) fn activate_selected_command(&mut self) -> CommandOutcome {
@@ -1219,6 +1290,7 @@ pub(crate) enum Screen {
     ConfirmMutation(MutationConfirmation),
     ConfirmDelete(DeleteConfirmation),
     Commands(CommandPalette),
+    QuickAccess(QuickAccess),
     ToolForm(ToolForm),
     ImportPreview(ImportPreviewState),
     Activity(ActivityView),

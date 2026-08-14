@@ -19,7 +19,7 @@ controls, and find any item or field quickly without exposing a value.
   and Enter-driven actions.
 - [x] Add a metadata-only line editor with cursor movement, deletion, word
   editing, bounded insertion, visible cursor, and horizontal viewport behavior.
-- [ ] Add metadata-only Quick Access with shared fuzzy ranking, result preview,
+- [x] Add metadata-only Quick Access with shared fuzzy ranking, result preview,
   scrolling, and action handoff.
 - [ ] Build the development Jig binary, run configured gates, inspect evidence,
   update this plan, close structured work, and push the commits to PR #4.

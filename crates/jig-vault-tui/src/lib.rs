@@ -17,6 +17,7 @@ mod commands;
 mod line_editor;
 mod model;
 mod peek;
+mod quick_access;
 mod render;
 mod runtime;
 mod secret_input;
