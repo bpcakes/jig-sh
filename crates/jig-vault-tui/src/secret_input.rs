@@ -7,6 +7,13 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+};
 
 use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes};
 use zeroize::Zeroizing;
@@ -81,10 +88,10 @@ impl SecretInput {
         let metadata = std::fs::symlink_metadata(path).map_err(|error| {
             SecretInputFileError::new(path_label.clone(), "inspect", error.kind())
         })?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        if !is_real_regular_file(&metadata) {
             return Err(SecretInputFileError::invalid(
                 path_label,
-                "value source must be a regular file and must not be a symlink",
+                "value source must be a regular file and must not be a symlink or reparse point",
             ));
         }
         if metadata.len() > MAX_SECRET_VALUE_LEN as u64 {
@@ -98,10 +105,10 @@ impl SecretInput {
         let opened = file.metadata().map_err(|error| {
             SecretInputFileError::new(path.to_path_buf(), "inspect opened", error.kind())
         })?;
-        if !opened.is_file() {
+        if !is_real_regular_file(&opened) {
             return Err(SecretInputFileError::invalid(
                 path.to_path_buf(),
-                "opened value source is not a regular file",
+                "opened value source is not a real regular file",
             ));
         }
 
@@ -199,5 +206,21 @@ fn open_value_file(path: &Path) -> std::io::Result<File> {
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
+}
+
+fn is_real_regular_file(metadata: &std::fs::Metadata) -> bool {
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }

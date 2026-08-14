@@ -133,6 +133,31 @@ fn protected_input_rejects_symlink_value_sources() {
     assert!(error.contains("must not be a symlink"), "{error}");
 }
 
+#[cfg(windows)]
+#[test]
+fn protected_input_rejects_windows_reparse_value_sources() {
+    use std::os::windows::fs::symlink_file;
+
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("value.bin");
+    let link = temp.path().join("value-link.bin");
+    std::fs::write(&source, b"safe-size-secret").unwrap();
+    if let Err(error) = symlink_file(&source, &link) {
+        if error.kind() == std::io::ErrorKind::PermissionDenied
+            || error.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32)
+        {
+            return;
+        }
+        panic!("failed to create Windows symlink fixture: {error}");
+    }
+
+    let error = SecretInput::from_regular_file(&link)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("symlink or reparse point"), "{error}");
+}
+
 #[test]
 fn snapshot_keeps_canonical_and_legacy_entries_separate() {
     let app = browsing_app();
