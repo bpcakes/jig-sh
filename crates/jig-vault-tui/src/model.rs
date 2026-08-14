@@ -1289,17 +1289,26 @@ impl ManagementForm {
                     }),
                 })
             }
-            Self::ChangeKind { reference, to, .. } => Ok(FormSubmission {
-                action: VaultAction::ChangeFieldKind {
-                    reference: reference.clone(),
-                    kind: *to,
-                },
-                label: "Changing field kind",
-                selection: Some(SelectionHint {
-                    item: ItemIdentity::Canonical(reference.item().to_owned()),
-                    entry: Some(EntryIdentity::Field(reference.clone())),
-                }),
-            }),
+            Self::ChangeKind {
+                reference,
+                from,
+                to,
+            } => {
+                if from == to {
+                    return Err("Choose a different field kind before saving.".to_owned());
+                }
+                Ok(FormSubmission {
+                    action: VaultAction::ChangeFieldKind {
+                        reference: reference.clone(),
+                        kind: *to,
+                    },
+                    label: "Changing field kind",
+                    selection: Some(SelectionHint {
+                        item: ItemIdentity::Canonical(reference.item().to_owned()),
+                        entry: Some(EntryIdentity::Field(reference.clone())),
+                    }),
+                })
+            }
             Self::RenameField {
                 source,
                 destination_item,

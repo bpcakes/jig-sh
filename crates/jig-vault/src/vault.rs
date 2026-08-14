@@ -312,7 +312,9 @@ impl Vault {
     }
 
     /// Changes one field's encrypted handling kind without exposing or
-    /// rewriting its value through a caller-visible plaintext buffer.
+    /// rewriting its value through a caller-visible plaintext buffer. Asking
+    /// for the current kind returns `changed: false` without rewriting state
+    /// or appending an audit event.
     ///
     /// # Errors
     ///
@@ -1581,13 +1583,14 @@ impl VaultStore {
         kind: FieldKind,
     ) -> Result<FieldKindChangeResult> {
         let audit_reference = reference.clone();
-        self.edit_with_audit(
+        self.edit_with_audit_if(
             passphrase,
             AuditAction::FieldKindChange,
             |vault| {
                 vault.ensure_field_format_v2()?;
                 vault.change_field_kind(reference, kind)
             },
+            |result| result.changed,
             |result| {
                 serde_json::json!({
                     "reference": audit_reference.to_string(),

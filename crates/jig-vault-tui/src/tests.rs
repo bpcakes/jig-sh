@@ -616,6 +616,31 @@ fn legacy_create_replace_convert_and_delete_are_explicit() {
 }
 
 #[test]
+fn change_kind_form_rejects_noop_selection() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_change_kind();
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(
+        app.screen,
+        Screen::Form(ManagementForm::ChangeKind { from, to, .. }) if from == to
+    ));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("different field kind"))
+    );
+}
+
+#[test]
 fn field_and_item_deletion_require_exact_typed_confirmation() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;

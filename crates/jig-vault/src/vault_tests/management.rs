@@ -175,10 +175,20 @@ fn field_kind_change_preserves_value_and_creation_time() {
     assert!(result.changed);
     assert_eq!(result.previous_kind, FieldKind::Concealed);
     assert_eq!(result.kind, FieldKind::Text);
+    let before_noop_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_noop_audit = vault.store.read_audit_text().unwrap().unwrap();
     let unchanged = vault
         .change_field_kind(&passphrase(), reference.clone(), FieldKind::Text)
         .unwrap();
     assert!(!unchanged.changed);
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_noop_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_noop_audit
+    );
 
     let after = vault.snapshot(&passphrase()).unwrap().fields.remove(0);
     assert_eq!(after.created_at_ms, before.created_at_ms);
