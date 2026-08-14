@@ -48,7 +48,12 @@ pub(crate) fn run(request: VaultTuiRequest, initial_passphrase: Option<SecretByt
 struct VaultTuiBackend {
     resolved: ResolvedVaultRuntime,
     descriptor: VaultDescriptor,
-    credential: Mutex<Option<SecretString>>,
+    session: Mutex<VaultTuiSession>,
+}
+
+#[derive(Default)]
+struct VaultTuiSession {
+    credential: Option<SecretString>,
 }
 
 impl VaultTuiBackend {
@@ -67,14 +72,12 @@ impl VaultTuiBackend {
         Ok(Self {
             resolved,
             descriptor,
-            credential: Mutex::new(None),
+            session: Mutex::new(VaultTuiSession::default()),
         })
     }
 
-    fn credential(
-        &self,
-    ) -> std::result::Result<MutexGuard<'_, Option<SecretString>>, VaultUiError> {
-        self.credential.lock().map_err(|_| {
+    fn session(&self) -> std::result::Result<MutexGuard<'_, VaultTuiSession>, VaultUiError> {
+        self.session.lock().map_err(|_| {
             VaultUiError::new(
                 VaultUiErrorKind::Other,
                 "Vault TUI credential state is unavailable.",
@@ -99,8 +102,8 @@ impl VaultTuiBackend {
     ) -> std::result::Result<T, VaultUiError> {
         // Holding this mutex for the complete core call makes `lock()` wait for
         // an in-flight non-cancellable operation before dropping credentials.
-        let credential = self.credential()?;
-        let passphrase = credential.as_ref().ok_or_else(|| {
+        let session = self.session()?;
+        let passphrase = session.credential.as_ref().ok_or_else(|| {
             VaultUiError::new(VaultUiErrorKind::Authentication, "Vault is locked.")
         })?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
@@ -235,17 +238,22 @@ impl VaultTuiBackend {
         new_passphrase: SecretBytes,
     ) -> std::result::Result<VaultSnapshot, VaultUiError> {
         let new_passphrase = Self::passphrase_from_bytes(new_passphrase)?;
-        let mut credential = self.credential()?;
-        let current = credential.as_ref().ok_or_else(|| {
+        let mut session = self.session()?;
+        let current = session.credential.as_ref().ok_or_else(|| {
             VaultUiError::new(VaultUiErrorKind::Authentication, "Vault is locked.")
         })?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
         selected
             .change_passphrase(current, &new_passphrase)
             .map_err(map_vault_error)?;
-        *credential = Some(new_passphrase);
+        session.credential = Some(new_passphrase);
         selected
-            .snapshot(credential.as_ref().expect("new credential was installed"))
+            .snapshot(
+                session
+                    .credential
+                    .as_ref()
+                    .expect("new credential was installed"),
+            )
             .map_err(map_vault_error)
     }
 }
@@ -259,7 +267,7 @@ impl VaultBackend for VaultTuiBackend {
         let passphrase = Self::passphrase_from_bytes(passphrase)?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
         let snapshot = selected.snapshot(&passphrase).map_err(map_vault_error)?;
-        *self.credential()? = Some(passphrase);
+        self.session()?.credential = Some(passphrase);
         Ok(snapshot)
     }
 
@@ -271,13 +279,13 @@ impl VaultBackend for VaultTuiBackend {
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
         selected.init(&passphrase).map_err(map_vault_error)?;
         let snapshot = selected.snapshot(&passphrase).map_err(map_vault_error)?;
-        *self.credential()? = Some(passphrase);
+        self.session()?.credential = Some(passphrase);
         Ok(snapshot)
     }
 
     fn lock(&self) {
-        if let Ok(mut credential) = self.credential.lock() {
-            *credential = None;
+        if let Ok(mut session) = self.session.lock() {
+            session.credential = None;
         }
     }
 
