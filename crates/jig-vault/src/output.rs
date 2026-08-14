@@ -16,7 +16,55 @@ pub struct PreparedPrivateFile {
     byte_len: usize,
 }
 
+/// Opaque observation of one private output destination.
+///
+/// This value binds a later preparation to the exact destination state seen
+/// during preview. It is intentionally non-cloneable so callers consume the
+/// approval once instead of silently reusing stale filesystem authority.
+pub struct PrivateFilePrecondition {
+    inner: PrivateDestinationPrecondition,
+    destination: PathBuf,
+    destination_exists: bool,
+}
+
+impl PrivateFilePrecondition {
+    /// Reports whether the exact previewed destination existed.
+    pub const fn destination_exists(&self) -> bool {
+        self.destination_exists
+    }
+}
+
+impl fmt::Debug for PrivateFilePrecondition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivateFilePrecondition")
+            .field("destination", &self.destination)
+            .field("destination_exists", &self.destination_exists)
+            .finish_non_exhaustive()
+    }
+}
+
 impl PreparedPrivateFile {
+    /// Captures the current hardened destination state without creating a file.
+    ///
+    /// The returned precondition can be consumed by
+    /// [`Self::prepare_if_unchanged`] after an operator approves a preview.
+    /// Existing compatibility APIs continue to express ordinary create/upsert
+    /// policy without retaining a preview observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination cannot be hardened or inspected.
+    pub fn preview(destination: &Path) -> Result<PrivateFilePrecondition> {
+        let inner =
+            preview_private_destination(destination).map_err(output_failure_to_vault_error)?;
+        Ok(PrivateFilePrecondition {
+            destination: destination.to_path_buf(),
+            destination_exists: private_destination_exists(&inner),
+            inner,
+        })
+    }
+
     /// Validates a destination and overwrite policy without creating a file.
     ///
     /// This is suitable for dry-run reporting. It checks the same supported
@@ -46,6 +94,41 @@ impl PreparedPrivateFile {
             inner,
             destination: destination.to_path_buf(),
             overwrite,
+            byte_len,
+        })
+    }
+
+    /// Writes and syncs an owner-only temporary file only when the destination
+    /// still matches a previously captured preview.
+    ///
+    /// When the preview observed an existing regular file, `allow_replace`
+    /// must be true and that same file identity must remain installed. When it
+    /// observed absence, installation remains atomic no-clobber even if
+    /// `allow_replace` is true. This prevents a broad overwrite permission from
+    /// authorizing a different destination than the operator reviewed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination changed since preview, replacement
+    /// was not authorized, or private preparation fails.
+    pub fn prepare_if_unchanged(
+        precondition: PrivateFilePrecondition,
+        contents: SecretBytes,
+        allow_replace: bool,
+    ) -> Result<Self> {
+        let PrivateFilePrecondition {
+            inner,
+            destination,
+            destination_exists,
+        } = precondition;
+        let byte_len = contents.len();
+        let prepared =
+            prepare_private_bytes_if_unchanged(inner, contents.as_slice(), allow_replace)
+                .map_err(output_failure_to_vault_error)?;
+        Ok(Self {
+            inner: prepared,
+            destination,
+            overwrite: destination_exists,
             byte_len,
         })
     }
@@ -124,12 +207,36 @@ pub(crate) fn install_private_bytes(
 type PreparedPrivateOutput = unix::PreparedPrivateOutput;
 
 #[cfg(unix)]
+type PrivateDestinationPrecondition = unix::PrivateDestinationPrecondition;
+
+#[cfg(unix)]
 fn prepare_private_bytes(
     path: &Path,
     bytes: &[u8],
     overwrite: bool,
 ) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
     unix::prepare_private_bytes(path, bytes, overwrite)
+}
+
+#[cfg(unix)]
+fn preview_private_destination(
+    path: &Path,
+) -> std::result::Result<PrivateDestinationPrecondition, OutputInstallFailure> {
+    unix::preview_private_destination(path)
+}
+
+#[cfg(unix)]
+fn private_destination_exists(precondition: &PrivateDestinationPrecondition) -> bool {
+    precondition.destination_exists()
+}
+
+#[cfg(unix)]
+fn prepare_private_bytes_if_unchanged(
+    precondition: PrivateDestinationPrecondition,
+    bytes: &[u8],
+    allow_replace: bool,
+) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
+    unix::prepare_private_bytes_if_unchanged(precondition, bytes, allow_replace)
 }
 
 #[cfg(unix)]
@@ -151,12 +258,36 @@ fn preflight_private_destination(
 struct PreparedPrivateOutput;
 
 #[cfg(not(unix))]
+struct PrivateDestinationPrecondition;
+
+#[cfg(not(unix))]
 fn prepare_private_bytes(
     path: &Path,
     _bytes: &[u8],
     _overwrite: bool,
 ) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
     Err(unsupported_private_output(path))
+}
+
+#[cfg(not(unix))]
+fn preview_private_destination(
+    path: &Path,
+) -> std::result::Result<PrivateDestinationPrecondition, OutputInstallFailure> {
+    Err(unsupported_private_output(path))
+}
+
+#[cfg(not(unix))]
+const fn private_destination_exists(_: &PrivateDestinationPrecondition) -> bool {
+    unreachable!("unsupported platforms cannot construct private destination preconditions")
+}
+
+#[cfg(not(unix))]
+fn prepare_private_bytes_if_unchanged(
+    _precondition: PrivateDestinationPrecondition,
+    _bytes: &[u8],
+    _allow_replace: bool,
+) -> std::result::Result<PreparedPrivateOutput, OutputInstallFailure> {
+    unreachable!("unsupported platforms cannot construct private destination preconditions")
 }
 
 #[cfg(not(unix))]
@@ -213,16 +344,66 @@ mod unix {
             })
     }
 
+    pub(super) fn preview_private_destination(
+        path: &Path,
+    ) -> Result<PrivateDestinationPrecondition, OutputInstallFailure> {
+        preview(path).map_err(|error| OutputInstallFailure {
+            stage: OutputFailureStage::Preflight,
+            kind: preflight_error_kind(&error),
+            error,
+        })
+    }
+
     pub(super) fn prepare_private_bytes(
         path: &Path,
         bytes: &[u8],
         overwrite: bool,
     ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
-        let mut path = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
+        let path = preflight(path, overwrite).map_err(|error| OutputInstallFailure {
             stage: OutputFailureStage::Preflight,
             kind: preflight_error_kind(&error),
             error,
         })?;
+        prepare_bytes(
+            path,
+            bytes,
+            if overwrite {
+                InstallPolicy::Upsert
+            } else {
+                InstallPolicy::Create
+            },
+        )
+    }
+
+    pub(super) fn prepare_private_bytes_if_unchanged(
+        precondition: PrivateDestinationPrecondition,
+        bytes: &[u8],
+        allow_replace: bool,
+    ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
+        let result = (|| -> anyhow::Result<_> {
+            if precondition.destination_exists() && !allow_replace {
+                return Err(anyhow!(
+                    "private vault output already exists at {}; enable replacement to replace it",
+                    precondition.destination.display()
+                ));
+            }
+            validate_precondition(&precondition)?;
+            let policy = InstallPolicy::Exact(precondition.state);
+            Ok((prepared_path(&precondition)?, policy))
+        })();
+        let (path, policy) = result.map_err(|error| OutputInstallFailure {
+            stage: OutputFailureStage::Preflight,
+            kind: preflight_error_kind(&error),
+            error,
+        })?;
+        prepare_bytes(path, bytes, policy)
+    }
+
+    fn prepare_bytes(
+        mut path: PreparedPath,
+        bytes: &[u8],
+        policy: InstallPolicy,
+    ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
         path.temporary_identity = match write_temporary(&path, bytes) {
             Ok(identity) => Some(identity),
             Err(error) => {
@@ -238,13 +419,13 @@ mod unix {
         };
         Ok(PreparedPrivateOutput {
             path: Some(path),
-            overwrite,
+            policy,
         })
     }
 
     pub(super) struct PreparedPrivateOutput {
         path: Option<PreparedPath>,
-        overwrite: bool,
+        policy: InstallPolicy,
     }
 
     impl PreparedPrivateOutput {
@@ -253,7 +434,7 @@ mod unix {
                 .path
                 .take()
                 .expect("prepared private output installs at most once");
-            install(path, self.overwrite).map_err(|error| OutputInstallFailure {
+            install(path, self.policy).map_err(|error| OutputInstallFailure {
                 stage: OutputFailureStage::Sink,
                 kind: install_error_kind(&error),
                 error,
@@ -276,16 +457,54 @@ mod unix {
         temporary_identity: Option<FileIdentity>,
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct FileIdentity {
         device: u64,
         inode: u64,
         owner: u32,
+        byte_len: u64,
+        changed_at_secs: i64,
+        changed_at_nanos: i64,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum DestinationState {
+        Absent,
+        Existing(FileIdentity),
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum InstallPolicy {
+        Create,
+        Upsert,
+        Exact(DestinationState),
+    }
+
+    pub(super) struct PrivateDestinationPrecondition {
+        destination: PathBuf,
+        parent: PathBuf,
+        state: DestinationState,
+    }
+
+    impl PrivateDestinationPrecondition {
+        pub(super) const fn destination_exists(&self) -> bool {
+            matches!(self.state, DestinationState::Existing(_))
+        }
     }
 
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
-        let file_name = path
-            .file_name()
+        let precondition = preview(path)?;
+        if precondition.destination_exists() && !overwrite {
+            return Err(anyhow!(
+                "private vault output already exists at {}; pass --overwrite to replace it",
+                path.display()
+            ));
+        }
+        prepared_path(&precondition)
+    }
+
+    fn preview(path: &Path) -> anyhow::Result<PrivateDestinationPrecondition> {
+        path.file_name()
             .ok_or_else(|| anyhow!("vault output path must name a file: {}", path.display()))?;
         let parent = match path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
@@ -307,8 +526,24 @@ mod unix {
                 parent.display()
             );
         }
-        inspect_destination(path, overwrite)?;
+        let state = destination_state(path)?;
 
+        Ok(PrivateDestinationPrecondition {
+            destination: path.to_path_buf(),
+            parent,
+            state,
+        })
+    }
+
+    fn prepared_path(
+        precondition: &PrivateDestinationPrecondition,
+    ) -> anyhow::Result<PreparedPath> {
+        let file_name = precondition.destination.file_name().ok_or_else(|| {
+            anyhow!(
+                "vault output path must name a file: {}",
+                precondition.destination.display()
+            )
+        })?;
         let mut temporary_name = OsString::from(".");
         temporary_name.push(file_name);
         temporary_name.push(format!(
@@ -317,11 +552,23 @@ mod unix {
             ulid::Ulid::new()
         ));
         Ok(PreparedPath {
-            destination: path.to_path_buf(),
-            temporary: parent.join(temporary_name),
-            parent,
+            destination: precondition.destination.clone(),
+            temporary: precondition.parent.join(temporary_name),
+            parent: precondition.parent.clone(),
             temporary_identity: None,
         })
+    }
+
+    fn validate_precondition(precondition: &PrivateDestinationPrecondition) -> anyhow::Result<()> {
+        reject_symlinked_ancestors(&precondition.parent)?;
+        let current = destination_state(&precondition.destination)?;
+        if current != precondition.state {
+            bail!(
+                "private vault output destination changed since preview at {}; preview again",
+                precondition.destination.display()
+            );
+        }
+        Ok(())
     }
 
     fn write_temporary(prepared: &PreparedPath, bytes: &[u8]) -> anyhow::Result<FileIdentity> {
@@ -371,14 +618,10 @@ mod unix {
                 prepared.destination.display()
             )
         })?;
-        Ok(FileIdentity {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            owner: metadata.uid(),
-        })
+        Ok(file_identity(&metadata))
     }
 
-    fn install(prepared: PreparedPath, overwrite: bool) -> anyhow::Result<()> {
+    fn install(prepared: PreparedPath, policy: InstallPolicy) -> anyhow::Result<()> {
         let PreparedPath {
             destination,
             parent,
@@ -392,9 +635,12 @@ mod unix {
             // narrows same-user directory-entry races without claiming an OS
             // isolation boundary stronger than the containing directory.
             reject_symlinked_ancestors(&parent)?;
-            inspect_destination(&destination, overwrite)?;
+            validate_install_policy(&destination, policy)?;
             validate_temporary_identity(&temporary, temporary_identity)?;
-            if overwrite {
+            if matches!(
+                policy,
+                InstallPolicy::Upsert | InstallPolicy::Exact(DestinationState::Existing(_))
+            ) {
                 fs::rename(&temporary, &destination).with_context(|| {
                     format!(
                         "failed to atomically replace private vault output {}",
@@ -435,6 +681,23 @@ mod unix {
         result
     }
 
+    fn validate_install_policy(path: &Path, policy: InstallPolicy) -> anyhow::Result<()> {
+        let current = destination_state(path)?;
+        match policy {
+            InstallPolicy::Create if current == DestinationState::Absent => Ok(()),
+            InstallPolicy::Create => Err(anyhow!(
+                "private vault output already exists at {}; pass --overwrite to replace it",
+                path.display()
+            )),
+            InstallPolicy::Upsert => Ok(()),
+            InstallPolicy::Exact(expected) if current == expected => Ok(()),
+            InstallPolicy::Exact(_) => Err(anyhow!(
+                "private vault output destination changed since preview at {}; preview again",
+                path.display()
+            )),
+        }
+    }
+
     fn validate_temporary_identity(path: &Path, expected: FileIdentity) -> anyhow::Result<()> {
         let metadata = fs::symlink_metadata(path).with_context(|| {
             format!(
@@ -444,9 +707,7 @@ mod unix {
         })?;
         if metadata.file_type().is_symlink()
             || !metadata.is_file()
-            || metadata.dev() != expected.device
-            || metadata.ino() != expected.inode
-            || metadata.uid() != expected.owner
+            || file_identity(&metadata) != expected
             || metadata.uid() != unsafe { libc::geteuid() }
             || metadata.permissions().mode() & 0o077 != 0
         {
@@ -509,24 +770,33 @@ mod unix {
         Ok(())
     }
 
-    fn inspect_destination(path: &Path, overwrite: bool) -> anyhow::Result<()> {
+    fn destination_state(path: &Path) -> anyhow::Result<DestinationState> {
         match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.file_type().is_symlink() => bail!(
                 "refusing to write private vault output through symlink {}",
                 path.display()
             ),
-            Ok(_metadata) if !overwrite => Err(anyhow!(
-                "private vault output already exists at {}; pass --overwrite to replace it",
-                path.display()
-            )),
             Ok(metadata) if !metadata.is_file() => bail!(
                 "refusing to replace non-regular private vault output {}",
                 path.display()
             ),
-            Ok(_) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(metadata) => Ok(DestinationState::Existing(file_identity(&metadata))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(DestinationState::Absent)
+            }
             Err(error) => Err(error)
                 .with_context(|| format!("failed to inspect vault output {}", path.display())),
+        }
+    }
+
+    fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
+        FileIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            owner: metadata.uid(),
+            byte_len: metadata.len(),
+            changed_at_secs: metadata.ctime(),
+            changed_at_nanos: metadata.ctime_nsec(),
         }
     }
 
@@ -539,7 +809,9 @@ mod unix {
     }
 
     fn preflight_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-        if error.to_string().contains("already exists") {
+        if error.to_string().contains("already exists")
+            || error.to_string().contains("changed since preview")
+        {
             VaultErrorKind::AlreadyExists
         } else if error.chain().any(|source| source.is::<std::io::Error>()) {
             VaultErrorKind::Io
@@ -550,6 +822,7 @@ mod unix {
 
     fn install_error_kind(error: &anyhow::Error) -> VaultErrorKind {
         if error.to_string().contains("already exists")
+            || error.to_string().contains("changed since preview")
             || error
                 .chain()
                 .filter_map(|source| source.downcast_ref::<std::io::Error>())
@@ -669,6 +942,53 @@ mod unix {
             let error = prepared.install().unwrap_err();
             assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
             assert_eq!(fs::read(&output).unwrap(), b"raced-existing");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn previewed_absence_never_widens_into_upsert_permission() {
+            let temp = private_tempdir();
+            let output = temp.path().join("import.env");
+            let precondition = crate::PreparedPrivateFile::preview(&output).unwrap();
+            assert!(!precondition.destination_exists());
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+
+            let prepared = crate::PreparedPrivateFile::prepare_if_unchanged(
+                precondition,
+                crate::SecretBytes::new(b"approved".to_vec()),
+                true,
+            )
+            .unwrap();
+            fs::write(&output, b"raced-existing").unwrap();
+
+            let error = prepared.install().unwrap_err();
+            assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+            assert!(error.message().contains("changed since preview"));
+            assert_eq!(fs::read(&output).unwrap(), b"raced-existing");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+
+        #[test]
+        fn previewed_existing_identity_must_survive_prepare_and_install() {
+            let temp = private_tempdir();
+            let output = temp.path().join("import.env");
+            fs::write(&output, b"previewed").unwrap();
+            let precondition = crate::PreparedPrivateFile::preview(&output).unwrap();
+            assert!(precondition.destination_exists());
+
+            let prepared = crate::PreparedPrivateFile::prepare_if_unchanged(
+                precondition,
+                crate::SecretBytes::new(b"approved".to_vec()),
+                true,
+            )
+            .unwrap();
+            fs::remove_file(&output).unwrap();
+            fs::write(&output, b"replacement-identity").unwrap();
+
+            let error = prepared.install().unwrap_err();
+            assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+            assert!(error.message().contains("changed since preview"));
+            assert_eq!(fs::read(&output).unwrap(), b"replacement-identity");
             assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
         }
 
