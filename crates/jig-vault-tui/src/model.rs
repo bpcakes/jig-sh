@@ -403,7 +403,13 @@ impl App {
             ));
             return None;
         }
-        if state.preview.rows.iter().any(|row| row.replaces_existing) && !state.preview.replace {
+        if state
+            .preview
+            .rows
+            .iter()
+            .any(|row| row.change.replaces_existing())
+            && !state.preview.replace
+        {
             self.screen = Screen::ImportPreview(state);
             self.set_error("Existing fields require Replace; press r to enable it.");
             return None;

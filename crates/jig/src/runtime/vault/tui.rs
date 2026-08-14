@@ -11,9 +11,9 @@ use jig_vault::{
     VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
 };
 use jig_vault_tui::{
-    ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
-    VaultActionResult, VaultBackend, VaultDescriptor, VaultMutation, VaultPresence, VaultUiError,
-    VaultUiErrorKind,
+    ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
+    ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultDescriptor, VaultMutation,
+    VaultPresence, VaultUiError, VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
@@ -216,18 +216,16 @@ impl VaultTuiBackend {
         let vault = self.with_vault(|selected, passphrase| {
             selected.plan_import_fields(passphrase, &references)
         })?;
-        let existing = vault
-            .fields()
-            .map(|(_, existed)| existed)
-            .collect::<Vec<_>>();
         let rows = entries
             .into_iter()
-            .zip(existing)
-            .map(|(entry, replaces_existing)| ImportPreviewRow {
-                variable: entry.name,
-                reference: entry.reference,
-                kind: entry.kind,
-                replaces_existing,
+            .zip(vault.fields_with_previous_kinds())
+            .map(|(entry, (planned_reference, previous_kind))| {
+                debug_assert_eq!(&entry.reference, planned_reference);
+                ImportPreviewRow {
+                    variable: entry.name,
+                    reference: entry.reference,
+                    change: ImportFieldChange::from_previous_kind(previous_kind, entry.kind),
+                }
             })
             .collect();
         let authorization = if dry_run {
@@ -1143,7 +1141,12 @@ printf '%s' 'resolved-tui-import-secret'
             panic!("expected existing import preview");
         };
         assert!(existing.destination_exists);
-        assert!(existing.rows.iter().all(|row| row.replaces_existing));
+        assert!(
+            existing
+                .rows
+                .iter()
+                .all(|row| row.change.replaces_existing())
+        );
         assert!(matches!(
             existing.authorization,
             ImportPreviewAuthorization::DryRun

@@ -154,13 +154,60 @@ pub enum VaultAction {
     },
 }
 
+/// One planned field transition in a 1Password import preview.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportFieldChange {
+    /// The destination field was absent when the revision-bound plan was made.
+    Create { kind: FieldKind },
+    /// The destination field existed with an authenticated prior kind.
+    Replace {
+        previous_kind: FieldKind,
+        kind: FieldKind,
+    },
+}
+
+impl ImportFieldChange {
+    /// Builds the only valid transition for an observed prior kind.
+    pub const fn from_previous_kind(previous_kind: Option<FieldKind>, kind: FieldKind) -> Self {
+        match previous_kind {
+            Some(previous_kind) => Self::Replace {
+                previous_kind,
+                kind,
+            },
+            None => Self::Create { kind },
+        }
+    }
+
+    /// Returns the kind that commit will store.
+    pub const fn kind(self) -> FieldKind {
+        match self {
+            Self::Create { kind } | Self::Replace { kind, .. } => kind,
+        }
+    }
+
+    /// Returns whether this transition replaces an existing field.
+    pub const fn replaces_existing(self) -> bool {
+        matches!(self, Self::Replace { .. })
+    }
+
+    /// Returns whether the transition removes output-redaction treatment.
+    pub const fn is_redaction_downgrade(self) -> bool {
+        matches!(
+            self,
+            Self::Replace {
+                previous_kind: FieldKind::Concealed,
+                kind: FieldKind::Text,
+            }
+        )
+    }
+}
+
 /// Safe preview row for one 1Password import assignment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportPreviewRow {
     pub variable: String,
     pub reference: VaultReference,
-    pub kind: FieldKind,
-    pub replaces_existing: bool,
+    pub change: ImportFieldChange,
 }
 
 /// Opaque one-shot capability for committing one exact import preview.

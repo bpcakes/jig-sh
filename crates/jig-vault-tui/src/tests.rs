@@ -7,8 +7,8 @@ use secrecy::SecretString;
 use tempfile::tempdir;
 
 use crate::{
-    ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
-    VaultDescriptor, VaultMutation,
+    ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
+    ImportPreviewRow, VaultAction, VaultDescriptor, VaultMutation,
     model::{
         App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, MAX_FILTER_INPUT_BYTES,
         MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation, MutationConfirmationKind,
@@ -1073,8 +1073,10 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
         rows: vec![ImportPreviewRow {
             variable: "TOKEN".to_owned(),
             reference: "jig://Production/TOKEN".parse().unwrap(),
-            kind: FieldKind::Concealed,
-            replaces_existing: true,
+            change: ImportFieldChange::Replace {
+                previous_kind: FieldKind::Concealed,
+                kind: FieldKind::Concealed,
+            },
         }],
         destination_exists: true,
     });

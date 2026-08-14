@@ -1071,8 +1071,8 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
             "{} → {}  [{}]  {}",
             sanitize_text(&row.variable),
             sanitize_text(&row.reference.to_string()),
-            kind_label(row.kind),
-            if row.replaces_existing {
+            kind_label(row.change.kind()),
+            if row.change.replaces_existing() {
                 "replace"
             } else {
                 "create"
