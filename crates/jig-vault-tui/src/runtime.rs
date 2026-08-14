@@ -369,7 +369,7 @@ fn apply_failure(
 
     match failure {
         BackendFailure::Refreshed { error, snapshot } => {
-            app.apply_snapshot(snapshot);
+            app.apply_recovery_snapshot(snapshot);
             app.set_error(error.message());
         }
         BackendFailure::RefreshFailed {
@@ -1179,7 +1179,10 @@ mod tests {
     use secrecy::SecretString;
 
     use super::*;
-    use crate::VaultDescriptor;
+    use crate::{
+        VaultDescriptor,
+        model::{EntryIdentity, ItemIdentity},
+    };
 
     struct TrackingBackend {
         locks: AtomicUsize,
@@ -1306,6 +1309,14 @@ mod tests {
                 "jig://Production/TOKEN".parse().unwrap(),
                 FieldKind::Concealed,
                 SecretBytes::new(b"runtime-test-secret".to_vec()),
+            )
+            .unwrap();
+        vault
+            .set_field(
+                &passphrase,
+                "jig://Production/OTHER".parse().unwrap(),
+                FieldKind::Concealed,
+                SecretBytes::new(b"other-runtime-secret".to_vec()),
             )
             .unwrap();
         let mut app = App::new(VaultDescriptor {
@@ -1459,14 +1470,21 @@ mod tests {
     #[test]
     fn successful_recovery_refresh_replaces_stale_snapshot_and_retains_primary_error() {
         let mut app = unlocked_app();
+        let original: VaultReference = "jig://Production/TOKEN".parse().unwrap();
+        app.selected_item = Some(ItemIdentity::Canonical("Production".to_owned()));
+        app.selected_entry = Some(EntryIdentity::Field(original.clone()));
+        app.focus = Focus::Fields;
+        app.begin_rename();
+        handle_paste(&mut app, "OTHER");
+        assert!(app.submit_form().is_some());
         let refreshed = app.snapshot.clone().unwrap();
         let backend = Arc::new(TrackingBackend::with_refresh(Ok(refreshed.clone())));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let completion = BackendCompletion::new(
-            OperationKind::Import,
+            OperationKind::Mutation,
             Err(VaultUiError::new(
-                VaultUiErrorKind::Io,
-                "safe import failure",
+                VaultUiErrorKind::Conflict,
+                "safe mutation failure",
             )),
             erased.as_ref(),
         );
@@ -1477,7 +1495,12 @@ mod tests {
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
         assert_eq!(app.snapshot, Some(refreshed));
         assert!(matches!(app.screen, Screen::Browse));
-        assert_eq!(app.status.unwrap().text, "safe import failure");
+        assert_eq!(
+            app.selected_entry,
+            Some(EntryIdentity::Field(original)),
+            "failed mutation must preserve the operator's prior selection"
+        );
+        assert_eq!(app.status.unwrap().text, "safe mutation failure");
     }
 
     #[test]

@@ -108,6 +108,15 @@ impl App {
     }
 
     pub(crate) fn apply_snapshot(&mut self, snapshot: VaultSnapshot) {
+        self.install_snapshot(snapshot);
+    }
+
+    pub(crate) fn apply_recovery_snapshot(&mut self, snapshot: VaultSnapshot) {
+        self.next_selection = None;
+        self.install_snapshot(snapshot);
+    }
+
+    fn install_snapshot(&mut self, snapshot: VaultSnapshot) {
         let previous_item = self.selected_item.clone();
         let previous_entry = self.selected_entry.clone();
         self.descriptor.exists = true;
