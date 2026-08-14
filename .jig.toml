@@ -13,8 +13,8 @@ schema_dump_enabled = false
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "cargo fmt --all -- --check"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
-rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace -E 'package(jig-vault) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
-rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E 'package(jig-vault) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
+rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace -E 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
+rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
 web_package_manager = "bun"
 frontend_apps = []
 

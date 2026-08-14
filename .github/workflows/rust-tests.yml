@@ -245,7 +245,7 @@ jobs:
         run: cargo clippy -p jig-sh --no-default-features --all-targets --locked -- -D warnings
 
   vault-platforms:
-    name: cargo test -p jig-vault (${{ matrix.os }})
+    name: cargo test vault crates (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -266,9 +266,9 @@ jobs:
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
       - name: Run vault tests
-        run: cargo test -p jig-vault --locked
+        run: cargo test -p jig-vault -p jig-vault-tui --locked
       - name: Run vault clippy
-        run: cargo clippy -p jig-vault --all-targets --locked -- -D warnings
+        run: cargo clippy -p jig-vault -p jig-vault-tui --all-targets --locked -- -D warnings
 
   no-default-features-clippy-macos:
     name: cargo clippy -p jig-sh --no-default-features (macOS)
