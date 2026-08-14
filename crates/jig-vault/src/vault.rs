@@ -2601,10 +2601,11 @@ impl OpenVault {
                     "jig://{}/{}",
                     to.as_str(),
                     field.reference.field()
-                ))?;
+                ))
+                .map_err(VaultError::into_classified_anyhow)?;
                 Ok((field.reference, target))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<AnyResult<Vec<_>>>()?;
         if moves.is_empty() {
             return Err(classified(
                 VaultErrorKind::NotFound,

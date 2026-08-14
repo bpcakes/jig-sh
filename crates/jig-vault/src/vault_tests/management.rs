@@ -412,6 +412,39 @@ fn item_rename_collision_is_all_or_nothing() {
 }
 
 #[test]
+fn item_rename_reports_an_overlong_derived_reference_without_writing() {
+    let (_temp, vault) = new_vault();
+    let field_name = "F".repeat(64);
+    let source = field(&format!("jig://A/{field_name}"));
+    vault
+        .set_field(
+            &passphrase(),
+            source,
+            FieldKind::Concealed,
+            SecretBytes::new(b"rename-length-sentinel".to_vec()),
+        )
+        .unwrap();
+    let before_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+    let destination = item(&format!("jig://{}", "I".repeat(64)));
+
+    let error = vault
+        .rename_item(&passphrase(), item("jig://A"), destination)
+        .unwrap_err();
+
+    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+    assert!(error.message().contains("vault reference is too long"));
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+}
+
+#[test]
 fn legacy_conversion_is_atomic_and_preserves_value_and_creation_time() {
     let (_temp, vault) = new_vault();
     vault
