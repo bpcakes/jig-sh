@@ -1195,6 +1195,21 @@ impl VaultStore {
         edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
         details: impl FnOnce(&R) -> serde_json::Value,
     ) -> AnyResult<R> {
+        self.edit_with_audit_if(passphrase, action, edit, |_| true, details)
+    }
+
+    /// Runs a verified in-memory edit and persists it only when the result
+    /// identifies a real state transition. A skipped edit still opens the
+    /// vault and verifies the audit chain, but it neither seals state nor
+    /// appends an audit event.
+    pub(crate) fn edit_with_audit_if<R>(
+        &self,
+        passphrase: &SecretString,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        should_commit: impl FnOnce(&R) -> bool,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
         self.with_lock(|| {
             let mut vault = self.open_unlocked(passphrase)?;
             verify_chain_unlocked(self, vault.audit_key.as_ref()).map_err(|error| {
@@ -1205,6 +1220,9 @@ impl VaultStore {
                 )
             })?;
             let result = edit(&mut vault)?;
+            if !should_commit(&result) {
+                return Ok(result);
+            }
             let envelope = vault.prepare_save_unlocked()?;
             let file_text = envelope.serialize_pretty()?;
             self.validate_vault_text_len(&file_text).map_err(|error| {
