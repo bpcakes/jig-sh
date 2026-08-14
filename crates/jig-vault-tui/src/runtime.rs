@@ -288,10 +288,19 @@ fn apply_completion(
             return;
         }
     };
-    match completion.result {
-        Ok(VaultActionResult::Snapshot(snapshot)) => {
+    match completion.outcome {
+        BackendOutcome::Success(result) => apply_success(app, completion.kind, result),
+        BackendOutcome::Failure(failure) => {
+            apply_failure(app, backend, completion.kind, failure);
+        }
+    }
+}
+
+fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) {
+    match result {
+        VaultActionResult::Snapshot(snapshot) => {
             app.apply_snapshot(snapshot);
-            let message = match completion.kind {
+            let message = match kind {
                 OperationKind::Unlock => "Vault unlocked.",
                 OperationKind::Initialize => "Vault initialized and unlocked.",
                 OperationKind::Refresh => "Vault metadata refreshed.",
@@ -308,67 +317,83 @@ fn apply_completion(
             };
             app.set_info(message);
         }
-        Ok(VaultActionResult::Activity(records)) => app.apply_activity(records),
-        Ok(VaultActionResult::Audit(verification)) => app.apply_audit_result(verification),
-        Ok(VaultActionResult::ImportPreview(preview)) => app.apply_import_preview(preview),
-        Ok(VaultActionResult::BackupCreated {
+        VaultActionResult::Activity(records) => app.apply_activity(records),
+        VaultActionResult::Audit(verification) => app.apply_audit_result(verification),
+        VaultActionResult::ImportPreview(preview) => app.apply_import_preview(preview),
+        VaultActionResult::BackupCreated {
             output,
             bytes_written,
             backup_version,
             snapshot,
-        }) => {
+        } => {
             app.apply_snapshot(snapshot);
             app.set_info(&format!(
                 "Encrypted backup v{backup_version} written to {} ({bytes_written} bytes).",
                 output.display()
             ));
         }
-        Ok(VaultActionResult::Restored { .. }) => app.apply_restore(),
-        Ok(VaultActionResult::Exported {
+        VaultActionResult::Restored { .. } => app.apply_restore(),
+        VaultActionResult::Exported {
             output,
             bytes_written,
             snapshot,
-        }) => {
+        } => {
             app.apply_snapshot(snapshot);
             app.set_info(&format!(
                 "Exported {bytes_written} bytes to private file {}.",
                 output.display()
             ));
         }
-        Err(error) => {
-            if matches!(
-                error.kind(),
-                VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
-            ) {
-                backend.lock();
-                if completion.kind == OperationKind::Restore {
-                    app.fail_restore(&error);
-                } else {
-                    app.fail_unlock(&error);
-                }
-                return;
-            }
-            if let Some(Ok(snapshot)) = completion.refreshed_after_error {
-                app.apply_snapshot(snapshot);
-                app.set_error(error.message());
-                return;
-            }
-            match completion.kind {
-                OperationKind::Unlock => app.fail_unlock(&error),
-                OperationKind::Initialize => app.fail_initialize(&error),
-                OperationKind::Restore => app.fail_restore(&error),
-                OperationKind::Refresh
-                | OperationKind::Migrate
-                | OperationKind::Mutation
-                | OperationKind::Activity
-                | OperationKind::VerifyAudit
-                | OperationKind::ImportPreview
-                | OperationKind::Import
-                | OperationKind::Backup
-                | OperationKind::Passphrase
-                | OperationKind::Export => app.fail_action(&error),
-            }
+    }
+}
+
+fn apply_failure(
+    app: &mut App,
+    backend: &Arc<dyn VaultBackend>,
+    kind: OperationKind,
+    failure: BackendFailure,
+) {
+    if matches!(
+        failure.error().kind(),
+        VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+    ) {
+        backend.lock();
+        if kind == OperationKind::Restore {
+            app.fail_restore(failure.error());
+        } else {
+            app.fail_unlock(failure.error());
         }
+        return;
+    }
+
+    match failure {
+        BackendFailure::Refreshed { error, snapshot } => {
+            app.apply_snapshot(snapshot);
+            app.set_error(error.message());
+        }
+        BackendFailure::Primary(error)
+        | BackendFailure::RefreshFailed {
+            error,
+            _refresh_error: _,
+        } => apply_primary_failure(app, kind, &error),
+    }
+}
+
+fn apply_primary_failure(app: &mut App, kind: OperationKind, error: &VaultUiError) {
+    match kind {
+        OperationKind::Unlock => app.fail_unlock(error),
+        OperationKind::Initialize => app.fail_initialize(error),
+        OperationKind::Restore => app.fail_restore(error),
+        OperationKind::Refresh
+        | OperationKind::Migrate
+        | OperationKind::Mutation
+        | OperationKind::Activity
+        | OperationKind::VerifyAudit
+        | OperationKind::ImportPreview
+        | OperationKind::Import
+        | OperationKind::Backup
+        | OperationKind::Passphrase
+        | OperationKind::Export => app.fail_action(error),
     }
 }
 
@@ -428,10 +453,70 @@ enum OperationKind {
     Export,
 }
 
+impl OperationKind {
+    fn should_refresh_after_error(self, error: &VaultUiError) -> bool {
+        matches!(self, Self::Mutation | Self::Import | Self::Export)
+            && matches!(
+                error.kind(),
+                VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
+            )
+    }
+}
+
 struct BackendCompletion {
     kind: OperationKind,
-    result: std::result::Result<VaultActionResult, VaultUiError>,
-    refreshed_after_error: Option<std::result::Result<VaultSnapshot, VaultUiError>>,
+    outcome: BackendOutcome,
+}
+
+impl BackendCompletion {
+    fn new(
+        kind: OperationKind,
+        result: std::result::Result<VaultActionResult, VaultUiError>,
+        backend: &dyn VaultBackend,
+    ) -> Self {
+        let outcome = match result {
+            Ok(result) => BackendOutcome::Success(result),
+            Err(error) if kind.should_refresh_after_error(&error) => {
+                let failure = match backend.refresh() {
+                    Ok(snapshot) => BackendFailure::Refreshed { error, snapshot },
+                    Err(refresh_error) => BackendFailure::RefreshFailed {
+                        error,
+                        _refresh_error: refresh_error,
+                    },
+                };
+                BackendOutcome::Failure(failure)
+            }
+            Err(error) => BackendOutcome::Failure(BackendFailure::Primary(error)),
+        };
+        Self { kind, outcome }
+    }
+}
+
+enum BackendOutcome {
+    Success(VaultActionResult),
+    Failure(BackendFailure),
+}
+
+enum BackendFailure {
+    Primary(VaultUiError),
+    Refreshed {
+        error: VaultUiError,
+        snapshot: VaultSnapshot,
+    },
+    RefreshFailed {
+        error: VaultUiError,
+        _refresh_error: VaultUiError,
+    },
+}
+
+impl BackendFailure {
+    const fn error(&self) -> &VaultUiError {
+        match self {
+            Self::Primary(error)
+            | Self::Refreshed { error, .. }
+            | Self::RefreshFailed { error, .. } => error,
+        }
+    }
 }
 
 struct ActionWorker {
@@ -451,24 +536,7 @@ impl ActionWorker {
                     .map(VaultActionResult::Snapshot),
                 BackendRequest::Execute(action) => backend.execute(action),
             };
-            let refreshed_after_error = if matches!(
-                kind,
-                OperationKind::Mutation | OperationKind::Import | OperationKind::Export
-            ) && result.as_ref().is_err_and(|error| {
-                matches!(
-                    error.kind(),
-                    VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
-                )
-            }) {
-                Some(backend.refresh())
-            } else {
-                None
-            };
-            BackendCompletion {
-                kind,
-                result,
-                refreshed_after_error,
-            }
+            BackendCompletion::new(kind, result, backend.as_ref())
         })?;
         Ok(Self { worker })
     }
@@ -1182,8 +1250,10 @@ mod tests {
                 &erased,
                 Ok(BackendCompletion {
                     kind: OperationKind::VerifyAudit,
-                    result: Err(VaultUiError::new(kind, "safe failure")),
-                    refreshed_after_error: None,
+                    outcome: BackendOutcome::Failure(BackendFailure::Primary(VaultUiError::new(
+                        kind,
+                        "safe failure",
+                    ))),
                 }),
             );
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
