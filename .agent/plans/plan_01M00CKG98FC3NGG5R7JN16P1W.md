@@ -22,7 +22,7 @@ typed classifications without parsing display text.
 - [x] Restore exhaustive matching at the closed Vault action boundary.
 - [x] Replace private-output message parsing with typed policy failures.
 - [x] Run focused checks, configured gates, and inspect receipts.
-- [ ] Close structured work and publish the commits to the existing PR branch.
+- [x] Close structured work and publish the commits to the existing PR branch.
 
 ## Surprises & Discoveries
 
