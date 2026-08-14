@@ -30,6 +30,46 @@ pub(crate) enum UiCommand {
     Lock,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PlatformCapabilities {
+    private_output: bool,
+    backup_restore: bool,
+}
+
+impl PlatformCapabilities {
+    const fn current() -> Self {
+        Self {
+            // Preserve existing command availability until the platform policy
+            // change lands independently from this structural refactor.
+            private_output: true,
+            backup_restore: cfg!(target_os = "linux"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlatformRequirement {
+    Portable,
+    PrivateOutput,
+    BackupRestore,
+}
+
+impl PlatformRequirement {
+    const fn availability(self, capabilities: PlatformCapabilities) -> CommandAvailability {
+        match self {
+            Self::Portable => CommandAvailability::Enabled,
+            Self::PrivateOutput if capabilities.private_output => CommandAvailability::Enabled,
+            Self::PrivateOutput => CommandAvailability::Disabled(
+                "Private file output is currently supported only on Unix.",
+            ),
+            Self::BackupRestore if capabilities.backup_restore => CommandAvailability::Enabled,
+            Self::BackupRestore => {
+                CommandAvailability::Disabled("Restore is currently supported only on Linux.")
+            }
+        }
+    }
+}
+
 impl UiCommand {
     pub(crate) const ALL: [Self; 19] = [
         Self::CreateItem,
@@ -164,6 +204,23 @@ impl UiCommand {
     }
 
     pub(crate) fn availability(self, app: &App) -> CommandAvailability {
+        self.availability_with_capabilities(app, PlatformCapabilities::current())
+    }
+
+    pub(crate) fn availability_with_capabilities(
+        self,
+        app: &App,
+        capabilities: PlatformCapabilities,
+    ) -> CommandAvailability {
+        let state_availability = self.state_availability(app);
+        if state_availability.is_enabled() {
+            self.platform_requirement().availability(capabilities)
+        } else {
+            state_availability
+        }
+    }
+
+    fn state_availability(self, app: &App) -> CommandAvailability {
         let format_version = app
             .snapshot
             .as_ref()
@@ -282,12 +339,34 @@ impl UiCommand {
             Self::RestoreBackup => {
                 if app.snapshot.is_some() || app.descriptor.exists {
                     CommandAvailability::Disabled("Restore requires a completely absent vault.")
-                } else if cfg!(target_os = "linux") {
-                    CommandAvailability::Enabled
                 } else {
-                    CommandAvailability::Disabled("Restore is currently supported only on Linux.")
+                    CommandAvailability::Enabled
                 }
             }
+        }
+    }
+
+    const fn platform_requirement(self) -> PlatformRequirement {
+        match self {
+            Self::ExportField | Self::ImportOnePassword | Self::CreateBackup => {
+                PlatformRequirement::PrivateOutput
+            }
+            Self::RestoreBackup => PlatformRequirement::BackupRestore,
+            Self::CreateItem
+            | Self::AddField
+            | Self::AddLegacy
+            | Self::ReplaceValue
+            | Self::ChangeKind
+            | Self::RenameSelection
+            | Self::ConvertLegacy
+            | Self::DeleteSelection
+            | Self::PeekField
+            | Self::Refresh
+            | Self::MigrateToV2
+            | Self::Activity
+            | Self::VerifyAudit
+            | Self::ChangePassphrase
+            | Self::Lock => PlatformRequirement::Portable,
         }
     }
 
