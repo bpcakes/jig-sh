@@ -320,6 +320,7 @@ fn unsupported_private_output(path: &Path) -> OutputInstallFailure {
 #[cfg(unix)]
 mod unix {
     use std::ffi::OsString;
+    use std::fmt;
     use std::fs::{self, File, OpenOptions};
     use std::io::Write;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -382,10 +383,10 @@ mod unix {
     ) -> Result<PreparedPrivateOutput, OutputInstallFailure> {
         let result = (|| -> anyhow::Result<_> {
             if precondition.destination_exists() && !allow_replace {
-                return Err(anyhow!(
-                    "private vault output already exists at {}; enable replacement to replace it",
-                    precondition.destination.display()
-                ));
+                return Err(PrivateOutputConflict::ExistingWithoutReplacement(
+                    precondition.destination.clone(),
+                )
+                .into());
             }
             validate_precondition(&precondition)?;
             let policy = InstallPolicy::Exact(precondition.state);
@@ -480,6 +481,37 @@ mod unix {
         Exact(DestinationState),
     }
 
+    #[derive(Debug)]
+    enum PrivateOutputConflict {
+        ExistingWithoutOverwrite(PathBuf),
+        ExistingWithoutReplacement(PathBuf),
+        ChangedSincePreview(PathBuf),
+    }
+
+    impl fmt::Display for PrivateOutputConflict {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::ExistingWithoutOverwrite(path) => write!(
+                    formatter,
+                    "private vault output already exists at {}; pass --overwrite to replace it",
+                    path.display()
+                ),
+                Self::ExistingWithoutReplacement(path) => write!(
+                    formatter,
+                    "private vault output already exists at {}; enable replacement to replace it",
+                    path.display()
+                ),
+                Self::ChangedSincePreview(path) => write!(
+                    formatter,
+                    "private vault output destination changed since preview at {}; preview again",
+                    path.display()
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for PrivateOutputConflict {}
+
     pub(super) struct PrivateDestinationPrecondition {
         destination: PathBuf,
         parent: PathBuf,
@@ -495,10 +527,7 @@ mod unix {
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
         let precondition = preview(path)?;
         if precondition.destination_exists() && !overwrite {
-            return Err(anyhow!(
-                "private vault output already exists at {}; pass --overwrite to replace it",
-                path.display()
-            ));
+            return Err(PrivateOutputConflict::ExistingWithoutOverwrite(path.to_path_buf()).into());
         }
         prepared_path(&precondition)
     }
@@ -563,10 +592,10 @@ mod unix {
         reject_symlinked_ancestors(&precondition.parent)?;
         let current = destination_state(&precondition.destination)?;
         if current != precondition.state {
-            bail!(
-                "private vault output destination changed since preview at {}; preview again",
-                precondition.destination.display()
-            );
+            return Err(PrivateOutputConflict::ChangedSincePreview(
+                precondition.destination.clone(),
+            )
+            .into());
         }
         Ok(())
     }
@@ -685,16 +714,14 @@ mod unix {
         let current = destination_state(path)?;
         match policy {
             InstallPolicy::Create if current == DestinationState::Absent => Ok(()),
-            InstallPolicy::Create => Err(anyhow!(
-                "private vault output already exists at {}; pass --overwrite to replace it",
-                path.display()
-            )),
+            InstallPolicy::Create => {
+                Err(PrivateOutputConflict::ExistingWithoutOverwrite(path.to_path_buf()).into())
+            }
             InstallPolicy::Upsert => Ok(()),
             InstallPolicy::Exact(expected) if current == expected => Ok(()),
-            InstallPolicy::Exact(_) => Err(anyhow!(
-                "private vault output destination changed since preview at {}; preview again",
-                path.display()
-            )),
+            InstallPolicy::Exact(_) => {
+                Err(PrivateOutputConflict::ChangedSincePreview(path.to_path_buf()).into())
+            }
         }
     }
 
