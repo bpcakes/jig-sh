@@ -12,7 +12,7 @@ use jig_vault::{
 };
 use jig_vault_tui::{
     ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
-    VaultActionResult, VaultBackend, VaultDescriptor, VaultPresence, VaultUiError,
+    VaultActionResult, VaultBackend, VaultDescriptor, VaultMutation, VaultPresence, VaultUiError,
     VaultUiErrorKind,
 };
 use secrecy::SecretString;
@@ -370,73 +370,7 @@ impl VaultBackend for VaultTuiBackend {
                 self.with_vault(|selected, passphrase| selected.migrate(passphrase, 2))?;
                 self.refresh().map(VaultActionResult::Snapshot)
             }
-            VaultAction::SetField {
-                reference,
-                kind,
-                value,
-                mode,
-            } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.write_field(passphrase, reference, kind, value, mode)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::ChangeFieldKind { reference, kind } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.change_field_kind(passphrase, reference, kind)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::RenameField {
-                source,
-                destination,
-            } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.rename_field(passphrase, source, destination)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::RenameItem {
-                source,
-                destination,
-            } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.rename_item(passphrase, source, destination)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::RemoveField { reference } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.remove_field_required(passphrase, reference)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::RemoveItem { item } => {
-                self.with_vault(|selected, passphrase| selected.remove_item(passphrase, item))?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::SetLegacy { name, value, mode } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.write_secret(passphrase, &name, value, mode)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::RemoveLegacy { name } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.remove_secret_required(passphrase, &name)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
-            VaultAction::ConvertLegacy {
-                name,
-                reference,
-                kind,
-            } => {
-                self.with_vault(|selected, passphrase| {
-                    selected.convert_legacy_secret(passphrase, &name, reference, kind)
-                })?;
-                self.refresh().map(VaultActionResult::Snapshot)
-            }
+            VaultAction::Mutate(mutation) => self.execute_mutation(mutation),
             VaultAction::Activity { limit } => self
                 .with_vault(|selected, passphrase| selected.activity(passphrase, limit))
                 .map(VaultActionResult::Activity),
@@ -525,6 +459,73 @@ impl VaultBackend for VaultTuiBackend {
             selected.read_field_to(passphrase, reference.clone(), &mut output)
         })
         .map(|result| result.bytes_written)
+    }
+}
+
+impl VaultTuiBackend {
+    fn execute_mutation(
+        &self,
+        mutation: VaultMutation,
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
+        match mutation {
+            VaultMutation::SetField {
+                reference,
+                kind,
+                value,
+                mode,
+            } => self
+                .with_vault(|selected, passphrase| {
+                    selected.write_field(passphrase, reference, kind, value, mode)
+                })
+                .map(drop)?,
+            VaultMutation::ChangeFieldKind { reference, kind } => self
+                .with_vault(|selected, passphrase| {
+                    selected.change_field_kind(passphrase, reference, kind)
+                })
+                .map(drop)?,
+            VaultMutation::RenameField {
+                source,
+                destination,
+            } => self
+                .with_vault(|selected, passphrase| {
+                    selected.rename_field(passphrase, source, destination)
+                })
+                .map(drop)?,
+            VaultMutation::RenameItem {
+                source,
+                destination,
+            } => self
+                .with_vault(|selected, passphrase| {
+                    selected.rename_item(passphrase, source, destination)
+                })
+                .map(drop)?,
+            VaultMutation::RemoveField { reference } => self
+                .with_vault(|selected, passphrase| {
+                    selected.remove_field_required(passphrase, reference)
+                })
+                .map(drop)?,
+            VaultMutation::RemoveItem { item } => self
+                .with_vault(|selected, passphrase| selected.remove_item(passphrase, item))
+                .map(drop)?,
+            VaultMutation::SetLegacy { name, value, mode } => {
+                self.with_vault(|selected, passphrase| {
+                    selected.write_secret(passphrase, &name, value, mode)
+                })?
+            }
+            VaultMutation::RemoveLegacy { name } => self.with_vault(|selected, passphrase| {
+                selected.remove_secret_required(passphrase, &name)
+            })?,
+            VaultMutation::ConvertLegacy {
+                name,
+                reference,
+                kind,
+            } => self
+                .with_vault(|selected, passphrase| {
+                    selected.convert_legacy_secret(passphrase, &name, reference, kind)
+                })
+                .map(drop)?,
+        }
+        self.refresh().map(VaultActionResult::Snapshot)
     }
 }
 
@@ -629,12 +630,12 @@ mod tests {
 
         let field: VaultReference = "jig://Production/TOKEN".parse().unwrap();
         let VaultActionResult::Snapshot(created) = backend
-            .execute(VaultAction::SetField {
+            .execute(VaultAction::Mutate(VaultMutation::SetField {
                 reference: field.clone(),
                 kind: FieldKind::Concealed,
                 value: SecretBytes::new(b"initial-secret".to_vec()),
                 mode: VaultWriteMode::Create,
-            })
+            }))
             .unwrap()
         else {
             panic!("expected snapshot");
@@ -644,50 +645,50 @@ mod tests {
         // Simulate a stale TUI create after an external CLI already created
         // the destination. The atomic mode rejects rather than overwriting.
         let collision = backend
-            .execute(VaultAction::SetField {
+            .execute(VaultAction::Mutate(VaultMutation::SetField {
                 reference: field.clone(),
                 kind: FieldKind::Text,
                 value: SecretBytes::new(b"stale-overwrite-sentinel".to_vec()),
                 mode: VaultWriteMode::Create,
-            })
+            }))
             .unwrap_err();
         assert_eq!(collision.kind(), VaultUiErrorKind::Conflict);
 
         backend
-            .execute(VaultAction::ChangeFieldKind {
+            .execute(VaultAction::Mutate(VaultMutation::ChangeFieldKind {
                 reference: field.clone(),
                 kind: FieldKind::Text,
-            })
+            }))
             .unwrap();
         let moved: VaultReference = "jig://Production/RENAMED".parse().unwrap();
         backend
-            .execute(VaultAction::RenameField {
+            .execute(VaultAction::Mutate(VaultMutation::RenameField {
                 source: field,
                 destination: moved,
-            })
+            }))
             .unwrap();
         let destination = jig_vault::VaultItem::parse("jig://RenamedItem").unwrap();
         backend
-            .execute(VaultAction::RenameItem {
+            .execute(VaultAction::Mutate(VaultMutation::RenameItem {
                 source: jig_vault::VaultItem::parse("jig://Production").unwrap(),
                 destination: destination.clone(),
-            })
+            }))
             .unwrap();
 
         backend
-            .execute(VaultAction::SetLegacy {
+            .execute(VaultAction::Mutate(VaultMutation::SetLegacy {
                 name: "old_token".to_owned(),
                 value: SecretBytes::new(b"legacy-secret".to_vec()),
                 mode: VaultWriteMode::Create,
-            })
+            }))
             .unwrap();
         let converted: VaultReference = "jig://Imported/TOKEN".parse().unwrap();
         let VaultActionResult::Snapshot(converted_snapshot) = backend
-            .execute(VaultAction::ConvertLegacy {
+            .execute(VaultAction::Mutate(VaultMutation::ConvertLegacy {
                 name: "old_token".to_owned(),
                 reference: converted.clone(),
                 kind: FieldKind::Concealed,
-            })
+            }))
             .unwrap()
         else {
             panic!("expected snapshot");
@@ -701,12 +702,14 @@ mod tests {
         );
 
         backend
-            .execute(VaultAction::RemoveField {
+            .execute(VaultAction::Mutate(VaultMutation::RemoveField {
                 reference: converted,
-            })
+            }))
             .unwrap();
         let VaultActionResult::Snapshot(empty) = backend
-            .execute(VaultAction::RemoveItem { item: destination })
+            .execute(VaultAction::Mutate(VaultMutation::RemoveItem {
+                item: destination,
+            }))
             .unwrap()
         else {
             panic!("expected snapshot");

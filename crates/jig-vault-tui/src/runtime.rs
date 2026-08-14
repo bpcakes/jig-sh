@@ -464,6 +464,7 @@ impl BackendRequest {
             Self::Initialize(_) => OperationKind::Initialize,
             Self::Execute(VaultAction::MigrateToV2) => OperationKind::Migrate,
             Self::Execute(VaultAction::Refresh) => OperationKind::Refresh,
+            Self::Execute(VaultAction::Mutate(_)) => OperationKind::Mutation,
             Self::Execute(VaultAction::Activity { .. }) => OperationKind::Activity,
             Self::Execute(VaultAction::VerifyAudit) => OperationKind::VerifyAudit,
             Self::Execute(VaultAction::PreviewOnePasswordImport { .. }) => {
@@ -474,7 +475,6 @@ impl BackendRequest {
             Self::Execute(VaultAction::ChangePassphrase { .. }) => OperationKind::Passphrase,
             Self::Execute(VaultAction::RestoreBackup { .. }) => OperationKind::Restore,
             Self::Execute(VaultAction::ExportField { .. }) => OperationKind::Export,
-            Self::Execute(_) => OperationKind::Mutation,
         }
     }
 }

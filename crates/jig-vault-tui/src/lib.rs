@@ -111,6 +111,45 @@ impl std::error::Error for VaultUiError {}
 pub enum VaultAction {
     Refresh,
     MigrateToV2,
+    Mutate(VaultMutation),
+    Activity {
+        limit: usize,
+    },
+    VerifyAudit,
+    PreviewOnePasswordImport {
+        env_file: PathBuf,
+        item: VaultItem,
+        out_env: PathBuf,
+        replace: bool,
+        overwrite: bool,
+        dry_run: bool,
+    },
+    CommitOnePasswordImport {
+        plan: ImportPlanToken,
+        replace: bool,
+        overwrite: bool,
+    },
+    CreateBackup {
+        output: PathBuf,
+        overwrite: bool,
+    },
+    RestoreBackup {
+        input: PathBuf,
+        passphrase: SecretBytes,
+    },
+    ChangePassphrase {
+        new_passphrase: SecretBytes,
+    },
+    ExportField {
+        reference: VaultReference,
+        output: PathBuf,
+        overwrite: bool,
+    },
+}
+
+/// One atomic field, item, or legacy-entry mutation.
+#[derive(Debug)]
+pub enum VaultMutation {
     SetField {
         reference: VaultReference,
         kind: FieldKind,
@@ -147,39 +186,6 @@ pub enum VaultAction {
         name: String,
         reference: VaultReference,
         kind: FieldKind,
-    },
-    Activity {
-        limit: usize,
-    },
-    VerifyAudit,
-    PreviewOnePasswordImport {
-        env_file: PathBuf,
-        item: VaultItem,
-        out_env: PathBuf,
-        replace: bool,
-        overwrite: bool,
-        dry_run: bool,
-    },
-    CommitOnePasswordImport {
-        plan: ImportPlanToken,
-        replace: bool,
-        overwrite: bool,
-    },
-    CreateBackup {
-        output: PathBuf,
-        overwrite: bool,
-    },
-    RestoreBackup {
-        input: PathBuf,
-        passphrase: SecretBytes,
-    },
-    ChangePassphrase {
-        new_passphrase: SecretBytes,
-    },
-    ExportField {
-        reference: VaultReference,
-        output: PathBuf,
-        overwrite: bool,
     },
 }
 

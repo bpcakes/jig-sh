@@ -7,8 +7,8 @@ use jig_vault::{
 };
 
 use crate::{
-    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultPresence,
-    VaultUiError,
+    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
+    VaultPresence, VaultUiError,
     secret_input::SecretInput,
     tools::{ToolChoice, ToolForm, ToolsMenu},
 };
@@ -1283,12 +1283,12 @@ impl ManagementForm {
             } => {
                 let reference = parse_reference(item, field)?;
                 let value = take_validated_value(value, value_file, *kind)?;
-                let action = VaultAction::SetField {
+                let action = VaultAction::Mutate(VaultMutation::SetField {
                     reference: reference.clone(),
                     kind: *kind,
                     value,
                     mode: *mode,
-                };
+                });
                 Ok(FormSubmission {
                     action,
                     label: match mode {
@@ -1312,11 +1312,11 @@ impl ManagementForm {
                 let name = parse_legacy_name(name)?;
                 let value = take_validated_value(value, value_file, FieldKind::Concealed)?;
                 Ok(FormSubmission {
-                    action: VaultAction::SetLegacy {
+                    action: VaultAction::Mutate(VaultMutation::SetLegacy {
                         name: name.clone(),
                         value,
                         mode: *mode,
-                    },
+                    }),
                     label: match mode {
                         VaultWriteMode::Create => "Creating legacy vault entry",
                         VaultWriteMode::Replace => "Replacing legacy vault entry",
@@ -1337,10 +1337,10 @@ impl ManagementForm {
                     return Err("Choose a different field kind before saving.".to_owned());
                 }
                 Ok(FormSubmission {
-                    action: VaultAction::ChangeFieldKind {
+                    action: VaultAction::Mutate(VaultMutation::ChangeFieldKind {
                         reference: reference.clone(),
                         kind: *to,
-                    },
+                    }),
                     label: "Changing field kind",
                     selection: Some(SelectionHint {
                         item: ItemIdentity::Canonical(reference.item().to_owned()),
@@ -1359,10 +1359,10 @@ impl ManagementForm {
                     return Err("Field rename destination must differ from the source.".to_owned());
                 }
                 Ok(FormSubmission {
-                    action: VaultAction::RenameField {
+                    action: VaultAction::Mutate(VaultMutation::RenameField {
                         source: source.clone(),
                         destination: destination.clone(),
-                    },
+                    }),
                     label: "Renaming vault field",
                     selection: Some(SelectionHint {
                         item: ItemIdentity::Canonical(destination.item().to_owned()),
@@ -1380,10 +1380,10 @@ impl ManagementForm {
                     return Err("Item rename destination must differ from the source.".to_owned());
                 }
                 Ok(FormSubmission {
-                    action: VaultAction::RenameItem {
+                    action: VaultAction::Mutate(VaultMutation::RenameItem {
                         source,
                         destination: destination.clone(),
-                    },
+                    }),
                     label: "Renaming vault item",
                     selection: Some(SelectionHint {
                         item: ItemIdentity::Canonical(destination.as_str().to_owned()),
@@ -1400,11 +1400,11 @@ impl ManagementForm {
             } => {
                 let reference = parse_reference(item, field)?;
                 Ok(FormSubmission {
-                    action: VaultAction::ConvertLegacy {
+                    action: VaultAction::Mutate(VaultMutation::ConvertLegacy {
                         name: source.clone(),
                         reference: reference.clone(),
                         kind: *kind,
-                    },
+                    }),
                     label: "Converting legacy vault entry",
                     selection: Some(SelectionHint {
                         item: ItemIdentity::Canonical(reference.item().to_owned()),
@@ -1426,12 +1426,12 @@ struct FormSubmission {
 impl FormSubmission {
     fn empty_text_replacement_reference(&self) -> Option<&VaultReference> {
         match &self.action {
-            VaultAction::SetField {
+            VaultAction::Mutate(VaultMutation::SetField {
                 reference,
                 kind: FieldKind::Text,
                 value,
                 mode: VaultWriteMode::Replace,
-            } if value.is_empty() => Some(reference),
+            }) if value.is_empty() => Some(reference),
             _ => None,
         }
     }
@@ -1540,18 +1540,18 @@ impl DeleteTarget {
     fn into_action(self) -> (VaultAction, &'static str) {
         match self {
             Self::Field(reference) => (
-                VaultAction::RemoveField { reference },
+                VaultAction::Mutate(VaultMutation::RemoveField { reference }),
                 "Removing vault field",
             ),
             Self::Item { item, .. } => (
-                VaultAction::RemoveItem {
+                VaultAction::Mutate(VaultMutation::RemoveItem {
                     item: VaultItem::parse(&format!("jig://{item}"))
                         .expect("selected item identity remains valid"),
-                },
+                }),
                 "Removing vault item",
             ),
             Self::Legacy(name) => (
-                VaultAction::RemoveLegacy { name },
+                VaultAction::Mutate(VaultMutation::RemoveLegacy { name }),
                 "Removing legacy vault entry",
             ),
         }
