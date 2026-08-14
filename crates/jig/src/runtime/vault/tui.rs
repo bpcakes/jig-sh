@@ -7,16 +7,16 @@ use anyhow::Result;
 #[cfg(all(unix, not(test)))]
 use anyhow::anyhow;
 use jig_vault::{
-    PreparedPrivateFile, SecretBytes, Vault, VaultError, VaultErrorKind, VaultReference,
-    VaultSnapshot,
+    PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault, VaultError, VaultErrorKind,
+    VaultImportPrecondition, VaultReference, VaultSnapshot,
 };
 use jig_vault_tui::{
-    ImportPreview, ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultDescriptor,
-    VaultUiError, VaultUiErrorKind,
+    ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
+    VaultActionResult, VaultBackend, VaultDescriptor, VaultUiError, VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
-use crate::command::VaultTuiRequest;
+use crate::command::{VaultImportEnvironment, VaultTuiRequest};
 
 use super::{ResolvedVaultRuntime, resolve_vault_runtime, vault};
 
@@ -54,6 +54,16 @@ struct VaultTuiBackend {
 #[derive(Default)]
 struct VaultTuiSession {
     credential: Option<SecretString>,
+    pending_import: Option<PendingImportPlan>,
+}
+
+struct PendingImportPlan {
+    token: ImportPlanToken,
+    environment: VaultImportEnvironment,
+    vault: VaultImportPrecondition,
+    destination: PrivateFilePrecondition,
+    out_env: std::path::PathBuf,
+    recovery_command: String,
 }
 
 impl VaultTuiBackend {
@@ -114,6 +124,47 @@ impl VaultTuiBackend {
         self.with_vault(Vault::snapshot)
     }
 
+    fn clear_pending_import(&self) -> std::result::Result<(), VaultUiError> {
+        self.session()?.pending_import = None;
+        Ok(())
+    }
+
+    fn retain_pending_import(
+        &self,
+        plan: PendingImportPlan,
+    ) -> std::result::Result<(), VaultUiError> {
+        let mut session = self.session()?;
+        if session.credential.is_none() {
+            return Err(VaultUiError::new(
+                VaultUiErrorKind::Authentication,
+                "Vault is locked.",
+            ));
+        }
+        session.pending_import = Some(plan);
+        Ok(())
+    }
+
+    fn take_pending_import(
+        &self,
+        token: &ImportPlanToken,
+    ) -> std::result::Result<PendingImportPlan, VaultUiError> {
+        let mut session = self.session()?;
+        let matches = session
+            .pending_import
+            .as_ref()
+            .is_some_and(|pending| pending.token == *token);
+        if !matches {
+            return Err(VaultUiError::new(
+                VaultUiErrorKind::Conflict,
+                "The 1Password import preview expired or was already used; preview again.",
+            ));
+        }
+        Ok(session
+            .pending_import
+            .take()
+            .expect("matching pending import remains installed"))
+    }
+
     fn preview_onepassword_import(
         &self,
         env_file: std::path::PathBuf,
@@ -123,6 +174,7 @@ impl VaultTuiBackend {
         overwrite: bool,
         dry_run: bool,
     ) -> std::result::Result<ImportPreview, VaultUiError> {
+        self.clear_pending_import()?;
         let environment = super::super::vault_env::parse_onepassword_env_file(&env_file, &item)
             .map_err(map_anyhow_error)?;
         let entries = super::super::vault_import::import_entries(&environment);
@@ -130,19 +182,23 @@ impl VaultTuiBackend {
             .iter()
             .map(|entry| entry.reference.clone())
             .collect::<Vec<_>>();
-        let destination_exists = super::super::vault_import::preflight_destination(&out_env)
-            .map_err(map_anyhow_error)?;
-        PreparedPrivateFile::preflight(&out_env, destination_exists).map_err(map_vault_error)?;
-        super::super::vault_import::recovery_command(
+        super::super::vault_import::preflight_destination(&out_env).map_err(map_anyhow_error)?;
+        let destination = PreparedPrivateFile::preview(&out_env).map_err(map_vault_error)?;
+        let destination_exists = destination.destination_exists();
+        let recovery_command = super::super::vault_import::recovery_command(
             &env_file,
             &item,
             &out_env,
             &self.descriptor.home,
         )
         .map_err(map_anyhow_error)?;
-        let existing = self.with_vault(|selected, passphrase| {
-            selected.preview_import_fields(passphrase, &references)
+        let vault = self.with_vault(|selected, passphrase| {
+            selected.plan_import_fields(passphrase, &references)
         })?;
+        let existing = vault
+            .fields()
+            .map(|(_, existed)| existed)
+            .collect::<Vec<_>>();
         let rows = entries
             .into_iter()
             .zip(existing)
@@ -153,13 +209,27 @@ impl VaultTuiBackend {
                 replaces_existing,
             })
             .collect();
+        let authorization = if dry_run {
+            ImportPreviewAuthorization::DryRun
+        } else {
+            let token = ImportPlanToken::generate();
+            self.retain_pending_import(PendingImportPlan {
+                token: token.clone(),
+                environment,
+                vault,
+                destination,
+                out_env: out_env.clone(),
+                recovery_command,
+            })?;
+            ImportPreviewAuthorization::Commit(token)
+        };
         Ok(ImportPreview {
             env_file,
             item,
             out_env,
             replace,
             overwrite,
-            dry_run,
+            authorization,
             rows,
             destination_exists,
         })
@@ -167,22 +237,20 @@ impl VaultTuiBackend {
 
     fn commit_onepassword_import(
         &self,
-        env_file: std::path::PathBuf,
-        item: jig_vault::VaultItem,
-        out_env: std::path::PathBuf,
+        token: ImportPlanToken,
         replace: bool,
         overwrite: bool,
     ) -> std::result::Result<VaultSnapshot, VaultUiError> {
-        let environment = super::super::vault_env::parse_onepassword_env_file(&env_file, &item)
-            .map_err(map_anyhow_error)?;
+        let PendingImportPlan {
+            token: _,
+            environment,
+            vault,
+            destination,
+            out_env,
+            recovery_command,
+        } = self.take_pending_import(&token)?;
         let entries = super::super::vault_import::import_entries(&environment);
-        let references = entries
-            .iter()
-            .map(|entry| entry.reference.clone())
-            .collect::<Vec<_>>();
-        let destination_exists = super::super::vault_import::preflight_destination(&out_env)
-            .map_err(map_anyhow_error)?;
-        if destination_exists && !overwrite {
+        if destination.destination_exists() && !overwrite {
             return Err(VaultUiError::new(
                 VaultUiErrorKind::Conflict,
                 format!(
@@ -191,19 +259,12 @@ impl VaultTuiBackend {
                 ),
             ));
         }
-        PreparedPrivateFile::preflight(&out_env, overwrite).map_err(map_vault_error)?;
-        let recovery_command = super::super::vault_import::recovery_command(
-            &env_file,
-            &item,
-            &out_env,
-            &self.descriptor.home,
-        )
-        .map_err(map_anyhow_error)?;
-        let existing = self.with_vault(|selected, passphrase| {
-            selected.preview_import_fields(passphrase, &references)
-        })?;
         if !replace {
-            if let Some((entry, _)) = entries.iter().zip(&existing).find(|(_, exists)| **exists) {
+            if let Some(entry) = entries
+                .iter()
+                .zip(vault.fields())
+                .find_map(|(entry, (_, existed))| existed.then_some(entry))
+            {
                 return Err(VaultUiError::new(
                     VaultUiErrorKind::Conflict,
                     format!(
@@ -216,10 +277,11 @@ impl VaultTuiBackend {
 
         let imported =
             super::super::vault_import::resolve_import(environment).map_err(map_anyhow_error)?;
-        let prepared = PreparedPrivateFile::prepare(&out_env, imported.destination, overwrite)
-            .map_err(map_vault_error)?;
+        let prepared =
+            PreparedPrivateFile::prepare_if_unchanged(destination, imported.destination, overwrite)
+                .map_err(map_vault_error)?;
         self.with_vault(|selected, passphrase| {
-            selected.import_fields(passphrase, imported.mutations, replace)
+            selected.import_fields_if_unchanged(passphrase, imported.mutations, vault, replace)
         })?;
         if let Err(error) = prepared.install() {
             return Err(VaultUiError::new(
@@ -286,6 +348,7 @@ impl VaultBackend for VaultTuiBackend {
     fn lock(&self) {
         if let Ok(mut session) = self.session.lock() {
             session.credential = None;
+            session.pending_import = None;
         }
     }
 
@@ -373,30 +436,23 @@ impl VaultBackend for VaultTuiBackend {
             VaultAction::VerifyAudit => self
                 .with_vault(Vault::verify_audit)
                 .map(VaultActionResult::Audit),
-            VaultAction::ImportOnePassword {
+            VaultAction::PreviewOnePasswordImport {
                 env_file,
                 item,
                 out_env,
                 replace,
                 overwrite,
-                preview,
                 dry_run,
-            } => {
-                if preview {
-                    self.preview_onepassword_import(
-                        env_file, item, out_env, replace, overwrite, dry_run,
-                    )
-                    .map(VaultActionResult::ImportPreview)
-                } else if dry_run {
-                    Err(VaultUiError::new(
-                        VaultUiErrorKind::InvalidInput,
-                        "A 1Password dry run may preview metadata only and cannot commit.",
-                    ))
-                } else {
-                    self.commit_onepassword_import(env_file, item, out_env, replace, overwrite)
-                        .map(VaultActionResult::Snapshot)
-                }
-            }
+            } => self
+                .preview_onepassword_import(env_file, item, out_env, replace, overwrite, dry_run)
+                .map(VaultActionResult::ImportPreview),
+            VaultAction::CommitOnePasswordImport {
+                plan,
+                replace,
+                overwrite,
+            } => self
+                .commit_onepassword_import(plan, replace, overwrite)
+                .map(VaultActionResult::Snapshot),
             VaultAction::CreateBackup { output, overwrite } => {
                 let result = self.with_vault(|selected, passphrase| {
                     let request = Vault::preflight_backup_create(
@@ -859,13 +915,12 @@ printf '%s' 'resolved-tui-import-secret'
         std::fs::write(&source, b"TOKEN=op://Test/Login/TOKEN\nMODE=production\n").unwrap();
         let item = jig_vault::VaultItem::parse("jig://Production").unwrap();
         let VaultActionResult::ImportPreview(preview) = backend
-            .execute(VaultAction::ImportOnePassword {
+            .execute(VaultAction::PreviewOnePasswordImport {
                 env_file: source.clone(),
-                item: item.clone(),
+                item,
                 out_env: destination.clone(),
                 replace: false,
                 overwrite: false,
-                preview: true,
                 dry_run: false,
             })
             .unwrap()
@@ -875,33 +930,19 @@ printf '%s' 'resolved-tui-import-secret'
         assert_eq!(preview.rows.len(), 2);
         assert!(!preview.destination_exists);
         assert!(!log.exists(), "preview unexpectedly invoked op");
+        let ImportPreviewAuthorization::Commit(plan) = preview.authorization else {
+            panic!("non-dry-run preview did not return commit authority");
+        };
 
-        let error = backend
-            .execute(VaultAction::ImportOnePassword {
-                env_file: source.clone(),
-                item: item.clone(),
-                out_env: destination.clone(),
-                replace: false,
-                overwrite: false,
-                preview: false,
-                dry_run: true,
-            })
-            .unwrap_err();
-        assert_eq!(error.kind(), VaultUiErrorKind::InvalidInput);
-        assert!(
-            !log.exists(),
-            "invalid dry-run commit unexpectedly invoked op"
-        );
+        // The approved plan owns the parsed protected source. Replacing the
+        // path after preview must not change the committed field set.
+        std::fs::write(&source, b"OTHER=op://Changed/Login/OTHER\n").unwrap();
 
         let VaultActionResult::Snapshot(imported) = backend
-            .execute(VaultAction::ImportOnePassword {
-                env_file: source,
-                item,
-                out_env: destination.clone(),
+            .execute(VaultAction::CommitOnePasswordImport {
+                plan: plan.clone(),
                 replace: false,
                 overwrite: false,
-                preview: false,
-                dry_run: false,
             })
             .unwrap()
         else {
@@ -914,17 +955,32 @@ printf '%s' 'resolved-tui-import-secret'
         );
         let log_text = std::fs::read_to_string(log).unwrap();
         assert!(log_text.contains("op://Test/Login/TOKEN"));
+        assert!(!log_text.contains("op://Changed/Login/OTHER"));
         assert!(!log_text.contains("reserved-env-leaked"));
 
+        let reused = backend
+            .execute(VaultAction::CommitOnePasswordImport {
+                plan,
+                replace: false,
+                overwrite: false,
+            })
+            .unwrap_err();
+        assert_eq!(reused.kind(), VaultUiErrorKind::Conflict);
+        assert!(reused.message().contains("already used"));
+
+        std::fs::write(
+            temp.path().join("source.env"),
+            b"TOKEN=op://Test/Login/TOKEN\nMODE=production\n",
+        )
+        .unwrap();
         let log_len = log_text.len();
         let VaultActionResult::ImportPreview(existing) = backend
-            .execute(VaultAction::ImportOnePassword {
+            .execute(VaultAction::PreviewOnePasswordImport {
                 env_file: temp.path().join("source.env"),
                 item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
                 out_env: destination,
                 replace: false,
                 overwrite: false,
-                preview: true,
                 dry_run: true,
             })
             .unwrap()
@@ -933,11 +989,132 @@ printf '%s' 'resolved-tui-import-secret'
         };
         assert!(existing.destination_exists);
         assert!(existing.rows.iter().all(|row| row.replaces_existing));
+        assert!(matches!(
+            existing.authorization,
+            ImportPreviewAuthorization::DryRun
+        ));
         assert_eq!(
             std::fs::read_to_string(temp.path().join("op.log"))
                 .unwrap()
                 .len(),
             log_len
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_commit_rejects_destination_and_vault_drift_from_preview() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        let backend = VaultTuiBackend::new(request(home)).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+
+        let source = temp.path().join("destination-drift.env");
+        let destination = temp.path().join("destination-drift.generated.env");
+        std::fs::write(&source, b"MODE=production\n").unwrap();
+        let VaultActionResult::ImportPreview(preview) = backend
+            .execute(VaultAction::PreviewOnePasswordImport {
+                env_file: source,
+                item: jig_vault::VaultItem::parse("jig://DestinationDrift").unwrap(),
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected destination-drift preview");
+        };
+        let ImportPreviewAuthorization::Commit(plan) = preview.authorization else {
+            panic!("expected destination-drift commit plan");
+        };
+        std::fs::write(&destination, b"must-not-be-overwritten").unwrap();
+
+        let destination_error = backend
+            .execute(VaultAction::CommitOnePasswordImport {
+                plan,
+                replace: false,
+                overwrite: true,
+            })
+            .unwrap_err();
+        assert_eq!(destination_error.kind(), VaultUiErrorKind::Conflict);
+        assert!(
+            destination_error
+                .message()
+                .contains("changed since preview")
+        );
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"must-not-be-overwritten"
+        );
+        assert_eq!(
+            vault
+                .preview_import_fields(
+                    &passphrase,
+                    &[jig_vault::VaultReference::parse("jig://DestinationDrift/MODE").unwrap()]
+                )
+                .unwrap(),
+            vec![false]
+        );
+
+        let source = temp.path().join("vault-drift.env");
+        let destination = temp.path().join("vault-drift.generated.env");
+        std::fs::write(&source, b"MODE=production\n").unwrap();
+        let VaultActionResult::ImportPreview(preview) = backend
+            .execute(VaultAction::PreviewOnePasswordImport {
+                env_file: source,
+                item: jig_vault::VaultItem::parse("jig://VaultDrift").unwrap(),
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected vault-drift preview");
+        };
+        let ImportPreviewAuthorization::Commit(plan) = preview.authorization else {
+            panic!("expected vault-drift commit plan");
+        };
+        vault
+            .set_field(
+                &passphrase,
+                jig_vault::VaultReference::parse("jig://External/CHANGE").unwrap(),
+                FieldKind::Text,
+                SecretBytes::new(b"external-change".to_vec()),
+            )
+            .unwrap();
+
+        let vault_error = backend
+            .execute(VaultAction::CommitOnePasswordImport {
+                plan,
+                replace: false,
+                overwrite: false,
+            })
+            .unwrap_err();
+        assert_eq!(vault_error.kind(), VaultUiErrorKind::Conflict);
+        assert!(
+            vault_error
+                .message()
+                .contains("changed since the import preview")
+        );
+        assert!(!destination.exists());
+        assert_eq!(
+            vault
+                .preview_import_fields(
+                    &passphrase,
+                    &[jig_vault::VaultReference::parse("jig://VaultDrift/MODE").unwrap()]
+                )
+                .unwrap(),
+            vec![false]
         );
     }
 }

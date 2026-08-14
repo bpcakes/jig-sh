@@ -21,6 +21,7 @@ jig-tui.workspace = true
 jig-vault.workspace = true
 libc.workspace = true
 ratatui.workspace = true
+ulid.workspace = true
 unicode-width.workspace = true
 zeroize.workspace = true
 

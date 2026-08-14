@@ -434,10 +434,10 @@ impl BackendRequest {
             Self::Execute(VaultAction::Refresh) => OperationKind::Refresh,
             Self::Execute(VaultAction::Activity { .. }) => OperationKind::Activity,
             Self::Execute(VaultAction::VerifyAudit) => OperationKind::VerifyAudit,
-            Self::Execute(VaultAction::ImportOnePassword { preview: true, .. }) => {
+            Self::Execute(VaultAction::PreviewOnePasswordImport { .. }) => {
                 OperationKind::ImportPreview
             }
-            Self::Execute(VaultAction::ImportOnePassword { .. }) => OperationKind::Import,
+            Self::Execute(VaultAction::CommitOnePasswordImport { .. }) => OperationKind::Import,
             Self::Execute(VaultAction::CreateBackup { .. }) => OperationKind::Backup,
             Self::Execute(VaultAction::ChangePassphrase { .. }) => OperationKind::Passphrase,
             Self::Execute(VaultAction::RestoreBackup { .. }) => OperationKind::Restore,

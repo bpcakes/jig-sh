@@ -267,13 +267,12 @@ impl ToolForm {
                 let item = VaultItem::parse(&format!("jig://{item}"))
                     .map_err(|error| jig_tui::sanitize_text(error.message()))?;
                 Ok(ToolSubmission {
-                    action: VaultAction::ImportOnePassword {
+                    action: VaultAction::PreviewOnePasswordImport {
                         env_file,
                         item,
                         out_env,
                         replace: *replace,
                         overwrite: *overwrite,
-                        preview: true,
                         dry_run: *dry_run,
                     },
                     label: if *dry_run {

@@ -7,7 +7,7 @@ use jig_vault::{
 };
 
 use crate::{
-    ImportPreview, VaultAction, VaultDescriptor, VaultUiError,
+    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultUiError,
     secret_input::SecretInput,
     tools::{ToolChoice, ToolForm, ToolsMenu},
 };
@@ -349,7 +349,7 @@ impl App {
             self.screen = screen;
             return None;
         };
-        if state.preview.dry_run {
+        if state.preview.is_dry_run() {
             self.status = Some(StatusMessage::info(
                 "1Password dry-run preview completed without resolving values or changing files.",
             ));
@@ -377,15 +377,14 @@ impl App {
             });
         }
         let preview = state.preview;
+        let ImportPreviewAuthorization::Commit(plan) = preview.authorization else {
+            unreachable!("dry-run previews returned before commit")
+        };
         self.begin_loading("Resolving and importing 1Password values");
-        Some(VaultAction::ImportOnePassword {
-            env_file: preview.env_file,
-            item: preview.item,
-            out_env: preview.out_env,
+        Some(VaultAction::CommitOnePasswordImport {
+            plan,
             replace: preview.replace,
             overwrite: preview.overwrite,
-            preview: false,
-            dry_run: false,
         })
     }
 

@@ -10,6 +10,7 @@ use jig_vault::{
     AuditVerification, FieldKind, SecretBytes, VaultActivityRecord, VaultItem, VaultReference,
     VaultSnapshot, VaultWriteMode,
 };
+use ulid::Ulid;
 
 mod model;
 mod peek;
@@ -132,14 +133,18 @@ pub enum VaultAction {
         limit: usize,
     },
     VerifyAudit,
-    ImportOnePassword {
+    PreviewOnePasswordImport {
         env_file: PathBuf,
         item: VaultItem,
         out_env: PathBuf,
         replace: bool,
         overwrite: bool,
-        preview: bool,
         dry_run: bool,
+    },
+    CommitOnePasswordImport {
+        plan: ImportPlanToken,
+        replace: bool,
+        overwrite: bool,
     },
     CreateBackup {
         output: PathBuf,
@@ -168,6 +173,32 @@ pub struct ImportPreviewRow {
     pub replaces_existing: bool,
 }
 
+/// Opaque one-shot capability for committing one exact import preview.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ImportPlanToken(String);
+
+impl ImportPlanToken {
+    /// Creates a process-local unguessable plan identity.
+    pub fn generate() -> Self {
+        Self(Ulid::new().to_string())
+    }
+}
+
+impl fmt::Debug for ImportPlanToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ImportPlanToken([OPAQUE])")
+    }
+}
+
+/// Whether a safe import preview can be committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ImportPreviewAuthorization {
+    /// A dry run intentionally has no commit authority.
+    DryRun,
+    /// The backend retained a protected one-shot plan for this preview.
+    Commit(ImportPlanToken),
+}
+
 /// Metadata-only preview of one proposed 1Password dotenv import.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportPreview {
@@ -176,9 +207,16 @@ pub struct ImportPreview {
     pub out_env: PathBuf,
     pub replace: bool,
     pub overwrite: bool,
-    pub dry_run: bool,
+    pub authorization: ImportPreviewAuthorization,
     pub rows: Vec<ImportPreviewRow>,
     pub destination_exists: bool,
+}
+
+impl ImportPreview {
+    /// Returns true when this result is metadata-only and cannot be committed.
+    pub const fn is_dry_run(&self) -> bool {
+        matches!(self.authorization, ImportPreviewAuthorization::DryRun)
+    }
 }
 
 /// Metadata-only completion returned by [`VaultBackend::execute`].

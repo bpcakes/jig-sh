@@ -1452,6 +1452,7 @@ dependencies = [
  "ratatui",
  "secrecy",
  "tempfile",
+ "ulid",
  "unicode-width 0.2.0",
  "zeroize",
 ]

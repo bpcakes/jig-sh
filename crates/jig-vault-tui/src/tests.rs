@@ -7,7 +7,8 @@ use secrecy::SecretString;
 use tempfile::tempdir;
 
 use crate::{
-    ImportPreview, ImportPreviewRow, VaultAction, VaultDescriptor,
+    ImportPlanToken, ImportPreview, ImportPreviewAuthorization, ImportPreviewRow, VaultAction,
+    VaultDescriptor,
     model::{App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, ManagementForm, Screen},
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
@@ -719,18 +720,16 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_paste(&mut app, "/tmp/generated.env");
     match submit_key(&mut app) {
-        VaultAction::ImportOnePassword {
+        VaultAction::PreviewOnePasswordImport {
             env_file,
             item,
             out_env,
-            preview,
             dry_run,
             ..
         } => {
             assert_eq!(env_file, PathBuf::from("/tmp/source.env"));
             assert_eq!(item.as_str(), "Production");
             assert_eq!(out_env, PathBuf::from("/tmp/generated.env"));
-            assert!(preview);
             assert!(!dry_run);
         }
         other => panic!("unexpected action: {other:?}"),
@@ -742,7 +741,7 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
         out_env: PathBuf::from("/tmp/generated.env"),
         replace: false,
         overwrite: false,
-        dry_run: false,
+        authorization: ImportPreviewAuthorization::Commit(ImportPlanToken::generate()),
         rows: vec![ImportPreviewRow {
             variable: "TOKEN".to_owned(),
             reference: "jig://Production/TOKEN".parse().unwrap(),
@@ -765,15 +764,11 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
         KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
     );
     match submit_key(&mut app) {
-        VaultAction::ImportOnePassword {
-            replace,
-            overwrite,
-            preview,
-            ..
+        VaultAction::CommitOnePasswordImport {
+            replace, overwrite, ..
         } => {
             assert!(replace);
             assert!(overwrite);
-            assert!(!preview);
         }
         other => panic!("unexpected action: {other:?}"),
     }

@@ -1009,7 +1009,7 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
         )));
     }
     lines.push(Line::from(""));
-    if preview.dry_run {
+    if preview.is_dry_run() {
         lines.push(Line::from(Span::styled(
             "Dry run: no 1Password values were resolved and no files or fields will change.",
             Style::default().fg(GOOD),
