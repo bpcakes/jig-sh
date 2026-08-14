@@ -762,6 +762,22 @@ struct ImportFieldPresence {
     existed: bool,
 }
 
+#[derive(Clone, Copy)]
+enum VaultEditPrecondition<'a> {
+    Unconditional,
+    Revision(&'a VaultRevision),
+}
+
+impl VaultEditPrecondition<'_> {
+    fn enforce(self, vault: &OpenVault, stale_message: &'static str) -> AnyResult<()> {
+        match self {
+            Self::Unconditional => Ok(()),
+            Self::Revision(revision) if vault.matches_revision(revision) => Ok(()),
+            Self::Revision(_) => Err(classified(VaultErrorKind::AlreadyExists, stale_message)),
+        }
+    }
+}
+
 impl VaultWriteMode {
     const fn as_str(self) -> &'static str {
         match self {
@@ -1233,6 +1249,25 @@ impl VaultStore {
         should_commit: impl FnOnce(&R) -> bool,
         details: impl FnOnce(&R) -> serde_json::Value,
     ) -> AnyResult<R> {
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            VaultEditPrecondition::Unconditional,
+            action,
+            edit,
+            should_commit,
+            details,
+        )
+    }
+
+    fn edit_with_audit_if_precondition<R>(
+        &self,
+        passphrase: &SecretString,
+        precondition: VaultEditPrecondition<'_>,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        should_commit: impl FnOnce(&R) -> bool,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
         self.with_lock(|| {
             let mut vault = self.open_unlocked(passphrase)?;
             verify_chain_unlocked(self, vault.audit_key.as_ref()).map_err(|error| {
@@ -1242,6 +1277,10 @@ impl VaultStore {
                     error,
                 )
             })?;
+            precondition.enforce(
+                &vault,
+                "vault state changed since the metadata snapshot; refresh and retry",
+            )?;
             let result = edit(&mut vault)?;
             if !should_commit(&result) {
                 return Ok(result);
@@ -2866,12 +2905,10 @@ fn enforce_import_precondition(
     precondition: &VaultImportPrecondition,
     replace: bool,
 ) -> AnyResult<()> {
-    if !vault.matches_revision(&precondition.revision) {
-        return Err(classified(
-            VaultErrorKind::AlreadyExists,
-            "vault state changed since the import preview; preview again",
-        ));
-    }
+    VaultEditPrecondition::Revision(&precondition.revision).enforce(
+        vault,
+        "vault state changed since the import preview; preview again",
+    )?;
     if !replace {
         if let Some(field) = precondition.fields.iter().find(|field| field.existed) {
             return Err(classified(
