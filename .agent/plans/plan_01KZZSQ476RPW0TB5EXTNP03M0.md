@@ -13,14 +13,14 @@ This ExecPlan follows up the comprehensive review of branch `feat/vault-tui`. It
 - [x] (2026-08-14) Fixed keyboard behavior so lowercase `q` is valid protected input and loading does not expose the unsafe hidden lock transition (`f1a22af`).
 - [x] (2026-08-14) Staged value-file loading and validation in a temporary protected buffer so failed validation does not mutate the form (`437b135`).
 - [x] (2026-08-14) Measured production-KDF latency and retained the existing credential-only session design.
-- [ ] Run the configured Jig gates, inspect receipts and the final diff, and close structured work.
+- [x] (2026-08-14) Passed the configured Jig gates, inspected receipts and the final diff, and closed structured work.
 
 ## Surprises & Discoveries
 
 - The two recovery findings are symptoms of one deeper invalid-state design. `BackendCompletion` stores a primary `Result` beside `Option<Result<VaultSnapshot, VaultUiError>>`, so success-plus-recovery and failed-recovery combinations are representable and the consumer can accidentally ignore the second error.
 - The 1Password partial-install symptom is not specific to importing. Any action that may change durable state can fail after its side effect or while taking the follow-up snapshot. Recovery policy should therefore follow operation semantics, not a short list of error kinds.
 - The lowercase-`q` defect is amplified by a boolean `initializing` flag inside a shared key handler. Locked and initialization screens have distinct control transitions and should delegate only their common protected editing behavior.
-- The value-file retry defect is a phase-order problem: file bytes are moved into live form state before validation finishes. A temporary `SecretInput` can encode load -> validate -> consume without exposing plaintext or adding allocation beyond the existing one-MiB protected buffer.
+- The value-file retry defect is a phase-order problem: file bytes are moved into live form state before validation finishes. A temporary `SecretInput` encodes load -> validate -> consume without exposing plaintext; submission briefly holds one additional bounded one-MiB zeroizing allocation so the live form remains untouched on failure.
 - Scanner reports about file length, exhaustive matches, DTO public fields, and test `unwrap` calls are non-findings for this change. The modules are cohesive, the matches cover closed enums, the records are presentation DTOs, and the panics are test/proven-invariant paths.
 - The initial repository-wide `work check` reached the 1,960-test Nextest suite but returned the harness's generic exit 100 after roughly twelve minutes without a vault-related failure in its captured preview. The focused vault/TUI baseline, workspace formatting, targeted all-target check, and targeted strict Clippy run were all green; final acceptance will rerun the configured gates after the changes.
 - Production Argon2id parameters are 131,072 KiB memory, 3 iterations, parallelism 4. On this host, an optimized fresh binary measured init at 0.32 s, five metadata snapshots at 0.28/0.29/0.29/0.28/0.28 s (0.28 s median), and five mutations at 0.31/0.33/0.33/0.34/0.32 s (0.33 s median). A TUI mutation plus its snapshot therefore costs roughly 0.61 s median. The unoptimized dev binary took about 5.9-6.0 s per KDF, which is a build-profile artifact rather than deployed latency.
@@ -53,7 +53,13 @@ This ExecPlan follows up the comprehensive review of branch `feat/vault-tui`. It
 
 ## Outcomes & Retrospective
 
-Not complete. Update this section after the implementation, latency measurement, and repository gates.
+Implementation, verification, and structured-work closure are complete.
+
+- Worker completion now uses closed outcome/failure enums, making successful recovery, failed recovery, and primary-only failure explicit and exhaustive. Recovery policy lives with `OperationKind`, follows side-effect semantics, and locks whenever metadata cannot be re-established.
+- Locked and Initialize key handling own their distinct transitions and share only protected editing. Lowercase `q` is enterable, Loading cannot discard a completion through the old hidden lock transition, and the rendered help matches the actual controls.
+- File-backed protected values are loaded, validated, and consumed as one staged operation. Failed validation leaves the live form empty and permits a corrected file to be retried.
+- The change added no dependency, public API, persistent format, CLI contract, unsafe code, or plaintext-bearing model/debug/error path. Regression coverage increased the vault-TUI suite from 31 to 37 tests.
+- The final focused formatting/check/test/Clippy set passed. The configured Jig contract and 1,960-test vault partition passed with fresh batch receipt `receipt_01KZZWF2D67J4BE8X5MZJR5VFJ`; `work gates` and `work evidence` report no unresolved gates.
 
 ## Context and orientation
 
@@ -73,7 +79,7 @@ Fourth change keyboard behavior. Treat every unmodified character, including low
 
 Fifth apply **Split Phase** to form value collection. Load a file into a local `SecretInput`, validate the selected kind, and only then consume the bytes into `VaultAction`. Add a test that fails with a three-byte concealed file, rewrites the same file with valid bytes, and succeeds on the next Enter.
 
-Finally measure production Argon2 operations with the freshly built `target/debug/jig` against an owner-only temporary vault. Record init, metadata read, and mutation timings and infer the current TUI mutation cost from its mutation-plus-snapshot calls. Do not add a derived-key session API unless the measurement demonstrates an unusable interaction cost; that security-sensitive optimization is outside a mere cleanup.
+Finally measure production Argon2 operations with a freshly built optimized `target/release/jig` against an owner-only temporary vault, retaining the debug-binary result only to identify build-profile overhead. Record init, metadata read, and mutation timings and infer the current TUI mutation cost from its mutation-plus-snapshot calls. Do not add a derived-key session API unless the optimized measurement demonstrates an unusable interaction cost; that security-sensitive optimization is outside a mere cleanup.
 
 ## Concrete steps and commit boundaries
 
