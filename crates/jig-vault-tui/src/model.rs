@@ -999,16 +999,22 @@ fn validate_value(kind: FieldKind, value: &SecretInput) -> Result<(), String> {
     Ok(())
 }
 
-fn load_value_file(value: &mut SecretInput, value_file: &str) -> Result<(), String> {
+fn take_validated_value(
+    value: &mut SecretInput,
+    value_file: &str,
+    kind: FieldKind,
+) -> Result<SecretBytes, String> {
     if value_file.is_empty() {
-        return Ok(());
+        validate_value(kind, value)?;
+        return Ok(value.take());
     }
     if !value.is_empty() {
         return Err("Choose either protected input or a value file, not both.".to_owned());
     }
-    *value = SecretInput::from_regular_file(Path::new(value_file))
+    let mut loaded = SecretInput::from_regular_file(Path::new(value_file))
         .map_err(|error| sanitize_text(&error.to_string()))?;
-    Ok(())
+    validate_value(kind, &loaded)?;
+    Ok(loaded.take())
 }
 
 const fn toggled_kind(kind: FieldKind) -> FieldKind {
@@ -1240,12 +1246,11 @@ impl ManagementForm {
                 ..
             } => {
                 let reference = parse_reference(item, field)?;
-                load_value_file(value, value_file)?;
-                validate_value(*kind, value)?;
+                let value = take_validated_value(value, value_file, *kind)?;
                 let action = VaultAction::SetField {
                     reference: reference.clone(),
                     kind: *kind,
-                    value: value.take(),
+                    value,
                     mode: *mode,
                 };
                 Ok(FormSubmission {
@@ -1269,12 +1274,11 @@ impl ManagementForm {
                 ..
             } => {
                 let name = parse_legacy_name(name)?;
-                load_value_file(value, value_file)?;
-                validate_value(FieldKind::Concealed, value)?;
+                let value = take_validated_value(value, value_file, FieldKind::Concealed)?;
                 Ok(FormSubmission {
                     action: VaultAction::SetLegacy {
                         name: name.clone(),
-                        value: value.take(),
+                        value,
                         mode: *mode,
                     },
                     label: match mode {

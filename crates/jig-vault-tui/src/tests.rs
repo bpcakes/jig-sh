@@ -448,6 +448,44 @@ fn create_field_form_can_load_exact_bytes_from_a_regular_file() {
 }
 
 #[test]
+fn invalid_concealed_value_file_can_be_corrected_and_retried() {
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("secret.bin");
+    std::fs::write(&source, b"bad").unwrap();
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "RETRY_FIELD");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, &source.to_string_lossy());
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Form(ManagementForm::WriteField {
+        value, value_file, ..
+    }) = &app.screen
+    else {
+        panic!("expected field form after validation failure");
+    };
+    assert!(value.is_empty());
+    assert_eq!(value_file, &source.to_string_lossy());
+    assert_eq!(
+        app.status.as_ref().unwrap().text,
+        "Concealed values must contain at least 4 bytes."
+    );
+
+    let corrected = b"corrected-binary\0value";
+    std::fs::write(&source, corrected).unwrap();
+    match submit_key(&mut app) {
+        VaultAction::SetField { value, .. } => assert_eq!(value.as_slice(), corrected),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
 fn replacement_form_starts_empty_and_does_not_render_existing_value() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;
