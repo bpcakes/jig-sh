@@ -314,6 +314,7 @@ fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) 
                 OperationKind::Activity
                 | OperationKind::VerifyAudit
                 | OperationKind::ImportPreview
+                | OperationKind::ImportDiscard
                 | OperationKind::Backup
                 | OperationKind::Restore
                 | OperationKind::Export => "Vault operation completed.",
@@ -323,6 +324,7 @@ fn apply_success(app: &mut App, kind: OperationKind, result: VaultActionResult) 
         VaultActionResult::Activity(records) => app.apply_activity(records),
         VaultActionResult::Audit(verification) => app.apply_audit_result(verification),
         VaultActionResult::ImportPreview(preview) => app.apply_import_preview(preview),
+        VaultActionResult::ImportDiscarded => app.finish_import_discard(),
         VaultActionResult::BackupCreated {
             output,
             bytes_written,
@@ -433,6 +435,7 @@ fn apply_primary_failure(app: &mut App, kind: OperationKind, error: &VaultUiErro
         | OperationKind::Activity
         | OperationKind::VerifyAudit
         | OperationKind::ImportPreview
+        | OperationKind::ImportDiscard
         | OperationKind::Import
         | OperationKind::Backup
         | OperationKind::Passphrase
@@ -471,6 +474,9 @@ impl BackendRequest {
                 OperationKind::ImportPreview
             }
             Self::Execute(VaultAction::CommitOnePasswordImport { .. }) => OperationKind::Import,
+            Self::Execute(VaultAction::DiscardOnePasswordImport { .. }) => {
+                OperationKind::ImportDiscard
+            }
             Self::Execute(VaultAction::CreateBackup { .. }) => OperationKind::Backup,
             Self::Execute(VaultAction::ChangePassphrase { .. }) => OperationKind::Passphrase,
             Self::Execute(VaultAction::RestoreBackup { .. }) => OperationKind::Restore,
@@ -489,6 +495,7 @@ enum OperationKind {
     Activity,
     VerifyAudit,
     ImportPreview,
+    ImportDiscard,
     Import,
     Backup,
     Passphrase,
@@ -1008,10 +1015,11 @@ fn handle_activity_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 
 fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     match key.code {
-        KeyCode::Esc => {
-            app.close_overlay();
-            RuntimeAction::Redraw
-        }
+        KeyCode::Esc => app
+            .discard_import_preview()
+            .map_or(RuntimeAction::Redraw, |action| {
+                RuntimeAction::Start(BackendRequest::Execute(action))
+            }),
         KeyCode::Char('r') => {
             app.toggle_import_replace();
             RuntimeAction::Redraw
@@ -1376,6 +1384,7 @@ mod tests {
             OperationKind::Activity,
             OperationKind::VerifyAudit,
             OperationKind::ImportPreview,
+            OperationKind::ImportDiscard,
             OperationKind::Restore,
         ] {
             assert!(!kind.should_refresh_after_error(&recoverable));

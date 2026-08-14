@@ -133,6 +133,9 @@ pub enum VaultAction {
         replace: bool,
         overwrite: bool,
     },
+    DiscardOnePasswordImport {
+        plan: ImportPlanToken,
+    },
     CreateBackup {
         output: PathBuf,
         overwrite: bool,
@@ -214,6 +217,7 @@ pub enum VaultActionResult {
     Activity(VerifiedVaultActivity),
     Audit(AuditVerification),
     ImportPreview(ImportPreview),
+    ImportDiscarded,
     BackupCreated {
         output: PathBuf,
         bytes_written: usize,

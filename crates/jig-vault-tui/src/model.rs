@@ -174,7 +174,6 @@ impl App {
                 | Screen::ConfirmDelete(_)
                 | Screen::Tools(_)
                 | Screen::ToolForm(_)
-                | Screen::ImportPreview(_)
                 | Screen::Activity(_)
                 | Screen::AuditResult(_)
                 | Screen::ConfirmPeek(_)
@@ -329,6 +328,25 @@ impl App {
             confirmation: String::new(),
         });
         self.status = None;
+    }
+
+    pub(crate) fn discard_import_preview(&mut self) -> Option<VaultAction> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::ImportPreview(state) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        let ImportPreviewAuthorization::Commit(plan) = state.preview.authorization else {
+            self.status = None;
+            return None;
+        };
+        self.begin_loading("Discarding 1Password import preview");
+        Some(VaultAction::DiscardOnePasswordImport { plan })
+    }
+
+    pub(crate) fn finish_import_discard(&mut self) {
+        self.screen = Screen::Browse;
+        self.status = Some(StatusMessage::info("1Password import preview discarded."));
     }
 
     pub(crate) fn toggle_import_replace(&mut self) {

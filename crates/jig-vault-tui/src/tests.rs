@@ -1080,6 +1080,55 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
 }
 
 #[test]
+fn import_preview_escape_emits_a_token_scoped_discard_action() {
+    let mut app = browsing_app();
+    let plan = ImportPlanToken::generate();
+    app.apply_import_preview(ImportPreview {
+        env_file: PathBuf::from("/tmp/source.env"),
+        item: "jig://Production".parse().unwrap(),
+        out_env: PathBuf::from("/tmp/generated.env"),
+        replace: false,
+        overwrite: false,
+        authorization: ImportPreviewAuthorization::Commit(plan.clone()),
+        rows: Vec::new(),
+        destination_exists: false,
+    });
+
+    let RuntimeAction::Start(BackendRequest::Execute(VaultAction::DiscardOnePasswordImport {
+        plan: discarded,
+    })) = handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+    else {
+        panic!("commit-capable preview did not produce a discard action");
+    };
+    assert_eq!(discarded, plan);
+    assert!(matches!(app.screen, Screen::Loading(_)));
+
+    app.finish_import_discard();
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("preview discarded"))
+    );
+
+    app.apply_import_preview(ImportPreview {
+        env_file: PathBuf::from("/tmp/source.env"),
+        item: "jig://Production".parse().unwrap(),
+        out_env: PathBuf::from("/tmp/generated.env"),
+        replace: false,
+        overwrite: false,
+        authorization: ImportPreviewAuthorization::DryRun,
+        rows: Vec::new(),
+        destination_exists: false,
+    });
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::Browse));
+}
+
+#[test]
 fn backup_and_passphrase_forms_emit_metadata_only_actions() {
     let mut app = browsing_app();
     app.open_tools();

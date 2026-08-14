@@ -63,6 +63,26 @@ impl VaultTuiSession {
         self.credential = None;
         self.pending_import = None;
     }
+
+    fn take_pending_import(
+        &mut self,
+        token: &ImportPlanToken,
+    ) -> std::result::Result<PendingImportPlan, VaultUiError> {
+        let matches = self
+            .pending_import
+            .as_ref()
+            .is_some_and(|pending| pending.token == *token);
+        if !matches {
+            return Err(VaultUiError::new(
+                VaultUiErrorKind::Conflict,
+                "The 1Password import preview expired or was already used; preview again.",
+            ));
+        }
+        Ok(self
+            .pending_import
+            .take()
+            .expect("matching pending import remains installed"))
+    }
 }
 
 struct PendingImportPlan {
@@ -156,21 +176,14 @@ impl VaultTuiBackend {
         &self,
         token: &ImportPlanToken,
     ) -> std::result::Result<PendingImportPlan, VaultUiError> {
-        let mut session = self.session()?;
-        let matches = session
-            .pending_import
-            .as_ref()
-            .is_some_and(|pending| pending.token == *token);
-        if !matches {
-            return Err(VaultUiError::new(
-                VaultUiErrorKind::Conflict,
-                "The 1Password import preview expired or was already used; preview again.",
-            ));
-        }
-        Ok(session
-            .pending_import
-            .take()
-            .expect("matching pending import remains installed"))
+        self.session()?.take_pending_import(token)
+    }
+
+    fn discard_pending_import(
+        &self,
+        token: &ImportPlanToken,
+    ) -> std::result::Result<(), VaultUiError> {
+        self.take_pending_import(token).map(drop)
     }
 
     fn preview_onepassword_import(
@@ -405,6 +418,10 @@ impl VaultBackend for VaultTuiBackend {
             } => self
                 .commit_onepassword_import(plan, replace, overwrite)
                 .map(VaultActionResult::Snapshot),
+            VaultAction::DiscardOnePasswordImport { plan } => {
+                self.discard_pending_import(&plan)?;
+                Ok(VaultActionResult::ImportDiscarded)
+            }
             VaultAction::CreateBackup { output, overwrite } => {
                 let result = self.with_vault(|selected, passphrase| {
                     let request = Vault::preflight_backup_create(
@@ -614,6 +631,77 @@ mod tests {
         };
         assert!(session.credential.is_none());
         assert!(session.pending_import.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_discard_consumes_only_the_matching_pending_plan() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("vault");
+        let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+        let passphrase = SecretString::from("correct horse battery staple".to_owned());
+        vault.init(&passphrase).unwrap();
+        let backend = VaultTuiBackend::new(request(home)).unwrap();
+        backend
+            .unlock(SecretBytes::new(b"correct horse battery staple".to_vec()))
+            .unwrap();
+
+        let source = temp.path().join("source.env");
+        let destination = temp.path().join("generated.env");
+        std::fs::write(&source, b"MODE=production\n").unwrap();
+        let VaultActionResult::ImportPreview(preview) = backend
+            .execute(VaultAction::PreviewOnePasswordImport {
+                env_file: source,
+                item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
+                out_env: destination.clone(),
+                replace: false,
+                overwrite: false,
+                dry_run: false,
+            })
+            .unwrap()
+        else {
+            panic!("expected import preview");
+        };
+        let ImportPreviewAuthorization::Commit(plan) = preview.authorization else {
+            panic!("expected commit authority");
+        };
+
+        let wrong_plan = backend
+            .execute(VaultAction::DiscardOnePasswordImport {
+                plan: ImportPlanToken::generate(),
+            })
+            .unwrap_err();
+        assert_eq!(wrong_plan.kind(), VaultUiErrorKind::Conflict);
+        assert!(
+            backend
+                .session()
+                .unwrap()
+                .pending_import
+                .as_ref()
+                .is_some_and(|pending| pending.token == plan)
+        );
+
+        assert!(matches!(
+            backend
+                .execute(VaultAction::DiscardOnePasswordImport { plan: plan.clone() })
+                .unwrap(),
+            VaultActionResult::ImportDiscarded
+        ));
+        assert!(backend.session().unwrap().pending_import.is_none());
+
+        let consumed = backend
+            .execute(VaultAction::CommitOnePasswordImport {
+                plan,
+                replace: false,
+                overwrite: false,
+            })
+            .unwrap_err();
+        assert_eq!(consumed.kind(), VaultUiErrorKind::Conflict);
+        assert!(!destination.exists());
+        assert!(vault.snapshot(&passphrase).unwrap().fields.is_empty());
     }
 
     #[test]
