@@ -14,14 +14,14 @@ separately.
 - [x] Establish the targeted formatting, test, and Clippy baseline.
 - [x] Run the Fowler heuristic scanner against `master...HEAD` and validate its
   relevant candidates manually.
-- [ ] Split command state eligibility from target-platform capability without
+- [x] Split command state eligibility from target-platform capability without
   changing existing behavior.
-- [ ] Disable private-output commands on unsupported targets and document the
+- [x] Disable private-output commands on unsupported targets and document the
   limitation.
-- [ ] Render browser filter state and operation feedback independently.
-- [ ] Introduce prepared fuzzy-search text without changing match ordering.
-- [ ] Move Quick Access terms and ranked indices into one cache-owning type.
-- [ ] Run the configured repository gates, review the final diff and commit
+- [x] Render browser filter state and operation feedback independently.
+- [x] Introduce prepared fuzzy-search text without changing match ordering.
+- [x] Move Quick Access terms and ranked indices into one cache-owning type.
+- [x] Run the configured repository gates, review the final diff and commit
   series, and close the structured work.
 
 ## Surprises & Discoveries
@@ -38,6 +38,9 @@ separately.
 - The scanner reported the large `UiCommand::availability` match and the exposed
   Quick Access fields, but it did not identify the actual footer defect. File
   length and exhaustive enum matches are not treated as findings by themselves.
+- The configured check retry completed both its non-vault and vault partitions
+  successfully. It took about fourteen minutes because the workspace includes
+  extensive bootstrap and cryptographic integration coverage.
 
 ## Decision Log
 
@@ -58,8 +61,32 @@ separately.
 
 ## Outcomes & Retrospective
 
-To be completed after all checks pass. Record the final commit series, any
-remaining risks, and whether the configured gates succeeded on retry.
+The work landed as five independently revertible source slices after the planning
+commit:
+
+- `4a1730d` splits state eligibility from platform capability without changing
+  behavior.
+- `cce3036` gates private-output commands to Unix and restore to Linux, with
+  injected-capability regressions and aligned help/documentation.
+- `9855b31` renders retained filters and operation feedback independently.
+- `7412bb5` adds reusable prepared fuzzy text while retaining the existing public
+  scoring adapter and ordering.
+- `f4e9b30` makes Quick Access own immutable prepared terms and cached ranked
+  indices behind read-only presentation methods.
+
+The symptoms were mixed. The footer was a local row-accounting/rendering omission.
+The platform bug and repeated Quick Access work were design issues: implicit
+capability groupings and derived state owned by read consumers created multiple
+places where behavior could drift. The refactorings reduced those surfaces to one
+platform requirement per command and one query-result invalidation path.
+
+The configured `jig.test` and `jig.contract_check` gates passed on retry with
+fresh receipts. `cargo fmt --all -- --check` and strict Clippy for `jig-sh` plus
+all four TUI crates also passed. No dependencies, persisted formats, plaintext
+boundaries, or terminal lifecycle paths changed. The only remaining risk is that
+non-Unix capability behavior is proven through injected platform tests rather
+than a locally installed cross target; the repository's target CI remains the
+end-to-end cross-platform check.
 
 ## Context and orientation
 
