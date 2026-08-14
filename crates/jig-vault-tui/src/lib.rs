@@ -6,9 +6,10 @@
 
 use std::{fmt, io::Write, path::PathBuf};
 
+pub use jig_vault::VaultMutation;
 use jig_vault::{
-    AuditVerification, FieldKind, SecretBytes, VaultItem, VaultReference, VaultSnapshot,
-    VaultWriteMode, VerifiedVaultActivity,
+    AuditVerification, FieldKind, SecretBytes, VaultItem, VaultReference, VaultRevision,
+    VaultSnapshot, VerifiedVaultActivity,
 };
 use ulid::Ulid;
 
@@ -111,7 +112,10 @@ impl std::error::Error for VaultUiError {}
 pub enum VaultAction {
     Refresh,
     MigrateToV2,
-    Mutate(VaultMutation),
+    Mutate {
+        revision: VaultRevision,
+        mutation: VaultMutation,
+    },
     Activity {
         limit: usize,
     },
@@ -144,48 +148,6 @@ pub enum VaultAction {
         reference: VaultReference,
         output: PathBuf,
         overwrite: bool,
-    },
-}
-
-/// One atomic field, item, or legacy-entry mutation.
-#[derive(Debug)]
-pub enum VaultMutation {
-    SetField {
-        reference: VaultReference,
-        kind: FieldKind,
-        value: SecretBytes,
-        mode: VaultWriteMode,
-    },
-    ChangeFieldKind {
-        reference: VaultReference,
-        kind: FieldKind,
-    },
-    RenameField {
-        source: VaultReference,
-        destination: VaultReference,
-    },
-    RenameItem {
-        source: VaultItem,
-        destination: VaultItem,
-    },
-    RemoveField {
-        reference: VaultReference,
-    },
-    RemoveItem {
-        item: VaultItem,
-    },
-    SetLegacy {
-        name: String,
-        value: SecretBytes,
-        mode: VaultWriteMode,
-    },
-    RemoveLegacy {
-        name: String,
-    },
-    ConvertLegacy {
-        name: String,
-        reference: VaultReference,
-        kind: FieldKind,
     },
 }
 

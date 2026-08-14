@@ -439,12 +439,16 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
         "{action_debug}"
     );
     match action {
-        VaultAction::Mutate(VaultMutation::SetField {
-            reference,
-            kind,
-            mode,
-            value: _,
-        }) => {
+        VaultAction::Mutate {
+            mutation:
+                VaultMutation::SetField {
+                    reference,
+                    kind,
+                    mode,
+                    value: _,
+                },
+            ..
+        } => {
             assert_eq!(reference.to_string(), "jig://Production/NEW_FIELD");
             assert_eq!(kind, FieldKind::Text);
             assert_eq!(mode, jig_vault::VaultWriteMode::Create);
@@ -468,7 +472,10 @@ fn create_field_form_can_load_exact_bytes_from_a_regular_file() {
     handle_paste(&mut app, &source.to_string_lossy());
 
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::SetField { value, .. }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetField { value, .. },
+            ..
+        } => {
             assert_eq!(value.as_slice(), exact)
         }
         other => panic!("unexpected action: {other:?}"),
@@ -508,7 +515,10 @@ fn invalid_concealed_value_file_can_be_corrected_and_retried() {
     let corrected = b"corrected-binary\0value";
     std::fs::write(&source, corrected).unwrap();
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::SetField { value, .. }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetField { value, .. },
+            ..
+        } => {
             assert_eq!(value.as_slice(), corrected)
         }
         other => panic!("unexpected action: {other:?}"),
@@ -592,14 +602,16 @@ fn empty_text_replacement_requires_exact_clear_confirmation() {
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
     handle_paste(&mut app, "CLEAR");
-    let RuntimeAction::Start(BackendRequest::Execute(VaultAction::Mutate(
-        VaultMutation::SetField {
-            reference,
-            kind,
-            value,
-            mode,
-        },
-    ))) = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    let RuntimeAction::Start(BackendRequest::Execute(VaultAction::Mutate {
+        mutation:
+            VaultMutation::SetField {
+                reference,
+                kind,
+                value,
+                mode,
+            },
+        ..
+    })) = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
     else {
         panic!("exact confirmation did not produce an empty replacement action");
     };
@@ -620,7 +632,10 @@ fn non_empty_text_replacement_does_not_require_clear_confirmation() {
     handle_paste(&mut app, "replacement value");
 
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::SetField { value, mode, .. }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetField { value, mode, .. },
+            ..
+        } => {
             assert_eq!(value.as_slice(), b"replacement value");
             assert_eq!(mode, jig_vault::VaultWriteMode::Replace);
         }
@@ -634,7 +649,10 @@ fn kind_rename_and_item_rename_forms_emit_typed_actions() {
     app.focus = Focus::Fields;
     app.begin_change_kind();
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::ChangeFieldKind { reference, kind }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::ChangeFieldKind { reference, kind },
+            ..
+        } => {
             assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
             assert_eq!(kind, FieldKind::Text);
         }
@@ -646,10 +664,14 @@ fn kind_rename_and_item_rename_forms_emit_typed_actions() {
     app.begin_rename();
     handle_paste(&mut app, "TOKEN_RENAMED");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::RenameField {
-            source,
-            destination,
-        }) => {
+        VaultAction::Mutate {
+            mutation:
+                VaultMutation::RenameField {
+                    source,
+                    destination,
+                },
+            ..
+        } => {
             assert_eq!(source.to_string(), "jig://Production/API_TOKEN");
             assert_eq!(destination.to_string(), "jig://Production/TOKEN_RENAMED");
         }
@@ -661,10 +683,14 @@ fn kind_rename_and_item_rename_forms_emit_typed_actions() {
     app.begin_rename();
     handle_paste(&mut app, "ProdRenamed");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::RenameItem {
-            source,
-            destination,
-        }) => {
+        VaultAction::Mutate {
+            mutation:
+                VaultMutation::RenameItem {
+                    source,
+                    destination,
+                },
+            ..
+        } => {
             assert_eq!(source.as_str(), "Production");
             assert_eq!(destination.as_str(), "ProdRenamed");
         }
@@ -680,7 +706,10 @@ fn legacy_create_replace_convert_and_delete_are_explicit() {
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_paste(&mut app, "new-legacy-value");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::SetLegacy { name, mode, .. }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetLegacy { name, mode, .. },
+            ..
+        } => {
             assert_eq!(name, "another_old_token");
             assert_eq!(mode, jig_vault::VaultWriteMode::Create);
         }
@@ -692,7 +721,10 @@ fn legacy_create_replace_convert_and_delete_are_explicit() {
     app.begin_replace();
     handle_paste(&mut app, "replacement-legacy-value");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::SetLegacy { name, mode, .. }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::SetLegacy { name, mode, .. },
+            ..
+        } => {
             assert_eq!(name, "old_token");
             assert_eq!(mode, jig_vault::VaultWriteMode::Replace);
         }
@@ -706,11 +738,15 @@ fn legacy_create_replace_convert_and_delete_are_explicit() {
     handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     handle_paste(&mut app, "TOKEN");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::ConvertLegacy {
-            name,
-            reference,
-            kind,
-        }) => {
+        VaultAction::Mutate {
+            mutation:
+                VaultMutation::ConvertLegacy {
+                    name,
+                    reference,
+                    kind,
+                },
+            ..
+        } => {
             assert_eq!(name, "old_token");
             assert_eq!(reference.to_string(), "jig://Imported/TOKEN");
             assert_eq!(kind, FieldKind::Concealed);
@@ -727,7 +763,10 @@ fn legacy_create_replace_convert_and_delete_are_explicit() {
     assert!(matches!(confirmation.target, DeleteTarget::Legacy(_)));
     handle_paste(&mut app, "old_token");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::RemoveLegacy { name }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::RemoveLegacy { name },
+            ..
+        } => {
             assert_eq!(name, "old_token")
         }
         other => panic!("unexpected action: {other:?}"),
@@ -775,7 +814,10 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
     }
     handle_paste(&mut app, "jig://Production/API_TOKEN");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::RemoveField { reference }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::RemoveField { reference },
+            ..
+        } => {
             assert_eq!(reference.to_string(), "jig://Production/API_TOKEN");
         }
         other => panic!("unexpected action: {other:?}"),
@@ -790,7 +832,10 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
     assert!(confirmation.target.label().contains("2 fields"));
     handle_paste(&mut app, "DELETE");
     match submit_key(&mut app) {
-        VaultAction::Mutate(VaultMutation::RemoveItem { item }) => {
+        VaultAction::Mutate {
+            mutation: VaultMutation::RemoveItem { item },
+            ..
+        } => {
             assert_eq!(item.as_str(), "Production")
         }
         other => panic!("unexpected action: {other:?}"),

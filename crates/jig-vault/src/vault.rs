@@ -233,6 +233,28 @@ impl Vault {
         self.store.snapshot(passphrase)
     }
 
+    /// Applies one interactive mutation only while the vault still matches the
+    /// authenticated metadata snapshot that authorized it.
+    ///
+    /// Existing operation-specific methods retain their non-interactive
+    /// semantics. This command boundary is for human-approved workflows where
+    /// an intervening state save must force a refresh and new approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict before editing or appending audit state when the
+    /// revision is stale, or the ordinary validation and persistence error for
+    /// the selected mutation.
+    pub fn mutate_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        revision: VaultRevision,
+        mutation: VaultMutation,
+    ) -> Result<()> {
+        self.store
+            .mutate_if_unchanged(passphrase, revision, mutation)
+    }
+
     /// Returns verified audit metadata and the newest activity records first.
     ///
     /// Only action-specific metadata is projected. Raw audit details, command
@@ -726,6 +748,49 @@ pub enum VaultWriteMode {
     Replace,
     /// Create or replace for backwards-compatible CLI behavior.
     Upsert,
+}
+
+/// One atomic field, item, or legacy-entry mutation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum VaultMutation {
+    SetField {
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    },
+    ChangeFieldKind {
+        reference: VaultReference,
+        kind: FieldKind,
+    },
+    RenameField {
+        source: VaultReference,
+        destination: VaultReference,
+    },
+    RenameItem {
+        source: VaultItem,
+        destination: VaultItem,
+    },
+    RemoveField {
+        reference: VaultReference,
+    },
+    RemoveItem {
+        item: VaultItem,
+    },
+    SetLegacy {
+        name: String,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    },
+    RemoveLegacy {
+        name: String,
+    },
+    ConvertLegacy {
+        name: String,
+        reference: VaultReference,
+        kind: FieldKind,
+    },
 }
 
 /// Opaque, one-shot optimistic-concurrency precondition for a field import.
@@ -1237,6 +1302,24 @@ impl VaultStore {
         self.edit_with_audit_if(passphrase, action, edit, |_| true, details)
     }
 
+    fn edit_with_audit_precondition<R>(
+        &self,
+        passphrase: &SecretString,
+        precondition: VaultEditPrecondition<'_>,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            precondition,
+            action,
+            edit,
+            |_| true,
+            details,
+        )
+    }
+
     /// Runs a verified in-memory edit and persists it only when the result
     /// identifies a real state transition. A skipped edit still opens the
     /// vault and verifies the audit chain, but it neither seals state nor
@@ -1331,8 +1414,25 @@ impl VaultStore {
         value: SecretBytes,
         mode: VaultWriteMode,
     ) -> Result<()> {
+        self.write_secret_precondition(
+            passphrase,
+            name,
+            value,
+            mode,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn write_secret_precondition(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<()> {
         let name = SecretName::parse(name)?;
-        self.write_secret_inner(passphrase, name, value, mode)
+        self.write_secret_inner(passphrase, name, value, mode, precondition)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
@@ -1342,12 +1442,14 @@ impl VaultStore {
         name: SecretName,
         value: SecretBytes,
         mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
     ) -> AnyResult<()> {
         // Reject too-short values before unlocking; `OpenVault::set_secret`
         // repeats this guard for internal callers that already hold a handle.
         validate_secret_value_len(value.len())?;
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::SecretSet,
             |vault| {
                 vault.ensure_write_mode(&name, mode, "vault secret")?;
@@ -1387,9 +1489,23 @@ impl VaultStore {
         passphrase: &SecretString,
         name: &str,
     ) -> Result<()> {
-        let name = SecretName::parse(name)?;
-        self.edit_with_audit(
+        self.remove_secret_required_precondition(
             passphrase,
+            name,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn remove_secret_required_precondition(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<()> {
+        let name = SecretName::parse(name)?;
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
             AuditAction::SecretRemove,
             |vault| {
                 if !vault.remove_secret(&name) {
@@ -1530,6 +1646,65 @@ impl VaultStore {
         })
     }
 
+    fn mutate_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        revision: VaultRevision,
+        mutation: VaultMutation,
+    ) -> Result<()> {
+        let precondition = VaultEditPrecondition::Revision(&revision);
+        match mutation {
+            VaultMutation::SetField {
+                reference,
+                kind,
+                value,
+                mode,
+            } => self
+                .write_field_precondition(passphrase, reference, kind, value, mode, precondition)
+                .map(drop),
+            VaultMutation::ChangeFieldKind { reference, kind } => self
+                .change_field_kind_precondition(passphrase, reference, kind, precondition)
+                .map(drop),
+            VaultMutation::RenameField {
+                source,
+                destination,
+            } => self
+                .rename_field_precondition(passphrase, source, destination, precondition)
+                .map(drop),
+            VaultMutation::RenameItem {
+                source,
+                destination,
+            } => self
+                .rename_item_precondition(passphrase, source, destination, precondition)
+                .map(drop),
+            VaultMutation::RemoveField { reference } => self
+                .remove_field_required_precondition(passphrase, reference, precondition)
+                .map(drop),
+            VaultMutation::RemoveItem { item } => self
+                .remove_item_precondition(passphrase, item, precondition)
+                .map(drop),
+            VaultMutation::SetLegacy { name, value, mode } => {
+                self.write_secret_precondition(passphrase, &name, value, mode, precondition)
+            }
+            VaultMutation::RemoveLegacy { name } => {
+                self.remove_secret_required_precondition(passphrase, &name, precondition)
+            }
+            VaultMutation::ConvertLegacy {
+                name,
+                reference,
+                kind,
+            } => self
+                .convert_legacy_secret_precondition(
+                    passphrase,
+                    &name,
+                    reference,
+                    kind,
+                    precondition,
+                )
+                .map(drop),
+        }
+    }
+
     pub(crate) fn activity(
         &self,
         passphrase: &SecretString,
@@ -1589,13 +1764,33 @@ impl VaultStore {
         value: SecretBytes,
         mode: VaultWriteMode,
     ) -> Result<FieldBatchResult> {
+        self.write_field_precondition(
+            passphrase,
+            reference,
+            kind,
+            value,
+            mode,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn write_field_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
         let mutations = vec![FieldMutation::set(reference.clone(), kind, value)];
         validate_field_mutations(&mutations)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         let audit_sets = field_batch_set_audit_metadata(&mutations);
         let name = reference.to_secret_name();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::FieldBatchApply,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1616,10 +1811,24 @@ impl VaultStore {
         passphrase: &SecretString,
         reference: VaultReference,
     ) -> Result<FieldBatchResult> {
+        self.remove_field_required_precondition(
+            passphrase,
+            reference,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn remove_field_required_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
         let mutations = vec![FieldMutation::remove(reference.clone())];
         let name = reference.to_secret_name();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::FieldBatchApply,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1642,9 +1851,25 @@ impl VaultStore {
         reference: VaultReference,
         kind: FieldKind,
     ) -> Result<FieldKindChangeResult> {
-        let audit_reference = reference.clone();
-        self.edit_with_audit_if(
+        self.change_field_kind_precondition(
             passphrase,
+            reference,
+            kind,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn change_field_kind_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldKindChangeResult> {
+        let audit_reference = reference.clone();
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            precondition,
             AuditAction::FieldKindChange,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1669,6 +1894,16 @@ impl VaultStore {
         from: VaultReference,
         to: VaultReference,
     ) -> Result<FieldBatchResult> {
+        self.rename_field_precondition(passphrase, from, to, VaultEditPrecondition::Unconditional)
+    }
+
+    fn rename_field_precondition(
+        &self,
+        passphrase: &SecretString,
+        from: VaultReference,
+        to: VaultReference,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
         if from == to {
             return Err(VaultError::new(
                 VaultErrorKind::InvalidInput,
@@ -1677,8 +1912,9 @@ impl VaultStore {
         }
         let audit_from = from.clone();
         let audit_to = to.clone();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::FieldRename,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1701,6 +1937,16 @@ impl VaultStore {
         from: VaultItem,
         to: VaultItem,
     ) -> Result<FieldBatchResult> {
+        self.rename_item_precondition(passphrase, from, to, VaultEditPrecondition::Unconditional)
+    }
+
+    fn rename_item_precondition(
+        &self,
+        passphrase: &SecretString,
+        from: VaultItem,
+        to: VaultItem,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
         if from == to {
             return Err(VaultError::new(
                 VaultErrorKind::InvalidInput,
@@ -1709,8 +1955,9 @@ impl VaultStore {
         }
         let audit_from = from.clone();
         let audit_to = to.clone();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::ItemRename,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1732,9 +1979,19 @@ impl VaultStore {
         passphrase: &SecretString,
         item: VaultItem,
     ) -> Result<FieldBatchResult> {
+        self.remove_item_precondition(passphrase, item, VaultEditPrecondition::Unconditional)
+    }
+
+    fn remove_item_precondition(
+        &self,
+        passphrase: &SecretString,
+        item: VaultItem,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
         let audit_item = item.clone();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::ItemRemove,
             |vault| {
                 vault.ensure_field_format_v2()?;
@@ -1757,6 +2014,23 @@ impl VaultStore {
         reference: VaultReference,
         kind: FieldKind,
     ) -> Result<LegacyConversionResult> {
+        self.convert_legacy_secret_precondition(
+            passphrase,
+            secret_name,
+            reference,
+            kind,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn convert_legacy_secret_precondition(
+        &self,
+        passphrase: &SecretString,
+        secret_name: &str,
+        reference: VaultReference,
+        kind: FieldKind,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<LegacyConversionResult> {
         let secret_name = SecretName::parse(secret_name)?;
         if VaultReference::from_secret_name(&secret_name).is_some() {
             return Err(VaultError::new(
@@ -1769,8 +2043,9 @@ impl VaultStore {
         }
         let audit_name = secret_name.clone();
         let audit_reference = reference.clone();
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::LegacySecretConvert,
             |vault| {
                 vault.ensure_field_format_v2()?;
