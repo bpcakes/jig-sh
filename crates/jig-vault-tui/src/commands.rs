@@ -10,6 +10,7 @@ const MAX_COMMAND_FILTER_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UiCommand {
+    CreateItem,
     AddField,
     AddLegacy,
     ReplaceValue,
@@ -31,7 +32,8 @@ pub(crate) enum UiCommand {
 }
 
 impl UiCommand {
-    pub(crate) const ALL: [Self; 18] = [
+    pub(crate) const ALL: [Self; 19] = [
+        Self::CreateItem,
         Self::AddField,
         Self::AddLegacy,
         Self::ReplaceValue,
@@ -54,6 +56,7 @@ impl UiCommand {
 
     pub(crate) const fn label(self) -> &'static str {
         match self {
+            Self::CreateItem => "Create item + first field",
             Self::AddField => "Add field",
             Self::AddLegacy => "Add explicit legacy entry",
             Self::ReplaceValue => "Replace selected value",
@@ -77,6 +80,7 @@ impl UiCommand {
 
     const fn short_label(self) -> &'static str {
         match self {
+            Self::CreateItem => "create item",
             Self::AddField => "add field",
             Self::AddLegacy => "legacy",
             Self::ReplaceValue => "replace",
@@ -100,7 +104,8 @@ impl UiCommand {
 
     pub(crate) const fn category(self) -> &'static str {
         match self {
-            Self::AddField
+            Self::CreateItem
+            | Self::AddField
             | Self::AddLegacy
             | Self::ReplaceValue
             | Self::ChangeKind
@@ -129,6 +134,7 @@ impl UiCommand {
 
     pub(crate) const fn binding(self) -> Option<CommandBinding> {
         match self {
+            Self::CreateItem => Some(CommandBinding::shifted('I', "I")),
             Self::AddField => Some(CommandBinding::plain('a', "a")),
             Self::AddLegacy => Some(CommandBinding::shifted('A', "A")),
             Self::ReplaceValue => Some(CommandBinding::plain('e', "e")),
@@ -165,11 +171,22 @@ impl UiCommand {
             .map(|snapshot| snapshot.format_version);
         let writable = format_version == Some(2);
         match self {
-            Self::AddField | Self::AddLegacy => {
+            Self::CreateItem | Self::AddLegacy => {
                 if writable {
                     CommandAvailability::Enabled
                 } else {
                     CommandAvailability::Disabled("Vault management requires version 2.")
+                }
+            }
+            Self::AddField => {
+                if !writable {
+                    CommandAvailability::Disabled("Vault management requires version 2.")
+                } else if matches!(app.selected_item, Some(ItemIdentity::Canonical(_))) {
+                    CommandAvailability::Enabled
+                } else {
+                    CommandAvailability::Disabled(
+                        "Select a canonical item or create a new item first.",
+                    )
                 }
             }
             Self::ReplaceValue => {
@@ -307,7 +324,11 @@ impl UiCommand {
         match app.focus {
             Focus::Items => matches!(
                 self,
-                Self::AddField | Self::AddLegacy | Self::RenameSelection | Self::DeleteSelection
+                Self::CreateItem
+                    | Self::AddField
+                    | Self::AddLegacy
+                    | Self::RenameSelection
+                    | Self::DeleteSelection
             ),
             Focus::Fields | Focus::Details => match app.selected_entry {
                 Some(EntryIdentity::Field(_)) => matches!(
@@ -329,7 +350,7 @@ impl UiCommand {
                         | Self::ExportField
                         | Self::PeekField
                 ),
-                None => matches!(self, Self::AddField | Self::AddLegacy),
+                None => matches!(self, Self::CreateItem | Self::AddField | Self::AddLegacy),
             },
         }
     }

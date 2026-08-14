@@ -11,9 +11,9 @@ use crate::{
     ImportPreviewRow, VaultAction, VaultDescriptor, VaultMutation,
     commands::{CommandAvailability, CommandOutcome, CommandPaletteScope, UiCommand},
     model::{
-        App, DeleteTarget, EntryIdentity, Focus, ItemIdentity, MAX_FILTER_INPUT_BYTES,
-        MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation, MutationConfirmationKind,
-        Screen,
+        App, DeleteTarget, EntryIdentity, FieldWriteFocus, FieldWriteIntent, Focus, ItemIdentity,
+        MAX_FILTER_INPUT_BYTES, MAX_METADATA_INPUT_BYTES, ManagementForm, MutationConfirmation,
+        MutationConfirmationKind, Screen,
     },
     render,
     runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
@@ -68,6 +68,14 @@ fn snapshot() -> VaultSnapshot {
             SecretBytes::new(b"legacy-secret".to_vec()),
         )
         .unwrap();
+    vault.snapshot(&passphrase).unwrap()
+}
+
+fn empty_snapshot() -> VaultSnapshot {
+    let temp = tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("empty-vault"))).unwrap();
+    let passphrase = SecretString::from("correct horse battery staple".to_owned());
+    vault.init(&passphrase).unwrap();
     vault.snapshot(&passphrase).unwrap()
 }
 
@@ -487,6 +495,148 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
 }
 
 #[test]
+fn create_item_shortcut_writes_first_field_and_selects_its_exact_identity() {
+    let temp = tempdir().unwrap();
+    let vault = Vault::resolve_for_test(Some(temp.path().join("create-item-vault"))).unwrap();
+    let passphrase = SecretString::from("correct horse battery staple".to_owned());
+    vault.init(&passphrase).unwrap();
+    let mut app = App::new(descriptor(true));
+    app.apply_snapshot(vault.snapshot(&passphrase).unwrap());
+
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT)
+        ),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Form(ManagementForm::WriteField {
+        intent,
+        item,
+        field,
+        focus,
+        ..
+    }) = &app.screen
+    else {
+        panic!("expected create-item field form");
+    };
+    assert_eq!(*intent, FieldWriteIntent::CreateItem);
+    assert!(item.is_empty());
+    assert!(field.is_empty());
+    assert_eq!(*focus, FieldWriteFocus::Item);
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Create item + first field"), "{rendered}");
+    assert!(
+        rendered.contains("created atomically with their first field"),
+        "{rendered}"
+    );
+
+    handle_paste(&mut app, "Fresh");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "API_KEY");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+
+    let action = submit_key(&mut app);
+    let VaultAction::Mutate {
+        mutation:
+            VaultMutation::SetField {
+                reference,
+                kind,
+                value,
+                mode,
+            },
+        ..
+    } = action
+    else {
+        panic!("unexpected action: {action:?}");
+    };
+    assert_eq!(reference.to_string(), "jig://Fresh/API_KEY");
+    assert_eq!(mode, jig_vault::VaultWriteMode::Create);
+    vault
+        .write_field(&passphrase, reference.clone(), kind, value, mode)
+        .unwrap();
+
+    app.apply_snapshot(vault.snapshot(&passphrase).unwrap());
+    assert_eq!(
+        app.selected_item,
+        Some(ItemIdentity::Canonical("Fresh".to_owned()))
+    );
+    assert_eq!(app.selected_entry, Some(EntryIdentity::Field(reference)));
+}
+
+#[test]
+fn empty_vault_explains_item_creation_and_context_actions_offer_it() {
+    let mut app = App::new(descriptor(true));
+    app.apply_snapshot(empty_snapshot());
+    let backend = TestBackend::new(110, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("No items yet"), "{rendered}");
+    assert!(rendered.contains("Press I to create an item"), "{rendered}");
+    assert!(rendered.contains("with its first field"), "{rendered}");
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let Screen::Commands(palette) = &app.screen else {
+        panic!("expected empty-vault context actions");
+    };
+    assert!(palette.entries.iter().any(|entry| {
+        entry.command == UiCommand::CreateItem && entry.availability == CommandAvailability::Enabled
+    }));
+    assert!(palette.entries.iter().any(|entry| {
+        entry.command == UiCommand::AddField
+            && matches!(entry.availability, CommandAvailability::Disabled(_))
+    }));
+}
+
+#[test]
+fn add_field_never_changes_meaning_when_legacy_is_selected() {
+    let mut app = browsing_app();
+    select_legacy(&mut app);
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(matches!(app.screen, Screen::Browse));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("create a new item"))
+    );
+}
+
+#[test]
+fn create_item_rejects_an_existing_item_before_consuming_the_value() {
+    let mut app = browsing_app();
+    app.begin_create_item();
+    handle_paste(&mut app, "Production");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "ANOTHER_FIELD");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Form(ManagementForm::WriteField { value, .. }) = &app.screen else {
+        panic!("expected correctable create-item form");
+    };
+    assert!(!value.is_empty());
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("already exists"))
+    );
+}
+
+#[test]
 fn create_field_form_can_load_exact_bytes_from_a_regular_file() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("secret.bin");
@@ -559,11 +709,11 @@ fn replacement_form_starts_empty_and_does_not_render_existing_value() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;
     app.begin_replace();
-    let Screen::Form(ManagementForm::WriteField { value, mode, .. }) = &app.screen else {
+    let Screen::Form(ManagementForm::WriteField { value, intent, .. }) = &app.screen else {
         panic!("expected field replacement form");
     };
     assert!(value.is_empty());
-    assert_eq!(*mode, jig_vault::VaultWriteMode::Replace);
+    assert_eq!(*intent, FieldWriteIntent::ReplaceValue);
 
     let backend = TestBackend::new(100, 28);
     let mut terminal = Terminal::new(backend).unwrap();

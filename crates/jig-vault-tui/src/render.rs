@@ -11,10 +11,10 @@ use crate::{
     ImportFieldChange,
     commands::{CommandAvailability, CommandPalette, CommandSafety, UiCommand},
     model::{
-        ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
-        ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
-        MutationConfirmation, MutationConfirmationKind, PeekConfirmation, RenameFieldFocus, Screen,
-        StatusKind, kind_label,
+        ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus,
+        FieldWriteIntent, Focus, ImportPreviewState, InitializeFocus, ItemIdentity,
+        LegacyWriteFocus, ManagementForm, MutationConfirmation, MutationConfirmationKind,
+        PeekConfirmation, RenameFieldFocus, Screen, StatusKind, kind_label,
     },
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
 };
@@ -338,6 +338,28 @@ fn draw_browser_header(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_items(frame: &mut Frame, area: Rect, app: &App) {
     let rows = app.visible_items();
+    let title = if app.focus == Focus::Items {
+        "Items •"
+    } else {
+        "Items"
+    };
+    if rows.is_empty() {
+        let message = if app.filter.is_empty() {
+            vec![
+                Line::from("No items yet."),
+                Line::from("Press I to create an item with its first field."),
+            ]
+        } else {
+            vec![Line::from("No items match the current filter.")]
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .block(panel(title))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
     let legacy_count = app
         .snapshot
         .as_ref()
@@ -355,16 +377,37 @@ fn draw_items(frame: &mut Frame, area: Rect, app: &App) {
         .as_ref()
         .and_then(|identity| rows.iter().position(|row| row == identity));
     let mut state = ListState::default().with_selected(selected);
-    let title = if app.focus == Focus::Items {
-        "Items •"
-    } else {
-        "Items"
-    };
     frame.render_stateful_widget(list(items, title), area, &mut state);
 }
 
 fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
     let rows = app.visible_entries();
+    let base = if matches!(app.selected_item, Some(ItemIdentity::Legacy)) {
+        "Legacy entries"
+    } else {
+        "Fields"
+    };
+    let title = if app.focus == Focus::Fields {
+        format!("{base} •")
+    } else {
+        base.to_owned()
+    };
+    if rows.is_empty() {
+        let message = if !app.filter.is_empty() {
+            "No fields match the current filter."
+        } else if app.selected_item.is_none() {
+            "Create an item with its first field to get started."
+        } else {
+            "No fields are available for this item."
+        };
+        frame.render_widget(
+            Paragraph::new(message)
+                .block(panel(&title))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
     let items = rows
         .iter()
         .map(|identity| {
@@ -390,16 +433,6 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
         .as_ref()
         .and_then(|identity| rows.iter().position(|row| row == identity));
     let mut state = ListState::default().with_selected(selected);
-    let base = if matches!(app.selected_item, Some(ItemIdentity::Legacy)) {
-        "Legacy entries"
-    } else {
-        "Fields"
-    };
-    let title = if app.focus == Focus::Fields {
-        format!("{base} •")
-    } else {
-        base.to_owned()
-    };
     frame.render_stateful_widget(list(items, &title), area, &mut state);
 }
 
@@ -612,7 +645,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
     frame.render_widget(Clear, area);
     let (title, mut lines) = match form {
         ManagementForm::WriteField {
-            mode,
+            intent,
             item,
             field,
             kind,
@@ -620,11 +653,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
             value_file,
             focus,
         } => {
-            let action = match mode {
-                jig_vault::VaultWriteMode::Create => "Create field",
-                jig_vault::VaultWriteMode::Replace => "Replace field value",
-                jig_vault::VaultWriteMode::Upsert => "Write field",
-            };
+            let action = intent.title();
             let mut lines = vec![
                 form_value_line("Item", item, *focus == FieldWriteFocus::Item, false),
                 form_value_line("Field", field, *focus == FieldWriteFocus::Field, false),
@@ -648,7 +677,12 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                 ),
                 Line::from(""),
             ];
-            if *mode == jig_vault::VaultWriteMode::Replace {
+            if *intent == FieldWriteIntent::CreateItem {
+                lines.push(Line::from(Span::styled(
+                    "Items are created atomically with their first field.",
+                    Style::default().fg(MUTED),
+                )));
+            } else if *intent == FieldWriteIntent::ReplaceValue {
                 lines.push(Line::from(Span::styled(
                     "The current value was not loaded. It remains unchanged until Save succeeds.",
                     Style::default().fg(WARN),

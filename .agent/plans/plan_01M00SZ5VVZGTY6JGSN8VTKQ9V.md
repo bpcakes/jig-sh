@@ -15,7 +15,7 @@ controls, and find any item or field quickly without exposing a value.
   four delivery boundaries.
 - [x] Introduce a total command catalog, contextual and universal palettes, and
   catalog-derived action help/footer rendering.
-- [ ] Add an explicit Create item + first field flow, contextual empty states,
+- [x] Add an explicit Create item + first field flow, contextual empty states,
   and Enter-driven actions.
 - [ ] Add a metadata-only line editor with cursor movement, deletion, word
   editing, bounded insertion, visible cursor, and horizontal viewport behavior.

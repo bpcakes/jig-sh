@@ -361,6 +361,7 @@ impl App {
             return self.activate_tool_choice(choice);
         }
         match command {
+            UiCommand::CreateItem => self.begin_create_item(),
             UiCommand::AddField => self.begin_add(),
             UiCommand::AddLegacy => self.begin_add_legacy(),
             UiCommand::ReplaceValue => self.begin_replace(),
@@ -537,34 +538,31 @@ impl App {
         if !self.require_writable_v2() {
             return;
         }
-        let form = match &self.selected_item {
-            Some(ItemIdentity::Legacy) => ManagementForm::WriteLegacy {
-                mode: VaultWriteMode::Create,
-                name: String::new(),
-                value: SecretInput::new(),
-                value_file: String::new(),
-                focus: LegacyWriteFocus::Name,
-            },
-            Some(ItemIdentity::Canonical(item)) => ManagementForm::WriteField {
-                mode: VaultWriteMode::Create,
-                item: item.clone(),
-                field: String::new(),
-                kind: FieldKind::Concealed,
-                value: SecretInput::new(),
-                value_file: String::new(),
-                focus: FieldWriteFocus::Field,
-            },
-            None => ManagementForm::WriteField {
-                mode: VaultWriteMode::Create,
-                item: String::new(),
-                field: String::new(),
-                kind: FieldKind::Concealed,
-                value: SecretInput::new(),
-                value_file: String::new(),
-                focus: FieldWriteFocus::Item,
-            },
+        let Some(ItemIdentity::Canonical(item)) = &self.selected_item else {
+            self.set_error("Select a canonical item or press I to create a new item first.");
+            return;
         };
-        self.screen = Screen::Form(form);
+        self.screen = Screen::Form(ManagementForm::write_field(
+            FieldWriteIntent::AddField,
+            item.clone(),
+            String::new(),
+            FieldKind::Concealed,
+            FieldWriteFocus::Field,
+        ));
+        self.status = None;
+    }
+
+    pub(crate) fn begin_create_item(&mut self) {
+        if !self.require_writable_v2() {
+            return;
+        }
+        self.screen = Screen::Form(ManagementForm::write_field(
+            FieldWriteIntent::CreateItem,
+            String::new(),
+            String::new(),
+            FieldKind::Concealed,
+            FieldWriteFocus::Item,
+        ));
         self.status = None;
     }
 
@@ -591,15 +589,13 @@ impl App {
                 let kind = self
                     .selected_field()
                     .map_or(FieldKind::Concealed, |field| field.kind);
-                ManagementForm::WriteField {
-                    mode: VaultWriteMode::Replace,
-                    item: reference.item().to_owned(),
-                    field: reference.field().to_owned(),
+                ManagementForm::write_field(
+                    FieldWriteIntent::ReplaceValue,
+                    reference.item().to_owned(),
+                    reference.field().to_owned(),
                     kind,
-                    value: SecretInput::new(),
-                    value_file: String::new(),
-                    focus: FieldWriteFocus::Value,
-                }
+                    FieldWriteFocus::Value,
+                )
             }
             Some(EntryIdentity::Legacy(name)) => ManagementForm::WriteLegacy {
                 mode: VaultWriteMode::Replace,
@@ -787,7 +783,14 @@ impl App {
             self.screen = screen;
             return None;
         };
-        match form.submission() {
+        let submission = {
+            let snapshot = self
+                .snapshot
+                .as_ref()
+                .expect("management submissions require an unlocked vault snapshot");
+            form.submission(snapshot)
+        };
+        match submission {
             Ok(submission) => {
                 let confirmation = self
                     .snapshot
@@ -1374,7 +1377,7 @@ struct SelectionHint {
 #[derive(Debug)]
 pub(crate) enum ManagementForm {
     WriteField {
-        mode: VaultWriteMode,
+        intent: FieldWriteIntent,
         item: String,
         field: String,
         kind: FieldKind,
@@ -1414,6 +1417,24 @@ pub(crate) enum ManagementForm {
 }
 
 impl ManagementForm {
+    fn write_field(
+        intent: FieldWriteIntent,
+        item: String,
+        field: String,
+        kind: FieldKind,
+        focus: FieldWriteFocus,
+    ) -> Self {
+        Self::WriteField {
+            intent,
+            item,
+            field,
+            kind,
+            value: SecretInput::new(),
+            value_file: String::new(),
+            focus,
+        }
+    }
+
     pub(crate) fn protected_input_mut(&mut self) -> Option<&mut SecretInput> {
         match self {
             Self::WriteField { value, focus, .. } if *focus == FieldWriteFocus::Value => {
@@ -1491,10 +1512,10 @@ impl ManagementForm {
         }
     }
 
-    fn submission(&mut self) -> Result<FormSubmission, String> {
+    fn submission(&mut self, snapshot: &VaultSnapshot) -> Result<FormSubmission, String> {
         match self {
             Self::WriteField {
-                mode,
+                intent,
                 item,
                 field,
                 kind,
@@ -1503,20 +1524,17 @@ impl ManagementForm {
                 ..
             } => {
                 let reference = parse_reference(item, field)?;
+                intent.validate_destination(&reference, snapshot)?;
                 let value = take_validated_value(value, value_file, *kind)?;
                 let mutation = VaultMutation::SetField {
                     reference: reference.clone(),
                     kind: *kind,
                     value,
-                    mode: *mode,
+                    mode: intent.write_mode(),
                 };
                 Ok(FormSubmission {
                     mutation,
-                    label: match mode {
-                        VaultWriteMode::Create => "Creating vault field",
-                        VaultWriteMode::Replace => "Replacing vault field",
-                        VaultWriteMode::Upsert => "Writing vault field",
-                    },
+                    label: intent.loading_label(),
                     selection: Some(SelectionHint {
                         item: ItemIdentity::Canonical(reference.item().to_owned()),
                         entry: Some(EntryIdentity::Field(reference)),
@@ -1634,6 +1652,57 @@ impl ManagementForm {
                 })
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FieldWriteIntent {
+    CreateItem,
+    AddField,
+    ReplaceValue,
+}
+
+impl FieldWriteIntent {
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::CreateItem => "Create item + first field",
+            Self::AddField => "Add field",
+            Self::ReplaceValue => "Replace field value",
+        }
+    }
+
+    const fn loading_label(self) -> &'static str {
+        match self {
+            Self::CreateItem => "Creating vault item and first field",
+            Self::AddField => "Creating vault field",
+            Self::ReplaceValue => "Replacing vault field",
+        }
+    }
+
+    const fn write_mode(self) -> VaultWriteMode {
+        match self {
+            Self::CreateItem | Self::AddField => VaultWriteMode::Create,
+            Self::ReplaceValue => VaultWriteMode::Replace,
+        }
+    }
+
+    fn validate_destination(
+        self,
+        reference: &VaultReference,
+        snapshot: &VaultSnapshot,
+    ) -> Result<(), String> {
+        if self == Self::CreateItem
+            && snapshot
+                .fields
+                .iter()
+                .any(|field| field.reference.item() == reference.item())
+        {
+            return Err(format!(
+                "Item jig://{} already exists; use Add field instead.",
+                sanitize_text(reference.item())
+            ));
+        }
+        Ok(())
     }
 }
 
