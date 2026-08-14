@@ -371,11 +371,22 @@ fn apply_failure(
             app.apply_snapshot(snapshot);
             app.set_error(error.message());
         }
-        BackendFailure::Primary(error)
-        | BackendFailure::RefreshFailed {
+        BackendFailure::RefreshFailed {
             error,
-            _refresh_error: _,
-        } => apply_primary_failure(app, kind, &error),
+            refresh_error,
+        } => {
+            backend.lock();
+            let error = VaultUiError::new(
+                refresh_error.kind(),
+                format!(
+                    "{} Vault metadata recovery also failed: {}",
+                    error.message(),
+                    refresh_error.message()
+                ),
+            );
+            app.fail_unlock(&error);
+        }
+        BackendFailure::Primary(error) => apply_primary_failure(app, kind, &error),
     }
 }
 
@@ -455,11 +466,18 @@ enum OperationKind {
 
 impl OperationKind {
     fn should_refresh_after_error(self, error: &VaultUiError) -> bool {
-        matches!(self, Self::Mutation | Self::Import | Self::Export)
-            && matches!(
-                error.kind(),
-                VaultUiErrorKind::Conflict | VaultUiErrorKind::NotFound
-            )
+        matches!(
+            self,
+            Self::Migrate
+                | Self::Mutation
+                | Self::Import
+                | Self::Backup
+                | Self::Passphrase
+                | Self::Export
+        ) && !matches!(
+            error.kind(),
+            VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+        )
     }
 }
 
@@ -481,7 +499,7 @@ impl BackendCompletion {
                     Ok(snapshot) => BackendFailure::Refreshed { error, snapshot },
                     Err(refresh_error) => BackendFailure::RefreshFailed {
                         error,
-                        _refresh_error: refresh_error,
+                        refresh_error,
                     },
                 };
                 BackendOutcome::Failure(failure)
@@ -505,7 +523,7 @@ enum BackendFailure {
     },
     RefreshFailed {
         error: VaultUiError,
-        _refresh_error: VaultUiError,
+        refresh_error: VaultUiError,
     },
 }
 
@@ -1142,6 +1160,8 @@ mod tests {
 
     struct TrackingBackend {
         locks: AtomicUsize,
+        refreshes: AtomicUsize,
+        refresh_result: Mutex<Option<std::result::Result<VaultSnapshot, VaultUiError>>>,
         events: Mutex<Vec<&'static str>>,
         started: Mutex<Option<mpsc::Sender<()>>>,
         release: Mutex<Option<mpsc::Receiver<()>>>,
@@ -1151,15 +1171,25 @@ mod tests {
         fn immediate() -> Self {
             Self {
                 locks: AtomicUsize::new(0),
+                refreshes: AtomicUsize::new(0),
+                refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(None),
                 release: Mutex::new(None),
             }
         }
 
+        fn with_refresh(result: std::result::Result<VaultSnapshot, VaultUiError>) -> Self {
+            let backend = Self::immediate();
+            *backend.refresh_result.lock().unwrap() = Some(result);
+            backend
+        }
+
         fn blocking(started: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
             Self {
                 locks: AtomicUsize::new(0),
+                refreshes: AtomicUsize::new(0),
+                refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(Some(started)),
                 release: Mutex::new(Some(release)),
@@ -1192,7 +1222,12 @@ mod tests {
         }
 
         fn refresh(&self) -> std::result::Result<VaultSnapshot, VaultUiError> {
-            Err(VaultUiError::new(VaultUiErrorKind::Other, "unused"))
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            self.refresh_result
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| Err(VaultUiError::new(VaultUiErrorKind::Other, "unused")))
         }
 
         fn execute(&self, _: VaultAction) -> std::result::Result<VaultActionResult, VaultUiError> {
@@ -1273,6 +1308,95 @@ mod tests {
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot.is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
+        }
+    }
+
+    #[test]
+    fn recovery_policy_follows_operation_semantics() {
+        let recoverable = VaultUiError::new(VaultUiErrorKind::Io, "safe primary failure");
+        for kind in [
+            OperationKind::Migrate,
+            OperationKind::Mutation,
+            OperationKind::Import,
+            OperationKind::Backup,
+            OperationKind::Passphrase,
+            OperationKind::Export,
+        ] {
+            assert!(kind.should_refresh_after_error(&recoverable));
+        }
+        for kind in [
+            OperationKind::Unlock,
+            OperationKind::Initialize,
+            OperationKind::Refresh,
+            OperationKind::Activity,
+            OperationKind::VerifyAudit,
+            OperationKind::ImportPreview,
+            OperationKind::Restore,
+        ] {
+            assert!(!kind.should_refresh_after_error(&recoverable));
+        }
+        for fatal_kind in [VaultUiErrorKind::Authentication, VaultUiErrorKind::Audit] {
+            let fatal = VaultUiError::new(fatal_kind, "safe fatal failure");
+            assert!(!OperationKind::Import.should_refresh_after_error(&fatal));
+        }
+    }
+
+    #[test]
+    fn successful_recovery_refresh_replaces_stale_snapshot_and_retains_primary_error() {
+        let mut app = unlocked_app();
+        let refreshed = app.snapshot.clone().unwrap();
+        let backend = Arc::new(TrackingBackend::with_refresh(Ok(refreshed.clone())));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let completion = BackendCompletion::new(
+            OperationKind::Import,
+            Err(VaultUiError::new(
+                VaultUiErrorKind::Io,
+                "safe import failure",
+            )),
+            erased.as_ref(),
+        );
+
+        apply_completion(&mut app, &erased, Ok(completion));
+
+        assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
+        assert_eq!(app.snapshot, Some(refreshed));
+        assert!(matches!(app.screen, Screen::Browse));
+        assert_eq!(app.status.unwrap().text, "safe import failure");
+    }
+
+    #[test]
+    fn failed_recovery_refresh_drops_the_unverified_session() {
+        for refresh_kind in [
+            VaultUiErrorKind::Authentication,
+            VaultUiErrorKind::Audit,
+            VaultUiErrorKind::Other,
+        ] {
+            let backend = Arc::new(TrackingBackend::with_refresh(Err(VaultUiError::new(
+                refresh_kind,
+                "safe recovery failure",
+            ))));
+            let erased: Arc<dyn VaultBackend> = backend.clone();
+            let mut app = unlocked_app();
+            let completion = BackendCompletion::new(
+                OperationKind::Import,
+                Err(VaultUiError::new(
+                    VaultUiErrorKind::Io,
+                    "safe import failure",
+                )),
+                erased.as_ref(),
+            );
+
+            apply_completion(&mut app, &erased, Ok(completion));
+
+            assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
+            assert!(app.snapshot.is_none());
+            assert!(matches!(app.screen, Screen::Locked(_)));
+            assert_eq!(
+                app.status.unwrap().text,
+                "safe import failure Vault metadata recovery also failed: safe recovery failure"
+            );
         }
     }
 
