@@ -2,8 +2,8 @@ use std::{collections::BTreeSet, path::Path};
 
 use jig_tui::sanitize_text;
 use jig_vault::{
-    AuditVerification, FieldKind, FieldRecord, SecretBytes, SecretName, SecretRecord,
-    VaultActivityRecord, VaultItem, VaultReference, VaultSnapshot, VaultWriteMode,
+    AuditVerification, FieldKind, FieldRecord, SecretBytes, SecretName, SecretRecord, VaultItem,
+    VaultReference, VaultSnapshot, VaultWriteMode, VerifiedVaultActivity,
 };
 
 use crate::{
@@ -295,9 +295,9 @@ impl App {
         }
     }
 
-    pub(crate) fn apply_activity(&mut self, records: Vec<VaultActivityRecord>) {
+    pub(crate) fn apply_activity(&mut self, activity: VerifiedVaultActivity) {
         self.screen = Screen::Activity(ActivityView {
-            records,
+            activity,
             selected: 0,
         });
         self.status = None;
@@ -305,13 +305,13 @@ impl App {
 
     pub(crate) fn move_activity_selection(&mut self, delta: isize) {
         if let Screen::Activity(view) = &mut self.screen {
-            if view.records.is_empty() {
+            if view.activity.records.is_empty() {
                 view.selected = 0;
             } else {
                 view.selected = view
                     .selected
                     .saturating_add_signed(delta)
-                    .min(view.records.len() - 1);
+                    .min(view.activity.records.len() - 1);
             }
         }
     }
@@ -1052,7 +1052,7 @@ pub(crate) struct ImportPreviewState {
 
 #[derive(Debug)]
 pub(crate) struct ActivityView {
-    pub(crate) records: Vec<VaultActivityRecord>,
+    pub(crate) activity: VerifiedVaultActivity,
     pub(crate) selected: usize,
 }
 

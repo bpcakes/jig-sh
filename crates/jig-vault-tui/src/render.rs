@@ -1046,10 +1046,11 @@ fn draw_activity(frame: &mut Frame, area: Rect, view: &ActivityView) {
         .constraints([
             Constraint::Percentage(65),
             Constraint::Min(5),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(area);
     let items = view
+        .activity
         .records
         .iter()
         .map(|record| {
@@ -1062,14 +1063,14 @@ fn draw_activity(frame: &mut Frame, area: Rect, view: &ActivityView) {
             ))
         })
         .collect::<Vec<_>>();
-    let selected = (!view.records.is_empty()).then_some(view.selected);
+    let selected = (!view.activity.records.is_empty()).then_some(view.selected);
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(
         list(items, "Verified activity (newest first)"),
         chunks[0],
         &mut state,
     );
-    let details = view.records.get(view.selected).map_or_else(
+    let details = view.activity.records.get(view.selected).map_or_else(
         || vec![Line::from("No verified activity records.")],
         |record| {
             vec![
@@ -1087,9 +1088,26 @@ fn draw_activity(frame: &mut Frame, area: Rect, view: &ActivityView) {
             .wrap(Wrap { trim: true }),
         chunks[1],
     );
+    let audit = &view.activity.audit;
+    let audit_status = if audit.torn_tail_bytes == 0 {
+        Line::from(format!(
+            "Audit verified: {} authenticated events",
+            audit.event_count
+        ))
+        .style(Style::default().fg(GOOD))
+    } else {
+        Line::from(format!(
+            "Warning: verified prefix; {} unauthenticated trailing bytes ignored",
+            audit.torn_tail_bytes
+        ))
+        .style(Style::default().fg(WARN))
+    };
     frame.render_widget(
-        Paragraph::new("j/k move   PageUp/PageDown   Enter/Esc close")
-            .style(Style::default().fg(MUTED)),
+        Paragraph::new(vec![
+            audit_status,
+            Line::from("j/k move   PageUp/PageDown   Enter/Esc close")
+                .style(Style::default().fg(MUTED)),
+        ]),
         chunks[2],
     );
 }

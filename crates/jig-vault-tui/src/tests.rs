@@ -676,13 +676,17 @@ fn tools_palette_opens_verified_activity_and_audit_results() {
             SecretBytes::new(b"activity-secret-sentinel".to_vec()),
         )
         .unwrap();
-    app.apply_activity(vault.activity(&passphrase, 10).unwrap());
+    let mut activity = vault.activity(&passphrase, 10).unwrap();
+    activity.audit.torn_tail_bytes = 17;
+    app.apply_activity(activity);
     let backend = TestBackend::new(100, 28);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("Verified activity"), "{rendered}");
     assert!(rendered.contains("field_batch_apply"), "{rendered}");
+    assert!(rendered.contains("verified prefix"), "{rendered}");
+    assert!(rendered.contains("17 unauthenticated"), "{rendered}");
     assert!(
         !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
         "{rendered}"

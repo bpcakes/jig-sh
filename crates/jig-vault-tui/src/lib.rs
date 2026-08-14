@@ -7,8 +7,8 @@
 use std::{fmt, io::Write, path::PathBuf};
 
 use jig_vault::{
-    AuditVerification, FieldKind, SecretBytes, VaultActivityRecord, VaultItem, VaultReference,
-    VaultSnapshot, VaultWriteMode,
+    AuditVerification, FieldKind, SecretBytes, VaultItem, VaultReference, VaultSnapshot,
+    VaultWriteMode, VerifiedVaultActivity,
 };
 use ulid::Ulid;
 
@@ -243,7 +243,7 @@ impl ImportPreview {
 #[non_exhaustive]
 pub enum VaultActionResult {
     Snapshot(VaultSnapshot),
-    Activity(Vec<VaultActivityRecord>),
+    Activity(VerifiedVaultActivity),
     Audit(AuditVerification),
     ImportPreview(ImportPreview),
     BackupCreated {

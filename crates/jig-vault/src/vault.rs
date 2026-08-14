@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 use crate::audit::{
-    AuditAction, AuditEvent, AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VaultActivityRecord,
+    AuditAction, AuditEvent, AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VerifiedVaultActivity,
     verified_activity_unlocked, verify_chain_unlocked,
 };
 use crate::broker::BrokeredRun;
@@ -233,10 +233,12 @@ impl Vault {
         self.store.snapshot(passphrase)
     }
 
-    /// Returns the newest verified audit activity records first.
+    /// Returns verified audit metadata and the newest activity records first.
     ///
-    /// Only action-specific metadata is projected. Raw audit details, event
-    /// MACs, command arguments, errors, and secret values are never returned.
+    /// Only action-specific metadata is projected. Raw audit details, command
+    /// arguments, errors, and secret values are never returned. Chain summary
+    /// metadata includes the latest MAC, event count, and any recoverable torn
+    /// tail instead of silently discarding verification state.
     ///
     /// # Errors
     ///
@@ -247,7 +249,7 @@ impl Vault {
         &self,
         passphrase: &SecretString,
         limit: usize,
-    ) -> Result<Vec<VaultActivityRecord>> {
+    ) -> Result<VerifiedVaultActivity> {
         self.store.activity(passphrase, limit)
     }
 
@@ -1452,7 +1454,7 @@ impl VaultStore {
         &self,
         passphrase: &SecretString,
         limit: usize,
-    ) -> Result<Vec<VaultActivityRecord>> {
+    ) -> Result<VerifiedVaultActivity> {
         if !(1..=MAX_VAULT_ACTIVITY_RECORDS).contains(&limit) {
             return Err(VaultError::new(
                 VaultErrorKind::InvalidInput,
@@ -1461,15 +1463,13 @@ impl VaultStore {
         }
         self.with_lock(|| {
             let vault = self.open_unlocked(passphrase)?;
-            verified_activity_unlocked(self, vault.audit_key.as_ref(), limit)
-                .map(|(_, records)| records)
-                .map_err(|error| {
-                    classify_source(
-                        VaultErrorKind::AuditTampered,
-                        "vault audit activity verification failed",
-                        error,
-                    )
-                })
+            verified_activity_unlocked(self, vault.audit_key.as_ref(), limit).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit activity verification failed",
+                    error,
+                )
+            })
         })
         .map_err(|error| {
             if error.is::<ClassifiedVaultError>() {

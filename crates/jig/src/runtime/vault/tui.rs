@@ -744,7 +744,8 @@ mod tests {
         else {
             panic!("expected activity");
         };
-        assert!(!activity.is_empty());
+        assert!(!activity.records.is_empty());
+        assert_eq!(activity.audit.torn_tail_bytes, 0);
         assert!(!format!("{activity:?}").contains("lifecycle-secret-sentinel"));
         let VaultActionResult::Audit(verification) =
             backend.execute(VaultAction::VerifyAudit).unwrap()

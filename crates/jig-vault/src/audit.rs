@@ -114,6 +114,14 @@ pub struct VaultActivityRecord {
     pub outcome: Option<String>,
 }
 
+/// Verified audit metadata and its bounded, safe activity projection.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedVaultActivity {
+    pub audit: AuditVerification,
+    pub records: Vec<VaultActivityRecord>,
+}
+
 /// Maximum number of verified activity records returned by one request.
 pub const MAX_VAULT_ACTIVITY_RECORDS: usize = 1_000;
 
@@ -219,7 +227,7 @@ pub(crate) fn verified_activity_unlocked(
     store: &VaultStore,
     audit_key: &[u8],
     limit: usize,
-) -> Result<(AuditVerification, Vec<VaultActivityRecord>)> {
+) -> Result<VerifiedVaultActivity> {
     let text = store.read_audit_text()?.ok_or_else(|| {
         anyhow::anyhow!(
             "vault audit log is missing at {}; remove the stale vault home or restore audit.jsonl before continuing",
@@ -237,7 +245,10 @@ pub(crate) fn verified_activity_unlocked(
                 .map(project_activity_record)
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((verified.verification, events))
+    Ok(VerifiedVaultActivity {
+        audit: verified.verification,
+        records: events,
+    })
 }
 
 struct VerifiedAuditLog {

@@ -115,16 +115,17 @@ fn activity_is_newest_first_bounded_and_metadata_only() {
         .unwrap();
 
     let activity = vault.activity(&passphrase(), 3).unwrap();
-    assert_eq!(activity.len(), 3);
-    assert_eq!(activity[0].action, "field_kind_change");
+    assert_eq!(activity.audit.torn_tail_bytes, 0);
+    assert_eq!(activity.records.len(), 3);
+    assert_eq!(activity.records[0].action, "field_kind_change");
     assert_eq!(
-        activity[0].subject.as_deref(),
+        activity.records[0].subject.as_deref(),
         Some("jig://Production/TOKEN")
     );
-    assert_eq!(activity[0].outcome.as_deref(), Some("applied"));
-    assert_eq!(activity[1].action, "field_batch_apply");
-    assert_eq!(activity[2].action, "secret_set");
-    assert_eq!(activity[2].subject.as_deref(), Some("legacy_token"));
+    assert_eq!(activity.records[0].outcome.as_deref(), Some("applied"));
+    assert_eq!(activity.records[1].action, "field_batch_apply");
+    assert_eq!(activity.records[2].action, "secret_set");
+    assert_eq!(activity.records[2].subject.as_deref(), Some("legacy_token"));
     let debug = format!("{activity:?}");
     assert!(!debug.contains("activity-secret-sentinel"));
     assert!(!debug.contains("field-secret-sentinel"));
@@ -137,6 +138,11 @@ fn activity_is_newest_first_bounded_and_metadata_only() {
     }
 
     let audit = vault.store.read_audit_text().unwrap().unwrap();
+    std::fs::write(vault.store.audit_path(), format!("{audit}{{\"partial\"")).unwrap();
+    let activity = vault.activity(&passphrase(), 3).unwrap();
+    assert!(activity.audit.torn_tail_bytes > 0);
+    assert_eq!(activity.records.len(), 3);
+
     std::fs::write(
         vault.store.audit_path(),
         audit.replace(

@@ -18,7 +18,9 @@ mod template;
 mod types;
 mod vault;
 
-pub use audit::{AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VaultActivityRecord};
+pub use audit::{
+    AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VaultActivityRecord, VerifiedVaultActivity,
+};
 pub use backup::{
     BACKUP_FORMAT_VERSION, BackupCreateRequest, BackupCreateResult, BackupRestoreRequest,
     BackupRestoreResult, MAX_BACKUP_ARCHIVE_BYTES,
