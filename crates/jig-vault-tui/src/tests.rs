@@ -512,6 +512,92 @@ fn replacement_form_starts_empty_and_does_not_render_existing_value() {
 }
 
 #[test]
+fn empty_text_replacement_requires_exact_clear_confirmation() {
+    let mut app = browsing_app();
+    let reference = "jig://Production/API_URL".parse().unwrap();
+    app.selected_item = Some(ItemIdentity::Canonical("Production".to_owned()));
+    app.selected_entry = Some(EntryIdentity::Field(reference));
+    app.focus = Focus::Fields;
+    app.begin_replace();
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::ConfirmEmptyTextReplacement(confirmation) = &app.screen else {
+        panic!("expected empty text replacement confirmation");
+    };
+    assert_eq!(
+        confirmation.reference.to_string(),
+        "jig://Production/API_URL"
+    );
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(
+        rendered.contains("Confirm empty text replacement"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("Type CLEAR exactly"), "{rendered}");
+    assert!(!rendered.contains("https://example.invalid"), "{rendered}");
+
+    handle_paste(&mut app, "clear");
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(
+        &app.screen,
+        Screen::ConfirmEmptyTextReplacement(_)
+    ));
+    assert!(
+        app.status
+            .as_ref()
+            .is_some_and(|status| status.text.contains("CLEAR exactly"))
+    );
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+    handle_paste(&mut app, "CLEAR");
+    let RuntimeAction::Start(BackendRequest::Execute(VaultAction::SetField {
+        reference,
+        kind,
+        value,
+        mode,
+    })) = handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    else {
+        panic!("exact confirmation did not produce an empty replacement action");
+    };
+    assert_eq!(reference.to_string(), "jig://Production/API_URL");
+    assert_eq!(kind, FieldKind::Text);
+    assert!(value.is_empty());
+    assert_eq!(mode, jig_vault::VaultWriteMode::Replace);
+}
+
+#[test]
+fn non_empty_text_replacement_does_not_require_clear_confirmation() {
+    let mut app = browsing_app();
+    let reference = "jig://Production/API_URL".parse().unwrap();
+    app.selected_item = Some(ItemIdentity::Canonical("Production".to_owned()));
+    app.selected_entry = Some(EntryIdentity::Field(reference));
+    app.focus = Focus::Fields;
+    app.begin_replace();
+    handle_paste(&mut app, "replacement value");
+
+    match submit_key(&mut app) {
+        VaultAction::SetField { value, mode, .. } => {
+            assert_eq!(value.as_slice(), b"replacement value");
+            assert_eq!(mode, jig_vault::VaultWriteMode::Replace);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
 fn kind_rename_and_item_rename_forms_emit_typed_actions() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;

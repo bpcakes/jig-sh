@@ -8,9 +8,10 @@ use ratatui::{
 };
 
 use crate::model::{
-    ActivityView, App, ConvertFocus, DeleteConfirmation, EntryIdentity, FieldWriteFocus, Focus,
-    ImportPreviewState, InitializeFocus, ItemIdentity, LegacyWriteFocus, ManagementForm,
-    PeekConfirmation, RenameFieldFocus, Screen, StatusKind, kind_label,
+    ActivityView, App, ConvertFocus, DeleteConfirmation, EmptyTextReplacementConfirmation,
+    EntryIdentity, FieldWriteFocus, Focus, ImportPreviewState, InitializeFocus, ItemIdentity,
+    LegacyWriteFocus, ManagementForm, PeekConfirmation, RenameFieldFocus, Screen, StatusKind,
+    kind_label,
 };
 use crate::tools::{
     BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm, ToolsMenu,
@@ -60,6 +61,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::Help
         | Screen::ConfirmMigration
         | Screen::Form(_)
+        | Screen::ConfirmEmptyTextReplacement(_)
         | Screen::ConfirmDelete(_)
         | Screen::Tools(_)
         | Screen::ToolForm(_)
@@ -79,6 +81,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 }
                 Screen::Form(form) => {
                     draw_management_form(frame, centered_rect(78, 68, area), app, form);
+                }
+                Screen::ConfirmEmptyTextReplacement(confirmation) => {
+                    draw_empty_text_replacement_confirmation(
+                        frame,
+                        centered_rect(78, 54, area),
+                        app,
+                        confirmation,
+                    );
                 }
                 Screen::ConfirmDelete(confirmation) => {
                     draw_delete_confirmation(frame, centered_rect(78, 52, area), app, confirmation);
@@ -714,6 +724,37 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel(title))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_empty_text_replacement_confirmation(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    confirmation: &EmptyTextReplacementConfirmation,
+) {
+    frame.render_widget(Clear, area);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Replace this encrypted field with an empty text value?",
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        key_value("Reference", &confirmation.reference.to_string()),
+        Line::from(""),
+        Line::from("This clears the current value; the existing value was not loaded."),
+        Line::from(""),
+        Line::from("Type CLEAR exactly, then press Enter."),
+        form_value_line("Confirmation", &confirmation.input, true, false),
+        Line::from(""),
+        Line::from("Enter confirm   Esc cancel   Ctrl-U clear"),
+    ];
+    append_status(&mut lines, app);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Confirm empty text replacement"))
             .wrap(Wrap { trim: true }),
         area,
     );

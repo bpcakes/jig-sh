@@ -170,6 +170,7 @@ impl App {
             Screen::Help
                 | Screen::ConfirmMigration
                 | Screen::Form(_)
+                | Screen::ConfirmEmptyTextReplacement(_)
                 | Screen::ConfirmDelete(_)
                 | Screen::Tools(_)
                 | Screen::ToolForm(_)
@@ -218,6 +219,7 @@ impl App {
         match &mut self.screen {
             Screen::Form(form) => form.metadata_input_mut(),
             Screen::ToolForm(form) => form.metadata_input_mut(),
+            Screen::ConfirmEmptyTextReplacement(confirmation) => Some(&mut confirmation.input),
             Screen::ConfirmDelete(confirmation) => Some(&mut confirmation.input),
             Screen::ImportPreview(preview) => Some(&mut preview.confirmation),
             Screen::ConfirmPeek(confirmation) => Some(&mut confirmation.input),
@@ -652,9 +654,18 @@ impl App {
         };
         match form.submission() {
             Ok(submission) => {
-                self.next_selection = submission.selection;
-                self.begin_loading(submission.label);
-                Some(submission.action)
+                if let Some(reference) = submission.empty_text_replacement_reference().cloned() {
+                    self.screen =
+                        Screen::ConfirmEmptyTextReplacement(EmptyTextReplacementConfirmation {
+                            reference,
+                            submission,
+                            input: String::new(),
+                        });
+                    self.status = None;
+                    None
+                } else {
+                    Some(self.start_form_submission(submission))
+                }
             }
             Err(message) => {
                 self.screen = Screen::Form(form);
@@ -662,6 +673,26 @@ impl App {
                 None
             }
         }
+    }
+
+    pub(crate) fn submit_empty_text_replacement(&mut self) -> Option<VaultAction> {
+        let screen = std::mem::replace(&mut self.screen, Screen::Browse);
+        let Screen::ConfirmEmptyTextReplacement(confirmation) = screen else {
+            self.screen = screen;
+            return None;
+        };
+        if confirmation.input != "CLEAR" {
+            self.screen = Screen::ConfirmEmptyTextReplacement(confirmation);
+            self.set_error("Empty replacement confirmation must be CLEAR exactly.");
+            return None;
+        }
+        Some(self.start_form_submission(confirmation.submission))
+    }
+
+    fn start_form_submission(&mut self, submission: FormSubmission) -> VaultAction {
+        self.next_selection = submission.selection;
+        self.begin_loading(submission.label);
+        submission.action
     }
 
     pub(crate) fn submit_tool_form(&mut self) -> Option<VaultAction> {
@@ -1035,6 +1066,7 @@ pub(crate) enum Screen {
     Help,
     ConfirmMigration,
     Form(ManagementForm),
+    ConfirmEmptyTextReplacement(EmptyTextReplacementConfirmation),
     ConfirmDelete(DeleteConfirmation),
     Tools(ToolsMenu),
     ToolForm(ToolForm),
@@ -1059,6 +1091,13 @@ pub(crate) struct ActivityView {
 #[derive(Debug)]
 pub(crate) struct PeekConfirmation {
     pub(crate) reference: VaultReference,
+    pub(crate) input: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct EmptyTextReplacementConfirmation {
+    pub(crate) reference: VaultReference,
+    submission: FormSubmission,
     pub(crate) input: String,
 }
 
@@ -1377,10 +1416,25 @@ impl ManagementForm {
     }
 }
 
+#[derive(Debug)]
 struct FormSubmission {
     action: VaultAction,
     label: &'static str,
     selection: Option<SelectionHint>,
+}
+
+impl FormSubmission {
+    fn empty_text_replacement_reference(&self) -> Option<&VaultReference> {
+        match &self.action {
+            VaultAction::SetField {
+                reference,
+                kind: FieldKind::Text,
+                value,
+                mode: VaultWriteMode::Replace,
+            } if value.is_empty() => Some(reference),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
