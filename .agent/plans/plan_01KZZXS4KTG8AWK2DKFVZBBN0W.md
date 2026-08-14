@@ -5,14 +5,14 @@ This work closes the actionable branch-review findings without treating every sy
 ## Progress
 
 - [x] Establish the pre-change baseline and run the Fowler Rust heuristic scanner.
-- [ ] Introduce exact destination and vault-field preconditions behind compatible APIs.
-- [ ] Replace the import preview/commit flag protocol with an opaque one-shot plan.
-- [ ] Reconcile initialize and restore failures against a non-creating presence query.
-- [ ] Preserve audit verification in the activity result.
-- [ ] Skip no-op kind mutations before audit/save and require explicit empty replacement intent.
-- [ ] Harden protected file opening and TUI credential environment consumption.
-- [ ] Correct test partition/platform coverage and remove unused/dead surface.
-- [ ] Run focused checks after every slice and finish with configured Jig gates.
+- [x] Introduce exact destination and vault-field preconditions behind compatible APIs.
+- [x] Replace the import preview/commit flag protocol with an opaque one-shot plan.
+- [x] Reconcile initialize and restore failures against a non-creating presence query.
+- [x] Preserve audit verification in the activity result.
+- [x] Skip no-op kind mutations before audit/save and require explicit empty replacement intent.
+- [x] Harden protected file opening and TUI credential environment consumption.
+- [x] Correct test partition/platform coverage and remove unused/dead surface.
+- [x] Run focused checks after every slice and finish with configured Jig gates.
 
 ## Surprises & Discoveries
 
@@ -20,6 +20,8 @@ This work closes the actionable branch-review findings without treating every sy
 - The scanner reported 200 capped heuristic candidates. DTO public fields, exhaustive closed-enum matches, test-only `unwrap`s, and file length alone are explicit non-findings for this work.
 - Import approval currently spans two independently mutable resources: vault fields and the generated dotenv destination. Exact authorization therefore needs preconditions at both owning boundaries, not only a source-file digest in the presentation layer.
 - `PreparedPrivateFile` already rechecks ordinary path safety at installation, but its boolean overwrite policy means “replace the previewed file” and “upsert whatever is there now” are not distinguishable.
+- The TUI activity API discarded `AuditVerification` after successfully deriving it, so a recoverable torn audit tail became invisible precisely at the presentation boundary.
+- The Windows workspace already pins the required reparse-point APIs; the omission was local to the new TUI crate rather than a missing platform abstraction across the repository.
 
 ## Decision Log
 
@@ -29,10 +31,14 @@ This work closes the actionable branch-review findings without treating every sy
 - Treat empty replacement as a real state transition, not an empty `SecretInput`: an explicit confirmation screen distinguishes accidental empty submission from deliberate clearing.
 - Keep behavior-changing commits separate from preparatory structural commits, with a narrow green check before each commit.
 - Preserve existing public compatibility wrappers where a new exact API can be added without forcing unrelated callers to migrate.
+- Keep verification and projected audit records in one `VerifiedVaultActivity` result so future consumers cannot accidentally forget verification state.
+- Add a conditional audited-edit seam first, then use it for field-kind no-ops; this preserves the audit-before-state invariant while avoiding false mutation events and nonce churn.
 
 ## Outcomes & Retrospective
 
-Pending implementation and final gate evidence.
+Implementation is complete in fifteen independently verified commits after the planning commit. The deeper issues were concentrated at four boundaries—split-phase authorization, lifecycle state inference, incomplete verification results, and ambiguous edit intent. Platform environment/file handling, test partitioning, an unused dependency, and an inert marker were local omissions. No persisted vault or audit format changed, and compatibility entrypoints remain for non-TUI callers.
+
+The final `jig work check` passed the contract and complete two-part nextest suite with batch receipt `receipt_01M001PYSE04ZWKQPWV2TS6Q91`; `jig work gates` reported both required gates fresh with no receipt diff. Final formatter and workspace Clippy checks passed with receipts `receipt_01M001QH4J5DSWRHQ72WQXXSSC` and `receipt_01M001R9BGXS96KCXGF9MH5DQ3`. The local toolchain has only the Linux target installed, so the Windows reparse test is committed and selected by the expanded `vault-platforms` CI matrix rather than executed locally.
 
 ## Context and orientation
 
