@@ -836,9 +836,7 @@ mod unix {
     }
 
     fn preflight_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-        if error.to_string().contains("already exists")
-            || error.to_string().contains("changed since preview")
-        {
+        if is_private_output_conflict(error) {
             VaultErrorKind::AlreadyExists
         } else if error.chain().any(|source| source.is::<std::io::Error>()) {
             VaultErrorKind::Io
@@ -848,8 +846,7 @@ mod unix {
     }
 
     fn install_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-        if error.to_string().contains("already exists")
-            || error.to_string().contains("changed since preview")
+        if is_private_output_conflict(error)
             || error
                 .chain()
                 .filter_map(|source| source.downcast_ref::<std::io::Error>())
@@ -859,6 +856,12 @@ mod unix {
         } else {
             VaultErrorKind::Io
         }
+    }
+
+    fn is_private_output_conflict(error: &anyhow::Error) -> bool {
+        error
+            .chain()
+            .any(|source| source.is::<PrivateOutputConflict>())
     }
 
     #[cfg(test)]
@@ -878,6 +881,37 @@ mod unix {
             overwrite: bool,
         ) -> std::result::Result<(), OutputInstallFailure> {
             prepare_private_bytes(path, bytes, overwrite)?.install()
+        }
+
+        #[test]
+        fn classifies_private_output_conflicts_by_type_through_context() {
+            let error = anyhow::Error::new(PrivateOutputConflict::ChangedSincePreview(
+                PathBuf::from("/safe/destination"),
+            ))
+            .context("outer output context");
+
+            assert_eq!(preflight_error_kind(&error), VaultErrorKind::AlreadyExists);
+            assert_eq!(install_error_kind(&error), VaultErrorKind::AlreadyExists);
+        }
+
+        #[test]
+        fn conflict_words_in_unrelated_errors_do_not_change_classification() {
+            for message in [
+                "unrelated path contains already exists words",
+                "unrelated operation changed since preview wording",
+            ] {
+                let error = anyhow::Error::msg(message);
+                assert_eq!(preflight_error_kind(&error), VaultErrorKind::InvalidInput);
+                assert_eq!(install_error_kind(&error), VaultErrorKind::Io);
+            }
+        }
+
+        #[test]
+        fn install_classifier_retains_native_already_exists_errors() {
+            let error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+                .context("atomic no-replace install failed");
+
+            assert_eq!(install_error_kind(&error), VaultErrorKind::AlreadyExists);
         }
 
         #[test]
