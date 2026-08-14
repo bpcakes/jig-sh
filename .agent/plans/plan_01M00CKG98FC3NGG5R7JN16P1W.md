@@ -15,13 +15,14 @@ typed classifications without parsing display text.
   candidates.
 - [x] Classify the five review findings by root cause and identify small seams.
 - [x] Record a trustworthy pre-change baseline for the affected crates.
-- [ ] Model planned import field transitions without changing commit behavior.
-- [ ] Require explicit acknowledgement for concealed-to-text import replacements.
-- [ ] Separate success snapshot selection from failure-recovery snapshot selection.
-- [ ] Reconcile a vanished vault to the Missing screen.
-- [ ] Restore exhaustive matching at the closed Vault action boundary.
-- [ ] Replace private-output message parsing with typed policy failures.
-- [ ] Run focused checks, configured gates, inspect receipts, and close the work.
+- [x] Model planned import field transitions without changing commit behavior.
+- [x] Require explicit acknowledgement for concealed-to-text import replacements.
+- [x] Separate success snapshot selection from failure-recovery snapshot selection.
+- [x] Reconcile a vanished vault to the Missing screen.
+- [x] Restore exhaustive matching at the closed Vault action boundary.
+- [x] Replace private-output message parsing with typed policy failures.
+- [x] Run focused checks, configured gates, and inspect receipts.
+- [ ] Close structured work and publish the commits to the existing PR branch.
 
 ## Surprises & Discoveries
 
@@ -47,6 +48,13 @@ typed classifications without parsing display text.
 - The source baseline is green: `cargo fmt --all -- --check` passed; all 216
   `jig-vault` and 46 `jig-vault-tui` tests passed; and strict Clippy passed for
   `jig-vault`, `jig-vault-tui`, and `jig-sh` across all targets.
+- Presence reconciliation is also the correct credential boundary. Making that
+  transition always call `VaultBackend::lock` removes a second conditional and
+  guarantees the backend cannot retain a credential after the UI drops its
+  authenticated snapshot.
+- `anyhow::Error::chain` retains the private output-conflict type through added
+  context, so structural classification needs no public error variant or message
+  change.
 
 ## Decision Log
 
@@ -76,7 +84,32 @@ typed classifications without parsing display text.
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The five findings were not one undifferentiated design failure. Three exposed
+missing domain boundaries: import policy had been reduced to primitive facts,
+failure recovery conflated success and recovery state, and private-output errors
+discarded their type before classification. The action wildcard was a smaller
+closed-protocol omission. The fixes therefore stayed local and incremental
+instead of introducing a new framework.
+
+Implementation landed as independently green slices:
+
+- `1f7fe07`, `a6c2f3e`, and `2abc38e` retain revision-bound prior field kinds,
+  model closed import transitions, and require exact `IMPORT TEXT` for any
+  concealed-to-text replacement.
+- `ce97b4d`, `46c9513`, and `713010d` separate recovery snapshots, centralize
+  operation failure policy, reconcile missing storage, and erase credentials
+  whenever authenticated UI state is discarded.
+- `8942bf8` closes `VaultAction` so adapter omissions are compile failures.
+- `eee8a25` and `0d75396` preserve output-conflict messages while replacing
+  substring inference with type-based classification through error context.
+
+Focused tests passed after every slice. Final Jig evidence is green: work check
+`receipt_01M00EZAD2AEA224WRXN0VEFTY` covers contract and the configured complete
+test partition; formatting is `receipt_01M00EZS9Q4C9M1VRS958KYG8V`; strict
+Clippy is `receipt_01M00F0PX80T5X8MN8PTJQY99W`; and `scripts/jig work gates`
+reports every required gate fresh with no unresolved gate. No dependency,
+persisted format, CLI flag, JSON contract, or public error-message change was
+introduced.
 
 ## Context and Orientation
 
