@@ -468,10 +468,6 @@ impl VaultBackend for VaultTuiBackend {
                     snapshot,
                 })
             }
-            _ => Err(VaultUiError::new(
-                VaultUiErrorKind::Unsupported,
-                "This Vault TUI action is not available in the current milestone.",
-            )),
         }
     }
 

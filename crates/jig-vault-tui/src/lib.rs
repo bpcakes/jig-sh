@@ -108,7 +108,6 @@ impl std::error::Error for VaultUiError {}
 /// One typed backend operation. Protected payloads remain zeroizing and use a
 /// redacted `Debug` implementation through [`SecretBytes`].
 #[derive(Debug)]
-#[non_exhaustive]
 pub enum VaultAction {
     Refresh,
     MigrateToV2,
