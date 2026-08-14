@@ -429,6 +429,25 @@ impl Vault {
         self.store.preview_import_fields(passphrase, references)
     }
 
+    /// Captures an opaque precondition for one proposed import field set.
+    ///
+    /// The precondition records the exact encrypted vault-state generation and
+    /// ordered field presence observed under the vault lock. It can later be
+    /// consumed by [`Self::import_fields_if_unchanged`] so an interactive
+    /// approval cannot silently widen to a different state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, migration, unlock, and audit errors as
+    /// [`Self::preview_import_fields`].
+    pub fn plan_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<VaultImportPrecondition> {
+        self.store.plan_import_fields(passphrase, references)
+    }
+
     /// Atomically imports one batch of canonical encrypted fields.
     ///
     /// Imports accept only set mutations. With `replace == false`, any field
@@ -450,6 +469,29 @@ impl Vault {
         replace: bool,
     ) -> Result<FieldBatchResult> {
         self.store.import_fields(passphrase, mutations, replace)
+    }
+
+    /// Atomically imports fields only when the vault still matches a prior
+    /// [`Self::plan_import_fields`] observation.
+    ///
+    /// The precondition is consumed once. Any intervening vault-state save, a
+    /// different vault identity, or a mismatched field set rejects the import
+    /// before audit append or state mutation and requires a new preview.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without mutation when the plan is stale or mismatched,
+    /// replacement was not authorized for a previewed collision, or ordinary
+    /// import validation and persistence fails.
+    pub fn import_fields_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: VaultImportPrecondition,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .import_fields_if_unchanged(passphrase, mutations, precondition, replace)
     }
 
     /// Writes one canonical field to a caller-selected stream as exact bytes.
@@ -658,6 +700,41 @@ pub enum VaultWriteMode {
     Replace,
     /// Create or replace for backwards-compatible CLI behavior.
     Upsert,
+}
+
+/// Opaque, one-shot optimistic-concurrency precondition for a field import.
+///
+/// The encrypted-state generation is intentionally hidden so callers cannot
+/// construct or weaken a plan. Field presence is metadata and remains
+/// available for rendering a safe preview.
+pub struct VaultImportPrecondition {
+    vault_id: String,
+    state_nonce_b64: String,
+    fields: Vec<ImportFieldPresence>,
+}
+
+impl VaultImportPrecondition {
+    /// Iterates over the planned references and whether each one existed.
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = (&VaultReference, bool)> {
+        self.fields
+            .iter()
+            .map(|field| (&field.reference, field.existed))
+    }
+}
+
+impl std::fmt::Debug for VaultImportPrecondition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultImportPrecondition")
+            .field("field_count", &self.fields.len())
+            .field("state_generation", &"[OPAQUE]")
+            .finish_non_exhaustive()
+    }
+}
+
+struct ImportFieldPresence {
+    reference: VaultReference,
+    existed: bool,
 }
 
 impl VaultWriteMode {
@@ -1634,6 +1711,21 @@ impl VaultStore {
         passphrase: &SecretString,
         references: &[VaultReference],
     ) -> Result<Vec<bool>> {
+        self.plan_import_fields(passphrase, references)
+            .map(|precondition| {
+                precondition
+                    .fields
+                    .into_iter()
+                    .map(|field| field.existed)
+                    .collect()
+            })
+    }
+
+    pub(crate) fn plan_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<VaultImportPrecondition> {
         validate_import_references(references)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         self.with_lock(|| {
@@ -1646,10 +1738,17 @@ impl VaultStore {
                 )
             })?;
             vault.ensure_field_format_v2()?;
-            Ok(references
-                .iter()
-                .map(|reference| vault.contains_field(reference))
-                .collect())
+            Ok(VaultImportPrecondition {
+                vault_id: vault.file.header.vault_id.clone(),
+                state_nonce_b64: vault.file.state_nonce_b64.clone(),
+                fields: references
+                    .iter()
+                    .map(|reference| ImportFieldPresence {
+                        reference: reference.clone(),
+                        existed: vault.contains_field(reference),
+                    })
+                    .collect(),
+            })
         })
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
@@ -1660,15 +1759,41 @@ impl VaultStore {
         mutations: Vec<FieldMutation>,
         replace: bool,
     ) -> Result<FieldBatchResult> {
+        self.import_fields_with_precondition(passphrase, mutations, None, replace)
+    }
+
+    pub(crate) fn import_fields_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: VaultImportPrecondition,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.import_fields_with_precondition(passphrase, mutations, Some(precondition), replace)
+    }
+
+    fn import_fields_with_precondition(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: Option<VaultImportPrecondition>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
         validate_import_mutations(&mutations)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         let fields = field_batch_set_audit_metadata(&mutations);
+        if let Some(precondition) = &precondition {
+            validate_import_precondition(precondition, &fields)
+                .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        }
         self.edit_with_audit(
             passphrase,
             AuditAction::OnePasswordImport,
             |vault| {
                 vault.ensure_field_format_v2()?;
-                if !replace {
+                if let Some(precondition) = precondition {
+                    enforce_import_precondition(vault, &precondition, replace)?;
+                } else if !replace {
                     reject_import_collisions(vault, &fields)?;
                 }
                 Ok(vault.apply_validated_field_batch(mutations))
@@ -2656,6 +2781,52 @@ fn validate_import_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
                 VaultErrorKind::InvalidInput,
                 format!(
                     "onepassword import exceeds the {MAX_IMPORT_VALUE_BYTES} byte decoded value limit"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_import_precondition(
+    precondition: &VaultImportPrecondition,
+    fields: &[(VaultReference, FieldKind)],
+) -> AnyResult<()> {
+    if precondition.fields.len() != fields.len()
+        || precondition
+            .fields
+            .iter()
+            .zip(fields)
+            .any(|(planned, (reference, _))| planned.reference != *reference)
+    {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "vault import mutations do not match the previewed field set",
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_import_precondition(
+    vault: &OpenVault,
+    precondition: &VaultImportPrecondition,
+    replace: bool,
+) -> AnyResult<()> {
+    if vault.file.header.vault_id != precondition.vault_id
+        || vault.file.state_nonce_b64 != precondition.state_nonce_b64
+    {
+        return Err(classified(
+            VaultErrorKind::AlreadyExists,
+            "vault state changed since the import preview; preview again",
+        ));
+    }
+    if !replace {
+        if let Some(field) = precondition.fields.iter().find(|field| field.existed) {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!(
+                    "vault field '{}' already exists; enable replacement and preview again",
+                    field.reference
                 ),
             ));
         }
