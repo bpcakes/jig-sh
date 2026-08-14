@@ -1172,11 +1172,11 @@ fn handle_import_preview_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
             .map_or(RuntimeAction::Redraw, |action| {
                 RuntimeAction::Start(BackendRequest::Execute(action))
             }),
-        KeyCode::Char('r') => {
+        KeyCode::Char('r') if key.modifiers.is_empty() => {
             app.toggle_import_replace();
             RuntimeAction::Redraw
         }
-        KeyCode::Char('o') => {
+        KeyCode::Char('o') if key.modifiers.is_empty() => {
             app.toggle_import_overwrite();
             RuntimeAction::Redraw
         }

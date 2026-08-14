@@ -1085,6 +1085,25 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
         handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         RuntimeAction::Redraw
     ));
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        ),
+        RuntimeAction::Ignore
+    ));
+    assert!(matches!(
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT),
+        ),
+        RuntimeAction::Ignore
+    ));
+    let Screen::ImportPreview(preview) = &app.screen else {
+        panic!("expected the import preview to remain open");
+    };
+    assert!(!preview.preview.replace);
+    assert!(!preview.preview.overwrite);
     handle_key(
         &mut app,
         KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
