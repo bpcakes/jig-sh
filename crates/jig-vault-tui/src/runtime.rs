@@ -504,24 +504,43 @@ enum OperationKind {
 }
 
 impl OperationKind {
-    const fn should_reconcile_presence(self) -> bool {
-        matches!(self, Self::Initialize | Self::Restore)
-    }
-
-    fn should_refresh_after_error(self, error: &VaultUiError) -> bool {
-        matches!(
-            self,
+    const fn failure_recovery(self, error: &VaultUiError) -> FailureRecovery {
+        match self {
+            Self::Initialize | Self::Restore => FailureRecovery::ReconcilePresence,
             Self::Migrate
-                | Self::Mutation
-                | Self::Import
-                | Self::Backup
-                | Self::Passphrase
-                | Self::Export
-        ) && !matches!(
-            error.kind(),
-            VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
-        )
+            | Self::Mutation
+            | Self::Import
+            | Self::Backup
+            | Self::Passphrase
+            | Self::Export
+                if !matches!(
+                    error.kind(),
+                    VaultUiErrorKind::Authentication | VaultUiErrorKind::Audit
+                ) =>
+            {
+                FailureRecovery::RefreshSnapshot
+            }
+            Self::Unlock
+            | Self::Refresh
+            | Self::Migrate
+            | Self::Mutation
+            | Self::Activity
+            | Self::VerifyAudit
+            | Self::ImportPreview
+            | Self::ImportDiscard
+            | Self::Import
+            | Self::Backup
+            | Self::Passphrase
+            | Self::Export => FailureRecovery::Primary,
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailureRecovery {
+    Primary,
+    RefreshSnapshot,
+    ReconcilePresence,
 }
 
 struct BackendCompletion {
@@ -537,21 +556,23 @@ impl BackendCompletion {
     ) -> Self {
         let outcome = match result {
             Ok(result) => BackendOutcome::Success(result),
-            Err(error) if kind.should_reconcile_presence() => BackendOutcome::LifecycleFailure {
-                error,
-                presence: backend.presence(),
+            Err(error) => match kind.failure_recovery(&error) {
+                FailureRecovery::Primary => BackendOutcome::Failure(BackendFailure::Primary(error)),
+                FailureRecovery::RefreshSnapshot => {
+                    let failure = match backend.refresh() {
+                        Ok(snapshot) => BackendFailure::Refreshed { error, snapshot },
+                        Err(refresh_error) => BackendFailure::RefreshFailed {
+                            error,
+                            refresh_error,
+                        },
+                    };
+                    BackendOutcome::Failure(failure)
+                }
+                FailureRecovery::ReconcilePresence => BackendOutcome::LifecycleFailure {
+                    error,
+                    presence: backend.presence(),
+                },
             },
-            Err(error) if kind.should_refresh_after_error(&error) => {
-                let failure = match backend.refresh() {
-                    Ok(snapshot) => BackendFailure::Refreshed { error, snapshot },
-                    Err(refresh_error) => BackendFailure::RefreshFailed {
-                        error,
-                        refresh_error,
-                    },
-                };
-                BackendOutcome::Failure(failure)
-            }
-            Err(error) => BackendOutcome::Failure(BackendFailure::Primary(error)),
         };
         Self { kind, outcome }
     }
@@ -1377,23 +1398,36 @@ mod tests {
             OperationKind::Passphrase,
             OperationKind::Export,
         ] {
-            assert!(kind.should_refresh_after_error(&recoverable));
+            assert_eq!(
+                kind.failure_recovery(&recoverable),
+                FailureRecovery::RefreshSnapshot
+            );
         }
         for kind in [
             OperationKind::Unlock,
-            OperationKind::Initialize,
             OperationKind::Refresh,
             OperationKind::Activity,
             OperationKind::VerifyAudit,
             OperationKind::ImportPreview,
             OperationKind::ImportDiscard,
-            OperationKind::Restore,
         ] {
-            assert!(!kind.should_refresh_after_error(&recoverable));
+            assert_eq!(
+                kind.failure_recovery(&recoverable),
+                FailureRecovery::Primary
+            );
+        }
+        for kind in [OperationKind::Initialize, OperationKind::Restore] {
+            assert_eq!(
+                kind.failure_recovery(&recoverable),
+                FailureRecovery::ReconcilePresence
+            );
         }
         for fatal_kind in [VaultUiErrorKind::Authentication, VaultUiErrorKind::Audit] {
             let fatal = VaultUiError::new(fatal_kind, "safe fatal failure");
-            assert!(!OperationKind::Import.should_refresh_after_error(&fatal));
+            assert_eq!(
+                OperationKind::Import.failure_recovery(&fatal),
+                FailureRecovery::Primary
+            );
         }
     }
 
