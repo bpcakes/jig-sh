@@ -82,10 +82,31 @@ pub struct FuzzyMatchScore {
     start: usize,
 }
 
+/// Case-folded text that can be reused across fuzzy-match scoring calls.
+///
+/// Construction applies the same Unicode lowercase normalization as
+/// [`fuzzy_match_score`]. Scoring two prepared values performs no allocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedFuzzyText(String);
+
+impl PreparedFuzzyText {
+    /// Prepares one candidate or query for repeated fuzzy matching.
+    pub fn new(text: &str) -> Self {
+        Self(text.to_lowercase())
+    }
+
+    /// Scores this prepared candidate against a prepared query.
+    pub fn match_score(&self, query: &Self) -> Option<FuzzyMatchScore> {
+        fuzzy_match_score_normalized(&self.0, &query.0)
+    }
+}
+
 /// Scores a case-insensitive fuzzy match without retaining either input.
 pub fn fuzzy_match_score(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
-    let candidate = candidate.to_lowercase();
-    let query = query.to_lowercase();
+    PreparedFuzzyText::new(candidate).match_score(&PreparedFuzzyText::new(query))
+}
+
+fn fuzzy_match_score_normalized(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
     if candidate == query {
         return Some(FuzzyMatchScore {
             kind: 0,
@@ -93,14 +114,14 @@ pub fn fuzzy_match_score(candidate: &str, query: &str) -> Option<FuzzyMatchScore
             start: 0,
         });
     }
-    if candidate.starts_with(&query) {
+    if candidate.starts_with(query) {
         return Some(FuzzyMatchScore {
             kind: 1,
             span: candidate.chars().count(),
             start: 0,
         });
     }
-    if let Some(start) = candidate.find(&query) {
+    if let Some(start) = candidate.find(query) {
         return Some(FuzzyMatchScore {
             kind: 2,
             span: query.chars().count(),
@@ -414,6 +435,26 @@ mod tests {
         let late = fuzzy_match_score("xxa-b-c", "abc").unwrap();
         assert!(tight < broad);
         assert!(tight < late);
+    }
+
+    #[test]
+    fn prepared_fuzzy_text_preserves_compatibility_scoring() {
+        for (candidate, query) in [
+            ("Vault", "vault"),
+            ("vault item", "vault"),
+            ("open vault item", "vault"),
+            ("very agile useful local tool", "vault"),
+            ("Straße Production", "STRASSE"),
+            ("secret", "vault"),
+            ("", ""),
+            ("candidate", ""),
+        ] {
+            assert_eq!(
+                PreparedFuzzyText::new(candidate).match_score(&PreparedFuzzyText::new(query)),
+                fuzzy_match_score(candidate, query),
+                "candidate={candidate:?}, query={query:?}"
+            );
+        }
     }
 
     #[test]
