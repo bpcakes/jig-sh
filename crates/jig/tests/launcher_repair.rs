@@ -142,6 +142,143 @@ exit 79
 }
 
 #[test]
+fn embedded_full_refresh_replaces_repair_seed_before_old_contract_cleanup() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("embedded-refresh");
+    let jig = env!("CARGO_BIN_EXE_jig");
+    initialize_contract_drift_repo(jig, &destination, "embedded-refresh");
+
+    let repair = Command::new(jig)
+        .arg("update")
+        .arg(&destination)
+        .args(["--launcher-only", "--force"])
+        .output()
+        .unwrap();
+    assert_success(&repair, "launcher-only repair seed");
+
+    let cache_base = if destination.join(".git").is_dir() {
+        destination.join(".git/jig-tools")
+    } else {
+        destination.join(".agent/.cache/jig")
+    };
+    let old_stamp = cache_base.join("contract-3-runtime/.jig-source-stamp");
+    assert!(
+        fs::read_to_string(&old_stamp)
+            .unwrap()
+            .starts_with("jig-seeded-runtime-v1\n")
+    );
+
+    let refresh = Command::new(jig)
+        .arg("update")
+        .arg(&destination)
+        .arg("--force")
+        .output()
+        .unwrap();
+    assert_success(&refresh, "embedded full refresh");
+
+    let manifest: Value = serde_json::from_str(
+        &fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    let contract_version = manifest["contract_version"].as_u64().unwrap();
+    let current_stamp = cache_base.join(format!(
+        "contract-{contract_version}-runtime/.jig-source-stamp"
+    ));
+    assert!(
+        fs::read_to_string(&current_stamp)
+            .unwrap()
+            .starts_with("jig-embedded-runtime-v1\n"),
+        "full refresh must publish durable embedded provenance before cleanup"
+    );
+    assert!(
+        !old_stamp.exists(),
+        "the obsolete repair seed should be retired after its replacement is durable"
+    );
+
+    let version = Command::new(destination.join("scripts/jig"))
+        .arg("--version")
+        .env_remove("JIG_DEV_BIN")
+        .current_dir(&destination)
+        .output()
+        .unwrap();
+    assert_success(&version, "post-refresh launcher execution");
+}
+
+#[test]
+fn embedded_minimal_adopt_and_update_do_not_require_the_retired_installer() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("minimal-refresh");
+    let jig = env!("CARGO_BIN_EXE_jig");
+    initialize_embedded_repo(jig, &destination, "minimal-refresh");
+
+    let adopt = Command::new(jig)
+        .arg("adopt")
+        .arg(&destination)
+        .args([
+            "--minimal",
+            "--write",
+            "--force",
+            "--defaults",
+            "--no-input",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&adopt, "embedded full-to-minimal adoption");
+    assert!(!destination.join("scripts/install-jig.sh").exists());
+
+    let update = Command::new(jig)
+        .arg("update")
+        .arg(&destination)
+        .arg("--force")
+        .output()
+        .unwrap();
+    assert_success(&update, "embedded minimal update");
+    assert!(!destination.join("scripts/install-jig.sh").exists());
+}
+
+#[test]
+fn embedded_full_refresh_reports_cache_failure_without_invalidating_the_render() {
+    let temp = tempdir().unwrap();
+    let destination = temp.path().join("cache-warning");
+    let jig = env!("CARGO_BIN_EXE_jig");
+    initialize_embedded_repo(jig, &destination, "cache-warning");
+
+    let launcher = destination.join("scripts/jig");
+    fs::write(&launcher, "outdated launcher\n").unwrap();
+    let cache_base = destination.join(".git/jig-tools");
+    if cache_base.is_dir() {
+        fs::remove_dir_all(&cache_base).unwrap();
+    }
+    fs::write(&cache_base, "blocks runtime cache creation\n").unwrap();
+
+    let refresh = Command::new(jig)
+        .arg("--json")
+        .arg("update")
+        .arg(&destination)
+        .arg("--force")
+        .output()
+        .unwrap();
+
+    assert_success(&refresh, "embedded full refresh with unavailable cache");
+    assert!(launcher_text(&launcher).contains("# jig-generated-runtime-launcher:v1"));
+    let report: Value = serde_json::from_slice(&refresh.stdout).unwrap();
+    assert!(report["warnings"].as_array().is_some_and(|warnings| {
+        warnings.iter().any(|warning| {
+            warning
+                .as_str()
+                .is_some_and(|warning| warning.contains("runtime cache refresh did not complete"))
+        })
+    }));
+    let stderr = String::from_utf8_lossy(&refresh.stderr);
+    assert!(
+        stderr.contains("runtime cache refresh did not complete")
+            && stderr.contains("harness files remain applied"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn launcher_only_update_rolls_back_real_scripts_when_seed_process_fails() {
     let temp = tempdir().unwrap();
     let destination = temp.path().join("rollback");
@@ -270,6 +407,25 @@ fn initialize_contract_drift_repo(jig: &str, destination: &Path, repo_name: &str
         1,
     );
     fs::write(&answers_path, answers).unwrap();
+}
+
+fn initialize_embedded_repo(jig: &str, destination: &Path, repo_name: &str) {
+    let init = Command::new(jig)
+        .arg("init")
+        .arg(destination)
+        .args([
+            "--preset",
+            "harness-only",
+            "--repo-name",
+            repo_name,
+            "--sqlx-enabled",
+            "false",
+            "--no-input",
+            "--no-vault",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&init, "embedded fixture init");
 }
 
 fn configure_unfingerprintable_local_source(destination: &Path, source: &Path) {

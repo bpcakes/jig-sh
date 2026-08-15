@@ -266,7 +266,7 @@ fn full_update_upgrades_legacy_contract_and_launcher_together() {
 }
 
 #[test]
-fn full_update_retires_current_contract_repair_seed() {
+fn embedded_full_update_replaces_current_contract_repair_seed() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -319,13 +319,16 @@ fn full_update_retires_current_contract_repair_seed() {
     })
     .unwrap();
 
-    assert!(!cache.join(".jig-source-stamp").exists());
+    assert_eq!(
+        fs::read_to_string(cache.join(".jig-source-stamp")).unwrap(),
+        "jig-embedded-runtime-v1\nsource:fixture\n"
+    );
     assert!(!cache.join(".jig-source-metadata-stamp").exists());
     assert!(cache.join("bin/jig").exists());
 }
 
 #[test]
-fn adopt_write_retires_current_contract_repair_seed() {
+fn embedded_adopt_replaces_current_contract_repair_seed() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("repo");
@@ -363,7 +366,10 @@ fn adopt_write_retires_current_contract_repair_seed() {
         .unwrap()
     });
 
-    assert!(!cache.join(".jig-source-stamp").exists());
+    assert_eq!(
+        fs::read_to_string(cache.join(".jig-source-stamp")).unwrap(),
+        "jig-embedded-runtime-v1\nsource:fixture\n"
+    );
     assert!(cache.join("bin/jig").exists());
 }
 

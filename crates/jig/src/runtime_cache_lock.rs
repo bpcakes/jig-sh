@@ -150,8 +150,8 @@ impl RuntimeCacheLocks {
             }
         }
         bail!(
-            "Timed out waiting for Jig installer lock {}",
-            paths.directory.display()
+            "Timed out waiting for Jig installer lock {}. Another scripts/jig install may still be running; remove an unmarked legacy lock directory manually only after confirming no installer is active, then retry",
+            paths.directory.display(),
         )
     }
 }

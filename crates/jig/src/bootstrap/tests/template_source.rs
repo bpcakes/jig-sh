@@ -250,6 +250,63 @@ fn local_source_stamp_tracks_content_outside_a_git_worktree() {
 
 #[cfg(unix)]
 #[test]
+fn non_git_local_source_stamp_rejects_internal_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    let source_dir = source.join("crates/jig/src");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(
+        source_dir.join("implementation.rs"),
+        "pub const VALUE: u8 = 1;\n",
+    )
+    .unwrap();
+    symlink("implementation.rs", source_dir.join("selected.rs")).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let output = run_local_source_stamp(installer, &source);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("selected.rs is a symbolic link"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("replace links"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_local_source_stamp_rejects_tracked_internal_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("source");
+    let source_dir = source.join("crates/jig/src");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(source.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+    fs::write(source.join("Cargo.lock"), "version = 3\n").unwrap();
+    fs::write(
+        source_dir.join("implementation.rs"),
+        "pub const VALUE: u8 = 1;\n",
+    )
+    .unwrap();
+    symlink("implementation.rs", source_dir.join("selected.rs")).unwrap();
+    init_git_repo_for_test(&source);
+    git(&source, ["add", "."]).unwrap();
+    git(&source, ["commit", "-m", "symlink fixture"]).unwrap();
+    let installer = include_str!("../embedded_template_snapshots/scripts/install-jig.sh.jinja");
+
+    let output = run_local_source_stamp(installer, &source);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("tracked symbolic link"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
 fn local_source_stamp_bounds_non_git_source_bytes() {
     let temp = tempdir().unwrap();
     let source = temp.path().join("source");

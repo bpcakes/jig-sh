@@ -212,6 +212,39 @@ mod tests {
         assert!(optional_cargo_command_branches(&(command + " trailing")).is_none());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_bash_path_policy_normalizes_verbatim_disk_and_unc_paths() {
+        assert_eq!(
+            windows_bash_compatible_path(Path::new(r"\\?\C:\repo\tools")).unwrap(),
+            PathBuf::from(r"C:\repo\tools")
+        );
+        assert_eq!(
+            windows_bash_compatible_path(Path::new(r"\\?\UNC\server\share\repo")).unwrap(),
+            PathBuf::from(r"\\server\share\repo")
+        );
+        assert_eq!(
+            windows_bash_compatible_path(Path::new(r"\\server\share\repo")).unwrap(),
+            PathBuf::from(r"\\server\share\repo")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_bash_path_policy_rejects_long_and_reserved_legacy_paths() {
+        let long_path = PathBuf::from(r"C:\").join("a".repeat(256));
+        assert_eq!(
+            windows_bash_compatible_path(&long_path).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            windows_bash_compatible_path(Path::new(r"\\?\C:\repo\CON"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn bash_environment_sanitizer_blocks_startup_options_tracing_and_exported_functions() {

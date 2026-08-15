@@ -104,6 +104,32 @@ fn repair_seed_retirement_preserves_ordinary_cache_provenance() {
 }
 
 #[test]
+fn repair_seed_retirement_preserves_embedded_runtime_provenance() {
+    let repo = tempdir().unwrap();
+    let cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
+        crate::context::CURRENT_CONTRACT_VERSION,
+        RuntimeCacheProfile::Runtime,
+    ));
+    fs::create_dir_all(cache.join("bin")).unwrap();
+    fs::write(cache.join("bin/jig"), "embedded runtime").unwrap();
+    fs::write(
+        cache.join(".jig-source-stamp"),
+        "jig-embedded-runtime-v1\nsource:fixture\n",
+    )
+    .unwrap();
+
+    let outcome =
+        retire_launcher_repair_seeded_caches(repo.path(), crate::context::CURRENT_CONTRACT_VERSION);
+
+    assert_eq!(outcome.retired, 0);
+    assert!(outcome.errors.is_empty());
+    assert_eq!(
+        fs::read_to_string(cache.join(".jig-source-stamp")).unwrap(),
+        "jig-embedded-runtime-v1\nsource:fixture\n"
+    );
+}
+
+#[test]
 fn repair_seed_retirement_does_not_block_or_fail_committed_harness_changes() {
     let repo = tempdir().unwrap();
     let cache = runtime_cache_base(repo.path()).join(runtime_profile_cache_name(
@@ -263,6 +289,12 @@ fn launcher_repair_cache_publication_refuses_an_active_installer_lock_before_mut
         error
             .to_string()
             .contains("Timed out waiting for Jig installer lock"),
+        "{error:#}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("only after confirming no installer is active"),
         "{error:#}"
     );
     assert_eq!(

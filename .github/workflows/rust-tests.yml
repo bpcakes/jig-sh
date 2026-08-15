@@ -447,10 +447,15 @@ jobs:
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           shared-key: rust-${{ runner.os }}-${{ github.job }}
-      # The jig-sh unit suite still uses Unix shell-script fixtures for
-      # bootstrap/runtime tests. Keep Windows coverage at compile level until
-      # those fixtures have native .cmd or Rust test-double equivalents.
+      # Most jig-sh tests still use Unix-only fixtures. Build everything, then
+      # run the focused Git Bash recovery boundary that has native fixtures.
       - name: Run jig-sh build
         run: cargo build -p jig-sh --locked
+      - name: Run Git Bash launcher recovery tests
+        run: cargo test -p jig-sh --test launcher_repair_windows --locked
+      - name: Run Windows repair and Bash path policy tests
+        run: |
+          cargo test -p jig-sh --lib --locked platform_policy_tests
+          cargo test -p jig-sh --lib --locked windows_bash_path_policy
       - name: Run jig-sh all-targets clippy
         run: cargo clippy -p jig-sh --all-targets --locked -- -D warnings

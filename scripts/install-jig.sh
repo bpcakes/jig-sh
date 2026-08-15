@@ -152,6 +152,8 @@ INSTALL_PROFILE="${JIG_INSTALL_PROFILE:-default}"
 INSTALL_ROOT_ARG=""
 RESOLVE_ONLY=0
 SEED_DEV_BIN=0
+SEED_PURPOSE="launcher-repair"
+SEED_PURPOSE_ARG_SET=0
 REPOSITORY_SCOPE=0
 REFRESH_CACHE="${JIG_INSTALL_REFRESH:-0}"
 CONTRACT_VERSION=""
@@ -201,6 +203,20 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --seed-dev-bin)
       SEED_DEV_BIN=1
+      shift
+      ;;
+    --seed-purpose)
+      if [[ "$#" -lt 2 ]]; then
+        echo "--seed-purpose requires a value." >&2
+        exit 2
+      fi
+      SEED_PURPOSE="$2"
+      SEED_PURPOSE_ARG_SET=1
+      shift 2
+      ;;
+    --seed-purpose=*)
+      SEED_PURPOSE="${1#--seed-purpose=}"
+      SEED_PURPOSE_ARG_SET=1
       shift
       ;;
     --repository-scope)
@@ -333,6 +349,22 @@ if [[ "$SEED_DEV_BIN" == "1" && "$RESOLVE_ONLY" == "1" ]]; then
   echo "--seed-dev-bin cannot be combined with --resolve-only." >&2
   exit 2
 fi
+if [[ "$SEED_PURPOSE_ARG_SET" == "1" && "$SEED_DEV_BIN" != "1" ]]; then
+  echo "--seed-purpose requires --seed-dev-bin." >&2
+  exit 2
+fi
+case "$SEED_PURPOSE" in
+  launcher-repair)
+    SEED_STAMP_HEADER="jig-seeded-runtime-v1"
+    ;;
+  embedded-template)
+    SEED_STAMP_HEADER="jig-embedded-runtime-v1"
+    ;;
+  *)
+    echo "Unsupported runtime seed purpose: $SEED_PURPOSE" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -d "$ROOT_DIR/.git" ]]; then
   DEFAULT_INSTALL_BASE="$ROOT_DIR/.git/jig-tools"
@@ -477,6 +509,9 @@ total_bytes = 0
 class SourceStampLimit(Exception):
     pass
 
+class UnsupportedSourceEntry(Exception):
+    pass
+
 def field(value):
     if isinstance(value, str):
         value = os.fsencode(value)
@@ -508,8 +543,7 @@ def visit(relative, depth=0):
         field(str(metadata.st_mtime_ns))
         field(str(metadata.st_ctime_ns))
     if stat.S_ISLNK(metadata.st_mode):
-        field(b"symlink")
-        field(os.readlink(path))
+        raise UnsupportedSourceEntry(relative)
     elif stat.S_ISDIR(metadata.st_mode):
         field(b"directory")
         with os.scandir(path) as entries:
@@ -539,6 +573,12 @@ try:
 except SourceStampLimit as error:
     print(f"Local Jig source stamp limit exceeded: {error}.", file=sys.stderr)
     raise SystemExit(1)
+except UnsupportedSourceEntry as error:
+    print(
+        f"Local Jig source cannot be fingerprinted because {error} is a symbolic link; replace links under Cargo.toml, Cargo.lock, or crates with regular source entries.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 print("sha256:" + digest.hexdigest())
 ' "$source_root" "$stamp_mode"
@@ -547,12 +587,20 @@ print("sha256:" + digest.hexdigest())
 local_source_stamp() {
   local source_root="$1"
   local canonical_source_root
+  local tracked_path
   local untracked_path
   # Every workspace crate can feed the jig binary transitively. Git diffs cover
   # tracked edits and deletions; untracked inputs need their paths and contents
   # hashed separately because `git diff` intentionally omits them.
   canonical_source_root="$(CDPATH= cd "$source_root" && pwd -P)" || return 1
   if git -C "$source_root" rev-parse --verify HEAD >/dev/null 2>&1; then
+    git -C "$source_root" ls-files -z -- Cargo.toml Cargo.lock crates 2>/dev/null |
+      while IFS= read -r -d '' tracked_path; do
+        if [[ -L "$source_root/$tracked_path" ]]; then
+          echo "Local Jig source cannot be fingerprinted because $tracked_path is a tracked symbolic link in the worktree; replace it with a regular source entry." >&2
+          exit 1
+        fi
+      done || return 1
     {
     printf 'source-root:%s\0' "$canonical_source_root"
     git -C "$source_root" rev-parse HEAD || return 1
@@ -561,6 +609,10 @@ local_source_stamp() {
       || return 1
     git -C "$source_root" ls-files --others --exclude-standard -z -- Cargo.toml Cargo.lock crates 2>/dev/null |
       while IFS= read -r -d '' untracked_path; do
+        if [[ -L "$source_root/$untracked_path" ]]; then
+          echo "Local Jig source cannot be fingerprinted because $untracked_path is an untracked symbolic link; replace it with a regular source entry." >&2
+          exit 1
+        fi
         printf 'untracked:%s\0' "$untracked_path"
         # Exit the inner pipeline subshell on failure; the trailing return then
         # exits the outer producer before any later producer command can mask it.
@@ -594,7 +646,8 @@ compute_local_source_stamps() {
 recorded_source_stamp() {
   local stored_stamp="$1"
   local recorded
-  if [[ "$stored_stamp" == $'jig-seeded-runtime-v1\n'* ]]; then
+  if [[ "$stored_stamp" == $'jig-seeded-runtime-v1\n'* \
+    || "$stored_stamp" == $'jig-embedded-runtime-v1\n'* ]]; then
     recorded="${stored_stamp##*$'\n'}"
     recorded="${recorded#source:}"
   else
@@ -675,7 +728,8 @@ source_stamp_matches() {
   if [[ "$stored_stamp" == "$current_stamp" ]]; then
     return 0
   fi
-  [[ "$stored_stamp" == $'jig-seeded-runtime-v1\nbinary:sha256:'* ]] || return 1
+  [[ "$stored_stamp" == $'jig-seeded-runtime-v1\nbinary:sha256:'* \
+    || "$stored_stamp" == $'jig-embedded-runtime-v1\nbinary:sha256:'* ]] || return 1
   [[ "${stored_stamp##*$'\n'}" == "source:$current_stamp" ]] || return 1
   seeded_body="${stored_stamp#*$'\n'}"
   seeded_binary_line="${seeded_body%%$'\n'*}"
@@ -706,6 +760,7 @@ refresh_seeded_source_identity() (
   local seeded_binary_line="$3"
   local current_binary_identity="$4"
   local current_stamp="$5"
+  local seeded_header="${expected_stamp%%$'\n'*}"
   local install_root="${stamp_path%/*}"
   local refresh_lock="${install_root}.lock"
   local temp_stamp="$stamp_path.$$"
@@ -719,7 +774,7 @@ refresh_seeded_source_identity() (
   fi
   if ! (
     {
-      printf '%s\n' 'jig-seeded-runtime-v1'
+      printf '%s\n' "$seeded_header"
       printf '%s\n' "$seeded_binary_line"
       printf 'binary-identity:%s\n' "$current_binary_identity"
       printf 'source:%s\n' "$current_stamp"
@@ -880,7 +935,7 @@ write_seeded_source_stamp() {
   binary_identity="$(binary_file_identity "$binary_path" 2>/dev/null || true)"
   if ! (
     {
-      printf '%s\n' 'jig-seeded-runtime-v1'
+      printf '%s\n' "$SEED_STAMP_HEADER"
       printf 'binary:%s\n' "$binary_stamp"
       if [[ -n "$binary_identity" ]]; then
         printf 'binary-identity:%s\n' "$binary_identity"
@@ -1474,8 +1529,57 @@ install_from_git_source() {
   fi
 }
 
+native_binary_header_is_supported() {
+  local bin_path="$1"
+  require_python3
+  python3 -I - "$bin_path" <<'PY'
+import os
+import sys
+
+try:
+    with open(sys.argv[1], "rb") as binary:
+        header = binary.read(8)
+        magic = header[:4]
+        if magic == b"\x7fELF":
+            raise SystemExit(0)
+        if magic in {
+            b"\xfe\xed\xfa\xce",
+            b"\xce\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf",
+            b"\xcf\xfa\xed\xfe",
+        }:
+            raise SystemExit(0)
+        fat_byte_order = {
+            b"\xca\xfe\xba\xbe": "big",
+            b"\xca\xfe\xba\xbf": "big",
+            b"\xbe\xba\xfe\xca": "little",
+            b"\xbf\xba\xfe\xca": "little",
+        }.get(magic)
+        if fat_byte_order is not None:
+            architecture_count = int.from_bytes(header[4:8], fat_byte_order)
+            raise SystemExit(0 if 1 <= architecture_count <= 16 else 1)
+        if header[:2] == b"MZ":
+            binary.seek(0, os.SEEK_END)
+            file_size = binary.tell()
+            if file_size < 64:
+                raise SystemExit(1)
+            binary.seek(0x3C)
+            pe_offset_bytes = binary.read(4)
+            if len(pe_offset_bytes) != 4:
+                raise SystemExit(1)
+            pe_offset = int.from_bytes(pe_offset_bytes, "little")
+            if pe_offset < 64 or pe_offset + 4 > file_size:
+                raise SystemExit(1)
+            binary.seek(pe_offset)
+            raise SystemExit(0 if binary.read(4) == b"PE\0\0" else 1)
+except (OSError, ValueError):
+    pass
+raise SystemExit(1)
+PY
+}
+
 resolve_compatible_path_jig() {
-  local candidate candidate_header candidate_magic launcher launcher_path
+  local candidate launcher launcher_path
   candidate="$(command -v jig 2>/dev/null || true)"
   [[ -n "$candidate" ]] || return 1
   candidate="$(resolve_executable_path "$candidate")" || return 1
@@ -1489,22 +1593,9 @@ resolve_compatible_path_jig() {
   # PATH reuse is an explicit opt-in, but never execute a script wrapper while
   # trying to prove that the candidate itself is a Jig runtime binary. Bash can
   # interpret executable text even without a shebang after execve returns
-  # ENOEXEC, so accept only native ELF and Mach-O headers before probing it.
-  candidate_header="$(LC_ALL=C od -An -N8 -tx1 "$candidate" 2>/dev/null | tr -d '[:space:]')"
-  candidate_magic="${candidate_header:0:8}"
-  case "$candidate_magic" in
-    7f454c46|feedface|cefaedfe|feedfacf|cffaedfe) ;;
-    cafebabe|cafebabf)
-      # Fat Mach-O stores a small big-endian architecture count after the
-      # magic. Requiring a realistic count rejects Java class files, which use
-      # the same leading cafebabe bytes followed by a much larger version.
-      [[ "${candidate_header:8:8}" =~ ^000000(0[1-9a-f]|10)$ ]] || return 1
-      ;;
-    bebafeca|bfbafeca)
-      [[ "${candidate_header:8:8}" =~ ^(0[1-9a-f]|10)000000$ ]] || return 1
-      ;;
-    *) return 1 ;;
-  esac
+  # ENOEXEC, so accept only validated native ELF, Mach-O, or PE headers before
+  # probing it through Python's direct process API.
+  native_binary_header_is_supported "$candidate" || return 1
   native_binary_is_compatible "$candidate" || return 1
   printf '%s\n' "$candidate"
 }

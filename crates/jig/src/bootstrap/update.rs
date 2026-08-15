@@ -7,14 +7,15 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+use super::launcher_repair_cache::{FullRefreshRuntimePolicy, finish_full_refresh};
 use super::{
     ANSWERS_FILE, ApplyRenderConflictPolicy, ApplyRenderOptions, CliProgress,
     EMBEDDED_TEMPLATE_SOURCE, HarnessFootprint, InitMutationTransaction,
     LAUNCHER_ONLY_MANAGED_PATHS, RenderAnswers, RenderStageRequest, RepoContext, UpdateOpts,
     absolute_path_from, apply_staged_render, bootstrap_invocation_cwd, managed_paths,
     prepare_template_source_from_base, prepare_update_template_source, read_stored_template_state,
-    reject_newer_declared_contract, retire_launcher_repair_seeded_caches_best_effort,
-    seed_launcher_repair_runtime, stage_render, stage_selected_render, validate_update_destination,
+    reject_newer_declared_contract, seed_launcher_repair_runtime, stage_render,
+    stage_selected_render, validate_update_destination,
 };
 
 pub fn run_update(opts: UpdateOpts) -> Result<Value> {
@@ -224,6 +225,8 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         );
     };
     let answers = progress.log_blocked_on_err(RenderAnswers::from_answers_file(&answers_path))?;
+    let runtime_policy =
+        FullRefreshRuntimePolicy::for_render(answers.harness_footprint(), update_template.source());
     let reconcile_runtime_config =
         crate::context::RepoContext::validate_config_file(&destination).is_ok();
     let staged = stage_render(RenderStageRequest {
@@ -258,7 +261,7 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
             init_transaction: None,
         },
     )?;
-    finish_full_refresh(&destination, progress, "update complete")?;
+    let warnings = finish_full_refresh(&destination, runtime_policy, progress, "update complete");
 
     Ok(json!({
         "ok": true,
@@ -268,26 +271,8 @@ pub fn run_update(opts: UpdateOpts) -> Result<Value> {
         "answers_file": ANSWERS_FILE,
         "git_initialized": false,
         "render_report": render_report,
+        "warnings": warnings,
     }))
-}
-
-pub(super) fn finish_full_refresh(
-    destination: &Path,
-    progress: CliProgress,
-    completion_message: &str,
-) -> Result<()> {
-    let contract_version = progress.log_blocked_on_err(
-        RepoContext::supported_contract_version_from_root(destination),
-    )?;
-    let retired = retire_launcher_repair_seeded_caches_best_effort(destination, contract_version);
-    if retired > 0 {
-        progress.info(
-            "runtime cache",
-            format!("retired {retired} launcher-repair seed(s)"),
-        );
-    }
-    progress.done(completion_message);
-    Ok(())
 }
 
 pub(super) fn legacy_launcher_only_paths(destination: &Path) -> Result<BTreeSet<PathBuf>> {

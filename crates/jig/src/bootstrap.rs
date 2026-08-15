@@ -91,6 +91,9 @@ mod template_source;
 mod update;
 
 pub(crate) use launcher_repair_cache::LAUNCHER_REPAIR_SEED_STAMP_HEADER;
+use launcher_repair_cache::{
+    FullRefreshRuntimePolicy, finish_full_refresh, seed_launcher_repair_runtime,
+};
 #[cfg(test)]
 use launcher_repair_cache::{
     LAUNCHER_REPAIR_ENVIRONMENT_KEYS, LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE,
@@ -103,14 +106,10 @@ use launcher_repair_cache::{
 };
 #[cfg(all(test, unix))]
 use launcher_repair_cache::{is_root_owned_nonwritable_path, root_owned_nonwritable_component};
-use launcher_repair_cache::{
-    retire_launcher_repair_seeded_caches_best_effort, seed_launcher_repair_runtime,
-};
 
 pub use answers::HarnessFootprint;
 pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
-use update::finish_full_refresh;
 pub use update::run_update;
 pub(crate) use update::{
     launcher_only_repair_answers_are_valid, launcher_only_repair_scripts_are_recognizable,
@@ -807,6 +806,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         init_transaction: None,
         progress,
     })?;
+    let mut runtime_warnings = Vec::new();
     if opts.write {
         if let Err(error) =
             write_adopt_last_receipt(&destination, backup_root.as_deref(), &copy_result)
@@ -816,7 +816,14 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
                 format!("adopt write completed but undo receipt could not be recorded: {error:#}"),
             );
         }
-        finish_full_refresh(&destination, progress, "adopt complete")?;
+        let footprint = if copy_result.minimal_footprint {
+            HarnessFootprint::Minimal
+        } else {
+            HarnessFootprint::Full
+        };
+        let runtime_policy = FullRefreshRuntimePolicy::for_render(footprint, template.source());
+        runtime_warnings =
+            finish_full_refresh(&destination, runtime_policy, progress, "adopt complete");
     } else {
         progress.done("adopt preview complete");
     }
@@ -835,6 +842,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         "answers_file": ANSWERS_FILE,
         "git_initialized": false,
         "write": opts.write,
+        "warnings": runtime_warnings,
         "detection_report": inference.report(),
         "adoption_profile": inference.adoption_profile_report(
             &copy_result.render_preview.generated_gates,
