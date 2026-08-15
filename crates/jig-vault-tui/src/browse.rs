@@ -157,7 +157,8 @@ impl BrowseItem {
     }
 
     fn refresh_filter(&mut self, query: &str) -> bool {
-        self.visible_entry_indices = if query.is_empty() {
+        let group_matches = self.group_search_term.contains(query);
+        self.visible_entry_indices = if query.is_empty() || group_matches {
             (0..self.entries.len()).collect()
         } else {
             self.entries
@@ -166,9 +167,7 @@ impl BrowseItem {
                 .filter_map(|(index, entry)| entry.matches(query).then_some(index))
                 .collect()
         };
-        query.is_empty()
-            || self.group_search_term.contains(query)
-            || !self.visible_entry_indices.is_empty()
+        query.is_empty() || group_matches || !self.visible_entry_indices.is_empty()
     }
 
     fn visible_entries(&self) -> impl Iterator<Item = &BrowseEntry> {

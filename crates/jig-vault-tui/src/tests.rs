@@ -249,6 +249,23 @@ fn metadata_filter_searches_reference_kind_and_legacy_name() {
 }
 
 #[test]
+fn metadata_filter_group_match_exposes_legacy_entries() {
+    let mut app = browsing_app();
+
+    app.append_filter("legacy");
+
+    assert_eq!(app.visible_items(), vec![ItemIdentity::Legacy]);
+    assert_eq!(
+        app.visible_entries(),
+        vec![EntryIdentity::Legacy("old_token".to_owned())]
+    );
+    assert_eq!(
+        app.selected_entry,
+        Some(EntryIdentity::Legacy("old_token".to_owned()))
+    );
+}
+
+#[test]
 fn metadata_filter_projection_refreshes_only_when_text_changes() {
     let mut app = browsing_app();
     let initial_refreshes = app.browse_filter_refreshes();
