@@ -22,12 +22,14 @@ use zeroize::Zeroizing;
 /// storage.
 pub(crate) struct SecretInput {
     bytes: SecretBytes,
+    encoding: InputEncoding,
 }
 
 impl SecretInput {
     pub(crate) fn new() -> Self {
         Self {
             bytes: SecretBytes::with_capacity(MAX_SECRET_VALUE_LEN),
+            encoding: InputEncoding::empty(),
         }
     }
 
@@ -43,7 +45,9 @@ impl SecretInput {
         let mut encoded = Zeroizing::new([0_u8; 4]);
         self.bytes
             .extend_from_slice(character.encode_utf8(&mut *encoded).as_bytes())
-            .map_err(|_| InputTooLong)
+            .map_err(|_| InputTooLong)?;
+        self.encoding.append_char();
+        Ok(())
     }
 
     /// Appends one paste atomically. A paste that does not fit is rejected in
@@ -51,7 +55,9 @@ impl SecretInput {
     pub(crate) fn paste(&mut self, value: &str) -> Result<(), InputTooLong> {
         self.bytes
             .extend_from_slice(value.as_bytes())
-            .map_err(|_| InputTooLong)
+            .map_err(|_| InputTooLong)?;
+        self.encoding.append_str(value);
+        Ok(())
     }
 
     pub(crate) fn backspace(&mut self) {
@@ -59,15 +65,13 @@ impl SecretInput {
         if len == 0 {
             return;
         }
-        let new_len = std::str::from_utf8(self.bytes.as_slice())
-            .ok()
-            .and_then(|value| value.char_indices().next_back().map(|(index, _)| index))
-            .unwrap_or(len - 1);
+        let new_len = self.encoding.backspace_len(self.bytes.as_slice());
         self.bytes.truncate(new_len);
     }
 
     pub(crate) fn clear(&mut self) {
         self.bytes.clear();
+        self.encoding = InputEncoding::empty();
     }
 
     pub(crate) fn matches(&self, other: &Self) -> bool {
@@ -75,6 +79,7 @@ impl SecretInput {
     }
 
     pub(crate) fn take(&mut self) -> SecretBytes {
+        self.encoding = InputEncoding::empty();
         std::mem::replace(
             &mut self.bytes,
             SecretBytes::with_capacity(MAX_SECRET_VALUE_LEN),
@@ -123,6 +128,7 @@ impl SecretInput {
                 )
             })?;
         }
+        input.encoding = InputEncoding::inspect(input.bytes.as_slice());
         Ok(input)
     }
 
@@ -132,9 +138,7 @@ impl SecretInput {
         if self.is_empty() {
             return "(empty)".to_owned();
         }
-        let characters = std::str::from_utf8(self.bytes.as_slice())
-            .map(|value| value.chars().count())
-            .unwrap_or_else(|_| self.len());
+        let characters = self.encoding.display_characters(self.len());
         let shown = characters.min(24);
         let mut label = "•".repeat(shown);
         if characters > shown {
@@ -143,6 +147,88 @@ impl SecretInput {
         label.push_str(&format!("  ({} bytes)", self.len()));
         label
     }
+}
+
+#[derive(Clone, Copy)]
+enum InputEncoding {
+    Utf8 {
+        characters: usize,
+    },
+    Binary {
+        valid_prefix_bytes: usize,
+        valid_prefix_characters: usize,
+    },
+}
+
+impl InputEncoding {
+    const fn empty() -> Self {
+        Self::Utf8 { characters: 0 }
+    }
+
+    fn inspect(bytes: &[u8]) -> Self {
+        match std::str::from_utf8(bytes) {
+            Ok(value) => Self::Utf8 {
+                characters: value.chars().count(),
+            },
+            Err(error) => {
+                let valid_prefix_bytes = error.valid_up_to();
+                let valid_prefix = std::str::from_utf8(&bytes[..valid_prefix_bytes])
+                    .expect("Utf8Error::valid_up_to always ends at a valid UTF-8 boundary");
+                Self::Binary {
+                    valid_prefix_bytes,
+                    valid_prefix_characters: valid_prefix.chars().count(),
+                }
+            }
+        }
+    }
+
+    fn append_char(&mut self) {
+        if let Self::Utf8 { characters } = self {
+            *characters += 1;
+        }
+    }
+
+    fn append_str(&mut self, value: &str) {
+        if let Self::Utf8 { characters } = self {
+            *characters += value.chars().count();
+        }
+    }
+
+    fn backspace_len(&mut self, bytes: &[u8]) -> usize {
+        match self {
+            Self::Utf8 { characters } => {
+                *characters -= 1;
+                previous_utf8_boundary(bytes)
+            }
+            Self::Binary {
+                valid_prefix_bytes,
+                valid_prefix_characters,
+            } => {
+                let new_len = bytes.len() - 1;
+                if new_len == *valid_prefix_bytes {
+                    *self = Self::Utf8 {
+                        characters: *valid_prefix_characters,
+                    };
+                }
+                new_len
+            }
+        }
+    }
+
+    const fn display_characters(self, byte_len: usize) -> usize {
+        match self {
+            Self::Utf8 { characters } => characters,
+            Self::Binary { .. } => byte_len,
+        }
+    }
+}
+
+fn previous_utf8_boundary(bytes: &[u8]) -> usize {
+    let mut index = bytes.len() - 1;
+    while index > 0 && bytes[index] & 0b1100_0000 == 0b1000_0000 {
+        index -= 1;
+    }
+    index
 }
 
 impl Default for SecretInput {

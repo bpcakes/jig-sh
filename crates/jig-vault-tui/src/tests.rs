@@ -107,6 +107,35 @@ fn protected_input_debug_and_render_label_do_not_expose_source_text() {
 }
 
 #[test]
+fn protected_input_mask_preserves_utf8_and_binary_backspace_semantics() {
+    let mut utf8 = SecretInput::new();
+    utf8.paste(&"界".repeat(25)).unwrap();
+    let rendered = utf8.render_label();
+    assert_eq!(rendered.matches('•').count(), 24);
+    assert!(rendered.contains('…'), "{rendered}");
+
+    utf8.backspace();
+    let rendered = utf8.render_label();
+    assert_eq!(rendered.matches('•').count(), 24);
+    assert!(!rendered.contains('…'), "{rendered}");
+
+    let temp = tempdir().unwrap();
+    let source = temp.path().join("binary-value");
+    std::fs::write(&source, b"\xe7\x95\x8c\xff").unwrap();
+    let mut binary = SecretInput::from_regular_file(&source).unwrap();
+    let rendered = binary.render_label();
+    assert_eq!(rendered.matches('•').count(), 4);
+    assert!(rendered.contains("4 bytes"), "{rendered}");
+
+    binary.backspace();
+    let rendered = binary.render_label();
+    assert_eq!(rendered.matches('•').count(), 1);
+    assert!(rendered.contains("3 bytes"), "{rendered}");
+    binary.backspace();
+    assert!(binary.is_empty());
+}
+
+#[test]
 fn protected_paste_rejects_the_complete_overflow() {
     let mut input = SecretInput::new();
     let oversized = "x".repeat(MAX_SECRET_VALUE_LEN + 1);
