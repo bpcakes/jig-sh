@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use jig_vault::{
     PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault, VaultError, VaultErrorKind,
     VaultHomeState, VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
+    validate_new_vault_passphrase,
 };
 use jig_vault_tui::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
@@ -342,6 +343,7 @@ impl VaultTuiBackend {
         passphrase: SecretBytes,
     ) -> std::result::Result<VaultActionResult, VaultUiError> {
         let passphrase = Self::passphrase_from_bytes(passphrase)?;
+        validate_new_vault_passphrase(&passphrase).map_err(map_vault_error)?;
         let selected = vault(&self.resolved).map_err(map_anyhow_error)?;
         selected.init(&passphrase).map_err(map_vault_error)?;
         match self.session() {
@@ -603,6 +605,21 @@ mod tests {
         assert_eq!(backend.home_state().unwrap(), VaultHomeState::Uninitialized);
         std::fs::write(home.join("vault.json"), b"installed").unwrap();
         assert_eq!(backend.home_state().unwrap(), VaultHomeState::Initialized);
+    }
+
+    #[test]
+    fn invalid_initialization_passphrase_is_rejected_before_home_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("absent");
+        let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
+
+        let error = backend
+            .initialize(SecretBytes::new(b"too-short".to_vec()))
+            .unwrap_err();
+
+        assert_eq!(error.kind(), VaultUiErrorKind::InvalidInput);
+        assert!(!home.exists());
+        assert_eq!(backend.home_state().unwrap(), VaultHomeState::Absent);
     }
 
     #[test]

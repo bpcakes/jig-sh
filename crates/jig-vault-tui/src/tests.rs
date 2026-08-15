@@ -939,6 +939,34 @@ fn absent_vault_can_enter_and_cancel_initialization() {
     assert!(matches!(app.screen, Screen::Missing));
 }
 
+#[test]
+fn short_initialization_passphrase_is_rejected_without_consuming_either_input() {
+    let mut app = App::new(descriptor(false));
+    app.begin_initialize_form();
+    handle_paste(&mut app, "too-short");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, "too-short");
+
+    assert!(matches!(
+        handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Initialize {
+        passphrase,
+        confirmation,
+        ..
+    } = &app.screen
+    else {
+        panic!("short passphrase left the initialization form");
+    };
+    assert_eq!(passphrase.len(), "too-short".len());
+    assert_eq!(confirmation.len(), "too-short".len());
+    assert_eq!(
+        app.status.as_ref().unwrap().text,
+        "New vault passphrases must contain at least 12 bytes."
+    );
+}
+
 fn submit_key(app: &mut App) -> VaultAction {
     let RuntimeAction::Start(BackendRequest::Execute(action)) =
         handle_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))

@@ -96,6 +96,10 @@ impl App {
             self.set_error("Vault passphrase confirmation did not match.");
             return None;
         }
+        if let Err(error) = passphrase.validate_new_vault_passphrase() {
+            self.set_error(&error);
+            return None;
+        }
         let passphrase = passphrase.take();
         confirmation.clear();
         self.screen = Screen::Loading("Creating vault");
