@@ -17,6 +17,9 @@ pub(crate) struct TerminalSafePreviewWriter<'a> {
     output: &'a mut dyn Write,
     source_bytes: usize,
     previewed_source_bytes: usize,
+    pending_utf8: Zeroizing<[u8; 4]>,
+    pending_utf8_len: usize,
+    truncated_boundary_prefix_len: Option<usize>,
 }
 
 impl<'a> TerminalSafePreviewWriter<'a> {
@@ -25,10 +28,14 @@ impl<'a> TerminalSafePreviewWriter<'a> {
             output,
             source_bytes: 0,
             previewed_source_bytes: 0,
+            pending_utf8: Zeroizing::new([0; 4]),
+            pending_utf8_len: 0,
+            truncated_boundary_prefix_len: None,
         }
     }
 
     pub(crate) fn finish(&mut self) -> io::Result<()> {
+        self.flush_pending_utf8()?;
         if self.source_bytes > self.previewed_source_bytes {
             write!(
                 self.output,
@@ -44,30 +51,106 @@ impl<'a> TerminalSafePreviewWriter<'a> {
         self.source_bytes
     }
 
-    fn write_preview(&mut self, mut bytes: &[u8]) -> io::Result<()> {
-        while !bytes.is_empty() {
-            match std::str::from_utf8(bytes) {
-                Ok(text) => {
-                    self.write_valid_text(text)?;
-                    break;
+    fn write_preview(&mut self, bytes: &[u8]) -> io::Result<()> {
+        debug_assert!(self.truncated_boundary_prefix_len.is_none());
+        for byte in bytes {
+            debug_assert!(self.pending_utf8_len < self.pending_utf8.len());
+            self.pending_utf8[self.pending_utf8_len] = *byte;
+            self.pending_utf8_len += 1;
+            self.flush_decodable_utf8()?;
+        }
+        Ok(())
+    }
+
+    fn flush_decodable_utf8(&mut self) -> io::Result<()> {
+        loop {
+            if self.pending_utf8_len == 0 {
+                return Ok(());
+            }
+            let (valid_len, invalid_len) =
+                match std::str::from_utf8(&self.pending_utf8[..self.pending_utf8_len]) {
+                    Ok(_) => (self.pending_utf8_len, None),
+                    Err(error) => (error.valid_up_to(), error.error_len()),
+                };
+            if valid_len > 0 {
+                let bytes = self.take_pending_prefix(valid_len);
+                let text = std::str::from_utf8(&bytes[..valid_len])
+                    .expect("Utf8Error::valid_up_to always ends at a valid UTF-8 boundary");
+                self.write_valid_text(text)?;
+                continue;
+            }
+            let Some(invalid_len) = invalid_len else {
+                return Ok(());
+            };
+            let bytes = self.take_pending_prefix(invalid_len);
+            for byte in &bytes[..invalid_len] {
+                self.write_escaped_byte(*byte)?;
+            }
+        }
+    }
+
+    fn resolve_truncated_utf8_boundary(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.pending_utf8_len == 0 {
+            return Ok(());
+        }
+        let prefix_len = *self
+            .truncated_boundary_prefix_len
+            .get_or_insert(self.pending_utf8_len);
+        for byte in bytes {
+            debug_assert!(self.pending_utf8_len < self.pending_utf8.len());
+            self.pending_utf8[self.pending_utf8_len] = *byte;
+            self.pending_utf8_len += 1;
+            match std::str::from_utf8(&self.pending_utf8[..self.pending_utf8_len]) {
+                Ok(_) => {
+                    self.clear_pending_utf8();
+                    return Ok(());
                 }
-                Err(error) => {
-                    let valid = error.valid_up_to();
-                    if valid > 0 {
-                        // SAFETY: `Utf8Error::valid_up_to` guarantees this
-                        // prefix is valid UTF-8.
-                        let text = unsafe { std::str::from_utf8_unchecked(&bytes[..valid]) };
-                        self.write_valid_text(text)?;
-                    }
-                    let invalid = error.error_len().unwrap_or(bytes.len() - valid);
-                    for byte in &bytes[valid..valid + invalid] {
+                Err(error) if error.error_len().is_some() => {
+                    let prefix = self.copy_pending_prefix(prefix_len);
+                    self.clear_pending_utf8();
+                    for byte in &prefix[..prefix_len] {
                         self.write_escaped_byte(*byte)?;
                     }
-                    bytes = &bytes[valid + invalid..];
+                    return Ok(());
                 }
+                Err(_) => {}
             }
         }
         Ok(())
+    }
+
+    fn flush_pending_utf8(&mut self) -> io::Result<()> {
+        let visible_len = self
+            .truncated_boundary_prefix_len
+            .unwrap_or(self.pending_utf8_len)
+            .min(self.pending_utf8_len);
+        let pending = self.copy_pending_prefix(visible_len);
+        self.clear_pending_utf8();
+        for byte in &pending[..visible_len] {
+            self.write_escaped_byte(*byte)?;
+        }
+        Ok(())
+    }
+
+    fn copy_pending_prefix(&self, len: usize) -> Zeroizing<[u8; 4]> {
+        let mut bytes = Zeroizing::new([0; 4]);
+        bytes[..len].copy_from_slice(&self.pending_utf8[..len]);
+        bytes
+    }
+
+    fn take_pending_prefix(&mut self, len: usize) -> Zeroizing<[u8; 4]> {
+        let bytes = self.copy_pending_prefix(len);
+        self.pending_utf8.copy_within(len..self.pending_utf8_len, 0);
+        let remaining = self.pending_utf8_len - len;
+        self.pending_utf8[remaining..self.pending_utf8_len].fill(0);
+        self.pending_utf8_len = remaining;
+        bytes
+    }
+
+    fn clear_pending_utf8(&mut self) {
+        self.pending_utf8.fill(0);
+        self.pending_utf8_len = 0;
+        self.truncated_boundary_prefix_len = None;
     }
 
     fn write_valid_text(&mut self, text: &str) -> io::Result<()> {
@@ -113,11 +196,15 @@ impl Write for TerminalSafePreviewWriter<'_> {
         let preview_len = bytes.len().min(remaining);
         self.write_preview(&bytes[..preview_len])?;
         self.previewed_source_bytes += preview_len;
+        if preview_len < bytes.len() {
+            self.resolve_truncated_utf8_boundary(&bytes[preview_len..])?;
+        }
         self.source_bytes = self.source_bytes.saturating_add(bytes.len());
         Ok(bytes.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.flush_pending_utf8()?;
         self.output.flush()
     }
 }
@@ -184,5 +271,49 @@ mod tests {
         assert!(output.starts_with(&"a".repeat(MAX_PEEK_SOURCE_BYTES)));
         assert!(output.ends_with("preview limited to 4096 of 4113 source bytes"));
         assert_eq!(output.matches('a').count(), MAX_PEEK_SOURCE_BYTES);
+    }
+
+    #[test]
+    fn terminal_preview_preserves_utf8_split_across_writes() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalSafePreviewWriter::new(&mut output);
+            writer.write_all(&[0xe7, 0x95]).unwrap();
+            writer.write_all(&[0x8c]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        assert_eq!(String::from_utf8(output).unwrap(), "界");
+    }
+
+    #[test]
+    fn terminal_preview_omits_a_utf8_character_split_by_the_bound() {
+        let mut source = vec![b'a'; MAX_PEEK_SOURCE_BYTES - 1];
+        source.extend_from_slice("界".as_bytes());
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalSafePreviewWriter::new(&mut output);
+            writer.write_all(&source[..MAX_PEEK_SOURCE_BYTES]).unwrap();
+            writer.write_all(&source[MAX_PEEK_SOURCE_BYTES..]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches('a').count(), MAX_PEEK_SOURCE_BYTES - 1);
+        assert!(!output.contains("界"));
+        assert!(!output.contains("\\xe7"));
+        assert!(output.ends_with("preview limited to 4096 of 4098 source bytes"));
+    }
+
+    #[test]
+    fn terminal_preview_escapes_incomplete_utf8_when_the_source_ends() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalSafePreviewWriter::new(&mut output);
+            writer.write_all(&[0xe7]).unwrap();
+            writer.finish().unwrap();
+        }
+
+        assert_eq!(String::from_utf8(output).unwrap(), "\\xe7");
     }
 }
