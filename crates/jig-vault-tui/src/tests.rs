@@ -1937,6 +1937,37 @@ fn platform_capabilities_gate_private_output_without_disabling_portable_actions(
     );
 }
 
+#[test]
+fn restore_is_discoverable_only_for_an_absent_vault_home() {
+    let absent = App::new(descriptor(false));
+    assert!(UiCommand::RestoreBackup.visible_in_state(&absent));
+    assert_eq!(
+        UiCommand::RestoreBackup
+            .availability_with_capabilities(&absent, PlatformCapabilities::RESTORE_ONLY),
+        CommandAvailability::Enabled
+    );
+
+    let mut uninitialized_descriptor = descriptor(false);
+    uninitialized_descriptor.home_state = VaultHomeState::Uninitialized;
+    let uninitialized = App::new(uninitialized_descriptor);
+    assert!(!UiCommand::RestoreBackup.visible_in_state(&uninitialized));
+    assert_eq!(
+        UiCommand::RestoreBackup
+            .availability_with_capabilities(&uninitialized, PlatformCapabilities::RESTORE_ONLY),
+        CommandAvailability::Disabled("Restore requires a completely absent vault.")
+    );
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render::draw(frame, &uninitialized))
+        .unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("vault home exists"), "{rendered}");
+    assert!(rendered.contains("never overwrites"), "{rendered}");
+    assert!(!rendered.contains("actions/restore"), "{rendered}");
+}
+
 #[cfg(unix)]
 #[test]
 fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {

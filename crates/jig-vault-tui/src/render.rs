@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    ImportFieldChange,
+    ImportFieldChange, VaultHomeState,
     browse::BrowseEntryKind,
     commands::{CommandAvailability, CommandPalette, CommandSafety, UiCommand},
     line_editor::LineEditor,
@@ -141,19 +141,34 @@ fn safe_render_area(area: Rect) -> Rect {
 }
 
 fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
-    draw_public_header(frame, area, app, "absent", WARN);
+    let (state_label, headline, restore_message, footer) = match app.descriptor.home_state {
+        VaultHomeState::Absent => (
+            "absent",
+            "No vault exists at this fixed scope.",
+            "Restore from an encrypted backup is available from this screen.",
+            "i initialize   : actions/restore   q quit",
+        ),
+        VaultHomeState::Uninitialized => (
+            "uninitialized",
+            "This vault home exists, but it has no initialized vault state.",
+            "Restore is unavailable because it never overwrites an existing vault home.",
+            "i initialize   : actions   q quit",
+        ),
+        VaultHomeState::Initialized => unreachable!("initialized vaults do not use missing UI"),
+    };
+    draw_public_header(frame, area, app, state_label, WARN);
     let inner = centered_rect(72, 46, area);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
-                "No vault exists at this fixed scope.",
+                headline,
                 Style::default().fg(WARN).add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("Press i to initialize a new encrypted vault."),
-            Line::from("Restore from an encrypted backup is available from this screen."),
+            Line::from(restore_message),
             Line::from(""),
-            Line::from("i initialize   : actions/restore   q quit"),
+            Line::from(footer),
         ])
         .alignment(Alignment::Center)
         .block(panel("Vault not initialized"))

@@ -75,6 +75,11 @@ pub enum VaultHomeState {
 }
 
 impl VaultHomeState {
+    /// Returns whether the vault home itself is absent.
+    pub const fn is_absent(self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
     /// Returns whether initialized vault state exists.
     pub const fn is_initialized(self) -> bool {
         matches!(self, Self::Initialized)
