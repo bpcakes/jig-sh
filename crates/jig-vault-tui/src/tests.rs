@@ -214,6 +214,27 @@ fn metadata_filter_searches_reference_kind_and_legacy_name() {
 }
 
 #[test]
+fn metadata_filter_projection_refreshes_only_when_text_changes() {
+    let mut app = browsing_app();
+    let initial_refreshes = app.browse_filter_refreshes();
+    app.searching = true;
+    app.append_filter("api");
+    let filtered_refreshes = app.browse_filter_refreshes();
+    assert_eq!(filtered_refreshes, initial_refreshes + 1);
+
+    handle_key(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+    assert_eq!(app.browse_filter_refreshes(), filtered_refreshes);
+
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+    assert_eq!(app.browse_filter_refreshes(), filtered_refreshes + 1);
+}
+
+#[test]
 fn metadata_and_search_pastes_are_bounded_and_rejected_atomically() {
     let mut app = browsing_app();
     app.begin_add();
@@ -233,7 +254,7 @@ fn metadata_and_search_pastes_are_bounded_and_rejected_atomically() {
     app.searching = true;
     app.append_filter("api");
     handle_paste(&mut app, &"x".repeat(SEARCH_INPUT_LIMIT));
-    assert_eq!(app.filter.as_str(), "api");
+    assert_eq!(app.filter().as_str(), "api");
     assert!(
         app.status
             .as_ref()
@@ -302,7 +323,7 @@ fn search_and_command_palette_share_insertion_cursor_behavior() {
         KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL),
     );
     handle_paste(&mut app, "new ");
-    assert_eq!(app.filter.as_str(), "api new token");
+    assert_eq!(app.filter().as_str(), "api new token");
     handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     app.clear_filter();
 
@@ -2232,7 +2253,7 @@ fn locking_drops_pending_protected_tool_inputs_and_metadata() {
 
     assert!(app.snapshot().is_none());
     assert!(app.selected_entry.is_none());
-    assert!(app.filter.is_empty());
+    assert!(app.filter().is_empty());
     assert!(matches!(app.screen, Screen::Locked(_)));
     assert!(!format!("{:?}", app.screen).contains(std::str::from_utf8(SENTINEL).unwrap()));
 }

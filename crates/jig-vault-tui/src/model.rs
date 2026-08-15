@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::Path};
+use std::path::Path;
 
 use jig_tui::sanitize_text;
 use jig_vault::{
@@ -9,7 +9,7 @@ use jig_vault::{
 use crate::{
     ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
     VaultPresence, VaultUiError,
-    browse::BrowseState,
+    browse::{BrowseEntryKind, BrowseState},
     commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
     line_editor::{LineEdit, LineEditor},
     quick_access::{QuickAccess, QuickAccessSelection},
@@ -25,7 +25,7 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) selected_item: Option<ItemIdentity>,
     pub(crate) selected_entry: Option<EntryIdentity>,
-    pub(crate) filter: LineEditor,
+    filter: LineEditor,
     pub(crate) searching: bool,
     pub(crate) status: Option<StatusMessage>,
     pub(crate) tick: usize,
@@ -121,7 +121,7 @@ impl App {
         let previous_item = self.selected_item.clone();
         let previous_entry = self.selected_entry.clone();
         self.descriptor.exists = true;
-        self.browser = Some(BrowseState::new(snapshot));
+        self.browser = Some(BrowseState::new(snapshot, self.filter.as_str()));
         self.screen = Screen::Browse;
         self.status = None;
         if let Some(hint) = self.next_selection.take() {
@@ -163,7 +163,7 @@ impl App {
         self.next_selection = None;
         self.selected_item = None;
         self.selected_entry = None;
-        self.filter.clear();
+        self.clear_filter_projection();
         self.searching = false;
         self.focus = Focus::Items;
         self.screen = Screen::Locked(SecretInput::new());
@@ -373,7 +373,7 @@ impl App {
             self.set_error("No metadata matches the current Quick Access query.");
             return;
         };
-        self.filter.clear();
+        self.clear_filter_projection();
         match selection {
             QuickAccessSelection::Item(item) => {
                 self.selected_item = Some(item);
@@ -763,13 +763,7 @@ impl App {
         let target = if self.focus == Focus::Items {
             match self.selected_item.clone() {
                 Some(ItemIdentity::Canonical(item)) => {
-                    let count = self.snapshot().map_or(0, |snapshot| {
-                        snapshot
-                            .fields
-                            .iter()
-                            .filter(|field| field.reference.item() == item)
-                            .count()
-                    });
+                    let count = self.item_entry_count(&ItemIdentity::Canonical(item.clone()));
                     DeleteTarget::Item { item, count }
                 }
                 Some(ItemIdentity::Legacy) => {
@@ -990,50 +984,38 @@ impl App {
         self.browser.as_ref().map(BrowseState::snapshot)
     }
 
+    pub(crate) const fn filter(&self) -> &LineEditor {
+        &self.filter
+    }
+
     pub(crate) fn visible_items(&self) -> Vec<ItemIdentity> {
-        let Some(snapshot) = self.snapshot() else {
-            return Vec::new();
-        };
-        let query = self.filter.as_str().to_lowercase();
-        let mut items = snapshot
-            .fields
-            .iter()
-            .map(|field| field.reference.item().to_owned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(ItemIdentity::Canonical)
-            .filter(|item| self.item_matches(item, &query))
-            .collect::<Vec<_>>();
-        if !snapshot.legacy_secrets.is_empty() {
-            let legacy = ItemIdentity::Legacy;
-            if self.item_matches(&legacy, &query) {
-                items.push(legacy);
-            }
-        }
-        items
+        self.browser
+            .as_ref()
+            .map_or_else(Vec::new, BrowseState::visible_items)
+    }
+
+    pub(crate) fn visible_item_rows(&self) -> Vec<(ItemIdentity, usize)> {
+        self.browser
+            .as_ref()
+            .map_or_else(Vec::new, BrowseState::visible_item_rows)
     }
 
     pub(crate) fn visible_entries(&self) -> Vec<EntryIdentity> {
-        let Some(snapshot) = self.snapshot() else {
-            return Vec::new();
-        };
-        let query = self.filter.as_str().to_lowercase();
-        match &self.selected_item {
-            Some(ItemIdentity::Canonical(item)) => snapshot
-                .fields
-                .iter()
-                .filter(|record| record.reference.item() == item)
-                .filter(|record| field_matches(record, &query))
-                .map(|record| EntryIdentity::Field(record.reference.clone()))
-                .collect(),
-            Some(ItemIdentity::Legacy) => snapshot
-                .legacy_secrets
-                .iter()
-                .filter(|record| legacy_matches(record, &query))
-                .map(|record| EntryIdentity::Legacy(record.name.clone()))
-                .collect(),
-            None => Vec::new(),
-        }
+        self.browser.as_ref().map_or_else(Vec::new, |browser| {
+            browser.visible_entries(self.selected_item.as_ref())
+        })
+    }
+
+    pub(crate) fn visible_entry_rows(&self) -> Vec<(EntryIdentity, BrowseEntryKind)> {
+        self.browser.as_ref().map_or_else(Vec::new, |browser| {
+            browser.visible_entry_rows(self.selected_item.as_ref())
+        })
+    }
+
+    pub(crate) fn item_entry_count(&self, identity: &ItemIdentity) -> usize {
+        self.browser
+            .as_ref()
+            .map_or(0, |browser| browser.item_entry_count(identity))
     }
 
     pub(crate) fn selected_field(&self) -> Option<&FieldRecord> {
@@ -1097,34 +1079,35 @@ impl App {
     }
 
     pub(crate) fn append_filter(&mut self, value: &str) {
+        let previous_len = self.filter.as_str().len();
         if !self.filter.insert(value) {
             self.set_error("Search filter exceeds the interactive size limit.");
             return;
         }
-        self.reconcile_selection();
+        if self.filter.as_str().len() != previous_len {
+            self.refresh_filter_projection();
+            self.reconcile_selection();
+        }
     }
 
     pub(crate) fn clear_filter(&mut self) {
-        self.filter.clear();
-        self.reconcile_selection();
+        if !self.filter.is_empty() {
+            self.clear_filter_projection();
+            self.reconcile_selection();
+        }
     }
 
     pub(crate) fn edit_filter(&mut self, edit: LineEdit) {
+        let previous_len = self.filter.as_str().len();
         self.filter.apply(edit);
-        self.reconcile_selection();
+        if edit.changes_text() && self.filter.as_str().len() != previous_len {
+            self.refresh_filter_projection();
+            self.reconcile_selection();
+        }
     }
 
     pub(crate) fn snapshot_counts(&self) -> (usize, usize, usize) {
-        let Some(snapshot) = self.snapshot() else {
-            return (0, 0, 0);
-        };
-        let items = snapshot
-            .fields
-            .iter()
-            .map(|field| field.reference.item())
-            .collect::<BTreeSet<_>>()
-            .len();
-        (items, snapshot.fields.len(), snapshot.legacy_secrets.len())
+        self.browser.as_ref().map_or((0, 0, 0), BrowseState::counts)
     }
 
     pub(crate) fn set_error(&mut self, message: &str) {
@@ -1146,28 +1129,22 @@ impl App {
         true
     }
 
-    fn item_matches(&self, item: &ItemIdentity, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
+    fn clear_filter_projection(&mut self) {
+        self.filter.clear();
+        self.refresh_filter_projection();
+    }
+
+    fn refresh_filter_projection(&mut self) {
+        if let Some(browser) = &mut self.browser {
+            browser.refresh_filter(self.filter.as_str());
         }
-        let Some(snapshot) = self.snapshot() else {
-            return false;
-        };
-        match item {
-            ItemIdentity::Canonical(item) => {
-                item.to_lowercase().contains(query)
-                    || snapshot.fields.iter().any(|record| {
-                        record.reference.item() == item && field_matches(record, query)
-                    })
-            }
-            ItemIdentity::Legacy => {
-                "legacy".contains(query)
-                    || snapshot
-                        .legacy_secrets
-                        .iter()
-                        .any(|record| legacy_matches(record, query))
-            }
-        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn browse_filter_refreshes(&self) -> usize {
+        self.browser
+            .as_ref()
+            .map_or(0, BrowseState::filter_refreshes)
     }
 
     fn reconcile_selection(&mut self) {
@@ -1208,18 +1185,6 @@ fn move_identity<T: Clone + PartialEq>(
         .unwrap_or(0);
     rows.get(current.saturating_add_signed(delta).min(rows.len() - 1))
         .cloned()
-}
-
-fn field_matches(record: &FieldRecord, query: &str) -> bool {
-    query.is_empty()
-        || record.reference.item().to_lowercase().contains(query)
-        || record.reference.field().to_lowercase().contains(query)
-        || record.reference.to_string().to_lowercase().contains(query)
-        || record.kind.as_str().contains(query)
-}
-
-fn legacy_matches(record: &SecretRecord, query: &str) -> bool {
-    query.is_empty() || record.name.to_lowercase().contains(query)
 }
 
 fn parse_item(value: &str) -> Result<VaultItem, String> {

@@ -906,7 +906,7 @@ pub(crate) fn handle_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
 
     match key.code {
         KeyCode::Char('q') => RuntimeAction::Quit,
-        KeyCode::Esc if !app.filter.is_empty() => {
+        KeyCode::Esc if !app.filter().is_empty() => {
             app.clear_filter();
             RuntimeAction::Redraw
         }

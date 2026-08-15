@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::{
     ImportFieldChange,
+    browse::BrowseEntryKind,
     commands::{CommandAvailability, CommandPalette, CommandSafety, UiCommand},
     line_editor::LineEditor,
     model::{
@@ -239,7 +240,7 @@ fn draw_loading(frame: &mut Frame, area: Rect, app: &App, label: &str) {
 }
 
 fn draw_browser(frame: &mut Frame, area: Rect, app: &App) {
-    let filter_visible = app.searching || !app.filter.is_empty();
+    let filter_visible = app.searching || !app.filter().is_empty();
     let retained_filter_and_status = !app.searching && filter_visible && app.status.is_some();
     let footer_height = if filter_visible || app.status.is_some() {
         5 + u16::from(retained_filter_and_status)
@@ -345,14 +346,14 @@ fn draw_browser_header(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_items(frame: &mut Frame, area: Rect, app: &App) {
-    let rows = app.visible_items();
+    let rows = app.visible_item_rows();
     let title = if app.focus == Focus::Items {
         "Items •"
     } else {
         "Items"
     };
     if rows.is_empty() {
-        let message = if app.filter.is_empty() {
+        let message = if app.filter().is_empty() {
             vec![
                 Line::from("No items yet."),
                 Line::from("Press I to create an item with its first field."),
@@ -368,27 +369,23 @@ fn draw_items(frame: &mut Frame, area: Rect, app: &App) {
         );
         return;
     }
-    let legacy_count = app
-        .snapshot()
-        .map_or(0, |snapshot| snapshot.legacy_secrets.len());
     let items = rows
         .iter()
-        .map(|identity| {
-            let label = identity.label(legacy_count);
-            let count = item_count(app, identity);
+        .map(|(identity, count)| {
+            let label = identity.label(*count);
             ListItem::new(format!("{label}  ({count})"))
         })
         .collect::<Vec<_>>();
     let selected = app
         .selected_item
         .as_ref()
-        .and_then(|identity| rows.iter().position(|row| row == identity));
+        .and_then(|identity| rows.iter().position(|(row, _)| row == identity));
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list(items, title), area, &mut state);
 }
 
 fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
-    let rows = app.visible_entries();
+    let rows = app.visible_entry_rows();
     let base = if matches!(app.selected_item, Some(ItemIdentity::Legacy)) {
         "Legacy entries"
     } else {
@@ -400,7 +397,7 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
         base.to_owned()
     };
     if rows.is_empty() {
-        let message = if !app.filter.is_empty() {
+        let message = if !app.filter().is_empty() {
             "No fields match the current filter."
         } else if app.selected_item.is_none() {
             "Create an item with its first field to get started."
@@ -417,19 +414,10 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
     }
     let items = rows
         .iter()
-        .map(|identity| {
-            let suffix = match identity {
-                EntryIdentity::Field(reference) => app
-                    .snapshot()
-                    .and_then(|snapshot| {
-                        snapshot
-                            .fields
-                            .iter()
-                            .find(|field| &field.reference == reference)
-                    })
-                    .map(|field| format!("  [{}]", kind_label(field.kind)))
-                    .unwrap_or_default(),
-                EntryIdentity::Legacy(_) => "  [legacy]".to_owned(),
+        .map(|(identity, kind)| {
+            let suffix = match kind {
+                BrowseEntryKind::Field(kind) => format!("  [{}]", kind_label(*kind)),
+                BrowseEntryKind::Legacy => "  [legacy]".to_owned(),
             };
             ListItem::new(format!("{}{}", identity.label(), suffix))
         })
@@ -437,7 +425,7 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
     let selected = app
         .selected_entry
         .as_ref()
-        .and_then(|identity| rows.iter().position(|row| row == identity));
+        .and_then(|identity| rows.iter().position(|(row, _)| row == identity));
     let mut state = ListState::default().with_selected(selected);
     frame.render_stateful_widget(list(items, &title), area, &mut state);
 }
@@ -518,10 +506,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     if !app.searching {
         lines.push(Line::from(context_action_hints(app, frame.area().width)));
     }
-    if app.searching || !app.filter.is_empty() {
+    if app.searching || !app.filter().is_empty() {
         let mut spans = vec![Span::styled("/", Style::default().fg(ACCENT))];
         spans.extend(editor_spans(
-            &app.filter,
+            app.filter(),
             app.searching,
             usize::from(area.width.saturating_sub(3)),
             Style::default().fg(ACCENT),
@@ -1653,27 +1641,11 @@ fn list<'a>(items: Vec<ListItem<'a>>, title: &'a str) -> List<'a> {
         .highlight_symbol("› ")
 }
 
-fn item_count(app: &App, identity: &ItemIdentity) -> usize {
-    let Some(snapshot) = app.snapshot() else {
-        return 0;
-    };
-    match identity {
-        ItemIdentity::Canonical(item) => snapshot
-            .fields
-            .iter()
-            .filter(|field| field.reference.item() == item)
-            .count(),
-        ItemIdentity::Legacy => snapshot.legacy_secrets.len(),
-    }
-}
-
 fn item_breadcrumb(app: &App) -> String {
-    let legacy_count = app
-        .snapshot()
-        .map_or(0, |snapshot| snapshot.legacy_secrets.len());
-    app.selected_item
-        .as_ref()
-        .map_or_else(|| "Items".to_owned(), |item| item.label(legacy_count))
+    app.selected_item.as_ref().map_or_else(
+        || "Items".to_owned(),
+        |item| item.label(app.item_entry_count(item)),
+    )
 }
 
 fn entry_breadcrumb(app: &App) -> String {
