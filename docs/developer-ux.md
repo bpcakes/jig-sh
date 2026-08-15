@@ -222,7 +222,7 @@ scripts/jig vault audit verify
 
 For a one-time 1Password cutover, `vault import onepassword` parses the restricted dotenv grammar, resolves whole `op://...` values with direct `op read --no-newline` calls, stores them as concealed, stores literals as encrypted text, and writes a reference-only dotenv file. `--dry-run` invokes no `op` process and makes no mutation. A post-commit destination-install failure says that the vault import succeeded; rerun the emitted command with `--replace --overwrite` to converge. The importer does not provide ongoing synchronization.
 
-For example, importing an IdentityPro-shaped source into item `Production` produces project-local assignments like these; IdentityPro is source context, not another Jig reference segment:
+For example, importing a source whose 1Password vault is named `ExampleVault` into item `Production` produces project-local assignments like these; the source vault name is context, not another Jig reference segment:
 
 ```dotenv
 RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD
@@ -230,7 +230,7 @@ RESTIC_REPOSITORY=jig://Production/RESTIC_REPOSITORY
 RESTIC_COMPRESSION=jig://Production/RESTIC_COMPRESSION
 ```
 
-This documents a later operational cutover; Jig does not inspect or modify an existing IdentityPro checkout automatically.
+Jig reads only the requested dotenv source during this explicit cutover; it does not inspect or modify another project checkout automatically.
 
 Passphrase rotation reseals a version 2 vault without changing its fields or identity. Encrypted backup captures the vault and audit log; restore only installs into an entirely absent vault home. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
 

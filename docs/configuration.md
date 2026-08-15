@@ -523,7 +523,7 @@ When a command runs inside a repo with `scope = "repo"`, Jig resolves fields und
 
 ### References, fields, and format compatibility
 
-Every canonical reference has exactly two project-local segments: `jig://ITEM/FIELD`. Each segment is an ASCII identifier containing letters, digits, `_`, `-`, or `.`, subject to the CLI length limits. A reference never names a repository and never changes the selected scope. For example, `jig://Production/RESTIC_PASSWORD` means `Production/RESTIC_PASSWORD` in the vault chosen by the current repo, `--global`, or `--home`; `jig://IdentityPro/Production/RESTIC_PASSWORD` is invalid.
+Every canonical reference has exactly two project-local segments: `jig://ITEM/FIELD`. Each segment is an ASCII identifier containing letters, digits, `_`, `-`, or `.`, subject to the CLI length limits. A reference never names a repository and never changes the selected scope. For example, `jig://Production/RESTIC_PASSWORD` means `Production/RESTIC_PASSWORD` in the vault chosen by the current repo, `--global`, or `--home`; `jig://Project/Production/RESTIC_PASSWORD` is invalid.
 
 Version 2 stores a handling kind with every field. `concealed` is the default and contributes its raw and supported encoded forms to output redaction. `text`, selected with `field set --text`, is still encrypted with the same vault state but is not treated as a masking needle. Use text for contextual values that may legitimately appear in output; the distinction never means plaintext-at-rest.
 
