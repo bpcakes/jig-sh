@@ -63,8 +63,9 @@ const VAULT_READ_AFTER_HELP: &str = "\
 Read one encrypted field through a controlled byte-oriented output path. When
 stdout is a terminal, --reveal is required. Piped or redirected stdout receives
 the exact field bytes without an added newline. --out-file writes a private file
-and refuses an existing destination unless --overwrite is explicit. Exact stdout
-is portable; private file sinks are currently Unix-only.
+outside the selected vault home, refuses hard-link aliases of vault.json or
+audit.jsonl, and refuses an existing destination unless --overwrite is explicit.
+Exact stdout is portable; private file sinks are currently Unix-only.
 
 Examples:
   jig vault read jig://Production/RESTIC_PASSWORD | command
@@ -76,7 +77,8 @@ Replace only {{ jig://ITEM/FIELD }} placeholders in a bounded template. Pass
 --in - explicitly to read the template from stdin. When stdout is a terminal,
 --reveal is required. Piped or redirected stdout receives the exact rendered
 bytes without an added newline. --out-file uses the same private-file and
-explicit-overwrite rules as vault read and is currently Unix-only.
+vault-home exclusion, source-alias, and explicit-overwrite rules as vault read;
+it is currently Unix-only.
 
 Examples:
   jig vault inject --in config.template > config
@@ -100,6 +102,9 @@ signs and backticks are always rejected, so interpolation and command
 substitution never run. Use jig://ITEM/FIELD as the entire decoded value to
 bind a vault field.
 
+--env-file must name a non-symlink regular file. FIFOs, devices, directories,
+and other special files are rejected before passphrase capture.
+
 Unlike exec, the older vault run command injects selected legacy secret names
 into a cleaned, closed-stdin child with buffered/capped output, a timeout, and
 owned process-tree cleanup. Exec is transparent, not a sandbox or a substitute
@@ -120,6 +125,8 @@ directly with no shell and never includes its raw diagnostic output in errors.
 
 Dry-run parses and validates the source, unlocks the vault to report whether
 each field would be created or replaced, and never invokes `op` or mutates data.
+The --env-file source must be a non-symlink regular file; special files are
+rejected without waiting for a producer.
 
 If destination installation fails after the atomic vault commit, rerun the same
 command with --replace --overwrite to converge without resolving ambiguity.
