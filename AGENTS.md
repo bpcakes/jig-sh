@@ -58,6 +58,12 @@ When a backend crate has a crate-level `AGENTS.md`, use these sections:
 - `## Common commands`
 <!-- END JIG MANAGED BLOCK -->
 
+## Open-Source Fixture Hygiene
+
+- Never put names, paths, identifiers, or operational details from downstream, customer, or private projects in this repository.
+- Use unmistakably generic fixtures such as `ExampleProject`, `ExampleVault`, and `vault-consumer-fixture` in source, tests, documentation, plans, and generated evidence.
+- Check fixture and test names before running receipt-producing commands because repository paths can be captured in append-only state.
+
 ## Dogfooding This Harness
 
 This repo is both the `jig` source tree and an adopted `jig` harness repo. Prefer validating work through `scripts/jig` so changes exercise the same CLI, MCP, contract, and receipt paths that generated repos use.
