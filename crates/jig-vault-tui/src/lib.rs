@@ -22,6 +22,7 @@ mod render;
 mod runtime;
 mod secret_input;
 mod tools;
+mod viewport;
 
 #[cfg(test)]
 mod tests;

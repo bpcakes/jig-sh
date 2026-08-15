@@ -19,6 +19,7 @@ use crate::{
     },
     quick_access::{QuickAccess, QuickAccessTarget},
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
+    viewport::ViewportSize,
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -26,17 +27,19 @@ const MUTED: Color = Color::DarkGray;
 const GOOD: Color = Color::Green;
 const WARN: Color = Color::Yellow;
 const BAD: Color = Color::Red;
-const MIN_WIDTH: u16 = 46;
-const MIN_HEIGHT: u16 = 12;
 const WIDE_WIDTH: u16 = 104;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let area = safe_render_area(frame.area());
-    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+    let viewport = ViewportSize::new(area.width, area.height);
+    if !viewport.supports_full_ui() {
         frame.render_widget(
             Paragraph::new(format!(
-                "Terminal too small: {}x{}.\nVault TUI needs at least {MIN_WIDTH}x{MIN_HEIGHT}.\nResize, or press q to exit.",
-                area.width, area.height
+                "Terminal too small: {}x{}.\nVault TUI needs at least {}x{}.\nResize, or press q to exit.",
+                viewport.width(),
+                viewport.height(),
+                ViewportSize::MIN_WIDTH,
+                ViewportSize::MIN_HEIGHT,
             ))
             .block(panel("Jig Vault"))
             .wrap(Wrap { trim: true }),
