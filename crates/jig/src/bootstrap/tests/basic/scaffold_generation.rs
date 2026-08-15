@@ -142,6 +142,32 @@ fn run_init_explicit_harness_only_writes_no_starter_application() {
     })
     .unwrap();
 
+    let top_level_keys = output
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        top_level_keys,
+        std::collections::BTreeSet::from([
+            "answers_file",
+            "command",
+            "destination",
+            "git_initialized",
+            "next_steps",
+            "notes",
+            "ok",
+            "render_mode",
+            "render_report",
+            "scaffold",
+            "template",
+        ])
+    );
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["command"], "init");
+    assert_eq!(output["render_mode"], "copy");
+    assert_eq!(output["answers_file"], ".jig.toml");
     assert!(output["scaffold"].is_null());
     assert!(!destination.join("Cargo.toml").exists());
     assert!(!destination.join("package.json").exists());

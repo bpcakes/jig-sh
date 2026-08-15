@@ -354,17 +354,25 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
 
     let summary = format_init_human_summary(&output);
 
-    assert!(summary.contains("init summary"));
-    assert!(summary.contains("target: /tmp/repo"));
-    assert!(summary.contains("template: embedded"));
-    assert!(summary.contains("managed files: 2 created, 0 modified, 0 removed"));
-    assert!(summary.contains("scaffold: rust-react for demo (db: postgres)"));
-    assert!(summary.contains("scaffold files: 2 created, 0 modified, 1 unchanged"));
-    assert!(summary.contains("frontends: web, landing, admin-panel"));
-    assert!(summary.contains("git: initialized"));
-    assert!(summary.contains("SQLx disabled by default"));
-    assert!(summary.contains("scripts/jig setup"));
-    assert!(summary.contains("full report: rerun with --json"));
+    assert_eq!(
+        summary,
+        concat!(
+            "init summary\n",
+            "  target: /tmp/repo\n",
+            "  template: embedded\n",
+            "  managed files: 2 created, 0 modified, 0 removed\n",
+            "  scaffold: rust-react for demo (db: postgres)\n",
+            "  scaffold files: 2 created, 0 modified, 1 unchanged\n",
+            "  frontends: web, landing, admin-panel\n",
+            "  git: initialized\n",
+            "  notes:\n",
+            "    - SQLx disabled by default until configured.\n",
+            "  next steps:\n",
+            "    - cd /tmp/repo\n",
+            "    - scripts/jig setup\n",
+            "  full report: rerun with --json\n",
+        )
+    );
 }
 
 #[test]
