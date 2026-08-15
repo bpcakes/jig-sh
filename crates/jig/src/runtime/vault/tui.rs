@@ -199,10 +199,15 @@ impl VaultTuiBackend {
         replace: bool,
         overwrite: bool,
         dry_run: bool,
+        cancelled: &dyn Fn() -> bool,
     ) -> std::result::Result<ImportPreview, VaultUiError> {
         self.clear_pending_import()?;
-        let environment = super::super::vault_env::parse_onepassword_env_file(&env_file, &item)
-            .map_err(map_anyhow_error)?;
+        ensure_operation_active(cancelled)?;
+        let environment = super::super::vault_env::parse_onepassword_env_file_with_cancellation(
+            &env_file, &item, cancelled,
+        )
+        .map_err(map_anyhow_error)?;
+        ensure_operation_active(cancelled)?;
         let entries = super::super::vault_import::import_entries(&environment);
         let references = entries
             .iter()
@@ -216,11 +221,13 @@ impl VaultTuiBackend {
             &self.descriptor.home,
         )
         .map_err(map_anyhow_error)?;
+        ensure_operation_active(cancelled)?;
         let (destination, vault) = self.with_vault(|selected, passphrase| {
             let destination = selected.preview_private_output(&out_env)?;
             let vault = selected.plan_import_fields(passphrase, &references)?;
             Ok((destination, vault))
         })?;
+        ensure_operation_active(cancelled)?;
         let destination_exists = destination.destination_exists();
         let rows = entries
             .into_iter()
@@ -265,7 +272,9 @@ impl VaultTuiBackend {
         token: ImportPlanToken,
         replace: bool,
         overwrite: bool,
+        cancelled: &dyn Fn() -> bool,
     ) -> std::result::Result<VaultActionResult, VaultUiError> {
+        ensure_operation_active(cancelled)?;
         let PendingImportPlan {
             token: _,
             environment,
@@ -301,10 +310,13 @@ impl VaultTuiBackend {
         }
 
         let imported =
-            super::super::vault_import::resolve_import(environment).map_err(map_anyhow_error)?;
+            super::super::vault_import::resolve_import_with_cancellation(environment, cancelled)
+                .map_err(map_anyhow_error)?;
+        ensure_operation_active(cancelled)?;
         let prepared =
             PreparedPrivateFile::prepare_if_unchanged(destination, imported.destination, overwrite)
                 .map_err(map_vault_error)?;
+        ensure_operation_active(cancelled)?;
         self.with_vault(|selected, passphrase| {
             selected.import_fields_if_unchanged(passphrase, imported.mutations, vault, replace)
         })?;
@@ -449,13 +461,21 @@ impl VaultBackend for VaultTuiBackend {
                 overwrite,
                 dry_run,
             } => self
-                .preview_onepassword_import(env_file, item, out_env, replace, overwrite, dry_run)
+                .preview_onepassword_import(
+                    env_file,
+                    item,
+                    out_env,
+                    replace,
+                    overwrite,
+                    dry_run,
+                    &|| false,
+                )
                 .map(VaultActionResult::ImportPreview),
             VaultAction::CommitOnePasswordImport {
                 plan,
                 replace,
                 overwrite,
-            } => self.commit_onepassword_import(plan, replace, overwrite),
+            } => self.commit_onepassword_import(plan, replace, overwrite, &|| false),
             VaultAction::DiscardOnePasswordImport { plan } => {
                 self.discard_pending_import(&plan)?;
                 Ok(VaultActionResult::ImportDiscarded)
@@ -507,6 +527,33 @@ impl VaultBackend for VaultTuiBackend {
         }
     }
 
+    fn execute_with_cancellation(
+        &self,
+        action: VaultAction,
+        cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<VaultActionResult, VaultUiError> {
+        match action {
+            VaultAction::PreviewOnePasswordImport {
+                env_file,
+                item,
+                out_env,
+                replace,
+                overwrite,
+                dry_run,
+            } => self
+                .preview_onepassword_import(
+                    env_file, item, out_env, replace, overwrite, dry_run, cancelled,
+                )
+                .map(VaultActionResult::ImportPreview),
+            VaultAction::CommitOnePasswordImport {
+                plan,
+                replace,
+                overwrite,
+            } => self.commit_onepassword_import(plan, replace, overwrite, cancelled),
+            action => self.execute(action),
+        }
+    }
+
     fn peek(
         &self,
         reference: &VaultReference,
@@ -555,6 +602,16 @@ fn map_vault_error_kind(kind: VaultErrorKind) -> VaultUiErrorKind {
 
 fn map_anyhow_error(error: anyhow::Error) -> VaultUiError {
     VaultUiError::new(VaultUiErrorKind::Other, error.to_string())
+}
+
+fn ensure_operation_active(cancelled: &dyn Fn() -> bool) -> std::result::Result<(), VaultUiError> {
+    if cancelled() {
+        return Err(VaultUiError::new(
+            VaultUiErrorKind::Other,
+            "Vault operation was cancelled.",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

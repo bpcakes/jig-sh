@@ -775,7 +775,7 @@ struct ActionWorker {
 impl ActionWorker {
     fn spawn(backend: Arc<dyn VaultBackend>, request: BackendRequest) -> Result<Self> {
         let kind = request.kind();
-        let worker = CooperativeWorker::spawn("jig-vault-tui-action", move |_cancelled| {
+        let worker = CooperativeWorker::spawn("jig-vault-tui-action", move |cancelled| {
             let result = match request {
                 BackendRequest::Unlock(passphrase) => {
                     backend.unlock(passphrase).map(VaultActionResult::Snapshot)
@@ -783,7 +783,9 @@ impl ActionWorker {
                 BackendRequest::Initialize(passphrase) => {
                     backend.initialize_with_completion(passphrase)
                 }
-                BackendRequest::Execute(action) => backend.execute(action),
+                BackendRequest::Execute(action) => {
+                    backend.execute_with_cancellation(action, &|| cancelled.is_cancelled())
+                }
             };
             BackendCompletion::new(kind, result, backend.as_ref())
         })?;
@@ -1462,6 +1464,7 @@ mod tests {
         events: Mutex<Vec<&'static str>>,
         started: Mutex<Option<mpsc::Sender<()>>>,
         release: Mutex<Option<mpsc::Receiver<()>>>,
+        cooperative: bool,
     }
 
     impl TrackingBackend {
@@ -1475,6 +1478,7 @@ mod tests {
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(None),
                 release: Mutex::new(None),
+                cooperative: false,
             }
         }
 
@@ -1509,6 +1513,21 @@ mod tests {
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(Some(started)),
                 release: Mutex::new(Some(release)),
+                cooperative: false,
+            }
+        }
+
+        fn cancellable(started: mpsc::Sender<()>) -> Self {
+            Self {
+                locks: AtomicUsize::new(0),
+                home_state_reads: AtomicUsize::new(0),
+                refreshes: AtomicUsize::new(0),
+                home_state_result: Mutex::new(None),
+                refresh_result: Mutex::new(None),
+                events: Mutex::new(Vec::new()),
+                started: Mutex::new(Some(started)),
+                release: Mutex::new(None),
+                cooperative: true,
             }
         }
     }
@@ -1565,6 +1584,25 @@ mod tests {
             }
             self.events.lock().unwrap().push("operation-finished");
             Err(VaultUiError::new(VaultUiErrorKind::Other, "expected"))
+        }
+
+        fn execute_with_cancellation(
+            &self,
+            action: VaultAction,
+            cancelled: &dyn Fn() -> bool,
+        ) -> std::result::Result<VaultActionResult, VaultUiError> {
+            if !self.cooperative {
+                return self.execute(action);
+            }
+            self.events.lock().unwrap().push("operation-started");
+            if let Some(started) = self.started.lock().unwrap().take() {
+                started.send(()).unwrap();
+            }
+            while !cancelled() {
+                std::thread::yield_now();
+            }
+            self.events.lock().unwrap().push("operation-cancelled");
+            Err(VaultUiError::new(VaultUiErrorKind::Other, "cancelled"))
         }
 
         fn peek(
@@ -2100,6 +2138,28 @@ mod tests {
         assert_eq!(
             *backend.events.lock().unwrap(),
             ["operation-started", "operation-finished", "lock"]
+        );
+    }
+
+    #[test]
+    fn worker_cancellation_reaches_cancellable_backend_preparation() {
+        let (started_sender, started_receiver) = mpsc::channel();
+        let backend = Arc::new(TrackingBackend::cancellable(started_sender));
+        let erased: Arc<dyn VaultBackend> = backend.clone();
+        let mut worker = ActionWorker::spawn(
+            Arc::clone(&erased),
+            BackendRequest::Execute(VaultAction::Refresh),
+        )
+        .unwrap();
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        worker.cancel_and_join();
+
+        assert_eq!(
+            *backend.events.lock().unwrap(),
+            ["operation-started", "operation-cancelled"]
         );
     }
 }

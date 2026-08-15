@@ -371,6 +371,22 @@ pub trait VaultBackend: Send + Sync + 'static {
     /// Performs one typed operation. Results may contain metadata only.
     fn execute(&self, action: VaultAction) -> Result<VaultActionResult, VaultUiError>;
 
+    /// Performs one typed operation with cooperative cancellation available to
+    /// preparation that is still safe to abandon.
+    ///
+    /// Backends must ignore cancellation once an audited mutation or other
+    /// durable commit has started. The default keeps existing backend
+    /// implementations non-cancellable and lets the runtime join them before
+    /// dropping credentials or restoring the terminal.
+    fn execute_with_cancellation(
+        &self,
+        action: VaultAction,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<VaultActionResult, VaultUiError> {
+        let _ = cancelled;
+        self.execute(action)
+    }
+
     /// Reveals one canonical field directly into the supplied immediate sink.
     /// No protected bytes may be returned in the result or error.
     fn peek(
