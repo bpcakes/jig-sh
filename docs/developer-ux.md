@@ -2,6 +2,8 @@
 
 Jig is designed to make a repository feel immediately operable to a developer, an agent, or a CI job without requiring any of them to rediscover the same local conventions. The core UX promise is simple: after a repo is initialized or adopted, `scripts/jig` becomes the stable front door for setup, checks, local development, work evidence, agent readiness, and selected machine-local secrets.
 
+This workflow is supported on Linux and macOS hosts. See [Platform Support](platform-support.md) for the CI guarantee, unsupported-host policy, and feature-specific limits.
+
 That front door is intentionally repo-local. Developers do not need to remember whether a project uses a root Cargo workspace, SQLx metadata, a Vite frontend, a custom schema dump, or a particular MCP command. The repo records those decisions in `.jig.toml` and `.agent/jig-contract.json`, and the generated launcher pins the runtime version that knows how to execute them.
 
 ## First Contact

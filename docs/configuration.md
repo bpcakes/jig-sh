@@ -2,6 +2,8 @@
 
 This file is the supported configuration surface for downstream repos and must be committed alongside the generated template output.
 
+> Jig supports Linux and macOS hosts. Windows and other operating systems are outside the compatibility contract even where legacy platform-specific code remains. See [Platform Support](platform-support.md).
+
 `.jig.toml` is also the native renderer answers file.
 
 After changing values in `.jig.toml`, re-render with:
@@ -32,7 +34,7 @@ For scaffolded init, Jig validates the complete planned managed/scaffold output 
 
 Init destinations may be absolute, a normal relative path, or exactly `.`; parent-relative components and incomplete Windows drive/root forms are rejected before wizard/vault interaction and again at the library mutation boundary. Jig resolves the deepest existing destination ancestor before work begins. A wholly missing destination is rendered and Git-initialized in a private same-filesystem tree, then its top missing component is published with one atomic no-replace rename. An existing destination retains its filesystem identity for the transaction; overwritten entries are quarantined before replacement, and committed file identities and content signatures—not later path observations—define Jig-owned output.
 
-Transactional `jig init` publication is currently supported on Linux/Android, Apple-family, and Windows targets. Builds for other targets reject init before prompts, vault interaction, template resolution, or destination mutation instead of rendering work that cannot be published safely.
+Transactional `jig init` publication is supported on Linux and macOS. Some publication primitives remain implemented for unsupported targets, but they are not part of Jig's compatibility contract. Targets without the required primitives reject init before prompts, vault interaction, template resolution, or destination mutation instead of rendering work that cannot be published safely.
 
 If a later template, scaffold, agent-map, or Git step fails in an existing destination, rollback first quarantines the current entry, restores a retained preimage only when the quarantined entry is the exact Jig generation, and publishes every restoration without replacing a concurrent path. Concurrent or foreign content and any contended recovery artifacts are preserved, and an incomplete rollback is reported with the original failure. Git metadata is likewise built privately, initialized and validated with explicit work-tree/metadata paths under a repository-redirection-scrubbed environment, and only then published without replacement.
 
@@ -439,7 +441,7 @@ LAN mode exposes the Jig proxy, not the child app process directly. Jig still st
 
 In LAN mode, Jig-owned process routes remain reachable because Jig starts and supervises their child apps on loopback IP literals. Alias routes remain loopback-client-only; local loopback clients can still use those aliases for remote tunnels or shared development services.
 
-On Windows, foreground app supervision assigns each suspended child to a Job Object before resuming it. Graceful cleanup first sends CTRL+BREAK to that child's new process group, falls back to non-forced tree termination when console delivery is unavailable, and finally terminates the Job Object after the bounded grace period. Process-owned proxy routes are still refused because high-confidence persisted process start-token verification is not implemented. On BSD-like platforms child-tree cleanup remains best-effort and process-owned routes are likewise refused. The generated harness and its dependency readiness authority require Bash; use WSL or Git Bash and ensure `bash` is on PATH. Git Bash must expose numeric `btime` and per-process stat data through its Linux-compatible procfs; the dependency checker refuses an unverifiable install owner or worker group instead of falling back to native Windows PID probes. A missing-Bash diagnostic points to that prerequisite or to `scripts/jig proxy run --no-proxy` when only direct supervision is needed. `scripts/jig proxy stop` on Windows only terminates a process after the authenticated loopback health endpoint reports the stored PID, but it cannot recheck a process start token before `taskkill`; stop long-running Windows proxies promptly if you are relying on PID identity. HTTPS dev proxying is not supported on Windows because Jig does not yet harden private-key ACLs there; use plain HTTP, `scripts/jig proxy run --no-proxy`, or `scripts/jig proxy alias` for manually managed loopback services.
+Native Windows, Git Bash, and BSD-like hosts are unsupported. Some historical process-supervision and command-shim implementations remain in the source tree, but they are not CI-tested compatibility surfaces and must not be relied on for development, proxying, or generated harness execution. See [Platform Support](platform-support.md) for the narrower WSL boundary.
 
 If a proxy is already running without HTTPS and a later command asks for HTTPS, stop and restart the proxy with HTTPS using the same `JIG_PROXY_STATE_DIR`. Use separate state directories for worktrees that need different HTTP/HTTPS listener settings.
 
