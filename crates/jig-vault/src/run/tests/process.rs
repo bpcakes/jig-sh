@@ -298,10 +298,12 @@ fn macos_eperm_special_case_preserves_signal_failure_until_proven_quiescent() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn unix_process_group_gate_targets_only_the_pinned_identity() {
-    let group = PinnedUnixProcessGroup { id: 4242 };
+    let group = PinnedUnixProcessGroup {
+        id: jig_owned_process::unix::ProcessGroupId::new(4242).unwrap(),
+    };
     let mut target = None;
     with_pinned_unix_process_group(Some(&group), |owned| {
-        target = Some(owned.id);
+        target = Some(owned.id.as_raw());
         Ok(())
     })
     .unwrap();
@@ -309,7 +311,7 @@ fn unix_process_group_gate_targets_only_the_pinned_identity() {
 
     target = None;
     let error = with_pinned_unix_process_group(None, |owned| {
-        target = Some(owned.id);
+        target = Some(owned.id.as_raw());
         Ok(())
     })
     .unwrap_err();
@@ -320,7 +322,9 @@ fn unix_process_group_gate_targets_only_the_pinned_identity() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn unix_wait_error_clears_identity_only_for_echild() {
-    let group = PinnedUnixProcessGroup { id: 4242 };
+    let group = PinnedUnixProcessGroup {
+        id: jig_owned_process::unix::ProcessGroupId::new(4242).unwrap(),
+    };
     let mut identity = Some(group);
     update_unix_process_group_after_wait_error(
         &mut identity,
@@ -339,52 +343,6 @@ fn unix_wait_error_clears_identity_only_for_echild() {
         &io::Error::from_raw_os_error(libc::ECHILD),
     );
     assert!(identity.is_none());
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn waitid_observer_accepts_only_terminal_child_state_codes() {
-    for code in [libc::CLD_EXITED, libc::CLD_KILLED, libc::CLD_DUMPED] {
-        assert_eq!(
-            classify_waitid_leader_observation(73, 73, code).unwrap(),
-            LeaderObservation::Exited
-        );
-    }
-    for code in [libc::CLD_STOPPED, libc::CLD_TRAPPED, libc::CLD_CONTINUED] {
-        assert_eq!(
-            classify_waitid_leader_observation(73, 73, code).unwrap(),
-            LeaderObservation::Running
-        );
-    }
-    assert_eq!(
-        classify_waitid_leader_observation(73, 0, i32::MAX).unwrap(),
-        LeaderObservation::Running
-    );
-    assert!(classify_waitid_leader_observation(73, 74, libc::CLD_EXITED).is_err());
-    assert!(classify_waitid_leader_observation(73, 73, i32::MAX).is_err());
-}
-
-#[test]
-fn macos_group_snapshot_requires_the_exact_sole_pinned_leader() {
-    assert!(classify_macos_process_group_snapshot(73, 1, [73, 0]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [73, 74]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [74, 73]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [74, 75]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [73, 73]).unwrap());
-
-    for (process_group, count, members) in [
-        (73, 0, [0, 0]),
-        (73, -1, [0, 0]),
-        (73, 3, [73, 74]),
-        (73, 1, [74, 0]),
-        (73, 2, [73, 0]),
-        (0, 1, [73, 0]),
-    ] {
-        assert!(
-            classify_macos_process_group_snapshot(process_group, count, members).is_err(),
-            "untrusted snapshot was accepted: group={process_group}, count={count}, members={members:?}"
-        );
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -420,7 +378,7 @@ fn macos_group_confirmation_resignals_an_exited_leader_with_a_live_member() {
         );
         thread::sleep(Duration::from_millis(2));
     }
-    let process_group = process.process_group.unwrap().id;
+    let process_group = process.process_group.unwrap().id.as_raw();
     let confirmation_deadline = Instant::now()
         .checked_add(Duration::from_millis(500))
         .unwrap();
@@ -455,7 +413,7 @@ fn macos_group_confirmation_resignals_a_running_sole_leader_before_proof() {
     let mut process = BrokeredProcess::spawn(&mut command).unwrap();
     wait_for_path(&ready, Duration::from_secs(2));
 
-    let process_group = process.process_group.unwrap().id;
+    let process_group = process.process_group.unwrap().id.as_raw();
     let confirmation_deadline = Instant::now()
         .checked_add(Duration::from_millis(500))
         .unwrap();

@@ -23,14 +23,15 @@ After this change, running `scripts/jig codex launch` in a terminal opens a full
 - [x] (2026-08-02 14:38Z) Resolved the comprehensive-review findings: added signal-supervised picker cancellation, ordered final updates before completion, bounded detail scrolling, restored panic diagnostics, unified single-window weekly labeling, and made PTY EOF/restoration coverage portable and deterministic.
 - [x] (2026-08-02 15:38Z) Resolved the follow-up UX review: derived detail scrolling from wrapped viewport rows, distinguished stopped inspection from successful completion, ranked home-name search ahead of shared paths, sanitized Unicode format controls, required explicit PTY-test exemptions, and routed account-semantics tests through production report assembly.
 - [x] (2026-08-02 16:39Z) Resolved the final review findings: synchronized inspection updates and rendering before input, surfaced nonfatal discovery warnings, retained long-list viewport context, preserved defensive worker diagnostics, kept legitimate Unicode joiners, and corrected the review chronology.
+- [x] (2026-08-13) Upgraded the shared terminal stack to Ratatui 0.29.0 and added a 608x113 PTY regression after reproducing Ratatui 0.28.1's 65,535-cell buffer failure.
 
 ## Surprises & Discoveries
 
 - Observation: The old launcher does not block its interface on usage. It gives `fzf` inexpensive rows first, then runs a selected-home `preview-limits` process in the preview pane.
   Evidence: `/Users/aa/Documents/codex-launcher.sh` invokes `fzf --preview ... preview-limits {8}` while the initial rows contain `...` usage placeholders.
 
-- Observation: Jig already pins compatible Ratatui and Crossterm versions and has a robust alternate-screen runtime in a separate internal presentation crate.
-  Evidence: the workspace pins `ratatui = 0.28.1` and `crossterm = 0.28.1`; `crates/jig-status-tui/src/runtime.rs` restores raw mode, cursor visibility, and alternate-screen state through `Drop`.
+- Observation: Jig pins compatible Ratatui and Crossterm versions and has a robust alternate-screen runtime in a separate internal presentation crate.
+  Evidence: the workspace pins `ratatui = 0.29.0` for large-terminal buffer support and `crossterm = 0.28.1`; `crates/jig-status-tui/src/runtime.rs` restores raw mode, cursor visibility, and alternate-screen state through `Drop`.
 
 - Observation: The existing inspection callback does not expose the completed row index, which a live TUI needs because completion order differs from display order and non-UTF-8 display names can collide.
   Evidence: `homes_report_with_progress` currently reports only `(completed, total, home_json)` even though `inspect_homes_parallel` internally receives the exact `index`.
@@ -74,9 +75,15 @@ After this change, running `scripts/jig codex launch` in a terminal opens a full
   Rationale: The operator's explicit contract is that the sole current window is weekly; if the five-hour limit returns alongside it, server-reported durations distinguish the two without imposing roles on unexpected additional durations.
   Date/Author: 2026-08-02 / Codex
 
+- Decision: Pin the shared terminal stack to Ratatui 0.29.0 while retaining Crossterm 0.28.1 and the workspace Rust 1.85 floor.
+  Rationale: Ratatui 0.29 replaces the 16-bit buffer-area calculation that crashes the picker on a 608x113 terminal. Its exact `unicode-width` 0.2.0 requirement and the compatible Rustyline 17 dependency are accepted consequences of supporting the full terminal without a viewport cap.
+  Date/Author: 2026-08-13 / Codex
+
 ## Outcomes & Retrospective
 
 The implementation now opens a visibly responsive full-screen picker before account inspection completes, preserves exact `PathBuf` selection, supports ranked fuzzy search and viewport-correct focusable usage details, cancels active app-server checks before launch, and removes the old numbered prompt. Inspection updates are rendered before input can act on them, long lists retain surrounding context, partial home discovery remains visible as a nonfatal warning, and legitimate Unicode script joiners survive terminal hardening. External Unix termination signals cancel and join active app-server inspections, restore the terminal, and only then re-deliver the signal. The terminal lifecycle and cooperative worker implementation are shared with the existing status dashboard instead of copied. Final validation passes 19 Codex TUI tests, 76 Codex-focused Jig tests, 12 status TUI tests, 5 shared TUI tests, and all 3 Unix launcher PTY/signal tests; PTY unavailability is a failure unless the environment explicitly opts out with `JIG_ALLOW_PTY_TEST_SKIP=1`. Strict Clippy, formatting, contract, guide/map, and diff checks pass. The full workspace gate recorded 1,295 passing and 2 ignored tests; its only four failures were the Windows dependency-checker baseline explicitly excluded by the user. Because the structured gate cannot encode that platform exclusion, the plan remains mechanically blocked in `jig work gates` even though the scoped implementation and accepted repository evidence are complete.
+
+The later Ratatui 0.29.0 cutover removes the picker's 65,535-cell ceiling. A PTY regression now covers the reported 608x113 terminal while preserving the full terminal area rather than imposing a viewport workaround.
 
 ## Context and Orientation
 
@@ -214,3 +221,5 @@ Revision note (2026-08-02): Replaced the initial copy-the-pattern approach with 
 Revision note (2026-08-02): Recorded the completed implementation and focused evidence, including compact layouts, fuzzy search, a focusable detail pane, and the PTY-draining requirement discovered during end-to-end testing.
 
 Revision note (2026-08-02): Finalized validation results and documented why the structured gate remains mechanically blocked on the user-excluded Windows baseline.
+
+Revision note (2026-08-13): Recorded Ratatui 0.29.0 as the decided shared terminal dependency and the exact 608x113 large-terminal regression that superseded the earlier 0.28.1 assumption.

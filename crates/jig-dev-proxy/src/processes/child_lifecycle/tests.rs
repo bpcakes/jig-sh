@@ -2,6 +2,8 @@
 use super::super::termination_test_guard;
 use super::*;
 use std::cell::Cell;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
@@ -1348,58 +1350,6 @@ fn running_term_resistant_tree_is_confirmed_dead_before_leader_reap() {
     reap.unwrap();
     child.disarm();
     release_guard.disarm();
-}
-
-#[cfg(all(unix, not(target_os = "redox")))]
-#[test]
-fn waitid_observer_accepts_only_exact_terminal_child_states() {
-    use std::os::unix::process::ExitStatusExt;
-
-    for (code, status, raw) in [
-        (libc::CLD_EXITED, 7, 7 << 8),
-        (libc::CLD_KILLED, libc::SIGTERM, libc::SIGTERM),
-        (libc::CLD_DUMPED, libc::SIGABRT, libc::SIGABRT | 0x80),
-    ] {
-        assert_eq!(
-            classify_waitid_child_observation(73, 73, code, status).unwrap(),
-            ChildObservation::ExitedUnreaped(ExitStatus::from_raw(raw))
-        );
-    }
-    for code in [libc::CLD_STOPPED, libc::CLD_TRAPPED, libc::CLD_CONTINUED] {
-        assert_eq!(
-            classify_waitid_child_observation(73, 73, code, libc::SIGSTOP).unwrap(),
-            ChildObservation::Running
-        );
-    }
-    assert_eq!(
-        classify_waitid_child_observation(73, 0, i32::MAX, 0).unwrap(),
-        ChildObservation::Running
-    );
-    assert!(classify_waitid_child_observation(73, 74, libc::CLD_EXITED, 0).is_err());
-    assert!(classify_waitid_child_observation(73, 73, i32::MAX, 0).is_err());
-}
-
-#[test]
-fn macos_group_snapshot_requires_the_exact_sole_pinned_leader() {
-    assert!(classify_macos_process_group_snapshot(73, 1, [73, 0]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [73, 74]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [74, 73]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [74, 75]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [73, 73]).unwrap());
-
-    for (process_group, count, members) in [
-        (73, 0, [0, 0]),
-        (73, -1, [0, 0]),
-        (73, 3, [73, 74]),
-        (73, 1, [74, 0]),
-        (73, 2, [73, 0]),
-        (0, 1, [73, 0]),
-    ] {
-        assert!(
-            classify_macos_process_group_snapshot(process_group, count, members).is_err(),
-            "untrusted snapshot was accepted: group={process_group}, count={count}, members={members:?}"
-        );
-    }
 }
 
 #[test]

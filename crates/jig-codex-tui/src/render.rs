@@ -193,7 +193,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
                 .style(Style::default().fg(ACCENT).bold()),
         )
         .block(panel(homes_panel_title(best, false)))
-        .highlight_style(
+        .row_highlight_style(
             Style::default()
                 .bg(Color::Blue)
                 .fg(Color::White)
@@ -258,7 +258,7 @@ fn draw_projection_list(
             .style(Style::default().fg(ACCENT).bold()),
     )
     .block(panel(homes_panel_title(best, false)))
-    .highlight_style(
+    .row_highlight_style(
         Style::default()
             .bg(Color::Blue)
             .fg(Color::White)
@@ -314,7 +314,7 @@ fn draw_compact_list(
             Row::new(["", "Home · Account / Projection"]).style(Style::default().fg(ACCENT).bold()),
         )
         .block(panel(homes_panel_title(best, true)))
-        .highlight_style(
+        .row_highlight_style(
             Style::default()
                 .bg(Color::Blue)
                 .fg(Color::White)

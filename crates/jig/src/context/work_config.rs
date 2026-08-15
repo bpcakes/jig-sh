@@ -43,24 +43,6 @@ pub(crate) enum WorkGate {
     Unsupported(UnsupportedWorkGate),
 }
 
-impl WorkGate {
-    pub(crate) fn id(&self) -> &str {
-        match self {
-            Self::Check(gate) => &gate.id,
-            Self::CodexReview(gate) => &gate.id,
-            Self::Unsupported(gate) => &gate.id,
-        }
-    }
-
-    pub(crate) const fn required(&self) -> bool {
-        match self {
-            Self::Check(gate) => gate.required,
-            Self::CodexReview(gate) => gate.required,
-            Self::Unsupported(gate) => gate.required,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct WorkCheckGate {
     pub(crate) id: String,

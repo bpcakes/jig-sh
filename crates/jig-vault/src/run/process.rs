@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result as AnyResult, anyhow, bail};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use jig_owned_process::unix::ProcessGroupId;
+
 use crate::SecretBytes;
 
 use super::output::CappedOutputDrains;
@@ -32,7 +35,7 @@ pub(super) enum LeaderObservation {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PinnedUnixProcessGroup {
-    pub(super) id: libc::pid_t,
+    pub(super) id: ProcessGroupId,
 }
 
 pub(super) struct BrokeredProcess {

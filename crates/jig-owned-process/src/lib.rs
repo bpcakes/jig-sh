@@ -1,5 +1,7 @@
 mod process;
 
+pub mod unix;
+
 pub use process::interaction;
 pub use process::{
     BoundedProcessOutput, OwnedProcessTreeError, OwnedProcessTreeOutput, ProcessOutputLimits,
