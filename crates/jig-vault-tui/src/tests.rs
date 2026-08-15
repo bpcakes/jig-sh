@@ -1465,6 +1465,31 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
 }
 
 #[test]
+fn legacy_delete_confirmation_sanitizes_unsafe_identity_text() {
+    let unsafe_name = "old\u{1b}[31m\u{202e}token".to_owned();
+    let mut unsafe_snapshot = snapshot();
+    unsafe_snapshot.legacy_secrets[0].name = unsafe_name.clone();
+    let mut app = App::new(descriptor(true));
+    app.apply_snapshot(unsafe_snapshot);
+    app.selected_item = Some(ItemIdentity::Legacy);
+    app.selected_entry = Some(EntryIdentity::Legacy(unsafe_name));
+    app.focus = Focus::Fields;
+    app.begin_delete();
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+
+    assert!(!rendered.contains('\u{1b}'), "{rendered}");
+    assert!(!rendered.contains('\u{202e}'), "{rendered}");
+    assert!(
+        rendered.contains("legacy entry old�[31m�token"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn universal_palette_filters_and_opens_verified_activity() {
     let mut app = browsing_app();
     handle_key(

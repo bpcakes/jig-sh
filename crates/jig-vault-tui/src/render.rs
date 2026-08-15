@@ -914,7 +914,10 @@ fn draw_delete_confirmation(
     let required = confirmation.target.required_confirmation();
     let mut lines = vec![
         Line::from(Span::styled(
-            format!("Permanently remove {}?", confirmation.target.label()),
+            format!(
+                "Permanently remove {}?",
+                sanitize_text(&confirmation.target.label())
+            ),
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
