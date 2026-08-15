@@ -188,7 +188,7 @@ fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
 
 fn draw_locked(frame: &mut Frame, area: Rect, app: &App, input: String) {
     draw_public_header(frame, area, app, "locked", WARN);
-    let inner = centered_rect(72, 40, area);
+    let inner = centered_box(72, 8, area);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
@@ -199,7 +199,7 @@ fn draw_locked(frame: &mut Frame, area: Rect, app: &App, input: String) {
             Line::from(input),
             Line::from(""),
             Line::from(Span::styled(
-                "Only protected bullets and a byte count are shown.",
+                "Protected bullets and byte count only.",
                 Style::default().fg(MUTED),
             )),
             Line::from("Enter unlock   Ctrl-U clear   Esc quit"),
@@ -1798,6 +1798,18 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(vertical[1])[1]
+}
+
+fn centered_box(max_width: u16, height: u16, area: Rect) -> Rect {
+    let width = max_width.min(area.width.saturating_sub(2));
+    let height = height.min(area.height);
+    Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width) / 2),
+        area.y
+            .saturating_add(area.height.saturating_sub(height) / 2),
+        width,
+        height,
+    )
 }
 
 fn panel(title: &str) -> Block<'_> {

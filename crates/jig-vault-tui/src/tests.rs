@@ -739,6 +739,21 @@ fn locked_typing_and_paste_never_put_plaintext_in_a_frame() {
 }
 
 #[test]
+fn locked_screen_remains_usable_at_the_browser_minimum() {
+    let app = App::new(descriptor(true));
+    let backend = TestBackend::new(46, 12);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+
+    assert!(rendered.contains("Vault passphrase"), "{rendered}");
+    assert!(rendered.contains("Enter unlock"), "{rendered}");
+    assert!(rendered.contains("Esc quit"), "{rendered}");
+    assert!(!rendered.contains("resize required"), "{rendered}");
+}
+
+#[test]
 fn locked_q_is_protected_input_and_escape_remains_quit() {
     let mut app = App::new(descriptor(true));
 
@@ -793,7 +808,7 @@ fn undersized_viewport_owns_input_until_the_full_ui_is_visible() {
     assert!(matches!(
         dispatch_event(
             &mut app,
-            ViewportSize::new(90, 24),
+            ViewportSize::new(46, 12),
             Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
         ),
         RuntimeAction::Redraw

@@ -38,7 +38,10 @@ pub(crate) const fn screen_layout(screen: &Screen) -> ScreenLayout {
     match screen {
         Screen::Browse => BROWSER_LAYOUT,
         Screen::Missing => ScreenLayout::new(72, 20, "Vault setup"),
-        Screen::Locked(_) => ScreenLayout::new(72, 20, "Vault unlock"),
+        // Locking is always available from the browser, including at its
+        // compact minimum. Keep the unlock screen usable at that same size so
+        // the transition cannot strand the user behind a resize interstitial.
+        Screen::Locked(_) => BROWSER_LAYOUT,
         Screen::Initialize { .. } => ScreenLayout::new(72, 20, "Vault initialization"),
         Screen::Loading(_) => LOADING_LAYOUT,
         Screen::ConfirmMigration => ScreenLayout::new(64, 18, "Migration confirmation"),
