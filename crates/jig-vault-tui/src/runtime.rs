@@ -16,7 +16,7 @@ use crate::{
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
-    viewport::ViewportSize,
+    viewport::{ViewportSize, ratatui_viewport},
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -80,8 +80,7 @@ pub(crate) fn run(
         if dirty {
             terminal
                 .draw(|frame| {
-                    let area = frame.area();
-                    viewport = ViewportSize::new(area.width, area.height);
+                    viewport = ratatui_viewport(frame.area()).1;
                     render::draw(frame, &app);
                 })
                 .context("failed to draw the Vault TUI")?;

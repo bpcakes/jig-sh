@@ -68,5 +68,9 @@ mod tests {
         assert_eq!(area, Rect::new(0, 0, 608, 107));
         assert_eq!(viewport, ViewportSize::new(608, 107));
         assert!(area.area() <= u32::from(u16::MAX));
+
+        let (_, clipped) = ratatui_viewport(Rect::new(0, 0, 6_000, 20));
+        assert_eq!(clipped, ViewportSize::new(6_000, 10));
+        assert!(!clipped.supports_full_ui());
     }
 }
