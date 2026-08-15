@@ -168,7 +168,7 @@ pub(crate) struct QuickAccess {
 impl QuickAccess {
     pub(crate) fn for_app(app: &App) -> Self {
         let mut targets = Vec::new();
-        if let Some(snapshot) = &app.snapshot {
+        if let Some(snapshot) = app.snapshot() {
             let mut items = BTreeMap::new();
             for field in &snapshot.fields {
                 *items

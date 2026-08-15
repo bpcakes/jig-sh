@@ -77,7 +77,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         | Screen::Activity(_)
         | Screen::AuditResult(_)
         | Screen::ConfirmPeek(_) => {
-            if app.snapshot.is_some() {
+            if app.snapshot().is_some() {
                 draw_browser(frame, area, app);
             } else {
                 draw_missing(frame, area, app);
@@ -307,10 +307,7 @@ fn draw_public_header(frame: &mut Frame, area: Rect, app: &App, state: &str, col
 
 fn draw_browser_header(frame: &mut Frame, area: Rect, app: &App) {
     let (items, fields, legacy) = app.snapshot_counts();
-    let snapshot = app
-        .snapshot
-        .as_ref()
-        .expect("browser always has a snapshot");
+    let snapshot = app.snapshot().expect("browser always has a snapshot");
     let scope = app
         .descriptor
         .repo_name
@@ -372,8 +369,7 @@ fn draw_items(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
     let legacy_count = app
-        .snapshot
-        .as_ref()
+        .snapshot()
         .map_or(0, |snapshot| snapshot.legacy_secrets.len());
     let items = rows
         .iter()
@@ -424,8 +420,7 @@ fn draw_entries(frame: &mut Frame, area: Rect, app: &App) {
         .map(|identity| {
             let suffix = match identity {
                 EntryIdentity::Field(reference) => app
-                    .snapshot
-                    .as_ref()
+                    .snapshot()
                     .and_then(|snapshot| {
                         snapshot
                             .fields
@@ -506,8 +501,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         "Type to filter  ←/→ cursor  Ctrl-←/→ words  Ctrl-W delete word  Enter/Esc finish"
             .to_owned()
     } else if app
-        .snapshot
-        .as_ref()
+        .snapshot()
         .is_some_and(|snapshot| snapshot.format_version == 1)
     {
         format!(
@@ -1660,7 +1654,7 @@ fn list<'a>(items: Vec<ListItem<'a>>, title: &'a str) -> List<'a> {
 }
 
 fn item_count(app: &App, identity: &ItemIdentity) -> usize {
-    let Some(snapshot) = &app.snapshot else {
+    let Some(snapshot) = app.snapshot() else {
         return 0;
     };
     match identity {
@@ -1675,8 +1669,7 @@ fn item_count(app: &App, identity: &ItemIdentity) -> usize {
 
 fn item_breadcrumb(app: &App) -> String {
     let legacy_count = app
-        .snapshot
-        .as_ref()
+        .snapshot()
         .map_or(0, |snapshot| snapshot.legacy_secrets.len());
     app.selected_item
         .as_ref()

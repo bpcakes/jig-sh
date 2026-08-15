@@ -9,6 +9,7 @@ use jig_vault::{
 use crate::{
     ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
     VaultPresence, VaultUiError,
+    browse::BrowseState,
     commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
     line_editor::{LineEdit, LineEditor},
     quick_access::{QuickAccess, QuickAccessSelection},
@@ -20,7 +21,7 @@ use crate::{
 pub(crate) struct App {
     pub(crate) descriptor: VaultDescriptor,
     pub(crate) screen: Screen,
-    pub(crate) snapshot: Option<VaultSnapshot>,
+    browser: Option<BrowseState>,
     pub(crate) focus: Focus,
     pub(crate) selected_item: Option<ItemIdentity>,
     pub(crate) selected_entry: Option<EntryIdentity>,
@@ -41,7 +42,7 @@ impl App {
         Self {
             descriptor,
             screen,
-            snapshot: None,
+            browser: None,
             focus: Focus::Items,
             selected_item: None,
             selected_entry: None,
@@ -120,7 +121,7 @@ impl App {
         let previous_item = self.selected_item.clone();
         let previous_entry = self.selected_entry.clone();
         self.descriptor.exists = true;
-        self.snapshot = Some(snapshot);
+        self.browser = Some(BrowseState::new(snapshot));
         self.screen = Screen::Browse;
         self.status = None;
         if let Some(hint) = self.next_selection.take() {
@@ -134,7 +135,7 @@ impl App {
     }
 
     pub(crate) fn fail_unlock(&mut self, error: &VaultUiError) {
-        self.snapshot = None;
+        self.browser = None;
         self.next_selection = None;
         self.screen = Screen::Locked(SecretInput::new());
         self.status = Some(StatusMessage::error(error.message()));
@@ -147,7 +148,7 @@ impl App {
     }
 
     pub(crate) fn fail_lifecycle(&mut self, error: &VaultUiError, presence: VaultPresence) {
-        self.snapshot = None;
+        self.browser = None;
         self.next_selection = None;
         self.descriptor.exists = presence.is_present();
         self.screen = match presence {
@@ -158,7 +159,7 @@ impl App {
     }
 
     pub(crate) fn lock(&mut self) {
-        self.snapshot = None;
+        self.browser = None;
         self.next_selection = None;
         self.selected_item = None;
         self.selected_entry = None;
@@ -191,7 +192,7 @@ impl App {
                 | Screen::AuditResult(_)
                 | Screen::ConfirmPeek(_)
         ) {
-            self.screen = if self.snapshot.is_some() {
+            self.screen = if self.snapshot().is_some() {
                 Screen::Browse
             } else {
                 Screen::Missing
@@ -202,8 +203,7 @@ impl App {
 
     pub(crate) fn confirm_migration(&mut self) {
         if self
-            .snapshot
-            .as_ref()
+            .snapshot()
             .is_some_and(|snapshot| snapshot.format_version == 1)
         {
             self.screen = Screen::ConfirmMigration;
@@ -323,7 +323,7 @@ impl App {
     }
 
     pub(crate) fn open_quick_access(&mut self) {
-        if self.snapshot.is_none() {
+        if self.snapshot().is_none() {
             return;
         }
         self.screen = Screen::QuickAccess(QuickAccess::for_app(self));
@@ -403,7 +403,7 @@ impl App {
             self.set_error(reason);
             return CommandOutcome::Redraw;
         }
-        self.screen = if self.snapshot.is_some() {
+        self.screen = if self.snapshot().is_some() {
             Screen::Browse
         } else {
             Screen::Missing
@@ -592,7 +592,7 @@ impl App {
 
     pub(crate) fn apply_restore(&mut self) {
         self.descriptor.exists = true;
-        self.snapshot = None;
+        self.browser = None;
         self.next_selection = None;
         self.screen = Screen::Locked(SecretInput::new());
         self.status = Some(StatusMessage::info(
@@ -763,7 +763,7 @@ impl App {
         let target = if self.focus == Focus::Items {
             match self.selected_item.clone() {
                 Some(ItemIdentity::Canonical(item)) => {
-                    let count = self.snapshot.as_ref().map_or(0, |snapshot| {
+                    let count = self.snapshot().map_or(0, |snapshot| {
                         snapshot
                             .fields
                             .iter()
@@ -851,16 +851,14 @@ impl App {
         };
         let submission = {
             let snapshot = self
-                .snapshot
-                .as_ref()
+                .snapshot()
                 .expect("management submissions require an unlocked vault snapshot");
             form.submission(snapshot)
         };
         match submission {
             Ok(submission) => {
                 let confirmation = self
-                    .snapshot
-                    .as_ref()
+                    .snapshot()
                     .map(|snapshot| submission.confirmation(snapshot))
                     .expect("management submissions require an unlocked vault snapshot");
                 if let Some(kind) = confirmation {
@@ -907,15 +905,14 @@ impl App {
 
     fn authorize_mutation(&self, mutation: VaultMutation) -> VaultAction {
         let revision = self
-            .snapshot
-            .as_ref()
+            .snapshot()
             .map(|snapshot| snapshot.revision.clone())
             .expect("management mutations require an unlocked vault snapshot");
         VaultAction::Mutate { revision, mutation }
     }
 
     pub(crate) fn submit_tool_form(&mut self) -> Option<VaultAction> {
-        let fallback = if self.snapshot.is_some() {
+        let fallback = if self.snapshot().is_some() {
             Screen::Browse
         } else {
             Screen::Missing
@@ -986,11 +983,15 @@ impl App {
     }
 
     pub(crate) fn is_unlocked(&self) -> bool {
-        self.snapshot.is_some()
+        self.snapshot().is_some()
+    }
+
+    pub(crate) fn snapshot(&self) -> Option<&VaultSnapshot> {
+        self.browser.as_ref().map(BrowseState::snapshot)
     }
 
     pub(crate) fn visible_items(&self) -> Vec<ItemIdentity> {
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = self.snapshot() else {
             return Vec::new();
         };
         let query = self.filter.as_str().to_lowercase();
@@ -1013,7 +1014,7 @@ impl App {
     }
 
     pub(crate) fn visible_entries(&self) -> Vec<EntryIdentity> {
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = self.snapshot() else {
             return Vec::new();
         };
         let query = self.filter.as_str().to_lowercase();
@@ -1039,8 +1040,7 @@ impl App {
         let EntryIdentity::Field(reference) = self.selected_entry.as_ref()? else {
             return None;
         };
-        self.snapshot
-            .as_ref()?
+        self.snapshot()?
             .fields
             .iter()
             .find(|record| &record.reference == reference)
@@ -1050,8 +1050,7 @@ impl App {
         let EntryIdentity::Legacy(name) = self.selected_entry.as_ref()? else {
             return None;
         };
-        self.snapshot
-            .as_ref()?
+        self.snapshot()?
             .legacy_secrets
             .iter()
             .find(|record| &record.name == name)
@@ -1116,7 +1115,7 @@ impl App {
     }
 
     pub(crate) fn snapshot_counts(&self) -> (usize, usize, usize) {
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = self.snapshot() else {
             return (0, 0, 0);
         };
         let items = snapshot
@@ -1138,8 +1137,7 @@ impl App {
 
     fn require_writable_v2(&mut self) -> bool {
         if self
-            .snapshot
-            .as_ref()
+            .snapshot()
             .is_none_or(|snapshot| snapshot.format_version != 2)
         {
             self.set_error("Vault management requires version 2; press m to migrate first.");
@@ -1152,7 +1150,7 @@ impl App {
         if query.is_empty() {
             return true;
         }
-        let Some(snapshot) = &self.snapshot else {
+        let Some(snapshot) = self.snapshot() else {
             return false;
         };
         match item {

@@ -1635,7 +1635,7 @@ mod tests {
             assert_eq!(backend.refreshes.load(Ordering::SeqCst), 0);
             assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-            assert!(app.snapshot.is_none());
+            assert!(app.snapshot().is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
         }
     }
@@ -1748,7 +1748,7 @@ mod tests {
                 assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
                 assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
                 assert_eq!(app.descriptor.exists, presence.is_present());
-                assert!(app.snapshot.is_none());
+                assert!(app.snapshot().is_none());
                 match presence {
                     VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
                     VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
@@ -1781,7 +1781,7 @@ mod tests {
 
             assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-            assert!(app.snapshot.is_none());
+            assert!(app.snapshot().is_none());
             assert!(!app.descriptor.exists);
             assert!(matches!(app.screen, Screen::Missing));
             assert_eq!(
@@ -1809,7 +1809,7 @@ mod tests {
 
         assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
-        assert!(app.snapshot.is_some());
+        assert!(app.snapshot().is_some());
         assert!(matches!(app.screen, Screen::Browse));
         assert_eq!(app.status.unwrap().text, "safe entity failure");
     }
@@ -1834,12 +1834,12 @@ mod tests {
             match presence {
                 VaultPresence::Missing => {
                     assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-                    assert!(app.snapshot.is_none());
+                    assert!(app.snapshot().is_none());
                     assert!(matches!(app.screen, Screen::Missing));
                 }
                 VaultPresence::Present => {
                     assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
-                    assert!(app.snapshot.is_some());
+                    assert!(app.snapshot().is_some());
                     assert!(matches!(app.screen, Screen::Browse));
                 }
             }
@@ -1892,7 +1892,7 @@ mod tests {
         app.begin_rename();
         handle_paste(&mut app, "OTHER");
         assert!(app.submit_form().is_some());
-        let refreshed = app.snapshot.clone().unwrap();
+        let refreshed = app.snapshot().unwrap().clone();
         let backend = Arc::new(TrackingBackend::with_refresh(Ok(refreshed.clone())));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let completion = BackendCompletion::new(
@@ -1908,7 +1908,7 @@ mod tests {
 
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
-        assert_eq!(app.snapshot, Some(refreshed));
+        assert_eq!(app.snapshot(), Some(&refreshed));
         assert!(matches!(app.screen, Screen::Browse));
         assert_eq!(
             app.selected_entry,
@@ -1921,7 +1921,7 @@ mod tests {
     #[test]
     fn committed_result_recovers_a_snapshot_and_reports_primary_success() {
         let mut app = unlocked_app();
-        let refreshed = app.snapshot.clone().unwrap();
+        let refreshed = app.snapshot().unwrap().clone();
         let backend = Arc::new(TrackingBackend::with_refresh(Ok(refreshed.clone())));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let completion = BackendCompletion::new(
@@ -1941,7 +1941,7 @@ mod tests {
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
         assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
-        assert_eq!(app.snapshot, Some(refreshed));
+        assert_eq!(app.snapshot(), Some(&refreshed));
         assert!(matches!(app.screen, Screen::Browse));
         assert_eq!(app.status.unwrap().text, "Vault updated.");
     }
@@ -1974,7 +1974,7 @@ mod tests {
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
         assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-        assert!(app.snapshot.is_none());
+        assert!(app.snapshot().is_none());
         assert!(matches!(app.screen, Screen::Locked(_)));
         assert_eq!(
             app.status.unwrap().text,
@@ -2009,7 +2009,7 @@ mod tests {
             assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
             assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-            assert!(app.snapshot.is_none());
+            assert!(app.snapshot().is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
             assert_eq!(
                 app.status.unwrap().text,
@@ -2044,7 +2044,7 @@ mod tests {
         assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
         assert!(!app.descriptor.exists);
-        assert!(app.snapshot.is_none());
+        assert!(app.snapshot().is_none());
         assert!(matches!(app.screen, Screen::Missing));
         assert_eq!(
             app.status.unwrap().text,

@@ -637,7 +637,7 @@ fn exact_selection_survives_reordered_refresh() {
     app.focus = Focus::Fields;
     app.move_selection(1);
     let selected = app.selected_entry.clone();
-    let mut refreshed = app.snapshot.clone().unwrap();
+    let mut refreshed = app.snapshot().unwrap().clone();
     refreshed.fields.reverse();
 
     app.apply_snapshot(refreshed);
@@ -2230,7 +2230,7 @@ fn locking_drops_pending_protected_tool_inputs_and_metadata() {
 
     app.lock();
 
-    assert!(app.snapshot.is_none());
+    assert!(app.snapshot().is_none());
     assert!(app.selected_entry.is_none());
     assert!(app.filter.is_empty());
     assert!(matches!(app.screen, Screen::Locked(_)));

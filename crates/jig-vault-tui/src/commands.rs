@@ -225,10 +225,7 @@ impl UiCommand {
     }
 
     fn state_availability(self, app: &App) -> CommandAvailability {
-        let format_version = app
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.format_version);
+        let format_version = app.snapshot().map(|snapshot| snapshot.format_version);
         let writable = format_version == Some(2);
         match self {
             Self::CreateItem | Self::AddLegacy => {
@@ -341,7 +338,7 @@ impl UiCommand {
                 }
             }
             Self::RestoreBackup => {
-                if app.snapshot.is_some() || app.descriptor.exists {
+                if app.snapshot().is_some() || app.descriptor.exists {
                     CommandAvailability::Disabled("Restore requires a completely absent vault.")
                 } else {
                     CommandAvailability::Enabled
@@ -375,14 +372,10 @@ impl UiCommand {
     }
 
     pub(crate) fn visible_in_state(self, app: &App) -> bool {
-        if app.snapshot.is_none() {
+        if app.snapshot().is_none() {
             return self == Self::RestoreBackup && !app.descriptor.exists;
         }
-        match app
-            .snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.format_version)
-        {
+        match app.snapshot().map(|snapshot| snapshot.format_version) {
             Some(1) => matches!(
                 self,
                 Self::Refresh | Self::MigrateToV2 | Self::Activity | Self::VerifyAudit | Self::Lock
@@ -397,8 +390,7 @@ impl UiCommand {
             return false;
         }
         if app
-            .snapshot
-            .as_ref()
+            .snapshot()
             .is_some_and(|snapshot| snapshot.format_version == 1)
         {
             return self == Self::MigrateToV2;
