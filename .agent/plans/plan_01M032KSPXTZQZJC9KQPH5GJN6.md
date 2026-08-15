@@ -1,0 +1,1 @@
+Make cancellable precommit work terminate safely, couple modal input capability to visible layout, repair chunked Peek writes, document private-output restrictions, and add focused regression coverage.
