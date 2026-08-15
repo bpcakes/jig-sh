@@ -85,30 +85,23 @@ impl SecretInput {
     /// protected allocation. Symlinks and non-regular files are rejected.
     pub(crate) fn from_regular_file(path: &Path) -> Result<Self, SecretInputFileError> {
         let path_label = path.to_path_buf();
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            SecretInputFileError::new(path_label.clone(), "inspect", error.kind())
+        let mut file = open_value_file(path).map_err(|error| {
+            if is_no_follow_error(&error) {
+                invalid_file_type(path_label.clone())
+            } else {
+                SecretInputFileError::new(path_label.clone(), "open", error.kind())
+            }
         })?;
-        if !is_real_regular_file(&metadata) {
-            return Err(SecretInputFileError::invalid(
-                path_label,
-                "value source must be a regular file and must not be a symlink or reparse point",
-            ));
+        let opened = file.metadata().map_err(|error| {
+            SecretInputFileError::new(path_label.clone(), "inspect opened", error.kind())
+        })?;
+        if !is_real_regular_file(&opened) {
+            return Err(invalid_file_type(path_label));
         }
-        if metadata.len() > MAX_SECRET_VALUE_LEN as u64 {
+        if opened.len() > MAX_SECRET_VALUE_LEN as u64 {
             return Err(SecretInputFileError::invalid(
                 path_label,
                 format!("value source exceeds the {MAX_SECRET_VALUE_LEN} byte vault value limit"),
-            ));
-        }
-        let mut file = open_value_file(path)
-            .map_err(|error| SecretInputFileError::new(path.to_path_buf(), "open", error.kind()))?;
-        let opened = file.metadata().map_err(|error| {
-            SecretInputFileError::new(path.to_path_buf(), "inspect opened", error.kind())
-        })?;
-        if !is_real_regular_file(&opened) {
-            return Err(SecretInputFileError::invalid(
-                path.to_path_buf(),
-                "opened value source is not a real regular file",
             ));
         }
 
@@ -205,10 +198,27 @@ fn open_value_file(path: &Path) -> std::io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     #[cfg(windows)]
     options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
+}
+
+fn invalid_file_type(path: PathBuf) -> SecretInputFileError {
+    SecretInputFileError::invalid(
+        path,
+        "value source must be a regular file and must not be a symlink or reparse point",
+    )
+}
+
+#[cfg(unix)]
+fn is_no_follow_error(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_no_follow_error(_error: &std::io::Error) -> bool {
+    false
 }
 
 fn is_real_regular_file(metadata: &std::fs::Metadata) -> bool {
@@ -222,5 +232,53 @@ fn is_real_regular_file(metadata: &std::fs::Metadata) -> bool {
     #[cfg(not(windows))]
     {
         true
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{
+        ffi::CString,
+        os::{fd::AsRawFd, unix::ffi::OsStrExt},
+    };
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn fifo_open_is_nonblocking_and_rejected_as_non_regular() {
+        let temp = tempdir().unwrap();
+        let fifo = temp.path().join("value.fifo");
+        let fifo_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_path` remains a live, NUL-terminated CString for the
+        // call, and the mode contains only valid permission bits.
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+
+        // Keep both peer ends open so the subject open cannot hang even if it
+        // regresses to blocking mode. The descriptor flags below prove the
+        // production invariant without depending on scheduler timing.
+        let _reader = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+        let _writer = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+
+        let opened = open_value_file(&fifo).unwrap();
+        // SAFETY: `opened` owns a live descriptor for the duration of the call.
+        let flags = unsafe { libc::fcntl(opened.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1, "failed to inspect opened value-file flags");
+        assert_ne!(flags & libc::O_NONBLOCK, 0);
+        drop(opened);
+
+        let error = SecretInput::from_regular_file(&fifo)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must be a regular file"), "{error}");
     }
 }
