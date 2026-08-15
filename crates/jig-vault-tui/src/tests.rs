@@ -1451,7 +1451,7 @@ fn field_and_item_deletion_require_exact_typed_confirmation() {
     let Screen::ConfirmDelete(confirmation) = &app.screen else {
         panic!("expected item delete confirmation");
     };
-    assert!(confirmation.target.label().contains("2 fields"));
+    assert!(confirmation.target.display_label().contains("2 fields"));
     handle_paste(&mut app, "DELETE");
     match submit_key(&mut app) {
         VaultAction::Mutate {

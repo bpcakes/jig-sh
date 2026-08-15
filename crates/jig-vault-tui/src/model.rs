@@ -1884,12 +1884,13 @@ pub(crate) enum DeleteTarget {
 }
 
 impl DeleteTarget {
-    pub(crate) fn label(&self) -> String {
-        match self {
+    pub(crate) fn display_label(&self) -> String {
+        let label = match self {
             Self::Field(reference) => format!("field {reference}"),
             Self::Item { item, count } => format!("item jig://{item} and its {count} fields"),
             Self::Legacy(name) => format!("legacy entry {name}"),
-        }
+        };
+        sanitize_text(&label)
     }
 
     pub(crate) fn required_confirmation(&self) -> String {

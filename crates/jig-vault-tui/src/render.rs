@@ -916,7 +916,7 @@ fn draw_delete_confirmation(
         Line::from(Span::styled(
             format!(
                 "Permanently remove {}?",
-                sanitize_text(&confirmation.target.label())
+                confirmation.target.display_label()
             ),
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
         )),
