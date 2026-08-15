@@ -9,7 +9,7 @@ const ROTATED_PASSPHRASE: &str = "test-only-rotated-passphrase";
 const CONCEALED_VALUE: &str = "test-only-mask-value";
 const REPOSITORY_VALUE: &str = "fixture:local-store";
 const COMPRESSION_VALUE: &str = "false";
-const OP_REFERENCE: &str = "op://IdentityPro/Production/RESTIC_PASSWORD";
+const OP_REFERENCE: &str = "op://ExampleVault/Production/RESTIC_PASSWORD";
 
 fn private_dir(path: &Path) {
     std::fs::create_dir_all(path).unwrap();
@@ -24,14 +24,14 @@ fn write_synthetic_repo(repo: &Path) {
         format!(
             r#"_src_path = "/tmp/test-only-template"
 _commit = "test-only"
-repo_name = "identitypro-synthetic"
+repo_name = "vault-consumer-fixture"
 default_branch = "main"
 jig_version = "{}"
 contract_check_command = "true"
 
 [vault]
 scope = "repo"
-scope_id = "scope_identitypro_acceptance"
+scope_id = "scope_vault_consumer_acceptance"
 allow_global = false
 "#,
             env!("CARGO_PKG_VERSION")
@@ -256,10 +256,10 @@ fn run_exec(
 }
 
 #[test]
-fn synthetic_identitypro_cutover_covers_the_general_project_vault_workflow() {
+fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    let repo = temp.path().join("identitypro-synthetic");
+    let repo = temp.path().join("vault-consumer-fixture");
     let vault_base = temp.path().join("vault-base");
     let fake_bin = temp.path().join("fake-bin");
     let fixture_dir = temp.path().join("fixture-input");
@@ -270,7 +270,7 @@ fn synthetic_identitypro_cutover_covers_the_general_project_vault_workflow() {
     write_synthetic_repo(&repo);
     install_fake_op(&fake_bin);
 
-    let source_env = fixture_dir.join("identitypro.env");
+    let source_env = fixture_dir.join("onepassword-source.env");
     let generated_env = repo.join(".env.jig");
     let op_log = fixture_dir.join("op.log");
     let rendered_config = runtime_dir.join("config");
@@ -292,7 +292,7 @@ fn synthetic_identitypro_cutover_covers_the_general_project_vault_workflow() {
     assert_eq!(initialized_json["vault_scope"], "repo");
     assert_eq!(
         initialized_json["vault_scope_id"],
-        "scope_identitypro_acceptance"
+        "scope_vault_consumer_acceptance"
     );
     let source_home = PathBuf::from(
         initialized_json["vault_home"]
