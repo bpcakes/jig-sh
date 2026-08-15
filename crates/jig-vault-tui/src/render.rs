@@ -20,7 +20,7 @@ use crate::{
     },
     quick_access::{QuickAccess, QuickAccessTarget},
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
-    viewport::ViewportSize,
+    viewport::{ViewportSize, ratatui_viewport},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -31,8 +31,7 @@ const BAD: Color = Color::Red;
 const WIDE_WIDTH: u16 = 104;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
-    let area = safe_render_area(frame.area());
-    let viewport = ViewportSize::new(area.width, area.height);
+    let (area, viewport) = ratatui_viewport(frame.area());
     if !viewport.supports_full_ui() {
         frame.render_widget(
             Paragraph::new(format!(
@@ -127,17 +126,6 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             }
         }
     }
-}
-
-/// Ratatui 0.28 indexes cells with a `u16` multiplication. Bound the rendered
-/// height so unusually large terminals cannot wrap later rows over earlier
-/// cells. The unused bottom remains in the already-cleared alternate screen.
-fn safe_render_area(area: Rect) -> Rect {
-    if area.width == 0 {
-        return area;
-    }
-    let safe_height = u16::MAX / area.width;
-    Rect::new(area.x, area.y, area.width, area.height.min(safe_height))
 }
 
 fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
