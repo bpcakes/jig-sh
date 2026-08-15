@@ -14,8 +14,8 @@ Each slice must compile, pass its focused tests, and land in its own commit befo
 - [x] (2026-08-15) Built the development `jig` binary and opened plan `plan_01M02EAZJXZN2ECRC10W7CXVEQ` in session `session_01M02EAZCJQ3P96FK27PM827G0`.
 - [x] (2026-08-15) Slice 1: replaced internal work-gate JSON reparsing with typed evaluation/report types and explicit wire conversion; `cargo test -p jig-sh --lib --locked` passed 1,399 tests with 2 ignored, and strict crate Clippy passed. Committed as `56110e5`.
 - [x] (2026-08-15) Slice 2: extracted the doctor signal lifecycle into `doctor/signal_session.rs`, represented live restoration state as `Option<ActiveDoctorSignalSession>`, and added a subprocess Drop-restoration test; all 120 doctor tests and strict test-target Clippy passed. Committed as `5709093`.
-- [x] (2026-08-15) Slice 3: added shared validated Unix process identity, non-reaping wait observation, macOS snapshot classification, and consecutive-quiescence state to `jig-owned-process`; migrated owned-process, vault, and dev-proxy without merging their policies. Strict affected-crate Clippy passed, as did 489 dev-proxy, 30 owned-process, and 193 vault tests. Commit pending at this checkpoint.
-- [ ] Run configured repository gates, record evidence, close the plan/session, and summarize the three commits.
+- [x] (2026-08-15) Slice 3: added shared validated Unix process identity, non-reaping wait observation, macOS snapshot classification, and consecutive-quiescence state to `jig-owned-process`; migrated owned-process, vault, and dev-proxy without merging their policies. Strict affected-crate Clippy passed, as did 489 dev-proxy, 30 owned-process, and 193 vault tests. Committed as `367b1e1`.
+- [x] (2026-08-15) Ran workspace all-target/all-feature check and strict Clippy, the required repository test contract, and structured work gates. Contract and tests were fresh and passed under batch receipt `receipt_01M02JHE662TFS0TFR5MFCSAMW`; closed the plan and session successfully.
 
 ## Surprises & Discoveries
 
@@ -91,4 +91,6 @@ All source transformations are ordinary Git edits and each slice ends in a dedic
 
 ## Outcomes & Retrospective
 
-Pending implementation.
+Implemented the three accepted refactorings as three independent commits in the recommended order. Gate evaluation now stays typed until its explicit compatibility projection; doctor signal handlers are owned by a dedicated lifecycle state machine; and the three Unix supervisors share validated identity and kernel-observation primitives without sharing policy. The migration removed 542 lines of duplicated process code while retaining caller-specific failure context, deadlines, and ownership behavior.
+
+Focused validation passed for all changed areas, including 1,399 `jig-sh` library tests (2 ignored), 120 doctor tests, 489 dev-proxy tests, 30 owned-process tests, and 193 vault tests. Workspace all-target/all-feature check and strict Clippy passed. The final configured `jig.contract_check` and `jig.test` gates were fresh and successful, with 1,939 tests reported by the receipt-backed Nextest run.
