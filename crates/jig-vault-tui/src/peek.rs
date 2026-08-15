@@ -194,7 +194,9 @@ impl Write for TerminalSafePreviewWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let remaining = MAX_PEEK_SOURCE_BYTES.saturating_sub(self.previewed_source_bytes);
         let preview_len = bytes.len().min(remaining);
-        self.write_preview(&bytes[..preview_len])?;
+        if preview_len > 0 {
+            self.write_preview(&bytes[..preview_len])?;
+        }
         self.previewed_source_bytes += preview_len;
         if preview_len < bytes.len() {
             self.resolve_truncated_utf8_boundary(&bytes[preview_len..])?;
@@ -301,6 +303,26 @@ mod tests {
         let output = String::from_utf8(output).unwrap();
         assert_eq!(output.matches('a').count(), MAX_PEEK_SOURCE_BYTES - 1);
         assert!(!output.contains("界"));
+        assert!(!output.contains("\\xe7"));
+        assert!(output.ends_with("preview limited to 4096 of 4098 source bytes"));
+    }
+
+    #[test]
+    fn terminal_preview_resolves_a_boundary_character_across_later_writes() {
+        let mut output = Vec::new();
+        let mut boundary = vec![b'a'; MAX_PEEK_SOURCE_BYTES - 1];
+        boundary.push(0xe7);
+        {
+            let mut writer = TerminalSafePreviewWriter::new(&mut output);
+            writer.write_all(&boundary).unwrap();
+            writer.write_all(&[0x95]).unwrap();
+            writer.write_all(&[0x8c]).unwrap();
+            writer.finish().unwrap();
+            assert_eq!(writer.source_bytes(), MAX_PEEK_SOURCE_BYTES + 2);
+        }
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with(&"a".repeat(MAX_PEEK_SOURCE_BYTES - 1)));
         assert!(!output.contains("\\xe7"));
         assert!(output.ends_with("preview limited to 4096 of 4098 source bytes"));
     }
