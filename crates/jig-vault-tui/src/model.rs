@@ -1897,7 +1897,8 @@ impl DeleteTarget {
         match self {
             Self::Field(reference) => reference.to_string(),
             Self::Item { .. } => "DELETE".to_owned(),
-            Self::Legacy(name) => name.clone(),
+            Self::Legacy(name) if sanitize_text(name) == *name => name.clone(),
+            Self::Legacy(_) => "DELETE".to_owned(),
         }
     }
 

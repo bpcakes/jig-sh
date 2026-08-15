@@ -1472,7 +1472,7 @@ fn legacy_delete_confirmation_sanitizes_unsafe_identity_text() {
     let mut app = App::new(descriptor(true));
     app.apply_snapshot(unsafe_snapshot);
     app.selected_item = Some(ItemIdentity::Legacy);
-    app.selected_entry = Some(EntryIdentity::Legacy(unsafe_name));
+    app.selected_entry = Some(EntryIdentity::Legacy(unsafe_name.clone()));
     app.focus = Focus::Fields;
     app.begin_delete();
 
@@ -1487,6 +1487,16 @@ fn legacy_delete_confirmation_sanitizes_unsafe_identity_text() {
         rendered.contains("legacy entry old�[31m�token"),
         "{rendered}"
     );
+    assert!(rendered.contains("Type exactly: DELETE"), "{rendered}");
+
+    handle_paste(&mut app, "DELETE");
+    match submit_key(&mut app) {
+        VaultAction::Mutate {
+            mutation: VaultMutation::RemoveLegacy { name },
+            ..
+        } => assert_eq!(name, unsafe_name),
+        other => panic!("unexpected action: {other:?}"),
+    }
 }
 
 #[test]
