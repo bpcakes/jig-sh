@@ -466,6 +466,11 @@ pub(crate) struct InitReport {
     notes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vault: Option<BootstrapVaultReport>,
+    // Keep legacy JSON-style bootstrap assertions working without carrying a
+    // second representation in production reports.
+    #[cfg(test)]
+    #[serde(skip)]
+    serialized: std::sync::OnceLock<Value>,
 }
 
 impl InitReport {
@@ -506,7 +511,22 @@ impl InitReport {
             bail!("bootstrap::run_init output unexpectedly included a vault field");
         }
         self.vault = Some(vault);
+        #[cfg(test)]
+        {
+            self.serialized = std::sync::OnceLock::new();
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for InitReport {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.serialized.get_or_init(|| {
+            serde_json::to_value(self).expect("typed init report should serialize for legacy tests")
+        })
     }
 }
 

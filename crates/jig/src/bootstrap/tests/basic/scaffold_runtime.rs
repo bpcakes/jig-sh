@@ -1136,7 +1136,6 @@ fn run_init_sqlite_scaffold_keeps_sanitized_database_names_and_ignores_aligned()
         },
     })
     .unwrap();
-    let output = serde_json::to_value(output).unwrap();
 
     assert_eq!(output["scaffold"]["repo_name"], "app-123-type");
     assert_eq!(output["scaffold"]["repo_name_sanitized_from"], "123-type");

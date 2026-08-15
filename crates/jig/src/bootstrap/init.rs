@@ -222,6 +222,8 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 false,
             ),
             vault: None,
+            #[cfg(test)]
+            serialized: Default::default(),
         })
     })();
 
