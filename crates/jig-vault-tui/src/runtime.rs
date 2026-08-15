@@ -16,6 +16,7 @@ use crate::{
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
+    viewport::ViewportSize,
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -47,6 +48,7 @@ pub(crate) fn run(
         }
     }
     let mut dirty = true;
+    let mut viewport = ViewportSize::new(0, 0);
     let mut next_spinner = Instant::now() + SPINNER_INTERVAL;
     let mut idle = IdleTimer::new(Instant::now(), DEFAULT_IDLE_LOCK_TIMEOUT);
 
@@ -77,7 +79,11 @@ pub(crate) fn run(
 
         if dirty {
             terminal
-                .draw(|frame| render::draw(frame, &app))
+                .draw(|frame| {
+                    let area = frame.area();
+                    viewport = ViewportSize::new(area.width, area.height);
+                    render::draw(frame, &app);
+                })
                 .context("failed to draw the Vault TUI")?;
             dirty = false;
         }
@@ -89,12 +95,7 @@ pub(crate) fn run(
             {
                 idle.record(Instant::now());
             }
-            let action = match input {
-                Event::Key(key) if is_actionable_key(key) => handle_key(&mut app, key),
-                Event::Paste(value) => handle_paste(&mut app, &value),
-                Event::Resize(_, _) => RuntimeAction::Redraw,
-                _ => RuntimeAction::Ignore,
-            };
+            let action = dispatch_event(&mut app, viewport, input);
             match action {
                 RuntimeAction::Ignore => {}
                 RuntimeAction::Redraw => dirty = true,
@@ -130,6 +131,31 @@ pub(crate) fn run(
                 }
             }
         }
+    }
+}
+
+pub(crate) fn dispatch_event(app: &mut App, viewport: ViewportSize, input: Event) -> RuntimeAction {
+    match input {
+        Event::Resize(_, _) => RuntimeAction::Redraw,
+        Event::Key(key) if is_actionable_key(key) => {
+            if viewport.supports_full_ui() {
+                handle_key(app, key)
+            } else {
+                handle_undersized_key(key)
+            }
+        }
+        Event::Paste(value) if viewport.supports_full_ui() => handle_paste(app, &value),
+        _ => RuntimeAction::Ignore,
+    }
+}
+
+fn handle_undersized_key(key: KeyEvent) -> RuntimeAction {
+    if key.code == KeyCode::Char('q') && key.modifiers.is_empty()
+        || key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        RuntimeAction::Quit
+    } else {
+        RuntimeAction::Ignore
     }
 }
 

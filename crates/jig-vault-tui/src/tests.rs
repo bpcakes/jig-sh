@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use jig_vault::{FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes, Vault, VaultSnapshot};
 use ratatui::{Terminal, backend::TestBackend};
 use secrecy::SecretString;
@@ -19,8 +19,9 @@ use crate::{
     },
     quick_access::QuickAccessTarget,
     render,
-    runtime::{BackendRequest, RuntimeAction, handle_key, handle_paste},
+    runtime::{BackendRequest, RuntimeAction, dispatch_event, handle_key, handle_paste},
     secret_input::SecretInput,
+    viewport::ViewportSize,
 };
 
 const SENTINEL: &[u8] = b"vault-tui-plaintext-sentinel";
@@ -683,6 +684,73 @@ fn locked_q_is_protected_input_and_escape_remains_quit() {
         handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         RuntimeAction::Quit
     ));
+}
+
+#[test]
+fn undersized_viewport_owns_input_until_the_full_ui_is_visible() {
+    let mut app = App::new(descriptor(true));
+    let undersized = ViewportSize::new(40, 8);
+
+    assert!(matches!(
+        dispatch_event(&mut app, undersized, Event::Paste("hidden".to_owned())),
+        RuntimeAction::Ignore
+    ));
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            undersized,
+            Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+        ),
+        RuntimeAction::Ignore
+    ));
+    let Screen::Locked(input) = &app.screen else {
+        panic!("expected locked input");
+    };
+    assert!(input.is_empty());
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            undersized,
+            Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+        ),
+        RuntimeAction::Quit
+    ));
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(90, 24),
+            Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+        ),
+        RuntimeAction::Redraw
+    ));
+    let Screen::Locked(input) = &app.screen else {
+        panic!("expected locked input");
+    };
+    assert_eq!(input.len(), 1);
+}
+
+#[test]
+fn undersized_viewport_cannot_submit_a_hidden_deletion() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_delete();
+    let Screen::ConfirmDelete(confirmation) = &app.screen else {
+        panic!("expected delete confirmation");
+    };
+    let required = confirmation.target.required_confirmation();
+    handle_paste(&mut app, &required);
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(40, 8),
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        ),
+        RuntimeAction::Ignore
+    ));
+    assert!(matches!(app.screen, Screen::ConfirmDelete(_)));
 }
 
 #[test]
