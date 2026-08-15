@@ -1,0 +1,1 @@
+Fix the four validated branch-review findings and add regression coverage for unsafe legacy rendering, modified Space handling, nonblocking regular-file validation, and large-list prepared fuzzy matching.
