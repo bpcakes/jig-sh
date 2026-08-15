@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use jig_vault::{MIN_MASTER_PASSPHRASE_LEN, VaultItem, VaultReference};
+use jig_vault::{VaultItem, VaultReference};
 
 use crate::{VaultAction, line_editor::LineEditor, secret_input::SecretInput};
 
@@ -255,11 +255,7 @@ impl ToolForm {
                 confirmation,
                 ..
             } => {
-                if new_passphrase.len() < MIN_MASTER_PASSPHRASE_LEN {
-                    return Err(format!(
-                        "New vault passphrases must contain at least {MIN_MASTER_PASSPHRASE_LEN} bytes."
-                    ));
-                }
+                new_passphrase.validate_new_vault_passphrase()?;
                 if !new_passphrase.matches(confirmation) {
                     return Err("New vault passphrase confirmation did not match.".to_owned());
                 }

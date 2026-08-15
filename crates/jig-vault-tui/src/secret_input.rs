@@ -15,7 +15,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
 };
 
-use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes};
+use jig_vault::{MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 /// A bounded, non-cloneable protected editor backed by preallocated zeroizing
@@ -76,6 +76,15 @@ impl SecretInput {
 
     pub(crate) fn matches(&self, other: &Self) -> bool {
         self.bytes.as_slice() == other.bytes.as_slice()
+    }
+
+    pub(crate) fn validate_new_vault_passphrase(&self) -> Result<(), String> {
+        if self.len() < MIN_MASTER_PASSPHRASE_LEN {
+            return Err(format!(
+                "New vault passphrases must contain at least {MIN_MASTER_PASSPHRASE_LEN} bytes."
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn take(&mut self) -> SecretBytes {
