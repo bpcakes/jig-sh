@@ -95,6 +95,15 @@ struct PendingImportPlan {
     recovery_command: String,
 }
 
+struct OnePasswordPreviewRequest {
+    env_file: std::path::PathBuf,
+    item: jig_vault::VaultItem,
+    out_env: std::path::PathBuf,
+    replace: bool,
+    overwrite: bool,
+    dry_run: bool,
+}
+
 impl VaultTuiBackend {
     fn new(request: VaultTuiRequest) -> Result<Self> {
         let resolved = resolve_vault_runtime(&request.vault)?;
@@ -193,14 +202,17 @@ impl VaultTuiBackend {
 
     fn preview_onepassword_import(
         &self,
-        env_file: std::path::PathBuf,
-        item: jig_vault::VaultItem,
-        out_env: std::path::PathBuf,
-        replace: bool,
-        overwrite: bool,
-        dry_run: bool,
+        request: OnePasswordPreviewRequest,
         cancelled: &dyn Fn() -> bool,
     ) -> std::result::Result<ImportPreview, VaultUiError> {
+        let OnePasswordPreviewRequest {
+            env_file,
+            item,
+            out_env,
+            replace,
+            overwrite,
+            dry_run,
+        } = request;
         self.clear_pending_import()?;
         ensure_operation_active(cancelled)?;
         let environment = super::super::vault_env::parse_onepassword_env_file_with_cancellation(
@@ -462,12 +474,14 @@ impl VaultBackend for VaultTuiBackend {
                 dry_run,
             } => self
                 .preview_onepassword_import(
-                    env_file,
-                    item,
-                    out_env,
-                    replace,
-                    overwrite,
-                    dry_run,
+                    OnePasswordPreviewRequest {
+                        env_file,
+                        item,
+                        out_env,
+                        replace,
+                        overwrite,
+                        dry_run,
+                    },
                     &|| false,
                 )
                 .map(VaultActionResult::ImportPreview),
@@ -542,7 +556,15 @@ impl VaultBackend for VaultTuiBackend {
                 dry_run,
             } => self
                 .preview_onepassword_import(
-                    env_file, item, out_env, replace, overwrite, dry_run, cancelled,
+                    OnePasswordPreviewRequest {
+                        env_file,
+                        item,
+                        out_env,
+                        replace,
+                        overwrite,
+                        dry_run,
+                    },
+                    cancelled,
                 )
                 .map(VaultActionResult::ImportPreview),
             VaultAction::CommitOnePasswordImport {
