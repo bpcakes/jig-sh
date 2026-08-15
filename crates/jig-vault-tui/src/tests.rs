@@ -805,7 +805,7 @@ fn undersized_viewport_owns_input_until_the_full_ui_is_visible() {
 }
 
 #[test]
-fn undersized_viewport_cannot_submit_a_hidden_deletion() {
+fn deletion_submission_requires_its_visible_modal_layout() {
     let mut app = browsing_app();
     app.focus = Focus::Fields;
     app.begin_delete();
@@ -818,12 +818,55 @@ fn undersized_viewport_cannot_submit_a_hidden_deletion() {
     assert!(matches!(
         dispatch_event(
             &mut app,
-            ViewportSize::new(40, 8),
+            ViewportSize::new(46, 12),
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         ),
         RuntimeAction::Ignore
     ));
     assert!(matches!(app.screen, Screen::ConfirmDelete(_)));
+
+    let backend = TestBackend::new(46, 12);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let constrained = terminal.backend().to_string();
+    assert!(
+        constrained.contains("Permanent deletion needs more room"),
+        "{constrained}"
+    );
+    assert!(constrained.contains("required: 80x24"), "{constrained}");
+    assert!(!constrained.contains("Enter delete"), "{constrained}");
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let visible = terminal.backend().to_string();
+    assert!(visible.contains("Confirmation"), "{visible}");
+    assert!(visible.contains("Enter delete"), "{visible}");
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(80, 24),
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        ),
+        RuntimeAction::Start(_)
+    ));
+}
+
+#[test]
+fn constrained_modal_keeps_escape_available_as_a_safe_exit() {
+    let mut app = browsing_app();
+    app.focus = Focus::Fields;
+    app.begin_delete();
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(46, 12),
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        ),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(app.screen, Screen::Browse));
 }
 
 #[test]
@@ -903,8 +946,12 @@ fn minimum_size_message_is_actionable() {
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
 
-    assert!(rendered.contains("Terminal too small"), "{rendered}");
-    assert!(rendered.contains("press q"), "{rendered}");
+    assert!(
+        rendered.contains("Vault browser needs more room"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("required: 46x12"), "{rendered}");
+    assert!(rendered.contains("q exits"), "{rendered}");
 }
 
 #[test]
@@ -2107,6 +2154,86 @@ fn onepassword_form_previews_metadata_before_exact_commit_confirmation() {
 }
 
 #[test]
+fn import_preview_keeps_confirmation_visible_with_long_wrapped_metadata() {
+    let mut app = browsing_app();
+    let rows = (0..12)
+        .map(|index| ImportPreviewRow {
+            variable: format!("VERY_LONG_VARIABLE_{}_FIELD_{index:02}", "X".repeat(80)),
+            reference: format!("jig://Production/FIELD_{index:02}")
+                .parse()
+                .unwrap(),
+            change: if index == 0 {
+                ImportFieldChange::Replace {
+                    previous_kind: FieldKind::Concealed,
+                    kind: FieldKind::Text,
+                }
+            } else {
+                ImportFieldChange::Create {
+                    kind: FieldKind::Concealed,
+                }
+            },
+        })
+        .collect();
+    let deep_path = format!("/tmp/{}/source.env", "nested/".repeat(40));
+    app.apply_import_preview(ImportPreview {
+        env_file: PathBuf::from(&deep_path),
+        item: "jig://Production".parse().unwrap(),
+        out_env: PathBuf::from(format!("{deep_path}.generated")),
+        replace: true,
+        overwrite: true,
+        authorization: ImportPreviewAuthorization::Commit(ImportPlanToken::generate()),
+        rows,
+        destination_exists: true,
+    });
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(46, 12),
+            Event::Paste("IMPORT TEXT".to_owned())
+        ),
+        RuntimeAction::Ignore
+    ));
+    let Screen::ImportPreview(preview) = &app.screen else {
+        panic!("expected import preview");
+    };
+    assert!(preview.confirmation.is_empty());
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(80, 24),
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        ),
+        RuntimeAction::Redraw
+    ));
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Type IMPORT TEXT"), "{rendered}");
+    assert!(rendered.contains("Enter commit"), "{rendered}");
+    assert!(rendered.contains("additional fields"), "{rendered}");
+
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(80, 24),
+            Event::Paste("IMPORT TEXT".to_owned())
+        ),
+        RuntimeAction::Redraw
+    ));
+    assert!(matches!(
+        dispatch_event(
+            &mut app,
+            ViewportSize::new(80, 24),
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        ),
+        RuntimeAction::Start(_)
+    ));
+}
+
+#[test]
 fn import_redaction_downgrade_requires_specific_confirmation() {
     let mut app = browsing_app();
     app.apply_import_preview(ImportPreview {
@@ -2141,7 +2268,10 @@ fn import_redaction_downgrade_requires_specific_confirmation() {
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("concealed → text"), "{rendered}");
-    assert!(rendered.contains("redaction needles"), "{rendered}");
+    assert!(
+        rendered.contains("output redaction will be disabled"),
+        "{rendered}"
+    );
     assert!(rendered.contains("Type IMPORT TEXT"), "{rendered}");
 
     handle_paste(&mut app, "IMPORT");

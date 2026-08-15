@@ -6,6 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     ImportFieldChange, VaultHomeState,
@@ -20,7 +21,7 @@ use crate::{
     },
     quick_access::{QuickAccess, QuickAccessTarget},
     tools::{BackupFocus, ExportFocus, ImportFocus, PassphraseFocus, RestoreFocus, ToolForm},
-    viewport::{ViewportSize, ratatui_viewport},
+    viewport::{ScreenLayout, ViewportSize, ratatui_viewport, screen_layout},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -32,19 +33,9 @@ const WIDE_WIDTH: u16 = 104;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let (area, viewport) = ratatui_viewport(frame.area());
-    if !viewport.supports_full_ui() {
-        frame.render_widget(
-            Paragraph::new(format!(
-                "Terminal too small: {}x{}.\nVault TUI needs at least {}x{}.\nResize, or press q to exit.",
-                viewport.width(),
-                viewport.height(),
-                ViewportSize::MIN_WIDTH,
-                ViewportSize::MIN_HEIGHT,
-            ))
-            .block(panel("Jig Vault"))
-            .wrap(Wrap { trim: true }),
-            area,
-        );
+    let layout = screen_layout(&app.screen);
+    if !viewport.supports(layout) {
+        draw_resize_required(frame, area, viewport, layout);
         return;
     }
 
@@ -85,7 +76,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             match &app.screen {
                 Screen::Help => draw_help(frame, centered_rect(82, 82, area), app),
                 Screen::ConfirmMigration => {
-                    draw_migration_confirmation(frame, centered_rect(72, 42, area));
+                    draw_migration_confirmation(frame, centered_rect(72, 56, area));
                 }
                 Screen::Form(form) => {
                     draw_management_form(frame, centered_rect(78, 68, area), app, form);
@@ -93,13 +84,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                 Screen::ConfirmMutation(confirmation) => {
                     draw_mutation_confirmation(
                         frame,
-                        centered_rect(78, 54, area),
+                        centered_rect(86, 76, area),
                         app,
                         confirmation,
                     );
                 }
                 Screen::ConfirmDelete(confirmation) => {
-                    draw_delete_confirmation(frame, centered_rect(78, 52, area), app, confirmation);
+                    draw_delete_confirmation(frame, centered_rect(86, 76, area), app, confirmation);
                 }
                 Screen::Commands(palette) => {
                     draw_command_palette(frame, centered_rect(84, 76, area), app, palette)
@@ -120,12 +111,41 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
                     draw_audit_result(frame, centered_rect(72, 48, area), verification);
                 }
                 Screen::ConfirmPeek(confirmation) => {
-                    draw_peek_confirmation(frame, centered_rect(82, 58, area), app, confirmation);
+                    draw_peek_confirmation(frame, centered_rect(86, 82, area), app, confirmation);
                 }
                 _ => {}
             }
         }
     }
+}
+
+fn draw_resize_required(
+    frame: &mut Frame,
+    area: Rect,
+    viewport: ViewportSize,
+    layout: ScreenLayout,
+) {
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!("{} needs more room", layout.label()),
+                Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!(
+                "Current {}x{} · required: {}x{}",
+                viewport.width(),
+                viewport.height(),
+                layout.width(),
+                layout.height(),
+            )),
+            Line::from("Inputs are paused; resize to continue."),
+            Line::from("q exits · Esc closes when available"),
+        ])
+        .alignment(Alignment::Center)
+        .block(panel("Jig Vault · resize required"))
+        .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn draw_missing(frame: &mut Frame, area: Rect, app: &App) {
@@ -179,7 +199,7 @@ fn draw_locked(frame: &mut Frame, area: Rect, app: &App, input: String) {
             Line::from(input),
             Line::from(""),
             Line::from(Span::styled(
-                "Input is protected; only bullets and byte count are rendered.",
+                "Only protected bullets and a byte count are shown.",
                 Style::default().fg(MUTED),
             )),
             Line::from("Enter unlock   Ctrl-U clear   Esc quit"),
@@ -213,10 +233,10 @@ fn draw_initialize(
             Line::from(confirmation),
             Line::from(""),
             Line::from(Span::styled(
-                "Use at least 12 bytes. This process keeps the credential only while unlocked.",
+                "Use 12+ bytes; held only while this vault is unlocked.",
                 Style::default().fg(MUTED),
             )),
-            Line::from("Tab switch field   Enter create   Esc cancel   Ctrl-U clear"),
+            Line::from("Tab field · Enter create · Esc cancel · Ctrl-U clear"),
         ])
         .alignment(Alignment::Center)
         .block(panel("Initialize encrypted vault"))
@@ -238,7 +258,7 @@ fn draw_loading(frame: &mut Frame, area: Rect, app: &App, label: &str) {
         .alignment(Alignment::Center)
         .block(panel("Jig Vault"))
         .wrap(Wrap { trim: true }),
-        centered_rect(72, 34, area),
+        centered_rect(72, 50, area),
     );
 }
 
@@ -802,10 +822,10 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
     };
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Tab switch field   Space toggle kind   Enter save   Esc cancel   Ctrl-U clear",
+        "Tab field · Space toggle · Enter save · Esc cancel",
     ));
     lines.push(Line::from(
-        "←/→ cursor   Home/End   Ctrl-←/→ words   Backspace/Delete edit   Ctrl-W delete word",
+        "Arrows move · Ctrl-arrows word · Ctrl-W delete · Ctrl-U clear",
     ));
     if let Some(status) = &app.status {
         lines.push(Line::from(""));
@@ -843,7 +863,7 @@ fn draw_mutation_confirmation(
                     Style::default().fg(WARN).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                key_value("Reference", &reference.to_string()),
+                key_value_clipped("Reference", &reference.to_string(), area.width),
                 Line::from(""),
                 Line::from("This clears the current value; the existing value was not loaded."),
             ];
@@ -867,7 +887,7 @@ fn draw_mutation_confirmation(
                     Style::default().fg(WARN).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                key_value("Reference", &reference.to_string()),
+                key_value_clipped("Reference", &reference.to_string(), area.width),
                 Line::from("The value remains encrypted at rest."),
                 Line::from(Span::styled(
                     "Text fields are not output-redaction needles and may appear unmasked in command output.",
@@ -943,13 +963,13 @@ fn draw_peek_confirmation(
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        key_value("Reference", &confirmation.reference.to_string()),
-        Line::from("The value bypasses Ratatui and is escaped as terminal-safe text."),
+        key_value_clipped("Reference", &confirmation.reference.to_string(), area.width),
+        Line::from("The escaped value is written outside Ratatui."),
         Line::from(Span::styled(
-            "Terminal scrollback, multiplexers, remote sessions, and screen recording are external sinks.",
+            "Scrollback, multiplexers, and recordings may capture it.",
             Style::default().fg(WARN),
         )),
-        Line::from("The preview is bounded and is cleared after one key or ten seconds."),
+        Line::from("It clears after one key or ten seconds."),
         Line::from(""),
         Line::from("Type PEEK exactly to accept this disclosure:"),
         editor_value_line("Confirmation", &confirmation.input, true, area.width),
@@ -1188,7 +1208,7 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
         } => (
             "Export field to private file",
             vec![
-                key_value("Reference", &reference.to_string()),
+                key_value_clipped("Reference", &reference.to_string(), area.width),
                 editor_value_line(
                     "Output file",
                     output,
@@ -1332,10 +1352,10 @@ fn draw_tool_form(frame: &mut Frame, area: Rect, app: &App, form: &ToolForm) {
     };
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Tab switch field   Space toggle option   Enter continue   Esc cancel   Ctrl-U clear",
+        "Tab field · Space toggle · Enter continue · Esc cancel",
     ));
     lines.push(Line::from(
-        "←/→ cursor   Home/End   Ctrl-←/→ words   Backspace/Delete edit   Ctrl-W delete word",
+        "Arrows move · Ctrl-arrows word · Ctrl-W delete · Ctrl-U clear",
     ));
     append_status(&mut lines, app);
     frame.render_widget(
@@ -1350,17 +1370,32 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
     frame.render_widget(Clear, area);
     let preview = &state.preview;
     let has_redaction_downgrade = preview.has_redaction_downgrade();
-    let reserved_rows = if has_redaction_downgrade { 15 } else { 13 };
-    let max_rows = usize::from(area.height.saturating_sub(reserved_rows));
+    let content_rows = usize::from(area.height.saturating_sub(2));
+    let fixed_rows =
+        10 + usize::from(has_redaction_downgrade) * 2 + usize::from(app.status.is_some()) * 2;
+    let row_budget = content_rows.saturating_sub(fixed_rows);
+    let visible_rows = if preview.rows.len() > row_budget {
+        row_budget.saturating_sub(1)
+    } else {
+        preview.rows.len()
+    };
     let mut lines = vec![
-        key_value("Source", &preview.env_file.to_string_lossy()),
-        key_value("Item", &format!("jig://{}", preview.item.as_str())),
-        key_value("Destination", &preview.out_env.to_string_lossy()),
+        key_value_clipped("Source", &preview.env_file.to_string_lossy(), area.width),
+        key_value_clipped(
+            "Item",
+            &format!("jig://{}", preview.item.as_str()),
+            area.width,
+        ),
+        key_value_clipped(
+            "Destination",
+            &preview.out_env.to_string_lossy(),
+            area.width,
+        ),
         toggle_line("Replace fields (r)", preview.replace, false),
         toggle_line("Overwrite file (o)", preview.overwrite, false),
         Line::from(""),
     ];
-    for row in preview.rows.iter().take(max_rows) {
+    for row in preview.rows.iter().take(visible_rows) {
         let change = match row.change {
             ImportFieldChange::Create { kind } => {
                 format!("[{}]  create", kind_label(kind))
@@ -1374,39 +1409,37 @@ fn draw_import_preview(frame: &mut Frame, area: Rect, app: &App, state: &ImportP
                 kind_label(kind)
             ),
         };
-        lines.push(Line::from(format!(
-            "{} → {}  {}",
-            sanitize_text(&row.variable),
-            sanitize_text(&row.reference.to_string()),
-            change
-        )));
+        lines.push(clipped_line(
+            &format!("{} → {}  {change}", row.variable, row.reference),
+            area.width,
+        ));
     }
-    if preview.rows.len() > max_rows {
+    if row_budget > 0 && preview.rows.len() > visible_rows {
         lines.push(Line::from(Span::styled(
-            format!("… {} additional fields", preview.rows.len() - max_rows),
+            format!("… {} additional fields", preview.rows.len() - visible_rows),
             Style::default().fg(MUTED),
         )));
     }
     lines.push(Line::from(""));
     if has_redaction_downgrade {
         lines.push(Line::from(Span::styled(
-            "Redaction downgrade: concealed fields will become text.",
+            "Concealed → text: output redaction will be disabled.",
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            "Text fields are not output-redaction needles and may appear unmasked in command output.",
+            "The affected value may appear unmasked in command output.",
             Style::default().fg(WARN),
         )));
     }
     if preview.is_dry_run() {
         lines.push(Line::from(Span::styled(
-            "Dry run: no 1Password values were resolved and no files or fields will change.",
+            "Dry run: no 1Password values were resolved and nothing changed.",
             Style::default().fg(GOOD),
         )));
         lines.push(Line::from("Enter finish dry run   Esc close"));
     } else {
         lines.push(Line::from(Span::styled(
-            "Commit will invoke `op`, atomically import fields, then install the private dotenv file.",
+            "Commit resolves `op`, updates the vault, then writes the private .env.",
             Style::default().fg(WARN),
         )));
         lines.push(editor_value_line(
@@ -1670,6 +1703,50 @@ fn key_value(key: &str, value: &str) -> Line<'static> {
         Span::styled(format!("{key}: "), Style::default().fg(MUTED)),
         Span::raw(sanitize_text(value)),
     ])
+}
+
+fn key_value_clipped(key: &str, value: &str, area_width: u16) -> Line<'static> {
+    let prefix = format!("{key}: ");
+    let available = content_width(area_width).saturating_sub(prefix.width());
+    Line::from(vec![
+        Span::styled(prefix, Style::default().fg(MUTED)),
+        Span::raw(fit_text(value, available)),
+    ])
+}
+
+fn clipped_line(value: &str, area_width: u16) -> Line<'static> {
+    Line::from(fit_text(value, content_width(area_width)))
+}
+
+fn content_width(area_width: u16) -> usize {
+    usize::from(area_width.saturating_sub(2))
+}
+
+fn fit_text(value: &str, max_width: usize) -> String {
+    let value = sanitize_text(value);
+    if value.width() <= max_width {
+        return value;
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_owned();
+    }
+
+    let retained_width = max_width - 1;
+    let mut output = String::new();
+    let mut width = 0_usize;
+    for character in value.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if width.saturating_add(character_width) > retained_width {
+            break;
+        }
+        output.push(character);
+        width += character_width;
+    }
+    output.push('…');
+    output
 }
 
 fn focus_style(focused: bool) -> Style {

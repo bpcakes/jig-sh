@@ -16,7 +16,7 @@ use crate::{
     model::{App, Focus, Screen},
     peek::{PEEK_BEGIN_MARKER, PEEK_END_MARKER, TerminalSafePreviewWriter},
     render,
-    viewport::{ViewportSize, ratatui_viewport},
+    viewport::{ViewportSize, ratatui_viewport, screen_layout},
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -134,25 +134,28 @@ pub(crate) fn run(
 }
 
 pub(crate) fn dispatch_event(app: &mut App, viewport: ViewportSize, input: Event) -> RuntimeAction {
+    let screen_is_visible = viewport.supports(screen_layout(&app.screen));
     match input {
         Event::Resize(_, _) => RuntimeAction::Redraw,
         Event::Key(key) if is_actionable_key(key) => {
-            if viewport.supports_full_ui() {
+            if screen_is_visible {
                 handle_key(app, key)
             } else {
-                handle_undersized_key(key)
+                handle_constrained_key(app, key)
             }
         }
-        Event::Paste(value) if viewport.supports_full_ui() => handle_paste(app, &value),
+        Event::Paste(value) if screen_is_visible => handle_paste(app, &value),
         _ => RuntimeAction::Ignore,
     }
 }
 
-fn handle_undersized_key(key: KeyEvent) -> RuntimeAction {
+fn handle_constrained_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
     if key.code == KeyCode::Char('q') && key.modifiers.is_empty()
         || key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
     {
         RuntimeAction::Quit
+    } else if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+        handle_key(app, key)
     } else {
         RuntimeAction::Ignore
     }
