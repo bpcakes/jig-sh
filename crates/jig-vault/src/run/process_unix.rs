@@ -10,6 +10,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result as AnyResult, anyhow, bail};
+use jig_owned_process::unix::{
+    ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, WaitidClassificationError,
+    classify_waitid_status, waitid_without_reaping,
+};
+#[cfg(target_os = "macos")]
+use jig_owned_process::unix::{
+    MacosProcessGroupSnapshotError,
+    macos_process_group_contains_only_pinned_leader as shared_macos_process_group_contains_only_pinned_leader,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::process::{
@@ -41,13 +50,13 @@ pub(super) fn spawn_brokered_process(command: &mut Command) -> io::Result<Broker
             "brokered process identifier is not representable",
         ));
     };
-    if process_group <= 0 {
+    let Ok(process_group) = ProcessGroupId::new(process_group) else {
         let deadline = Instant::now().checked_add(BROKERED_PROCESS_CLEANUP_TIMEOUT);
         terminate_spawn_failure_child(&mut child, deadline);
         return Err(io::Error::other(
             "brokered process identifier was not positive",
         ));
-    }
+    };
     Ok(BrokeredProcess {
         child,
         process_group: Some(PinnedUnixProcessGroup { id: process_group }),
@@ -71,63 +80,37 @@ pub(super) fn observe_brokered_leader(
             ))
         };
     };
-    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: information is writable siginfo_t storage, id names our direct
-    // child, and WNOWAIT preserves the wait status so that child continues to
-    // pin this process-group generation until cleanup.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            process_group.id as _,
-            information.as_mut_ptr(),
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if result == 0 {
-        // SAFETY: successful waitid initialized information.
-        let information = unsafe { information.assume_init() };
-        // SAFETY: waitid populated the SIGCHLD union member.
-        let observed_pid = unsafe { information.si_pid() };
-        if observed_pid == 0 {
+    let status = match waitid_without_reaping(process_group.id) {
+        Ok(status) => status,
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => {
             return Ok(LeaderObservation::Running);
         }
-        return classify_waitid_leader_observation(
-            process_group.id,
-            observed_pid,
-            information.si_code,
-        );
-    }
-    let error = io::Error::last_os_error();
-    if error.kind() == io::ErrorKind::Interrupted {
-        return Ok(LeaderObservation::Running);
-    }
-    update_unix_process_group_after_wait_error(&mut process.process_group, &error);
-    Err(error)
+        Err(error) => {
+            update_unix_process_group_after_wait_error(&mut process.process_group, &error);
+            return Err(error);
+        }
+    };
+    classify_waitid_status(process_group.id, status)
+        .map(|observation| match observation {
+            UnreapedChildObservation::Running => LeaderObservation::Running,
+            UnreapedChildObservation::Exited(_) => LeaderObservation::Exited,
+        })
+        .map_err(brokered_waitid_classification_error)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn classify_waitid_leader_observation(
-    expected_pid: libc::pid_t,
-    observed_pid: libc::pid_t,
-    code: libc::c_int,
-) -> io::Result<LeaderObservation> {
-    if observed_pid == 0 {
-        return Ok(LeaderObservation::Running);
-    }
-    if observed_pid != expected_pid {
-        return Err(io::Error::other(format!(
+fn brokered_waitid_classification_error(error: WaitidClassificationError) -> io::Error {
+    match error {
+        WaitidClassificationError::UnexpectedPid {
+            observed: observed_pid,
+            ..
+        } => io::Error::other(format!(
             "waitid observed unexpected brokered child PID {observed_pid}"
-        )));
-    }
-    match code {
-        libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED => Ok(LeaderObservation::Exited),
-        libc::CLD_STOPPED | libc::CLD_TRAPPED | libc::CLD_CONTINUED => {
-            Ok(LeaderObservation::Running)
-        }
-        _ => Err(io::Error::new(
+        )),
+        WaitidClassificationError::UnexpectedCode(code) => io::Error::new(
             io::ErrorKind::InvalidData,
             format!("waitid returned unrecognized brokered child state code {code}"),
-        )),
+        ),
     }
 }
 
@@ -166,7 +149,7 @@ pub(super) fn signal_pinned_unix_process_group(
         process,
         expected_group,
         deadline,
-        |process| process.process_group.map(|group| group.id),
+        |process| process.process_group.map(|group| group.id.as_raw()),
         BrokeredProcess::observe_leader,
         Instant::now,
         |_, process_group| {
@@ -191,7 +174,7 @@ pub(super) fn kill_pinned_unix_process_leader(
         process,
         expected_group,
         deadline,
-        |process| process.process_group.map(|group| group.id),
+        |process| process.process_group.map(|group| group.id.as_raw()),
         BrokeredProcess::observe_leader,
         Instant::now,
         |process, _| process.child.kill(),
@@ -258,7 +241,8 @@ pub(super) fn terminate_brokered_process_tree(
     deadline: Instant,
 ) -> AnyResult<()> {
     let group = with_pinned_unix_process_group(process.process_group.as_ref(), Ok)?;
-    let signal_result = match signal_pinned_unix_process_group(process, group.id, deadline) {
+    let signal_result = match signal_pinned_unix_process_group(process, group.id.as_raw(), deadline)
+    {
         Ok(()) => Ok(()),
         Err(error) => {
             if error.raw_os_error() == Some(libc::ESRCH) {
@@ -277,7 +261,7 @@ pub(super) fn terminate_brokered_process_tree(
                     // either observation or confirmation fails.
                     let observation = process.observe_leader();
                     match resolve_macos_group_signal_eperm(error, observation, || {
-                        confirm_unix_process_group_quiescent(process, group.id, deadline)
+                        confirm_unix_process_group_quiescent(process, group.id.as_raw(), deadline)
                     })? {
                         None => return Ok(()),
                         Some(error) => error,
@@ -296,7 +280,8 @@ pub(super) fn terminate_brokered_process_tree(
             // still pins the PID. It cannot establish descendant cleanup, so
             // retain the group error as context unless the platform-specific
             // confirmation subsequently proves the whole group quiescent.
-            if let Err(direct_error) = kill_pinned_unix_process_leader(process, group.id, deadline)
+            if let Err(direct_error) =
+                kill_pinned_unix_process_leader(process, group.id.as_raw(), deadline)
             {
                 bail!(
                     "process-group SIGKILL failed: {group_error}; direct child SIGKILL also failed: {direct_error}"
@@ -305,7 +290,7 @@ pub(super) fn terminate_brokered_process_tree(
             Some(group_error)
         }
     };
-    let confirmation = confirm_unix_process_group_quiescent(process, group.id, deadline);
+    let confirmation = confirm_unix_process_group_quiescent(process, group.id.as_raw(), deadline);
     finish_unix_process_group_termination(signal_error, confirmation)
 }
 
@@ -335,16 +320,14 @@ pub(super) fn confirm_unix_process_group_quiescent_with<T>(
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> AnyResult<()> {
-    if required_quiescent_proofs == 0 {
-        bail!("brokered process-group confirmation requires at least one proof");
-    }
+    let mut quiescence = ConsecutiveQuiescence::new(required_quiescent_proofs)
+        .map_err(|_| anyhow!("brokered process-group confirmation requires at least one proof"))?;
 
     let timeout_error = || {
         anyhow!(
             "brokered process group {process_group} retained additional or unverified members through its cleanup deadline"
         )
     };
-    let mut consecutive_quiescent_proofs = 0_u8;
     let mut retained_signal_error = None;
     loop {
         if deadline
@@ -392,13 +375,8 @@ pub(super) fn confirm_unix_process_group_quiescent_with<T>(
                 Err(timeout_error()),
             );
         }
-        if quiescent {
-            consecutive_quiescent_proofs += 1;
-            if consecutive_quiescent_proofs == required_quiescent_proofs {
-                return Ok(());
-            }
-        } else {
-            consecutive_quiescent_proofs = 0;
+        if quiescence.observe(quiescent) {
+            return Ok(());
         }
 
         let Some(remaining) = deadline.checked_duration_since(now()) else {
@@ -447,12 +425,12 @@ pub(super) fn confirm_unix_process_group_quiescent(
             signal_pinned_unix_process_group,
             |process, expected_group, deadline| {
                 with_pinned_unix_process_group(process.process_group.as_ref(), |group| {
-                    if group.id == expected_group {
+                    if group.id.as_raw() == expected_group {
                         Ok(())
                     } else {
                         Err(io::Error::other(format!(
                             "brokered process-group identity changed from {expected_group} to {}",
-                            group.id
+                            group.id.as_raw()
                         )))
                     }
                 })?;
@@ -494,51 +472,30 @@ pub(super) fn confirm_unix_process_group_quiescent(
 pub(super) fn macos_process_group_contains_only_pinned_leader(
     process_group: libc::pid_t,
 ) -> AnyResult<bool> {
-    let mut members = [0 as libc::pid_t; 2];
-    let buffer_size = i32::try_from(std::mem::size_of_val(&members))
-        .map_err(|_| anyhow!("macOS process-group snapshot buffer size was not representable"))?;
-    // SAFETY: members is writable storage for exactly two pid_t values and the
-    // byte count describes that complete live buffer. libproc returns a PID
-    // count; a count of two may mean two or more members because the kernel
-    // deliberately caps collection at the supplied capacity.
-    let count =
-        unsafe { libc::proc_listpgrppids(process_group, members.as_mut_ptr().cast(), buffer_size) };
-    if count <= 0 {
-        let error = io::Error::last_os_error();
-        bail!("failed to atomically list brokered process group {process_group} members: {error}");
-    }
-    classify_macos_process_group_snapshot(process_group, count, members)
-}
-
-#[cfg(any(target_os = "macos", test))]
-pub(super) fn classify_macos_process_group_snapshot(
-    process_group: i32,
-    count: i32,
-    members: [i32; 2],
-) -> AnyResult<bool> {
-    if process_group <= 0 {
-        bail!("macOS process-group snapshot used a non-positive pinned leader");
-    }
-    let count = usize::try_from(count)
-        .map_err(|_| anyhow!("macOS process-group snapshot returned a negative member count"))?;
-    if count == 0 || count > members.len() {
-        bail!("macOS process-group snapshot returned an untrusted member count of {count}");
-    }
-    let observed = &members[..count];
-    if observed.iter().any(|pid| *pid <= 0) {
-        bail!("macOS process-group snapshot returned a non-positive member identifier");
-    }
-    if count == members.len() {
-        // The kernel scans live allproc entries before zombies and caps its
-        // output at this buffer. Two positive PIDs therefore means "at least
-        // two members"; the pinned zombie need not be among the returned pair.
-        return Ok(false);
-    }
-    let leader_count = observed.iter().filter(|pid| **pid == process_group).count();
-    if leader_count != 1 {
-        bail!(
-            "macOS process-group snapshot did not contain exactly one pinned leader {process_group}"
-        );
-    }
-    Ok(count == 1)
+    let process_group = ProcessGroupId::new(process_group)
+        .map_err(|_| anyhow!("macOS process-group snapshot used a non-positive pinned leader"))?;
+    shared_macos_process_group_contains_only_pinned_leader(process_group).map_err(|error| {
+        match error {
+            MacosProcessGroupSnapshotError::BufferSize => {
+                anyhow!("macOS process-group snapshot buffer size was not representable")
+            }
+            MacosProcessGroupSnapshotError::List(error) => anyhow!(
+                "failed to atomically list brokered process group {} members: {error}",
+                process_group.as_raw()
+            ),
+            MacosProcessGroupSnapshotError::NegativeMemberCount => {
+                anyhow!("macOS process-group snapshot returned a negative member count")
+            }
+            MacosProcessGroupSnapshotError::UntrustedMemberCount(count) => anyhow!(
+                "macOS process-group snapshot returned an untrusted member count of {count}"
+            ),
+            MacosProcessGroupSnapshotError::NonPositiveMember => {
+                anyhow!("macOS process-group snapshot returned a non-positive member identifier")
+            }
+            MacosProcessGroupSnapshotError::MissingPinnedLeader(_) => anyhow!(
+                "macOS process-group snapshot did not contain exactly one pinned leader {}",
+                process_group.as_raw()
+            ),
+        }
+    })
 }

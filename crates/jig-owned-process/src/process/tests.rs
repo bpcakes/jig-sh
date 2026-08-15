@@ -194,41 +194,6 @@ fn owned_process_output_capture_does_not_wait_for_an_escaped_pipe_owner() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn owned_process_waitid_observer_accepts_only_the_exact_terminal_child() {
-    for code in [libc::CLD_EXITED, libc::CLD_KILLED, libc::CLD_DUMPED] {
-        assert_eq!(
-            classify_owned_process_waitid_observation(73, 73, code).unwrap(),
-            OwnedProcessObservation::Exited
-        );
-    }
-    for code in [libc::CLD_STOPPED, libc::CLD_TRAPPED, libc::CLD_CONTINUED] {
-        assert_eq!(
-            classify_owned_process_waitid_observation(73, 73, code).unwrap(),
-            OwnedProcessObservation::Running
-        );
-    }
-    assert_eq!(
-        classify_owned_process_waitid_observation(73, 0, i32::MAX).unwrap(),
-        OwnedProcessObservation::Running
-    );
-    assert!(classify_owned_process_waitid_observation(73, 74, libc::CLD_EXITED).is_err());
-    assert!(classify_owned_process_waitid_observation(73, 73, i32::MAX).is_err());
-}
-
-#[test]
-fn macos_owned_process_snapshot_requires_the_exact_sole_pinned_leader() {
-    assert!(classify_macos_process_group_snapshot(73, 1, [73, 0]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [73, 74]).unwrap());
-    assert!(!classify_macos_process_group_snapshot(73, 2, [74, 75]).unwrap());
-    assert!(classify_macos_process_group_snapshot(73, 1, [74, 0]).is_err());
-    assert!(classify_macos_process_group_snapshot(73, 1, [0, 0]).is_err());
-    assert!(classify_macos_process_group_snapshot(0, 1, [73, 0]).is_err());
-    assert!(classify_macos_process_group_snapshot(73, 0, [0, 0]).is_err());
-    assert!(classify_macos_process_group_snapshot(73, 3, [73, 74]).is_err());
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
 fn owned_process_group_confirmation_resignals_before_retrying_an_inconclusive_proof() {
     #[derive(Default)]
     struct InjectedCleanup {
@@ -628,10 +593,17 @@ fn owned_process_tree_failure_uses_one_direct_fallback_and_retains_the_primary_e
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let mut process = spawn_owned_process(&mut command).unwrap();
-    process.process_group = Some(PinnedProcessGroup { id: -1 });
 
-    let first = process.terminate_and_reap().unwrap_err().to_string();
-    assert!(first.contains("identity is not positive"), "{first}");
+    let first = process
+        .terminate_and_reap_with(|_, _| {
+            Err(std::io::Error::other("injected owned process-tree failure"))
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(
+        first.contains("injected owned process-tree failure"),
+        "{first}"
+    );
     assert!(process.cleanup_finalized);
     assert!(!process.cleanup_complete);
     assert!(process.reaped_status.is_some());
@@ -708,7 +680,10 @@ fn owned_process_cleanup_is_bounded_and_requires_pinned_identity() {
     );
     // SAFETY: the test deliberately hid this still-pinned group from the
     // supervisor and retains its exact original identifier for teardown.
-    assert_eq!(unsafe { libc::kill(-process_group.id, libc::SIGKILL) }, 0);
+    assert_eq!(
+        unsafe { libc::kill(-process_group.id.as_raw(), libc::SIGKILL) },
+        0
+    );
     process.child.wait().unwrap();
 }
 
@@ -796,7 +771,10 @@ fn owned_process_wait_errors_only_release_identity_after_echild() {
     );
     // SAFETY: this is the exact original process group whose identity the
     // test removed artificially; terminate it solely for test teardown.
-    assert_eq!(unsafe { libc::kill(-process_group.id, libc::SIGKILL) }, 0);
+    assert_eq!(
+        unsafe { libc::kill(-process_group.id.as_raw(), libc::SIGKILL) },
+        0
+    );
     process.child.wait().unwrap();
 }
 

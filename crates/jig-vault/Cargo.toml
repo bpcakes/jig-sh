@@ -34,6 +34,7 @@ fs4.workspace = true
 getrandom.workspace = true
 hkdf.workspace = true
 hmac.workspace = true
+jig-owned-process.workspace = true
 secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true

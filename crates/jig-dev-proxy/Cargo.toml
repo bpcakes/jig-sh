@@ -28,6 +28,7 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 jig-core.workspace = true
+jig-owned-process.workspace = true
 libc.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
