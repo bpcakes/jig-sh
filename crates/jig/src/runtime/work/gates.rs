@@ -7,9 +7,10 @@ use crate::cancellation::ensure_status_collection_active;
 use crate::command::{WorkEvidenceRequest, WorkGatesRequest};
 use crate::context::{RepoContext, WorkGate};
 use crate::state::{
-    PlanStatus, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptStatus,
-    current_worktree_fingerprint, current_worktree_fingerprint_with_cancellation,
-    ensure_plan_exists, ensure_plan_exists_with_cancellation, open_plan_summaries,
+    PlanStatus, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptEvidence,
+    WorkReviewReceiptStatus, current_worktree_fingerprint,
+    current_worktree_fingerprint_with_cancellation, ensure_plan_exists,
+    ensure_plan_exists_with_cancellation, open_plan_summaries,
     open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
     work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
 };
@@ -33,6 +34,380 @@ impl GateCollection<'_> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GateOutcome {
+    Passed,
+    Missing,
+    Failed,
+    InvalidOutput,
+    Stale,
+    Unknown,
+    Unsupported,
+}
+
+impl GateOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Missing => "missing",
+            Self::Failed => "failed",
+            Self::InvalidOutput => "invalid_output",
+            Self::Stale => "stale",
+            Self::Unknown => "unknown",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    const fn with_freshness(self, freshness: GateFreshness) -> Self {
+        if matches!(self, Self::Passed) {
+            freshness.as_gate_outcome()
+        } else {
+            self
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GateFreshness {
+    Fresh,
+    Missing,
+    Stale,
+    Unknown,
+}
+
+impl GateFreshness {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Missing => "missing",
+            Self::Stale => "stale",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    const fn as_gate_outcome(self) -> GateOutcome {
+        match self {
+            Self::Fresh => GateOutcome::Passed,
+            Self::Missing => GateOutcome::Missing,
+            Self::Stale => GateOutcome::Stale,
+            Self::Unknown => GateOutcome::Unknown,
+        }
+    }
+
+    fn reason<T: GateReceiptView>(
+        self,
+        receipt: Option<&T>,
+        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+    ) -> &'static str {
+        match self {
+            Self::Fresh => "receipt matches current worktree fingerprint",
+            Self::Missing => "no receipt exists for this gate",
+            Self::Stale => "receipt was recorded for a different worktree fingerprint",
+            Self::Unknown
+                if receipt
+                    .and_then(GateReceiptView::worktree_fingerprint)
+                    .is_none() =>
+            {
+                "receipt did not record a worktree fingerprint"
+            }
+            Self::Unknown if current_fingerprint.fingerprint.is_none() => {
+                "current worktree fingerprint could not be collected"
+            }
+            Self::Unknown => "worktree freshness could not be determined",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EvaluatedReceipt {
+    receipt_id: Option<String>,
+    freshness_receipt_id: Option<String>,
+    exit_status: Option<i32>,
+    ended_at_ms: Option<u64>,
+    freshness: GateFreshness,
+    freshness_reason: &'static str,
+    changed_paths: Vec<String>,
+    changed_path_count: usize,
+    changed_paths_truncated: bool,
+    changed_paths_digest: Option<String>,
+    diff_summary: Option<String>,
+    receipt_worktree_fingerprint_error: Option<String>,
+    current_worktree_fingerprint_error: Option<String>,
+}
+
+impl EvaluatedReceipt {
+    fn new<T: GateReceiptView>(
+        receipt: Option<&T>,
+        freshness_receipt: Option<&T>,
+        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+    ) -> Self {
+        let freshness = gate_freshness(freshness_receipt, current_fingerprint);
+        let freshness_reason = freshness.reason(freshness_receipt, current_fingerprint);
+        let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
+            gate_changed_paths(freshness_receipt);
+        Self {
+            receipt_id: receipt.map(|receipt| receipt.receipt_id().to_string()),
+            freshness_receipt_id: freshness_receipt.map(|receipt| receipt.receipt_id().to_string()),
+            exit_status: receipt.map(GateReceiptView::exit_status),
+            ended_at_ms: receipt.map(GateReceiptView::ended_at_ms),
+            freshness,
+            freshness_reason,
+            changed_paths,
+            changed_path_count,
+            changed_paths_truncated,
+            changed_paths_digest,
+            diff_summary: freshness_receipt.map(|receipt| receipt.diff_summary().to_string()),
+            receipt_worktree_fingerprint_error: freshness_receipt
+                .and_then(GateReceiptView::worktree_fingerprint_error)
+                .map(str::to_string),
+            current_worktree_fingerprint_error: current_fingerprint.error.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CheckGateEvaluation {
+    id: String,
+    required: bool,
+    tool: String,
+    outcome: GateOutcome,
+    receipt: EvaluatedReceipt,
+}
+
+#[derive(Clone, Debug)]
+struct ReviewGateEvaluation {
+    id: String,
+    required: bool,
+    skill: String,
+    outcome: GateOutcome,
+    receipt: EvaluatedReceipt,
+    evidence: Option<WorkReviewReceiptEvidence>,
+}
+
+#[derive(Clone, Debug)]
+struct UnsupportedGateEvaluation {
+    id: String,
+    required: bool,
+    kind: String,
+}
+
+#[derive(Clone, Debug)]
+enum GateEvaluation {
+    Check(CheckGateEvaluation),
+    CodexReview(ReviewGateEvaluation),
+    Unsupported(UnsupportedGateEvaluation),
+}
+
+impl GateEvaluation {
+    fn id(&self) -> &str {
+        match self {
+            Self::Check(gate) => &gate.id,
+            Self::CodexReview(gate) => &gate.id,
+            Self::Unsupported(gate) => &gate.id,
+        }
+    }
+
+    const fn required(&self) -> bool {
+        match self {
+            Self::Check(gate) => gate.required,
+            Self::CodexReview(gate) => gate.required,
+            Self::Unsupported(gate) => gate.required,
+        }
+    }
+
+    const fn outcome(&self) -> GateOutcome {
+        match self {
+            Self::Check(gate) => gate.outcome,
+            Self::CodexReview(gate) => gate.outcome,
+            Self::Unsupported(_) => GateOutcome::Unsupported,
+        }
+    }
+
+    fn unsupported_label(&self) -> String {
+        match self {
+            Self::Unsupported(gate) => format!("{} (kind: {})", gate.id, gate.kind),
+            _ => self.id().to_string(),
+        }
+    }
+
+    fn receipt(&self) -> Option<&EvaluatedReceipt> {
+        match self {
+            Self::Check(gate) => Some(&gate.receipt),
+            Self::CodexReview(gate) => Some(&gate.receipt),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    fn evidence_key(&self) -> Option<String> {
+        match self {
+            Self::Check(gate) => Some(format!("tool:{}", gate.tool)),
+            Self::CodexReview(gate) => Some(format!("gate:{}", gate.id)),
+            Self::Unsupported(_) => None,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        match self {
+            Self::Check(gate) => {
+                let receipt = &gate.receipt;
+                json!({
+                    "id": gate.id,
+                    "kind": "check",
+                    "required": gate.required,
+                    "tool": gate.tool,
+                    "status": gate.outcome.as_str(),
+                    "receipt_id": receipt.receipt_id,
+                    "freshness_receipt_id": receipt.freshness_receipt_id,
+                    "exit_status": receipt.exit_status,
+                    "ended_at_ms": receipt.ended_at_ms,
+                    "freshness": receipt.freshness.as_str(),
+                    "freshness_reason": receipt.freshness_reason,
+                    "changed_paths": receipt.changed_paths,
+                    "changed_path_count": receipt.changed_path_count,
+                    "changed_paths_truncated": receipt.changed_paths_truncated,
+                    "changed_paths_digest": receipt.changed_paths_digest,
+                    "diff_summary": receipt.diff_summary,
+                    "receipt_worktree_fingerprint_error": receipt.receipt_worktree_fingerprint_error,
+                    "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
+                })
+            }
+            Self::CodexReview(gate) => {
+                let receipt = &gate.receipt;
+                let evidence = gate.evidence.as_ref();
+                json!({
+                    "id": gate.id,
+                    "kind": "codex_review",
+                    "required": gate.required,
+                    "skill": gate.skill,
+                    "status": gate.outcome.as_str(),
+                    "receipt_id": receipt.receipt_id,
+                    "exit_status": receipt.exit_status,
+                    "ended_at_ms": receipt.ended_at_ms,
+                    "freshness": receipt.freshness.as_str(),
+                    "freshness_reason": receipt.freshness_reason,
+                    "changed_paths": receipt.changed_paths,
+                    "changed_path_count": receipt.changed_path_count,
+                    "changed_paths_truncated": receipt.changed_paths_truncated,
+                    "changed_paths_digest": receipt.changed_paths_digest,
+                    "diff_summary": receipt.diff_summary,
+                    "finding_count": evidence.and_then(|evidence| evidence.finding_count),
+                    "actionable_count": evidence.and_then(|evidence| evidence.actionable_count),
+                    "retained_finding_count": evidence.and_then(|evidence| evidence.retained_finding_count),
+                    "retained_actionable_count": evidence.and_then(|evidence| evidence.retained_actionable_count),
+                    "findings_truncated": evidence.and_then(|evidence| evidence.findings_truncated),
+                    "actionable_findings_truncated": evidence.and_then(|evidence| evidence.actionable_findings_truncated),
+                    "threshold": evidence.and_then(|evidence| evidence.threshold.as_deref()),
+                    "parse_error": evidence.and_then(WorkReviewReceiptEvidence::parse_error),
+                    "receipt_worktree_fingerprint_error": receipt.receipt_worktree_fingerprint_error,
+                    "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
+                })
+            }
+            Self::Unsupported(gate) => json!({
+                "id": gate.id,
+                "kind": gate.kind,
+                "required": gate.required,
+                "status": GateOutcome::Unsupported.as_str(),
+            }),
+        }
+    }
+
+    fn to_latest_evidence(&self) -> Option<Value> {
+        let receipt = self.receipt()?;
+        if receipt.exit_status != Some(0) {
+            return None;
+        }
+        let (tool, skill, freshness_receipt_id) = match self {
+            Self::Check(gate) => (
+                Some(gate.tool.as_str()),
+                None,
+                receipt.freshness_receipt_id.as_deref(),
+            ),
+            // Review gate JSON intentionally has no freshness_receipt_id field;
+            // the legacy evidence projection therefore exposed null here.
+            Self::CodexReview(gate) => (None, Some(gate.skill.as_str()), None),
+            Self::Unsupported(_) => return None,
+        };
+        Some(json!({
+            "tool": tool,
+            "skill": skill,
+            "gate_id": self.id(),
+            "status": self.outcome().as_str(),
+            "receipt_id": receipt.receipt_id,
+            "freshness_receipt_id": freshness_receipt_id,
+            "matches_current_worktree": receipt.freshness == GateFreshness::Fresh,
+            "freshness": receipt.freshness.as_str(),
+            "freshness_reason": receipt.freshness_reason,
+            "changed_paths": receipt.changed_paths,
+            "changed_path_count": receipt.changed_path_count,
+            "changed_paths_truncated": receipt.changed_paths_truncated,
+            "changed_paths_digest": receipt.changed_paths_digest,
+            "diff_summary": receipt.diff_summary,
+            "ended_at_ms": receipt.ended_at_ms.unwrap_or(0),
+        }))
+    }
+}
+
+struct GateReport {
+    plan_id: String,
+    plan_state: &'static str,
+    current_worktree_fingerprint: Option<String>,
+    current_worktree_fingerprint_error: Option<String>,
+    gates: Vec<GateEvaluation>,
+    required_failures: RequiredGateFailures,
+}
+
+impl GateReport {
+    fn gates_ok(&self) -> bool {
+        self.required_failures.is_empty()
+    }
+
+    fn to_value(&self) -> Value {
+        let gates_ok = self.gates_ok();
+        json!({
+            "ok": true,
+            "gates_ok": gates_ok,
+            "plan_id": self.plan_id,
+            "plan_state": self.plan_state,
+            "overall": if gates_ok { "passed" } else { "blocked" },
+            "current_worktree_fingerprint": self.current_worktree_fingerprint,
+            "current_worktree_fingerprint_error": self.current_worktree_fingerprint_error,
+            "gates": self.gates.iter().map(GateEvaluation::to_value).collect::<Vec<_>>(),
+            "missing_required": self.required_failures.missing,
+            "failed_required": self.required_failures.failed,
+            "stale_required": self.required_failures.stale,
+            "unknown_required": self.required_failures.unknown,
+            "unsupported_required": self.required_failures.unsupported,
+        })
+    }
+
+    fn fingerprint_errors(&self) -> Vec<String> {
+        self.gates
+            .iter()
+            .filter_map(|gate| {
+                let receipt = gate.receipt()?;
+                match (
+                    receipt.current_worktree_fingerprint_error.as_deref(),
+                    receipt.receipt_worktree_fingerprint_error.as_deref(),
+                ) {
+                    (None, None) => None,
+                    (Some(current), None) => {
+                        Some(format!("{}: current={}", gate.id(), concise_error(current)))
+                    }
+                    (None, Some(receipt)) => {
+                        Some(format!("{}: receipt={}", gate.id(), concise_error(receipt)))
+                    }
+                    (Some(current), Some(receipt)) => Some(format!(
+                        "{}: current={}, receipt={}",
+                        gate.id(),
+                        concise_error(current),
+                        concise_error(receipt)
+                    )),
+                }
+            })
+            .collect()
+    }
+}
+
 #[derive(Default)]
 struct RequiredGateFailures {
     missing: Vec<String>,
@@ -51,29 +426,27 @@ impl RequiredGateFailures {
             && self.unsupported.is_empty()
     }
 
-    // A declared unsupported gate and an unrecognized future status both block as
-    // unsupported, but retaining the named arm documents the stable wire value.
-    #[allow(clippy::match_same_arms)]
-    fn observe(&mut self, gate: &WorkGate, status: &Value) {
+    fn observe(&mut self, gate: &GateEvaluation) {
         if !gate.required() {
             return;
         }
 
-        match status["status"].as_str() {
-            Some("passed") => {}
-            Some("missing") => self.missing.push(gate.id().to_string()),
-            Some("failed" | "invalid_output") => self.failed.push(gate.id().to_string()),
-            Some("stale") => self.stale.push(gate.id().to_string()),
-            Some("unknown") => self.unknown.push(gate.id().to_string()),
-            Some("unsupported") => self.unsupported.push(unsupported_gate_label(gate, status)),
-            _ => self.unsupported.push(unsupported_gate_label(gate, status)),
+        match gate.outcome() {
+            GateOutcome::Passed => {}
+            GateOutcome::Missing => self.missing.push(gate.id().to_string()),
+            GateOutcome::Failed | GateOutcome::InvalidOutput => {
+                self.failed.push(gate.id().to_string());
+            }
+            GateOutcome::Stale => self.stale.push(gate.id().to_string()),
+            GateOutcome::Unknown => self.unknown.push(gate.id().to_string()),
+            GateOutcome::Unsupported => self.unsupported.push(gate.unsupported_label()),
         }
     }
 }
 
 pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    gate_status(ctx, &plan_id)
+    Ok(gate_report(ctx, &plan_id)?.to_value())
 }
 
 pub(super) fn snapshot_with_cancellation(
@@ -84,13 +457,14 @@ pub(super) fn snapshot_with_cancellation(
     ensure_gate_collection_active(cancelled)?;
     let plan_id = resolve_work_plan_id_with_cancellation(ctx, plan_id, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
-    gate_status_with_cancellation(ctx, &plan_id, cancelled)
+    Ok(gate_report_with_cancellation(ctx, &plan_id, cancelled)?.to_value())
 }
 
 pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
-    let mut status = gate_status(ctx, &plan_id)?;
-    let latest = latest_passing_gates(&status);
+    let report = gate_report(ctx, &plan_id)?;
+    let latest = latest_passing_gates(&report);
+    let mut status = report.to_value();
     let object = status
         .as_object_mut()
         .ok_or_else(|| anyhow!("work gate status was not a JSON object"))?;
@@ -100,17 +474,13 @@ pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<V
 }
 
 pub(super) fn ensure_required_gates_passed(ctx: &RepoContext, plan_id: &str) -> Result<()> {
-    let status = gate_status(ctx, plan_id)?;
-    if status["overall"] == "passed" {
+    let report = gate_report(ctx, plan_id)?;
+    if report.gates_ok() {
         return Ok(());
     }
 
-    let missing = gate_list(&status, "missing_required");
-    let failed = gate_list(&status, "failed_required");
-    let stale = gate_list(&status, "stale_required");
-    let unknown = gate_list(&status, "unknown_required");
-    let unsupported = gate_list(&status, "unsupported_required");
-    let fingerprint_errors = gate_fingerprint_errors(&status);
+    let failures = &report.required_failures;
+    let fingerprint_errors = report.fingerprint_errors();
     let fingerprint_error_details = if fingerprint_errors.is_empty() {
         String::new()
     } else {
@@ -119,18 +489,18 @@ pub(super) fn ensure_required_gates_passed(ctx: &RepoContext, plan_id: &str) -> 
 
     bail!(
         "Required work gates are not satisfied for plan {plan_id}. Missing: [{}]. Failed: [{}]. Stale: [{}]. Unknown: [{}]. Unsupported: [{}].{} Run `scripts/jig work gates --plan-id {plan_id}` for details.",
-        missing.join(", "),
-        failed.join(", "),
-        stale.join(", "),
-        unknown.join(", "),
-        unsupported.join(", "),
+        failures.missing.join(", "),
+        failures.failed.join(", "),
+        failures.stale.join(", "),
+        failures.unknown.join(", "),
+        failures.unsupported.join(", "),
         fingerprint_error_details,
     )
 }
 
-fn gate_status(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
+fn gate_report(ctx: &RepoContext, plan_id: &str) -> Result<GateReport> {
     let plan_state = resolve_plan_state(ctx, plan_id)?;
-    gate_status_with_current_fingerprint(
+    evaluate_gate_report(
         ctx,
         plan_id,
         plan_state,
@@ -139,17 +509,17 @@ fn gate_status(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
     )
 }
 
-fn gate_status_with_cancellation(
+fn gate_report_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
+) -> Result<GateReport> {
     ensure_gate_collection_active(cancelled)?;
     let plan_state = resolve_plan_state_with_cancellation(ctx, plan_id, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
     let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
     ensure_gate_collection_active(cancelled)?;
-    gate_status_with_current_fingerprint(
+    evaluate_gate_report(
         ctx,
         plan_id,
         plan_state,
@@ -158,13 +528,13 @@ fn gate_status_with_cancellation(
     )
 }
 
-fn gate_status_with_current_fingerprint(
+fn evaluate_gate_report(
     ctx: &RepoContext,
     plan_id: &str,
     plan_state: &'static str,
     current_fingerprint: crate::state::CurrentWorktreeFingerprint,
     collection: GateCollection<'_>,
-) -> Result<Value> {
+) -> Result<GateReport> {
     collection.ensure_active()?;
     let work_gates = ctx.work_gates();
     let mut check_tools = BTreeSet::new();
@@ -202,30 +572,21 @@ fn gate_status_with_current_fingerprint(
 
     for gate in work_gates {
         collection.ensure_active()?;
-        let status = gate_status_value(&gate, &current_fingerprint, &receipt_index, collection)?;
+        let status = evaluate_gate(&gate, &current_fingerprint, &receipt_index, collection)?;
         collection.ensure_active()?;
-        required_failures.observe(&gate, &status);
+        required_failures.observe(&status);
         gates.push(status);
     }
     collection.ensure_active()?;
 
-    let gates_ok = required_failures.is_empty();
-
-    Ok(json!({
-        "ok": true,
-        "gates_ok": gates_ok,
-        "plan_id": plan_id,
-        "plan_state": plan_state,
-        "overall": if gates_ok { "passed" } else { "blocked" },
-        "current_worktree_fingerprint": current_fingerprint.fingerprint.as_deref(),
-        "current_worktree_fingerprint_error": current_fingerprint.error.as_deref(),
-        "gates": gates,
-        "missing_required": required_failures.missing,
-        "failed_required": required_failures.failed,
-        "stale_required": required_failures.stale,
-        "unknown_required": required_failures.unknown,
-        "unsupported_required": required_failures.unsupported,
-    }))
+    Ok(GateReport {
+        plan_id: plan_id.to_string(),
+        plan_state,
+        current_worktree_fingerprint: current_fingerprint.fingerprint,
+        current_worktree_fingerprint_error: current_fingerprint.error,
+        gates,
+        required_failures,
+    })
 }
 
 fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> {
@@ -294,44 +655,25 @@ fn ensure_gate_collection_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
     ensure_status_collection_active(cancelled)
 }
 
-fn latest_passing_gates(status: &Value) -> Vec<Value> {
+fn latest_passing_gates(report: &GateReport) -> Vec<Value> {
     let mut latest = BTreeMap::<String, (u64, Value)>::new();
-    let gates = status["gates"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    for gate in gates {
-        if gate["exit_status"].as_i64() != Some(0) {
-            continue;
-        }
-        let evidence_key = gate["tool"]
-            .as_str()
-            .map(|tool| format!("tool:{tool}"))
-            .or_else(|| gate["id"].as_str().map(|id| format!("gate:{id}")));
-        let Some(evidence_key) = evidence_key else {
+    for gate in &report.gates {
+        let Some(evidence_key) = gate.evidence_key() else {
             continue;
         };
-        let gate_id = gate["id"].as_str().unwrap_or("<unknown>").to_string();
-        let ended_at_ms = gate["ended_at_ms"].as_u64().unwrap_or(0);
-        let value = json!({
-            "tool": gate["tool"],
-            "skill": gate["skill"],
-            "gate_id": gate["id"],
-            "status": gate["status"],
-            "receipt_id": gate["receipt_id"],
-            "freshness_receipt_id": gate["freshness_receipt_id"],
-            "matches_current_worktree": gate["freshness"].as_str() == Some("fresh"),
-            "freshness": gate["freshness"],
-            "freshness_reason": gate["freshness_reason"],
-            "changed_paths": gate["changed_paths"],
-            "changed_path_count": gate["changed_path_count"],
-            "changed_paths_truncated": gate["changed_paths_truncated"],
-            "changed_paths_digest": gate["changed_paths_digest"],
-            "diff_summary": gate["diff_summary"],
-            "ended_at_ms": ended_at_ms,
-        });
+        let Some(value) = gate.to_latest_evidence() else {
+            continue;
+        };
+        let gate_id = gate.id();
+        let ended_at_ms = gate
+            .receipt()
+            .and_then(|receipt| receipt.ended_at_ms)
+            .unwrap_or(0);
         match latest.get(&evidence_key) {
             Some((existing_ended_at_ms, _)) if *existing_ended_at_ms > ended_at_ms => {}
             Some((existing_ended_at_ms, existing))
                 if *existing_ended_at_ms == ended_at_ms
-                    && existing["gate_id"].as_str().unwrap_or("") >= gate_id.as_str() => {}
+                    && existing["gate_id"].as_str().unwrap_or("") >= gate_id => {}
             // Replace when this receipt is newer, or when the timestamp ties
             // and the gate id sorts after the current winner.
             _ => {
@@ -342,12 +684,12 @@ fn latest_passing_gates(status: &Value) -> Vec<Value> {
     latest.into_values().map(|(_, value)| value).collect()
 }
 
-fn gate_status_value(
+fn evaluate_gate(
     gate: &WorkGate,
     current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
     receipt_index: &WorkGateReceiptIndex,
     collection: GateCollection<'_>,
-) -> Result<Value> {
+) -> Result<GateEvaluation> {
     collection.ensure_active()?;
     match gate {
         WorkGate::Check(gate) => {
@@ -368,47 +710,23 @@ fn gate_status_value(
                 }
                 _ => receipt.clone(),
             };
-            let freshness = gate_freshness(&freshness_receipt, current_fingerprint);
-            let freshness_reason =
-                gate_freshness_reason(&freshness_receipt, current_fingerprint, freshness);
-            let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
-                gate_changed_paths(freshness_receipt.as_ref());
-            let status = match &receipt {
-                Some(receipt) if receipt.exit_status == 0 => "passed",
-                Some(_) => "failed",
-                None => "missing",
-            };
-            let status = if status == "passed" && freshness != "fresh" {
-                freshness
-            } else {
-                status
+            let evaluated_receipt = EvaluatedReceipt::new(
+                receipt.as_ref(),
+                freshness_receipt.as_ref(),
+                current_fingerprint,
+            );
+            let outcome = match &receipt {
+                Some(receipt) if receipt.exit_status == 0 => GateOutcome::Passed,
+                Some(_) => GateOutcome::Failed,
+                None => GateOutcome::Missing,
             };
 
-            Ok(json!({
-                "id": gate.id,
-                "kind": "check",
-                "required": gate.required,
-                "tool": tool_name,
-                "status": status,
-                "receipt_id": receipt.as_ref().map(|receipt| receipt.receipt_id.as_str()),
-                "freshness_receipt_id": freshness_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.receipt_id.as_str()),
-                "exit_status": receipt.as_ref().map(|receipt| receipt.exit_status),
-                "ended_at_ms": receipt.as_ref().map(|receipt| receipt.ended_at_ms),
-                "freshness": freshness,
-                "freshness_reason": freshness_reason,
-                "changed_paths": changed_paths,
-                "changed_path_count": changed_path_count,
-                "changed_paths_truncated": changed_paths_truncated,
-                "changed_paths_digest": changed_paths_digest,
-                "diff_summary": freshness_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.diff_summary.as_str()),
-                "receipt_worktree_fingerprint_error": freshness_receipt
-                    .as_ref()
-                    .and_then(|receipt| receipt.worktree_fingerprint_error.as_deref()),
-                "current_worktree_fingerprint_error": current_fingerprint.error.as_deref(),
+            Ok(GateEvaluation::Check(CheckGateEvaluation {
+                id: gate.id.clone(),
+                required: gate.required,
+                tool: tool_name.to_string(),
+                outcome: outcome.with_freshness(evaluated_receipt.freshness),
+                receipt: evaluated_receipt,
             }))
         }
         WorkGate::CodexReview(gate) => {
@@ -416,75 +734,61 @@ fn gate_status_value(
             collection.ensure_active()?;
             let receipt = receipt_index.review_receipt(&gate.id).cloned();
             collection.ensure_active()?;
-            let freshness = gate_freshness(&receipt, current_fingerprint);
-            let freshness_reason = gate_freshness_reason(&receipt, current_fingerprint, freshness);
-            let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
-                gate_changed_paths(receipt.as_ref());
             let evidence = receipt
                 .as_ref()
                 .and_then(|receipt| receipt.evidence.as_ref());
             let evidence_status = evidence.and_then(|evidence| evidence.status.as_deref());
-            let status = match &receipt {
-                Some(receipt) if receipt.exit_status == 0 => "passed",
-                Some(_) if evidence_status == Some("invalid_output") => "invalid_output",
-                Some(_) => "failed",
-                None => "missing",
+            let outcome = match &receipt {
+                Some(receipt) if receipt.exit_status == 0 => GateOutcome::Passed,
+                Some(_) if evidence_status == Some("invalid_output") => GateOutcome::InvalidOutput,
+                Some(_) => GateOutcome::Failed,
+                None => GateOutcome::Missing,
             };
-            let status = if status == "passed" && freshness != "fresh" {
-                freshness
-            } else {
-                status
-            };
-            Ok(json!({
-                "id": gate.id,
-                "kind": "codex_review",
-                "required": gate.required,
-                "skill": skill,
-                "status": status,
-                "receipt_id": receipt.as_ref().map(|receipt| receipt.receipt_id.as_str()),
-                "exit_status": receipt.as_ref().map(|receipt| receipt.exit_status),
-                "ended_at_ms": receipt.as_ref().map(|receipt| receipt.ended_at_ms),
-                "freshness": freshness,
-                "freshness_reason": freshness_reason,
-                "changed_paths": changed_paths,
-                "changed_path_count": changed_path_count,
-                "changed_paths_truncated": changed_paths_truncated,
-                "changed_paths_digest": changed_paths_digest,
-                "diff_summary": receipt
-                    .as_ref()
-                    .map(|receipt| receipt.diff_summary.as_str()),
-                "finding_count": evidence.and_then(|evidence| evidence.finding_count),
-                "actionable_count": evidence.and_then(|evidence| evidence.actionable_count),
-                "retained_finding_count": evidence.and_then(|evidence| evidence.retained_finding_count),
-                "retained_actionable_count": evidence.and_then(|evidence| evidence.retained_actionable_count),
-                "findings_truncated": evidence.and_then(|evidence| evidence.findings_truncated),
-                "actionable_findings_truncated": evidence.and_then(|evidence| evidence.actionable_findings_truncated),
-                "threshold": evidence.and_then(|evidence| evidence.threshold.as_deref()),
-                "parse_error": evidence.and_then(|evidence| evidence.parse_error.as_deref()),
-                "receipt_worktree_fingerprint_error": receipt
-                    .as_ref()
-                    .and_then(|receipt| receipt.worktree_fingerprint_error.as_deref()),
-                "current_worktree_fingerprint_error": current_fingerprint.error.as_deref(),
+            let evaluated_receipt =
+                EvaluatedReceipt::new(receipt.as_ref(), receipt.as_ref(), current_fingerprint);
+            Ok(GateEvaluation::CodexReview(ReviewGateEvaluation {
+                id: gate.id.clone(),
+                required: gate.required,
+                skill: skill.to_string(),
+                outcome: outcome.with_freshness(evaluated_receipt.freshness),
+                receipt: evaluated_receipt,
+                evidence: evidence.cloned(),
             }))
         }
-        WorkGate::Unsupported(gate) => Ok(json!({
-            "id": gate.id,
-            "kind": gate.kind,
-            "required": gate.required,
-            "status": "unsupported",
+        WorkGate::Unsupported(gate) => Ok(GateEvaluation::Unsupported(UnsupportedGateEvaluation {
+            id: gate.id.clone(),
+            required: gate.required,
+            kind: gate.kind.clone(),
         })),
     }
 }
 
 trait GateReceiptView {
+    fn receipt_id(&self) -> &str;
+    fn exit_status(&self) -> i32;
+    fn ended_at_ms(&self) -> u64;
     fn changed_paths(&self) -> &[String];
     fn changed_path_count(&self) -> usize;
     fn changed_paths_truncated(&self) -> bool;
     fn changed_paths_digest(&self) -> Option<&str>;
+    fn diff_summary(&self) -> &str;
     fn worktree_fingerprint(&self) -> Option<&str>;
+    fn worktree_fingerprint_error(&self) -> Option<&str>;
 }
 
 impl GateReceiptView for ToolReceiptStatus {
+    fn receipt_id(&self) -> &str {
+        &self.receipt_id
+    }
+
+    fn exit_status(&self) -> i32 {
+        self.exit_status
+    }
+
+    fn ended_at_ms(&self) -> u64 {
+        self.ended_at_ms
+    }
+
     fn changed_paths(&self) -> &[String] {
         &self.changed_paths
     }
@@ -501,12 +805,32 @@ impl GateReceiptView for ToolReceiptStatus {
         self.changed_paths_digest.as_deref()
     }
 
+    fn diff_summary(&self) -> &str {
+        &self.diff_summary
+    }
+
     fn worktree_fingerprint(&self) -> Option<&str> {
         self.worktree_fingerprint.as_deref()
+    }
+
+    fn worktree_fingerprint_error(&self) -> Option<&str> {
+        self.worktree_fingerprint_error.as_deref()
     }
 }
 
 impl GateReceiptView for WorkReviewReceiptStatus {
+    fn receipt_id(&self) -> &str {
+        &self.receipt_id
+    }
+
+    fn exit_status(&self) -> i32 {
+        self.exit_status
+    }
+
+    fn ended_at_ms(&self) -> u64 {
+        self.ended_at_ms
+    }
+
     fn changed_paths(&self) -> &[String] {
         &self.changed_paths
     }
@@ -523,14 +847,22 @@ impl GateReceiptView for WorkReviewReceiptStatus {
         self.changed_paths_digest.as_deref()
     }
 
+    fn diff_summary(&self) -> &str {
+        &self.diff_summary
+    }
+
     fn worktree_fingerprint(&self) -> Option<&str> {
         self.worktree_fingerprint.as_deref()
+    }
+
+    fn worktree_fingerprint_error(&self) -> Option<&str> {
+        self.worktree_fingerprint_error.as_deref()
     }
 }
 
 fn gate_changed_paths<T: GateReceiptView>(
     receipt: Option<&T>,
-) -> (Vec<String>, usize, bool, Option<&str>) {
+) -> (Vec<String>, usize, bool, Option<String>) {
     let Some(receipt) = receipt else {
         return (Vec::new(), 0, false, None);
     };
@@ -545,94 +877,28 @@ fn gate_changed_paths<T: GateReceiptView>(
         paths,
         total,
         receipt.changed_paths_truncated() || total > MAX_GATE_CHANGED_PATHS,
-        receipt.changed_paths_digest(),
-    )
-}
-
-fn unsupported_gate_label(gate: &WorkGate, status: &Value) -> String {
-    status["kind"].as_str().map_or_else(
-        || gate.id().to_string(),
-        |kind| format!("{} (kind: {kind})", gate.id()),
+        receipt.changed_paths_digest().map(str::to_string),
     )
 }
 
 fn gate_freshness<T: GateReceiptView>(
-    receipt: &Option<T>,
+    receipt: Option<&T>,
     current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
-) -> &'static str {
+) -> GateFreshness {
     let Some(receipt) = receipt else {
-        return "missing";
+        return GateFreshness::Missing;
     };
     let Some(receipt_fingerprint) = receipt.worktree_fingerprint() else {
-        return "unknown";
+        return GateFreshness::Unknown;
     };
     let Some(current_fingerprint) = current_fingerprint.fingerprint.as_deref() else {
-        return "unknown";
+        return GateFreshness::Unknown;
     };
     if receipt_fingerprint == current_fingerprint {
-        "fresh"
+        GateFreshness::Fresh
     } else {
-        "stale"
+        GateFreshness::Stale
     }
-}
-
-fn gate_freshness_reason<T: GateReceiptView>(
-    receipt: &Option<T>,
-    current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
-    freshness: &str,
-) -> &'static str {
-    match freshness {
-        "fresh" => "receipt matches current worktree fingerprint",
-        "missing" => "no receipt exists for this gate",
-        "stale" => "receipt was recorded for a different worktree fingerprint",
-        "unknown" => {
-            if receipt
-                .as_ref()
-                .and_then(GateReceiptView::worktree_fingerprint)
-                .is_none()
-            {
-                "receipt did not record a worktree fingerprint"
-            } else if current_fingerprint.fingerprint.is_none() {
-                "current worktree fingerprint could not be collected"
-            } else {
-                "worktree freshness could not be determined"
-            }
-        }
-        _ => "worktree freshness could not be determined",
-    }
-}
-
-fn gate_list(status: &Value, key: &str) -> Vec<String> {
-    status[key]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect()
-}
-
-fn gate_fingerprint_errors(status: &Value) -> Vec<String> {
-    status["gates"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|gate| {
-            let id = gate["id"].as_str()?;
-            let current = gate["current_worktree_fingerprint_error"].as_str();
-            let receipt = gate["receipt_worktree_fingerprint_error"].as_str();
-            match (current, receipt) {
-                (None, None) => None,
-                (Some(current), None) => Some(format!("{id}: current={}", concise_error(current))),
-                (None, Some(receipt)) => Some(format!("{id}: receipt={}", concise_error(receipt))),
-                (Some(current), Some(receipt)) => Some(format!(
-                    "{id}: current={}, receipt={}",
-                    concise_error(current),
-                    concise_error(receipt)
-                )),
-            }
-        })
-        .collect()
 }
 
 fn concise_error(error: &str) -> String {
@@ -652,8 +918,34 @@ fn concise_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{concise_error, latest_passing_gates};
-    use serde_json::json;
+    use super::{
+        CheckGateEvaluation, EvaluatedReceipt, GateEvaluation, GateFreshness, GateOutcome,
+        GateReport, RequiredGateFailures, concise_error, latest_passing_gates,
+    };
+
+    fn passing_check(id: &str, receipt_id: &str) -> GateEvaluation {
+        GateEvaluation::Check(CheckGateEvaluation {
+            id: id.to_string(),
+            required: true,
+            tool: "jig.test".into(),
+            outcome: GateOutcome::Passed,
+            receipt: EvaluatedReceipt {
+                receipt_id: Some(receipt_id.to_string()),
+                freshness_receipt_id: Some(receipt_id.to_string()),
+                exit_status: Some(0),
+                ended_at_ms: Some(42),
+                freshness: GateFreshness::Fresh,
+                freshness_reason: "receipt matches current worktree fingerprint",
+                changed_paths: Vec::new(),
+                changed_path_count: 0,
+                changed_paths_truncated: false,
+                changed_paths_digest: None,
+                diff_summary: None,
+                receipt_worktree_fingerprint_error: None,
+                current_worktree_fingerprint_error: None,
+            },
+        })
+    }
 
     #[test]
     fn concise_error_reserves_room_for_ellipsis() {
@@ -666,45 +958,56 @@ mod tests {
 
     #[test]
     fn latest_passing_gates_uses_gate_id_tie_breaker() {
-        let status = json!({
-            "gates": [
-                {
-                    "id": "alpha",
-                    "tool": "jig.test",
-                    "exit_status": 0,
-                    "status": "passed",
-                    "receipt_id": "receipt-alpha",
-                    "freshness_receipt_id": "receipt-alpha",
-                    "freshness": "fresh",
-                    "freshness_reason": "receipt matches current worktree fingerprint",
-                    "changed_paths": [],
-                    "changed_path_count": 0,
-                    "changed_paths_truncated": false,
-                    "diff_summary": null,
-                    "ended_at_ms": 42,
-                },
-                {
-                    "id": "zeta",
-                    "tool": "jig.test",
-                    "exit_status": 0,
-                    "status": "passed",
-                    "receipt_id": "receipt-zeta",
-                    "freshness_receipt_id": "receipt-zeta",
-                    "freshness": "fresh",
-                    "freshness_reason": "receipt matches current worktree fingerprint",
-                    "changed_paths": [],
-                    "changed_path_count": 0,
-                    "changed_paths_truncated": false,
-                    "diff_summary": null,
-                    "ended_at_ms": 42,
-                }
-            ]
-        });
+        let report = GateReport {
+            plan_id: "plan-test".into(),
+            plan_state: "open",
+            current_worktree_fingerprint: Some("fingerprint".into()),
+            current_worktree_fingerprint_error: None,
+            gates: vec![
+                passing_check("alpha", "receipt-alpha"),
+                passing_check("zeta", "receipt-zeta"),
+            ],
+            required_failures: RequiredGateFailures::default(),
+        };
 
-        let latest = latest_passing_gates(&status);
+        let latest = latest_passing_gates(&report);
 
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0]["gate_id"], "zeta");
         assert_eq!(latest[0]["receipt_id"], "receipt-zeta");
+    }
+
+    #[test]
+    fn gate_outcome_uses_closed_freshness_mapping() {
+        assert_eq!(
+            GateOutcome::Passed
+                .with_freshness(GateFreshness::Fresh)
+                .as_str(),
+            "passed"
+        );
+        assert_eq!(
+            GateOutcome::Passed
+                .with_freshness(GateFreshness::Missing)
+                .as_str(),
+            "missing"
+        );
+        assert_eq!(
+            GateOutcome::Passed
+                .with_freshness(GateFreshness::Stale)
+                .as_str(),
+            "stale"
+        );
+        assert_eq!(
+            GateOutcome::Passed
+                .with_freshness(GateFreshness::Unknown)
+                .as_str(),
+            "unknown"
+        );
+        assert_eq!(
+            GateOutcome::Failed
+                .with_freshness(GateFreshness::Unknown)
+                .as_str(),
+            "failed"
+        );
     }
 }

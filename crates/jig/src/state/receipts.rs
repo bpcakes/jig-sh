@@ -111,7 +111,22 @@ pub(crate) struct WorkReviewReceiptEvidence {
     pub(crate) findings_truncated: Option<bool>,
     pub(crate) actionable_findings_truncated: Option<bool>,
     pub(crate) threshold: Option<String>,
-    pub(crate) parse_error: Option<String>,
+    parse: WorkReviewEvidenceParse,
+}
+
+#[derive(Clone, Debug)]
+enum WorkReviewEvidenceParse {
+    Valid,
+    Invalid(String),
+}
+
+impl WorkReviewReceiptEvidence {
+    pub(crate) fn parse_error(&self) -> Option<&str> {
+        match &self.parse {
+            WorkReviewEvidenceParse::Valid => None,
+            WorkReviewEvidenceParse::Invalid(error) => Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -554,7 +569,10 @@ fn work_review_receipt_evidence(evidence: &Value) -> WorkReviewReceiptEvidence {
         findings_truncated: evidence["findings_truncated"].as_bool(),
         actionable_findings_truncated: evidence["actionable_findings_truncated"].as_bool(),
         threshold: evidence["threshold"].as_str().map(str::to_string),
-        parse_error,
+        parse: parse_error.map_or(
+            WorkReviewEvidenceParse::Valid,
+            WorkReviewEvidenceParse::Invalid,
+        ),
     }
 }
 

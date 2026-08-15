@@ -1,8 +1,6 @@
 #[cfg(any(windows, test))]
 use std::collections::HashMap;
 use std::io;
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 #[cfg(windows)]
@@ -16,6 +14,18 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+#[cfg(any(unix, test))]
+use jig_owned_process::unix::ConsecutiveQuiescence;
+#[cfg(target_os = "macos")]
+use jig_owned_process::unix::{
+    MacosProcessGroupSnapshotError,
+    macos_process_group_contains_only_pinned_leader as shared_macos_process_group_contains_only_pinned_leader,
+};
+#[cfg(all(unix, not(target_os = "redox")))]
+use jig_owned_process::unix::{
+    ProcessGroupId, UnreapedChildObservation, WaitidClassificationError, classify_waitid_status,
+    waitid_without_reaping,
+};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
@@ -266,79 +276,50 @@ pub(super) fn try_wait_preserving_process_group(
 #[cfg(all(unix, not(target_os = "redox")))]
 fn observe_child(child: &mut Child) -> io::Result<ChildObservation> {
     let pid = checked_pid_io(child.id())?;
+    let process_group = ProcessGroupId::new(pid).map_err(|_| {
+        io::Error::other(format!("child PID {} exceeds platform range", child.id()))
+    })?;
     loop {
-        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        // SAFETY: `information` is writable `siginfo_t` storage, `pid` names our
-        // direct child, and WNOWAIT deliberately preserves the wait status so
-        // the zombie leader continues to pin its PID/process-group identity.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid as _,
-                information.as_mut_ptr(),
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == 0 {
-            // SAFETY: successful waitid initialized `information`.
-            let information = unsafe { information.assume_init() };
-            // SAFETY: si_pid/si_status access the SIGCHLD fields populated by
-            // waitid for this direct child.
-            return classify_waitid_child_observation(
-                pid,
-                unsafe { information.si_pid() },
-                information.si_code,
-                unsafe { information.si_status() },
-            );
+        match waitid_without_reaping(process_group) {
+            Ok(status) => {
+                return classify_waitid_status(process_group, status)
+                    .map(|observation| match observation {
+                        UnreapedChildObservation::Running => ChildObservation::Running,
+                        UnreapedChildObservation::Exited(status) => {
+                            ChildObservation::ExitedUnreaped(status)
+                        }
+                    })
+                    .map_err(dev_proxy_waitid_classification_error);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.raw_os_error() == Some(libc::ECHILD) => {
+                // Child caches statuses it reaps itself. If some other SIGCHLD
+                // consumer reaped the leader, propagate ECHILD rather than ever
+                // treating the now-recyclable numeric PID as an owned group.
+                return child
+                    .try_wait()?
+                    .map(ChildObservation::ExitedReaped)
+                    .ok_or(error);
+            }
+            Err(error) => return Err(error),
         }
-
-        let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::Interrupted {
-            continue;
-        }
-        if error.raw_os_error() == Some(libc::ECHILD) {
-            // Child caches statuses it reaps itself. If some other SIGCHLD
-            // consumer reaped the leader, propagate ECHILD rather than ever
-            // treating the now-recyclable numeric PID as an owned group.
-            return child
-                .try_wait()?
-                .map(ChildObservation::ExitedReaped)
-                .ok_or(error);
-        }
-        return Err(error);
     }
 }
 
 #[cfg(all(unix, not(target_os = "redox")))]
-fn classify_waitid_child_observation(
-    expected_pid: libc::pid_t,
-    observed_pid: libc::pid_t,
-    code: libc::c_int,
-    status: libc::c_int,
-) -> io::Result<ChildObservation> {
-    if observed_pid == 0 {
-        return Ok(ChildObservation::Running);
-    }
-    if observed_pid != expected_pid {
-        return Err(io::Error::other(format!(
+fn dev_proxy_waitid_classification_error(error: WaitidClassificationError) -> io::Error {
+    match error {
+        WaitidClassificationError::UnexpectedPid {
+            expected: expected_pid,
+            observed: observed_pid,
+        } => io::Error::other(format!(
             "waitid observed unexpected child PID {observed_pid} instead of {expected_pid}"
-        )));
+        )),
+        WaitidClassificationError::UnexpectedCode(code) => io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("waitid returned unexpected child status code {code}"),
+        ),
     }
-    let raw = match code {
-        libc::CLD_EXITED => status << 8,
-        libc::CLD_KILLED => status,
-        libc::CLD_DUMPED => status | 0x80,
-        libc::CLD_STOPPED | libc::CLD_TRAPPED | libc::CLD_CONTINUED => {
-            return Ok(ChildObservation::Running);
-        }
-        code => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("waitid returned unexpected child status code {code}"),
-            ));
-        }
-    };
-    Ok(ChildObservation::ExitedUnreaped(ExitStatus::from_raw(raw)))
 }
 
 #[cfg(any(not(unix), target_os = "redox"))]
@@ -961,10 +942,9 @@ fn confirm_exited_process_group_not_live_with<T>(
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> Result<()> {
-    if required_empty_proofs == 0 {
-        bail!("child process group {pid} confirmation requires at least one empty proof");
-    }
-    let mut consecutive_empty_proofs = 0_u8;
+    let mut quiescence = ConsecutiveQuiescence::new(required_empty_proofs).map_err(|_| {
+        anyhow!("child process group {pid} confirmation requires at least one empty proof")
+    })?;
     loop {
         let Some(_) = remaining_phase_budget(deadline, now()) else {
             bail!(
@@ -977,17 +957,13 @@ fn confirm_exited_process_group_not_live_with<T>(
                 "child process group {pid} retained live members through its SIGKILL confirmation deadline"
             );
         };
-        if live_members(state, pid, deadline)? {
-            consecutive_empty_proofs = 0;
-        } else {
-            consecutive_empty_proofs += 1;
-        }
+        let quiescent = quiescence.observe(!live_members(state, pid, deadline)?);
         let Some(remaining) = remaining_phase_budget(deadline, now()) else {
             bail!(
                 "child process group {pid} retained live members through its SIGKILL confirmation deadline"
             )
         };
-        if consecutive_empty_proofs == required_empty_proofs {
+        if quiescent {
             return Ok(());
         }
         sleep(remaining.min(Duration::from_millis(10)));
@@ -1184,72 +1160,47 @@ fn classify_macos_group_signal_eperm(quiescence: io::Result<bool>) -> io::Result
 
 #[cfg(target_os = "macos")]
 fn macos_process_group_contains_only_pinned_leader(pid: u32) -> io::Result<bool> {
-    let process_group = checked_pid_io(pid)?;
-    let mut members = [0 as libc::pid_t; 2];
-    let buffer_size = i32::try_from(std::mem::size_of_val(&members))
-        .map_err(|_| io::Error::other("macOS process-group snapshot buffer was too large"))?;
-    // SAFETY: members is writable storage for exactly two pid_t values and
-    // buffer_size describes that complete live buffer. libproc returns a PID
-    // count; a full buffer means at least two members because collection is
-    // deliberately capped at the supplied capacity.
-    let count =
-        unsafe { libc::proc_listpgrppids(process_group, members.as_mut_ptr().cast(), buffer_size) };
-    if count <= 0 {
-        let error = io::Error::last_os_error();
-        return Err(io::Error::new(
-            error.kind(),
-            format!(
-                "failed to atomically list macOS process group {process_group} members: {error}"
-            ),
-        ));
-    }
-    classify_macos_process_group_snapshot(process_group, count, members)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn classify_macos_process_group_snapshot(
-    process_group: i32,
-    count: i32,
-    members: [i32; 2],
-) -> io::Result<bool> {
-    if process_group <= 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "macOS process-group snapshot used a non-positive pinned leader",
-        ));
-    }
-    let count = usize::try_from(count).map_err(|_| {
+    let process_group = ProcessGroupId::new(checked_pid_io(pid)?).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "macOS process-group snapshot returned a negative member count",
+            "macOS process-group snapshot used a non-positive pinned leader",
         )
     })?;
-    if count == 0 || count > members.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("macOS process-group snapshot returned an untrusted member count of {count}"),
-        ));
-    }
-    let observed = &members[..count];
-    if observed.iter().any(|pid| *pid <= 0) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "macOS process-group snapshot returned a non-positive member identifier",
-        ));
-    }
-    if count == members.len() {
-        // XNU scans live allproc entries before zombies and caps the result at
-        // this buffer. Two positive PIDs therefore means "at least two"; the
-        // pinned zombie leader need not appear in the returned pair.
-        return Ok(false);
-    }
-    if observed[0] != process_group {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("macOS process-group snapshot did not contain pinned leader {process_group}"),
-        ));
-    }
-    Ok(true)
+    shared_macos_process_group_contains_only_pinned_leader(process_group).map_err(|error| {
+        match error {
+            MacosProcessGroupSnapshotError::BufferSize => {
+                io::Error::other("macOS process-group snapshot buffer was too large")
+            }
+            MacosProcessGroupSnapshotError::List(error) => io::Error::new(
+                error.kind(),
+                format!(
+                    "failed to atomically list macOS process group {} members: {error}",
+                    process_group.as_raw()
+                ),
+            ),
+            MacosProcessGroupSnapshotError::NegativeMemberCount => io::Error::new(
+                io::ErrorKind::InvalidData,
+                "macOS process-group snapshot returned a negative member count",
+            ),
+            MacosProcessGroupSnapshotError::UntrustedMemberCount(count) => io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "macOS process-group snapshot returned an untrusted member count of {count}"
+                ),
+            ),
+            MacosProcessGroupSnapshotError::NonPositiveMember => io::Error::new(
+                io::ErrorKind::InvalidData,
+                "macOS process-group snapshot returned a non-positive member identifier",
+            ),
+            MacosProcessGroupSnapshotError::MissingPinnedLeader(_) => io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "macOS process-group snapshot did not contain pinned leader {}",
+                    process_group.as_raw()
+                ),
+            ),
+        }
+    })
 }
 
 #[cfg(all(unix, target_os = "linux"))]

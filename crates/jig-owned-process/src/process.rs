@@ -5,6 +5,17 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use wait_timeout::ChildExt;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::unix::{
+    ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, WaitidClassificationError,
+    classify_waitid_status, waitid_without_reaping,
+};
+#[cfg(target_os = "macos")]
+use crate::unix::{
+    MacosProcessGroupSnapshotError,
+    macos_process_group_contains_only_pinned_leader as shared_macos_process_group_contains_only_pinned_leader,
+};
+
 pub mod interaction;
 
 const OWNED_PROCESS_TREE_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
@@ -385,7 +396,7 @@ impl OwnedProcessOutputDrains {
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PinnedProcessGroup {
-    id: libc::pid_t,
+    id: ProcessGroupId,
 }
 
 struct OwnedProcess {
@@ -430,6 +441,13 @@ impl OwnedProcess {
     }
 
     fn terminate_and_reap(&mut self) -> std::io::Result<ExitStatus> {
+        self.terminate_and_reap_with(terminate_owned_process_tree)
+    }
+
+    fn terminate_and_reap_with(
+        &mut self,
+        terminate_tree: impl FnOnce(&mut Self, Instant) -> std::io::Result<()>,
+    ) -> std::io::Result<ExitStatus> {
         if self.cleanup_finalized {
             return if self.cleanup_complete {
                 self.reaped_status.ok_or_else(|| {
@@ -449,7 +467,7 @@ impl OwnedProcess {
         }
 
         let deadline = self.cleanup_deadline();
-        let mut tree_cleanup_error = terminate_owned_process_tree(self, deadline).err();
+        let mut tree_cleanup_error = terminate_tree(self, deadline).err();
         let mut direct_fallback_error = None;
         if tree_cleanup_error.is_some() && self.reaped_status.is_none() {
             direct_fallback_error = terminate_owned_process_fallback(self).err();
@@ -732,7 +750,7 @@ fn spawn_owned_process(command: &mut Command) -> std::io::Result<OwnedProcess> {
 
     command.process_group(0);
     let mut child = command.spawn()?;
-    let Ok(process_group) = libc::pid_t::try_from(child.id()) else {
+    let Ok(process_group) = ProcessGroupId::try_from(child.id()) else {
         let deadline = Instant::now()
             .checked_add(OWNED_PROCESS_TREE_CLEANUP_TIMEOUT)
             .unwrap_or_else(Instant::now);
@@ -765,63 +783,37 @@ fn observe_owned_process(process: &mut OwnedProcess) -> std::io::Result<OwnedPro
     let process_group = process
         .process_group
         .ok_or_else(|| std::io::Error::other("owned process-group identity is no longer pinned"))?;
-    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: `information` is writable storage, the identifier names our
-    // direct child, and WNOWAIT retains its status so the PID continues to pin
-    // this exact process-group generation through cleanup.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            process_group.id as _,
-            information.as_mut_ptr(),
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
+    let status = match waitid_without_reaping(process_group.id) {
+        Ok(status) => status,
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return Ok(OwnedProcessObservation::Running);
+        }
+        Err(error) => {
+            update_owned_process_identity_after_wait_error(process, &error);
+            return Err(error);
+        }
     };
-    if result == 0 {
-        // SAFETY: successful `waitid` initialized the siginfo value and its
-        // SIGCHLD union member.
-        let information = unsafe { information.assume_init() };
-        let observed_pid = unsafe { information.si_pid() };
-        return classify_owned_process_waitid_observation(
-            process_group.id,
-            observed_pid,
-            information.si_code,
-        );
-    }
-
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::Interrupted {
-        return Ok(OwnedProcessObservation::Running);
-    }
-    update_owned_process_identity_after_wait_error(process, &error);
-    Err(error)
+    classify_waitid_status(process_group.id, status)
+        .map(|observation| match observation {
+            UnreapedChildObservation::Running => OwnedProcessObservation::Running,
+            UnreapedChildObservation::Exited(_) => OwnedProcessObservation::Exited,
+        })
+        .map_err(owned_process_waitid_classification_error)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn classify_owned_process_waitid_observation(
-    expected_pid: libc::pid_t,
-    observed_pid: libc::pid_t,
-    code: libc::c_int,
-) -> std::io::Result<OwnedProcessObservation> {
-    if observed_pid == 0 {
-        return Ok(OwnedProcessObservation::Running);
-    }
-    if observed_pid != expected_pid {
-        return Err(std::io::Error::other(format!(
+fn owned_process_waitid_classification_error(error: WaitidClassificationError) -> std::io::Error {
+    match error {
+        WaitidClassificationError::UnexpectedPid {
+            expected: expected_pid,
+            observed: observed_pid,
+        } => std::io::Error::other(format!(
             "waitid observed unexpected owned child PID {observed_pid} instead of {expected_pid}"
-        )));
-    }
-    match code {
-        libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED => {
-            Ok(OwnedProcessObservation::Exited)
-        }
-        libc::CLD_STOPPED | libc::CLD_TRAPPED | libc::CLD_CONTINUED => {
-            Ok(OwnedProcessObservation::Running)
-        }
-        _ => Err(std::io::Error::new(
+        )),
+        WaitidClassificationError::UnexpectedCode(code) => std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("waitid returned an unrecognized owned child state code {code}"),
-        )),
+        ),
     }
 }
 
@@ -836,12 +828,7 @@ fn terminate_owned_process_tree(
             "owned process-group identity is no longer pinned; refusing to signal it",
         )
     })?;
-    if process_group.id <= 0 {
-        return Err(std::io::Error::other(
-            "owned process-group identity is not positive",
-        ));
-    }
-    confirm_process_group_quiescent(process, process_group.id, deadline)
+    confirm_process_group_quiescent(process, process_group.id.as_raw(), deadline)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -861,16 +848,11 @@ fn pinned_process_group_for_retry(
             "owned process-group identity is no longer pinned; refusing to signal it",
         )
     })?;
-    if process_group.id != expected_process_group {
+    if process_group.id.as_raw() != expected_process_group {
         return Err(std::io::Error::other(format!(
             "owned process-group identity changed from pinned group {expected_process_group} to {}",
-            process_group.id
+            process_group.id.as_raw()
         )));
-    }
-    if process_group.id <= 0 {
-        return Err(std::io::Error::other(
-            "owned process-group identity is not positive",
-        ));
     }
     Ok(process_group)
 }
@@ -906,7 +888,7 @@ fn signal_pinned_process_group(
             // SAFETY: the positive group identifier was revalidated after a
             // fresh non-consuming observation of our direct child. Its
             // unconsumed wait status pins this exact process-group generation.
-            if unsafe { libc::kill(-process_group.id, libc::SIGKILL) } == 0 {
+            if unsafe { libc::kill(-process_group.id.as_raw(), libc::SIGKILL) } == 0 {
                 return Ok(ProcessGroupSignalResult::Delivered);
             }
 
@@ -964,14 +946,12 @@ fn confirm_process_group_quiescent_with<T>(
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) -> std::io::Result<()> {
-    if required_consecutive_proofs == 0 {
-        return Err(std::io::Error::new(
+    let mut quiescence = ConsecutiveQuiescence::new(required_consecutive_proofs).map_err(|_| {
+        std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "owned process-group confirmation requires at least one proof",
-        ));
-    }
-
-    let mut consecutive_proofs = 0_u8;
+        )
+    })?;
     loop {
         owned_process_cleanup_remaining_at(deadline, now(), timeout_phase)?;
         // Signal before every proof. A descendant can become visible in this
@@ -983,13 +963,8 @@ fn confirm_process_group_quiescent_with<T>(
         // Never accept a proof that completed outside the original absolute
         // cleanup budget.
         owned_process_cleanup_remaining_at(deadline, now(), "after process-group confirmation")?;
-        if quiescent {
-            consecutive_proofs += 1;
-            if consecutive_proofs == required_consecutive_proofs {
-                return Ok(());
-            }
-        } else {
-            consecutive_proofs = 0;
+        if quiescence.observe(quiescent) {
+            return Ok(());
         }
 
         let remaining = owned_process_cleanup_remaining_at(deadline, now(), timeout_phase)?;
@@ -1052,66 +1027,41 @@ fn confirm_process_group_quiescent(
 fn macos_process_group_contains_only_pinned_leader(
     process_group: libc::pid_t,
 ) -> std::io::Result<bool> {
-    let mut members = [0 as libc::pid_t; 2];
-    let buffer_size = i32::try_from(std::mem::size_of_val(&members)).map_err(|_| {
-        std::io::Error::other("macOS process-group snapshot buffer was not representable")
+    let process_group = ProcessGroupId::new(process_group).map_err(|_| {
+        std::io::Error::other("macOS process-group snapshot used a non-positive pinned leader")
     })?;
-    // SAFETY: `members` is writable storage for two pid_t values and the byte
-    // count describes that full buffer. A full buffer means at least two live
-    // group entries, so collection is intentionally capped at two.
-    let count =
-        unsafe { libc::proc_listpgrppids(process_group, members.as_mut_ptr().cast(), buffer_size) };
-    if count <= 0 {
-        return Err(std::io::Error::other(format!(
-            "failed to atomically list owned process group {process_group}: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    classify_macos_process_group_snapshot(process_group, count, members)
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn classify_macos_process_group_snapshot(
-    process_group: i32,
-    count: i32,
-    members: [i32; 2],
-) -> std::io::Result<bool> {
-    if process_group <= 0 {
-        return Err(std::io::Error::other(
-            "macOS process-group snapshot used a non-positive pinned leader",
-        ));
-    }
-    let count = usize::try_from(count).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "macOS process-group snapshot returned a negative member count",
-        )
-    })?;
-    if count == 0 || count > members.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("macOS process-group snapshot returned an untrusted member count of {count}"),
-        ));
-    }
-    let observed = &members[..count];
-    if observed.iter().any(|pid| *pid <= 0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "macOS process-group snapshot returned a non-positive member identifier",
-        ));
-    }
-    if count == members.len() {
-        return Ok(false);
-    }
-    if observed[0] != process_group {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "macOS process-group snapshot did not contain the exact pinned leader {process_group}"
+    shared_macos_process_group_contains_only_pinned_leader(process_group).map_err(|error| {
+        match error {
+            MacosProcessGroupSnapshotError::BufferSize => {
+                std::io::Error::other("macOS process-group snapshot buffer was not representable")
+            }
+            MacosProcessGroupSnapshotError::List(error) => std::io::Error::other(format!(
+                "failed to atomically list owned process group {}: {error}",
+                process_group.as_raw()
+            )),
+            MacosProcessGroupSnapshotError::NegativeMemberCount => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "macOS process-group snapshot returned a negative member count",
             ),
-        ));
-    }
-    Ok(true)
+            MacosProcessGroupSnapshotError::UntrustedMemberCount(count) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "macOS process-group snapshot returned an untrusted member count of {count}"
+                ),
+            ),
+            MacosProcessGroupSnapshotError::NonPositiveMember => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "macOS process-group snapshot returned a non-positive member identifier",
+            ),
+            MacosProcessGroupSnapshotError::MissingPinnedLeader(_) => std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "macOS process-group snapshot did not contain the exact pinned leader {}",
+                    process_group.as_raw()
+                ),
+            ),
+        }
+    })
 }
 
 #[cfg(target_os = "linux")]
