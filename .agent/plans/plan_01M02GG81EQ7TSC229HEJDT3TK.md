@@ -1,0 +1,1 @@
+Use Fowler-style small steps to centralize safe deletion confirmation policy, make FIFO coverage deterministic, cache prepared Codex home search terms, preserve exact modifier behavior, and commit each independently verified slice.

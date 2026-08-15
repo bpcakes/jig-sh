@@ -14,6 +14,7 @@ members = [
     "crates/jig-typescript",
     "crates/jig-ui",
     "crates/jig-vault",
+    "crates/jig-vault-tui",
 ]
 resolver = "2"
 
@@ -69,11 +70,13 @@ jig-tui = { path = "crates/jig-tui", version = "=0.2.0" }
 jig-typescript = { path = "crates/jig-typescript", version = "=0.2.0" }
 jig-ui = { path = "crates/jig-ui", version = "=0.2.0" }
 jig-vault = { path = "crates/jig-vault", version = "=0.2.0" }
+jig-vault-tui = { path = "crates/jig-vault-tui", version = "=0.2.0" }
 jsonschema = { version = "0.48.5", default-features = false }
 libc = "0.2.177"
 rcgen = { version = "0.14", features = ["x509-parser"] }
 # Ratatui 0.29 is the newest line compatible with the workspace Rust 1.85 floor.
-# Its u32 terminal areas also support buffers larger than 65,535 cells.
+# Its `Rect::area` uses u32, but `Buffer::pos_of` still narrows cell indices to
+# u16 while diffing; TUI render areas must remain at most 65,535 cells.
 ratatui = { version = "=0.29.0", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 # rpassword 7.5.2 uses let-chains that require newer Rust despite its declared
 # MSRV. Keep this exact pin so the workspace remains buildable on Rust 1.85.

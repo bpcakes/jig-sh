@@ -261,6 +261,7 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_help, "project name is never a reference segment");
     assert_help_contains(&vault_help, "Both concealed and text fields are encrypted");
     assert_help_contains(&vault_help, "jig vault init");
+    assert_help_contains(&vault_help, "jig vault tui");
     assert_help_contains(&vault_help, "jig vault migrate --to 2");
     assert_help_contains(
         &vault_help,
@@ -293,6 +294,15 @@ fn vault_help_includes_quick_start_examples() {
     let vault_init_help = rendered_help(&["vault", "init"]);
     assert_help_contains(&vault_init_help, "prompts twice for a new vault passphrase");
     assert_help_contains(&vault_init_help, "jig vault init");
+
+    let vault_tui_help = rendered_help(&["vault", "tui"]);
+    assert_help_contains(&vault_tui_help, "keyboard-first full-screen vault manager");
+    assert_help_contains(&vault_tui_help, "five minutes");
+    assert_help_contains(&vault_tui_help, "terminal-safe escaped");
+    assert_help_contains(&vault_tui_help, "preview after a warning");
+    assert_help_contains(&vault_tui_help, "available only on Unix");
+    assert_help_contains(&vault_tui_help, "There is no clipboard integration");
+    assert_help_contains(&vault_tui_help, "exec, run, and inject");
 
     let vault_secret_set_help = rendered_help(&["vault", "secret", "set"]);
     assert_help_contains(&vault_secret_set_help, "--value-prompt");

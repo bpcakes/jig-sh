@@ -6,7 +6,7 @@ use super::super::{
     VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand, VaultImportOnePasswordOpts,
     VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultPassphraseChangeOpts,
     VaultPassphraseCommand, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
-    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
+    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, VaultTuiOpts,
 };
 
 impl From<VaultCommand> for command::VaultCommand {
@@ -16,6 +16,7 @@ impl From<VaultCommand> for command::VaultCommand {
             VaultCommand::Backup(command) => Self::Backup(command.into()),
             VaultCommand::Init(opts) => Self::Init(opts.into()),
             VaultCommand::Status(opts) => Self::Status(opts.into()),
+            VaultCommand::Tui(opts) => Self::Tui(opts.into()),
             VaultCommand::Migrate(opts) => Self::Migrate(opts.into()),
             VaultCommand::Passphrase(command) => Self::Passphrase(command.into()),
             VaultCommand::Exec(opts) => Self::Exec(opts.into()),
@@ -88,7 +89,7 @@ impl From<VaultImportOnePasswordOpts> for command::VaultImportOnePasswordRequest
         Self {
             env_file: opts.env_file,
             environment: None,
-            destination_exists: None,
+            destination: None,
             item: opts.item,
             out_env: opts.out_env,
             replace: opts.replace,
@@ -150,6 +151,14 @@ impl From<VaultInitOpts> for command::VaultInitRequest {
 
 impl From<VaultStatusOpts> for command::VaultStatusRequest {
     fn from(opts: VaultStatusOpts) -> Self {
+        Self {
+            vault: opts.vault.into(),
+        }
+    }
+}
+
+impl From<VaultTuiOpts> for command::VaultTuiRequest {
+    fn from(opts: VaultTuiOpts) -> Self {
         Self {
             vault: opts.vault.into(),
         }

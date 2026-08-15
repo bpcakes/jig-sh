@@ -11,7 +11,10 @@
 //! interpolation or command substitution syntax is accepted.
 
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -50,6 +53,14 @@ pub(crate) fn parse_vault_env_file(path: &Path) -> Result<VaultExecEnvironment> 
 }
 
 fn parse_vault_env_file_for(path: &Path, operation: EnvOperation) -> Result<VaultExecEnvironment> {
+    parse_vault_env_file_for_with_cancellation(path, operation, &|| false)
+}
+
+fn parse_vault_env_file_for_with_cancellation(
+    path: &Path,
+    operation: EnvOperation,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<VaultExecEnvironment> {
     if path == Path::new("-") {
         match operation {
             EnvOperation::Exec => {
@@ -58,7 +69,7 @@ fn parse_vault_env_file_for(path: &Path, operation: EnvOperation) -> Result<Vaul
             EnvOperation::Import => bail!("vault import env rejects --env-file -"),
         }
     }
-    let bytes = read_bounded_file(path, operation)?;
+    let bytes = read_bounded_file(path, operation, cancelled)?;
     parse_vault_env_bytes_for(bytes.as_slice(), operation)
 }
 
@@ -66,7 +77,16 @@ pub(crate) fn parse_onepassword_env_file(
     path: &Path,
     item: &jig_vault::VaultItem,
 ) -> Result<VaultImportEnvironment> {
-    let environment = parse_vault_env_file_for(path, EnvOperation::Import)?;
+    parse_onepassword_env_file_with_cancellation(path, item, &|| false)
+}
+
+pub(crate) fn parse_onepassword_env_file_with_cancellation(
+    path: &Path,
+    item: &jig_vault::VaultItem,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<VaultImportEnvironment> {
+    let environment =
+        parse_vault_env_file_for_with_cancellation(path, EnvOperation::Import, cancelled)?;
     if environment.assignments.is_empty() {
         bail!("vault import env must contain at least one assignment");
     }
@@ -201,16 +221,21 @@ fn parse_vault_env_bytes_for(
     Ok(VaultExecEnvironment { assignments })
 }
 
-fn read_bounded_file(path: &Path, operation: EnvOperation) -> Result<SecretBytes> {
+fn read_bounded_file(
+    path: &Path,
+    operation: EnvOperation,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SecretBytes> {
     let label = operation.label();
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open {label} file {}", path.display()))?;
+    ensure_env_read_active(label, cancelled)?;
+    let mut file = open_regular_env_file(path, label)?;
     let capacity = MAX_VAULT_ENV_FILE_LEN
         .checked_add(1)
         .expect("vault env file limit leaves room for an overflow byte");
     let mut bytes = SecretBytes::with_capacity(capacity);
     let mut chunk = Zeroizing::new([0_u8; 8 * 1024]);
     loop {
+        ensure_env_read_active(label, cancelled)?;
         let remaining = capacity - bytes.len();
         let chunk_len = remaining.min(chunk.len());
         let read = match file.read(&mut chunk[..chunk_len]) {
@@ -235,6 +260,45 @@ fn read_bounded_file(path: &Path, operation: EnvOperation) -> Result<SecretBytes
         }
     }
     Ok(bytes)
+}
+
+fn open_regular_env_file(path: &Path, label: &str) -> Result<File> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "{label} file {} must not be a symbolic link",
+                path.display()
+            )
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect {label} file {}", path.display()));
+        }
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = options
+        .open(path)
+        .with_context(|| format!("failed to open {label} file {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect opened {label} file {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("{label} file {} must be a regular file", path.display());
+    }
+    Ok(file)
+}
+
+fn ensure_env_read_active(label: &str, cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        bail!("{label} file read was cancelled");
+    }
+    Ok(())
 }
 
 fn decode_value(raw: &[u8]) -> std::result::Result<SecretBytes, &'static str> {
@@ -414,6 +478,13 @@ fn line_number_at(input: &[u8], offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::{
+        ffi::CString,
+        fs::OpenOptions,
+        os::{unix::ffi::OsStrExt, unix::fs::OpenOptionsExt},
+    };
+
     use super::*;
 
     fn literal(assignment: &VaultExecAssignment) -> &[u8] {
@@ -524,6 +595,60 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("inherit stdin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_file_rejects_symlinks_and_nonblocking_fifos() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.env");
+        let link = temp.path().join("source-link.env");
+        std::fs::write(&source, b"MODE=production\n").unwrap();
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        let link_error = parse_vault_env_file(&link).unwrap_err().to_string();
+        assert!(
+            link_error.contains("must not be a symbolic link"),
+            "{link_error}"
+        );
+
+        let fifo = temp.path().join("source.fifo");
+        let fifo_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `fifo_path` is a live NUL-terminated string and the mode
+        // contains only ordinary permission bits.
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+        // Keep both peers open so this regression test remains bounded even if
+        // the subject accidentally drops O_NONBLOCK in the future.
+        let _reader = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+        let _writer = OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+            .unwrap();
+
+        let fifo_error = parse_vault_env_file(&fifo).unwrap_err().to_string();
+        assert!(
+            fifo_error.contains("must be a regular file"),
+            "{fifo_error}"
+        );
+    }
+
+    #[test]
+    fn cancelled_env_read_stops_before_opening_the_path() {
+        let error = parse_onepassword_env_file_with_cancellation(
+            Path::new("missing.env"),
+            &jig_vault::VaultItem::parse("jig://Production").unwrap(),
+            &|| true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(!error.contains("failed to open"), "{error}");
     }
 
     #[test]

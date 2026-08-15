@@ -63,8 +63,9 @@ const VAULT_READ_AFTER_HELP: &str = "\
 Read one encrypted field through a controlled byte-oriented output path. When
 stdout is a terminal, --reveal is required. Piped or redirected stdout receives
 the exact field bytes without an added newline. --out-file writes a private file
-and refuses an existing destination unless --overwrite is explicit. Exact stdout
-is portable; private file sinks are currently Unix-only.
+outside the selected vault home, refuses hard-link aliases of vault.json or
+audit.jsonl, and refuses an existing destination unless --overwrite is explicit.
+Exact stdout is portable; private file sinks are currently Unix-only.
 
 Examples:
   jig vault read jig://Production/RESTIC_PASSWORD | command
@@ -76,7 +77,8 @@ Replace only {{ jig://ITEM/FIELD }} placeholders in a bounded template. Pass
 --in - explicitly to read the template from stdin. When stdout is a terminal,
 --reveal is required. Piped or redirected stdout receives the exact rendered
 bytes without an added newline. --out-file uses the same private-file and
-explicit-overwrite rules as vault read and is currently Unix-only.
+vault-home exclusion, source-alias, and explicit-overwrite rules as vault read;
+it is currently Unix-only.
 
 Examples:
   jig vault inject --in config.template > config
@@ -100,6 +102,9 @@ signs and backticks are always rejected, so interpolation and command
 substitution never run. Use jig://ITEM/FIELD as the entire decoded value to
 bind a vault field.
 
+--env-file must name a non-symlink regular file. FIFOs, devices, directories,
+and other special files are rejected before passphrase capture.
+
 Unlike exec, the older vault run command injects selected legacy secret names
 into a cleaned, closed-stdin child with buffered/capped output, a timeout, and
 owned process-tree cleanup. Exec is transparent, not a sandbox or a substitute
@@ -120,6 +125,8 @@ directly with no shell and never includes its raw diagnostic output in errors.
 
 Dry-run parses and validates the source, unlocks the vault to report whether
 each field would be created or replaced, and never invokes `op` or mutates data.
+The --env-file source must be a non-symlink regular file; special files are
+rejected without waiting for a producer.
 
 If destination installation fails after the atomic vault commit, rerun the same
 command with --replace --overwrite to converge without resolving ambiguity.
@@ -159,6 +166,30 @@ provide the required atomic absent-directory installation path.
 Example:
   jig vault backup restore --in ./project-vault.backup --home ./restored-vault";
 
+const VAULT_TUI_AFTER_HELP: &str = "\
+Opens one fixed repo, global, or explicit-home vault in a full-screen keyboard
+manager. The TUI browses metadata without decrypting on selection; manages
+canonical and legacy entries; imports a 1Password dotenv bundle; creates and
+restores encrypted backups; rotates the passphrase; and verifies safe activity.
+
+Private-output actions (field export, 1Password destination installation, and
+backup creation) are available only on Unix. Peek and passphrase rotation remain
+portable; restore remains Linux-only.
+
+Canonical fields can be exported directly to a hardened private file. The
+explicit Peek action bypasses Ratatui, shows a bounded terminal-safe escaped
+preview after a warning and exact confirmation, then clears it after one key or
+ten seconds. Terminal scrollback, multiplexers, remote sessions, and recording
+remain external sinks. There is no clipboard integration or unlock daemon.
+
+The process-local credential is dropped by L, after five minutes without
+terminal input, on authentication or audit failure, and before terminal exit.
+Operational exec, run, and inject workflows remain separate CLI commands.
+This command requires terminal input/output and rejects --json.
+
+Example:
+  jig vault tui";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum VaultCommand {
     /// Inspect or verify the local vault audit log.
@@ -176,6 +207,12 @@ pub(crate) enum VaultCommand {
     /// Inspect local vault presence without decrypting values.
     #[command(name = tool_defs::cli_command::VAULT_STATUS)]
     Status(VaultStatusOpts),
+    /// Open the keyboard-first full-screen vault manager.
+    #[command(
+        name = tool_defs::cli_command::VAULT_TUI,
+        after_help = VAULT_TUI_AFTER_HELP
+    )]
+    Tui(VaultTuiOpts),
     /// Explicitly upgrade an existing vault format.
     #[command(
         name = tool_defs::cli_command::VAULT_MIGRATE,
@@ -377,6 +414,12 @@ pub(crate) struct VaultInitOpts {
 
 #[derive(Args, Debug, Default)]
 pub(crate) struct VaultStatusOpts {
+    #[command(flatten)]
+    pub(crate) vault: VaultRuntimeOpts,
+}
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct VaultTuiOpts {
     #[command(flatten)]
     pub(crate) vault: VaultRuntimeOpts,
 }

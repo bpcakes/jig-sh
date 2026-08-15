@@ -50,7 +50,8 @@ pub(crate) use vault::{
     VaultInitRequest, VaultInjectRequest, VaultMigrateRequest, VaultPassphraseChangeRequest,
     VaultPassphraseCommand, VaultReadRequest, VaultRepoScope, VaultRunRequest, VaultRuntimeOptions,
     VaultScopeSelection, VaultSecretCommand, VaultSecretListRequest, VaultSecretRemoveRequest,
-    VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, is_valid_vault_scope_id,
+    VaultSecretSetRequest, VaultSecretValueSource, VaultStatusRequest, VaultTuiRequest,
+    is_valid_vault_scope_id,
 };
 pub(crate) use work::{
     DEFAULT_REFINE_MAX_ITERATIONS, WorkAppendRequest, WorkCheckRequest, WorkCommand,

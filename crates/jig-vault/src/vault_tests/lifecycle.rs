@@ -2,6 +2,28 @@ use super::*;
 use crate::crypto::KdfParams;
 
 #[test]
+fn status_distinguishes_vault_home_lifecycle_without_creating_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("vault");
+
+    let absent = Vault::status(Some(home.clone())).unwrap();
+    assert_eq!(absent.home_state, VaultHomeState::Absent);
+    assert!(!absent.exists);
+    assert!(!home.exists());
+
+    std::fs::create_dir(&home).unwrap();
+    let uninitialized = Vault::status(Some(home.clone())).unwrap();
+    assert_eq!(uninitialized.home_state, VaultHomeState::Uninitialized);
+    assert!(!uninitialized.exists);
+
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let initialized = Vault::status(Some(home)).unwrap();
+    assert_eq!(initialized.home_state, VaultHomeState::Initialized);
+    assert!(initialized.exists);
+}
+
+#[test]
 fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
@@ -238,4 +260,84 @@ fn direct_file_output_is_private_atomic_and_terminalizes_overwrite_refusal() {
     assert_eq!(events[events.len() - 2].action, "field_read_start");
     assert_eq!(events.last().unwrap().action, "field_read_failed");
     assert_eq!(events.last().unwrap().details["stage"], "sink_preflight");
+}
+
+#[cfg(unix)]
+#[test]
+fn vault_bound_private_output_precondition_rechecks_namespace_ownership() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+
+    let reserved = vault.root().join("vault.json");
+    let error = vault.preview_private_output(&reserved).unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+    assert!(error.to_string().contains("outside the source vault home"));
+
+    let destination = temp.path().join("generated.env");
+    let precondition = vault.preview_private_output(&destination).unwrap();
+    assert!(!precondition.destination_exists());
+    crate::PreparedPrivateFile::prepare_if_unchanged(
+        precondition,
+        SecretBytes::new(b"MODE=production\n".to_vec()),
+        false,
+    )
+    .unwrap()
+    .install()
+    .unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), b"MODE=production\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_file_output_cannot_replace_vault_owned_paths() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let reference = VaultReference::parse("jig://Production/TOKEN").unwrap();
+    let value = b"reserved-path-secret-sentinel";
+    vault
+        .set_field(
+            &passphrase(),
+            reference.clone(),
+            FieldKind::Concealed,
+            SecretBytes::new(value.to_vec()),
+        )
+        .unwrap();
+    let nested = vault.root().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let vault_path = vault.root().join("vault.json");
+    let audit_path = vault.root().join("audit.jsonl");
+    let lock_path = vault.root().join("vault.lock");
+    let before_vault = std::fs::read(&vault_path).unwrap();
+    let before_lock = std::fs::read(&lock_path).unwrap();
+
+    for destination in [
+        vault_path.clone(),
+        audit_path.clone(),
+        lock_path.clone(),
+        nested.join("rendered.bin"),
+    ] {
+        let error = vault
+            .read_field_to_file(&passphrase(), reference.clone(), &destination, true)
+            .unwrap_err();
+        assert_eq!(error.kind(), VaultErrorKind::InvalidInput);
+        assert!(error.to_string().contains("outside the source vault home"));
+        assert!(!error.to_string().contains("reserved-path-secret-sentinel"));
+    }
+
+    assert_eq!(std::fs::read(&vault_path).unwrap(), before_vault);
+    assert_eq!(std::fs::read(&lock_path).unwrap(), before_lock);
+    assert!(!nested.join("rendered.bin").exists());
+    assert_eq!(vault.snapshot(&passphrase()).unwrap().fields.len(), 1);
+    vault.verify_audit(&passphrase()).unwrap();
+    let audit = std::fs::read_to_string(audit_path).unwrap();
+    assert!(!audit.contains("reserved-path-secret-sentinel"));
 }

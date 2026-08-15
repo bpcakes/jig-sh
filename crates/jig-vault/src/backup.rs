@@ -1,10 +1,7 @@
 use std::fmt;
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result as AnyResult, bail};
+use anyhow::{Context, Result as AnyResult};
 use secrecy::SecretString;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
@@ -279,9 +276,12 @@ pub(crate) fn create(
             let kind = error.kind();
             lifecycle.failure_error("sink_prepare", kind, anyhow::Error::new(error))
         })?;
-    validate_output_not_source(&lifecycle.store, &output).map_err(|error| {
-        lifecycle.failure_error("sink_preflight", VaultErrorKind::InvalidInput, error)
-    })?;
+    lifecycle
+        .store
+        .validate_external_output(&output, "backup")
+        .map_err(|error| {
+            lifecycle.failure_error("sink_preflight", VaultErrorKind::InvalidInput, error)
+        })?;
     prepared.install().map_err(|error| {
         let kind = error.kind();
         lifecycle.failure_error("sink_install", kind, anyhow::Error::new(error))
@@ -353,7 +353,7 @@ fn unsupported_restore_platform() -> VaultError {
 fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -> AnyResult<()> {
     store.revalidate_existing()?;
     PreparedPrivateFile::preflight(output, overwrite).map_err(anyhow::Error::new)?;
-    validate_output_not_source(store, output)?;
+    store.validate_external_output(output, "backup")?;
     let vault_bytes = store
         .read_vault_bytes()?
         .context("existing vault state disappeared during backup preflight")?;
@@ -378,40 +378,6 @@ fn validate_create_request(store: &VaultStore, output: &Path, overwrite: bool) -
                 "vault audit log is {audit_len} bytes; this one-shot backup supports at most {max_audit} bytes before its start event"
             ),
         ));
-    }
-    Ok(())
-}
-
-fn validate_output_not_source(store: &VaultStore, output: &Path) -> AnyResult<()> {
-    let file_name = output
-        .file_name()
-        .context("backup output path must name a file")?;
-    let parent = match output.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    let canonical_parent = fs::canonicalize(parent).with_context(|| {
-        format!(
-            "failed to canonicalize backup output parent {}",
-            parent.display()
-        )
-    })?;
-    let normalized_output = canonical_parent.join(file_name);
-    if normalized_output.starts_with(store.root()) {
-        bail!("backup output must be outside the source vault home");
-    }
-
-    #[cfg(unix)]
-    if let Ok(output_metadata) = fs::metadata(&normalized_output) {
-        for source in [store.vault_path(), store.audit_path()] {
-            let source_metadata = fs::metadata(&source)
-                .with_context(|| format!("failed to inspect backup source {}", source.display()))?;
-            if output_metadata.dev() == source_metadata.dev()
-                && output_metadata.ino() == source_metadata.ino()
-            {
-                bail!("backup output must not alias a source vault file");
-            }
-        }
     }
     Ok(())
 }

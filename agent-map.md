@@ -21,6 +21,7 @@ Fast jump index for agent-facing guidance in this repository.
 - [crates/jig-typescript](./crates/jig-typescript/AGENTS.md)
 - [crates/jig-ui](./crates/jig-ui/AGENTS.md)
 - [crates/jig-vault](./crates/jig-vault/AGENTS.md)
+- [crates/jig-vault-tui](./crates/jig-vault-tui/AGENTS.md)
 - [crates/jig](./crates/jig/AGENTS.md)
 
 ## Suggested usage pattern

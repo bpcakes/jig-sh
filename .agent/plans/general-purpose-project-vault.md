@@ -10,6 +10,8 @@ The project is implicit in every reference. `jig://Production/RESTIC_PASSWORD` m
 
 This is local CLI replacement scope, not a clone of the whole 1Password product. It covers the workflows analogous to `op read`, `op inject`, and `op run --env-file`, along with field management, one-time import, passphrase change, and encrypted backup/restore. It excludes browser/mobile autofill, remote synchronization, team sharing, TOTP generation, hosted audit, enterprise access control, attachments, arbitrary 1Password item-schema reproduction, clipboard integration, and a long-lived unlock daemon.
 
+A later delivery adds `jig vault tui` as a process-local interactive management plane over this completed CLI/core scope. It does not reopen the exclusions above: the TUI fixes one vault scope, auto-locks its in-process credential, exports only through the existing private-file sink, and offers a warned, bounded, terminal-safe transient Peek rather than clipboard integration or a daemon. `exec`, `run`, and `inject` remain CLI-owned operational workflows.
+
 ## Progress
 
 - [x] (2026-08-09) Read the repository, crate, and ExecPlan guidance and inspect the current vault format, scope resolution, CLI/runtime boundaries, audit model, redactor, and brokered process behavior.

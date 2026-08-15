@@ -266,6 +266,134 @@ fn import_preview_is_read_only_audit_verified_and_version_two_only() {
 }
 
 #[test]
+fn planned_import_applies_only_to_its_exact_ordered_field_set() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let existing = VaultReference::parse("jig://Production/EXISTING").unwrap();
+    let new = VaultReference::parse("jig://Production/NEW").unwrap();
+    vault
+        .set_field(
+            &passphrase(),
+            existing.clone(),
+            FieldKind::Text,
+            SecretBytes::new(b"before".to_vec()),
+        )
+        .unwrap();
+
+    let plan = vault
+        .plan_import_fields(&passphrase(), &[existing.clone(), new.clone()])
+        .unwrap();
+    assert_eq!(
+        plan.fields()
+            .map(|(reference, existed)| (reference.clone(), existed))
+            .collect::<Vec<_>>(),
+        vec![(existing.clone(), true), (new.clone(), false)]
+    );
+    assert_eq!(
+        plan.fields_with_previous_kinds()
+            .map(|(reference, previous_kind)| (reference.clone(), previous_kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (existing.clone(), Some(FieldKind::Text)),
+            (new.clone(), None)
+        ]
+    );
+    vault
+        .import_fields_if_unchanged(
+            &passphrase(),
+            vec![
+                FieldMutation::set(
+                    existing,
+                    FieldKind::Text,
+                    SecretBytes::new(b"after".to_vec()),
+                ),
+                FieldMutation::set(
+                    new.clone(),
+                    FieldKind::Concealed,
+                    SecretBytes::new(b"new-secret".to_vec()),
+                ),
+            ],
+            plan,
+            true,
+        )
+        .unwrap();
+
+    let mismatch_plan = vault
+        .plan_import_fields(&passphrase(), std::slice::from_ref(&new))
+        .unwrap();
+    let before_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+    let mismatch = vault
+        .import_fields_if_unchanged(
+            &passphrase(),
+            vec![import_set(
+                "jig://Production/DIFFERENT",
+                FieldKind::Text,
+                b"different",
+            )],
+            mismatch_plan,
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(mismatch.kind(), VaultErrorKind::InvalidInput);
+    assert!(mismatch.message().contains("do not match"));
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+}
+
+#[test]
+fn planned_import_rejects_intervening_vault_state_without_audit_or_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = Vault::resolve(Some(temp.path().join("vault"))).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let target = VaultReference::parse("jig://Production/TARGET").unwrap();
+    let plan = vault
+        .plan_import_fields(&passphrase(), std::slice::from_ref(&target))
+        .unwrap();
+
+    vault
+        .set_field(
+            &passphrase(),
+            VaultReference::parse("jig://Production/UNRELATED").unwrap(),
+            FieldKind::Text,
+            SecretBytes::new(b"changed".to_vec()),
+        )
+        .unwrap();
+    let before_vault = vault.store.read_vault_text().unwrap().unwrap();
+    let before_audit = vault.store.read_audit_text().unwrap().unwrap();
+
+    let error = vault
+        .import_fields_if_unchanged(
+            &passphrase(),
+            vec![FieldMutation::set(
+                target,
+                FieldKind::Concealed,
+                SecretBytes::new(b"planned-secret".to_vec()),
+            )],
+            plan,
+            true,
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), VaultErrorKind::AlreadyExists);
+    assert!(error.message().contains("changed since the import preview"));
+    assert_eq!(
+        vault.store.read_vault_text().unwrap().unwrap(),
+        before_vault
+    );
+    assert_eq!(
+        vault.store.read_audit_text().unwrap().unwrap(),
+        before_audit
+    );
+}
+
+#[test]
 fn onepassword_import_save_fault_leaves_intent_ahead_and_retry_converges() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();

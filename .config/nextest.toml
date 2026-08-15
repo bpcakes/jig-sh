@@ -28,5 +28,5 @@ filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_sigint))) | pa
 test-group = 'process-signals'
 
 [[profile.default.overrides]]
-filter = 'package(jig-vault) | (package(jig-sh) & test(vault))'
+filter = 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 test-group = 'vault-crypto'

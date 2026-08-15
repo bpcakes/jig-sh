@@ -1,7 +1,7 @@
 //! Shared terminal lifecycle and cooperative worker foundations for Jig TUIs.
 
 use std::{
-    io::{self, IsTerminal, Stdout},
+    io::{self, IsTerminal, Stdout, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -12,10 +12,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use crossterm::{
-    cursor::{Hide, Show},
-    event::{KeyEvent, KeyEventKind},
+    cursor::{Hide, MoveTo, Show},
+    event::{DisableBracketedPaste, EnableBracketedPaste, KeyEvent, KeyEventKind},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
@@ -67,6 +70,85 @@ pub fn sanitize_text(text: &str) -> String {
         .collect()
 }
 
+/// Deterministic quality score for a case-insensitive fuzzy text match.
+///
+/// Exact, prefix, substring, and ordered-subsequence matches sort in that
+/// order. Lower scores are better; `None` means the query is not a subsequence
+/// of the candidate.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct FuzzyMatchScore {
+    kind: u8,
+    span: usize,
+    start: usize,
+}
+
+/// Case-folded text that can be reused across fuzzy-match scoring calls.
+///
+/// Construction applies the same Unicode lowercase normalization as
+/// [`fuzzy_match_score`]. Scoring two prepared values performs no allocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedFuzzyText(String);
+
+impl PreparedFuzzyText {
+    /// Prepares one candidate or query for repeated fuzzy matching.
+    pub fn new(text: &str) -> Self {
+        Self(text.to_lowercase())
+    }
+
+    /// Scores this prepared candidate against a prepared query.
+    pub fn match_score(&self, query: &Self) -> Option<FuzzyMatchScore> {
+        fuzzy_match_score_normalized(&self.0, &query.0)
+    }
+}
+
+/// Scores a case-insensitive fuzzy match without retaining either input.
+pub fn fuzzy_match_score(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
+    PreparedFuzzyText::new(candidate).match_score(&PreparedFuzzyText::new(query))
+}
+
+fn fuzzy_match_score_normalized(candidate: &str, query: &str) -> Option<FuzzyMatchScore> {
+    if candidate == query {
+        return Some(FuzzyMatchScore {
+            kind: 0,
+            span: 0,
+            start: 0,
+        });
+    }
+    if candidate.starts_with(query) {
+        return Some(FuzzyMatchScore {
+            kind: 1,
+            span: candidate.chars().count(),
+            start: 0,
+        });
+    }
+    if let Some(start) = candidate.find(query) {
+        return Some(FuzzyMatchScore {
+            kind: 2,
+            span: query.chars().count(),
+            start,
+        });
+    }
+
+    let mut query = query.chars();
+    let mut expected = query.next();
+    let mut start = None;
+    for (index, character) in candidate.chars().enumerate() {
+        if Some(character) == expected {
+            start.get_or_insert(index);
+            expected = query.next();
+            if expected.is_none() {
+                let start = start.unwrap_or_default();
+                return Some(FuzzyMatchScore {
+                    kind: 3,
+                    span: index.saturating_sub(start).saturating_add(1),
+                    start,
+                });
+            }
+        }
+    }
+    None
+}
+
 fn is_unsafe_format_character(character: char) -> bool {
     matches!(
         character,
@@ -88,24 +170,47 @@ fn is_unsafe_format_character(character: char) -> bool {
 /// Owns raw mode, alternate-screen state, cursor visibility, and restoration.
 pub struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    bracketed_paste: bool,
 }
 
 impl TerminalSession {
     /// Enters raw mode and the alternate screen.
     pub fn enter(label: &str) -> Result<Self> {
+        Self::enter_with_options(label, false)
+    }
+
+    /// Enters raw mode and the alternate screen with bracketed paste events.
+    /// Paste mode is paired with restoration on every return and unwind path.
+    pub fn enter_with_bracketed_paste(label: &str) -> Result<Self> {
+        Self::enter_with_options(label, true)
+    }
+
+    fn enter_with_options(label: &str, bracketed_paste: bool) -> Result<Self> {
         enable_raw_mode().with_context(|| format!("failed to enable {label} terminal raw mode"))?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
-            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        let enter_result = if bracketed_paste {
+            execute!(stdout, EnterAlternateScreen, Hide, EnableBracketedPaste)
+        } else {
+            execute!(stdout, EnterAlternateScreen, Hide)
+        };
+        if let Err(error) = enter_result {
+            let _ = execute!(stdout, DisableBracketedPaste, Show, LeaveAlternateScreen);
             let _ = disable_raw_mode();
             return Err(error).with_context(|| format!("failed to enter the {label} terminal"));
         }
         let backend = CrosstermBackend::new(stdout);
         match Terminal::new(backend) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(terminal) => Ok(Self {
+                terminal,
+                bracketed_paste,
+            }),
             Err(error) => {
                 let mut stdout = io::stdout();
-                let _ = execute!(stdout, Show, LeaveAlternateScreen);
+                if bracketed_paste {
+                    let _ = execute!(stdout, DisableBracketedPaste, Show, LeaveAlternateScreen);
+                } else {
+                    let _ = execute!(stdout, Show, LeaveAlternateScreen);
+                }
                 let _ = disable_raw_mode();
                 Err(error).with_context(|| format!("failed to initialize the {label} terminal"))
             }
@@ -116,12 +221,55 @@ impl TerminalSession {
     pub fn draw(&mut self, draw: impl FnOnce(&mut ratatui::Frame)) -> io::Result<()> {
         self.terminal.draw(draw).map(|_| ())
     }
+
+    /// Clears Ratatui's frame and lends the alternate-screen writer to one
+    /// immediate output operation. The caller must not retain the writer.
+    pub fn with_direct_output<T>(
+        &mut self,
+        operation: impl FnOnce(&mut dyn io::Write) -> io::Result<T>,
+    ) -> io::Result<T> {
+        self.terminal.clear()?;
+        execute!(self.terminal.backend_mut(), MoveTo(0, 0), Show)?;
+        let result = operation(self.terminal.backend_mut())?;
+        self.terminal.backend_mut().flush()?;
+        Ok(result)
+    }
+
+    /// Erases direct alternate-screen output and invalidates Ratatui's back
+    /// buffer so the next frame is redrawn in full.
+    pub fn clear_direct_output(&mut self) -> io::Result<()> {
+        execute!(
+            self.terminal.backend_mut(),
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            Hide
+        )?;
+        self.terminal.clear()?;
+        self.terminal.backend_mut().flush()
+    }
 }
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = self.terminal.show_cursor();
-        let _ = execute!(self.terminal.backend_mut(), Show, LeaveAlternateScreen);
+        if self.bracketed_paste {
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                DisableBracketedPaste,
+                Clear(ClearType::All),
+                MoveTo(0, 0),
+                Show,
+                LeaveAlternateScreen
+            );
+        } else {
+            let _ = execute!(
+                self.terminal.backend_mut(),
+                Clear(ClearType::All),
+                MoveTo(0, 0),
+                Show,
+                LeaveAlternateScreen
+            );
+        }
         let _ = disable_raw_mode();
     }
 }
@@ -266,6 +414,47 @@ mod tests {
             sanitize_text("safe\u{1b}[31m\u{202e}text\u{2069}\u{200c}\u{200d}"),
             "safe\u{fffd}[31m\u{fffd}text\u{fffd}\u{200c}\u{200d}"
         );
+    }
+
+    #[test]
+    fn fuzzy_match_scores_exact_prefix_substring_and_subsequence_in_order() {
+        let exact = fuzzy_match_score("Vault", "vault").unwrap();
+        let prefix = fuzzy_match_score("vault item", "vault").unwrap();
+        let substring = fuzzy_match_score("open vault item", "vault").unwrap();
+        let subsequence = fuzzy_match_score("very agile useful local tool", "vault").unwrap();
+        assert!(exact < prefix);
+        assert!(prefix < substring);
+        assert!(substring < subsequence);
+        assert!(fuzzy_match_score("secret", "vault").is_none());
+    }
+
+    #[test]
+    fn fuzzy_subsequence_prefers_tighter_and_earlier_matches() {
+        let tight = fuzzy_match_score("a-b-c", "abc").unwrap();
+        let broad = fuzzy_match_score("a---b---c", "abc").unwrap();
+        let late = fuzzy_match_score("xxa-b-c", "abc").unwrap();
+        assert!(tight < broad);
+        assert!(tight < late);
+    }
+
+    #[test]
+    fn prepared_fuzzy_text_preserves_compatibility_scoring() {
+        for (candidate, query) in [
+            ("Vault", "vault"),
+            ("vault item", "vault"),
+            ("open vault item", "vault"),
+            ("very agile useful local tool", "vault"),
+            ("Straße Production", "STRASSE"),
+            ("secret", "vault"),
+            ("", ""),
+            ("candidate", ""),
+        ] {
+            assert_eq!(
+                PreparedFuzzyText::new(candidate).match_score(&PreparedFuzzyText::new(query)),
+                fuzzy_match_score(candidate, query),
+                "candidate={candidate:?}, query={query:?}"
+            );
+        }
     }
 
     #[test]

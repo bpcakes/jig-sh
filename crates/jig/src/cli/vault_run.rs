@@ -14,14 +14,40 @@ use super::vault::VaultCommand;
 use crate::{context::RepoContext, runtime};
 
 pub(super) fn run_vault_command(command: VaultCommand, json_output: bool) -> Result<()> {
-    run_vault_command_with_stdout_terminal(command, json_output, std::io::stdout().is_terminal())
+    run_vault_command_with_terminal_state(
+        command,
+        json_output,
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    )
 }
 
+#[cfg(test)]
 fn run_vault_command_with_stdout_terminal(
     command: VaultCommand,
     json_output: bool,
     stdout_is_terminal: bool,
 ) -> Result<()> {
+    run_vault_command_with_terminal_state(command, json_output, true, stdout_is_terminal)
+}
+
+fn run_vault_command_with_terminal_state(
+    command: VaultCommand,
+    json_output: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> Result<()> {
+    if matches!(&command, VaultCommand::Tui(_)) {
+        if json_output {
+            bail!("--json is not supported by vault tui; use the interactive terminal interface");
+        }
+        jig_tui::require_terminal_with_state(
+            "jig vault tui",
+            "use `jig vault field list` for non-interactive metadata",
+            stdin_is_terminal,
+            stdout_is_terminal,
+        )?;
+    }
     let human_output = vault_human_output(&command);
     let mut runtime_command: crate::command::VaultCommand = command.into();
     let is_raw = vault_command_uses_raw_output(&runtime_command);
@@ -31,6 +57,14 @@ fn run_vault_command_with_stdout_terminal(
     }
     apply_repo_vault_scope(&mut runtime_command)?;
     runtime::preflight_scoped_vault_command(&mut runtime_command)?;
+    if let crate::command::VaultCommand::Tui(request) = runtime_command {
+        let initial_passphrase = runtime::take_optional_vault_tui_passphrase()?;
+        // Capture consumes the current value and clears both reserved names;
+        // repeat the boundary call to preserve the invariant if capture
+        // behavior changes later.
+        runtime::strip_vault_passphrase_environment();
+        return runtime::run_vault_tui(request, initial_passphrase);
+    }
     let is_run = matches!(runtime_command, crate::command::VaultCommand::Run(_));
     if vault_command_requires_passphrase(&runtime_command) {
         // Invariant: capture and clear the process environment copy before vault
@@ -232,7 +266,10 @@ const fn vault_human_output(command: &VaultCommand) -> HumanOutput {
 }
 
 const fn vault_command_requires_passphrase(command: &crate::command::VaultCommand) -> bool {
-    !matches!(command, crate::command::VaultCommand::Status(_))
+    !matches!(
+        command,
+        crate::command::VaultCommand::Status(_) | crate::command::VaultCommand::Tui(_)
+    )
 }
 
 pub(super) fn apply_repo_vault_scope(command: &mut crate::command::VaultCommand) -> Result<()> {
@@ -265,6 +302,7 @@ pub(super) const fn vault_options_mut(
         },
         crate::command::VaultCommand::Init(request) => &mut request.vault,
         crate::command::VaultCommand::Status(request) => &mut request.vault,
+        crate::command::VaultCommand::Tui(request) => &mut request.vault,
         crate::command::VaultCommand::Migrate(request) => &mut request.vault,
         crate::command::VaultCommand::Passphrase(command) => match command {
             crate::command::VaultPassphraseCommand::Change(request) => &mut request.vault,

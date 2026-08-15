@@ -152,16 +152,16 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let marker = if row.home.current { "*" } else { " " };
+            let marker = if row.is_current() { "*" } else { " " };
             Row::new([
                 Cell::from(marker),
-                Cell::from(row.display_name.clone()),
+                Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
                 Cell::from(row.plan().to_owned()),
                 Cell::from(row.usage()),
                 Cell::from(row.state().to_owned()),
             ])
-            .style(match &row.inspection {
+            .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
                 }
@@ -207,12 +207,12 @@ fn draw_compact_list(frame: &mut Frame, area: Rect, app: &App, visible: &[usize]
         .map(|index| {
             let row = &app.rows[*index];
             Row::new([
-                Cell::from(if row.home.current { "*" } else { " " }),
-                Cell::from(row.display_name.clone()),
+                Cell::from(if row.is_current() { "*" } else { " " }),
+                Cell::from(row.display_name().to_owned()),
                 Cell::from(row.usage()),
                 Cell::from(row.state().to_owned()),
             ])
-            .style(match &row.inspection {
+            .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
                 }
@@ -281,11 +281,11 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         return Vec::new();
     };
     let mut lines = vec![
-        key_value("Name", &row.display_name),
-        key_value("Path", &row.display_path),
-        key_value("Current", if row.home.current { "yes" } else { "no" }),
+        key_value("Name", row.display_name()),
+        key_value("Path", row.display_path()),
+        key_value("Current", if row.is_current() { "yes" } else { "no" }),
     ];
-    match &row.inspection {
+    match row.inspection() {
         Inspection::Loading => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -303,7 +303,7 @@ fn detail_lines(app: &App) -> Vec<Line<'static>> {
         Inspection::Ready(details) => {
             lines.extend([
                 Line::from(""),
-                key_value("Account", &details.account_label()),
+                key_value("Account", details.account_label()),
                 key_value("Type", &details.account_type),
                 key_value("Plan", &details.plan),
                 key_value("Status", &details.status),

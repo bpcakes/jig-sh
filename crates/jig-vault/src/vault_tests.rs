@@ -16,6 +16,8 @@ mod import;
 mod legacy;
 #[path = "vault_tests/lifecycle.rs"]
 mod lifecycle;
+#[path = "vault_tests/management.rs"]
+mod management;
 #[path = "vault_tests/mutations.rs"]
 mod mutations;
 #[path = "vault_tests/reveal.rs"]

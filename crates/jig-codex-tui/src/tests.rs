@@ -62,7 +62,7 @@ fn ready_update(index: usize) -> HomeUpdate {
 fn starts_with_visible_loading_rows_and_current_selection() {
     let app = app(homes());
     assert_eq!(app.selected, Some(0));
-    assert!(matches!(app.rows[0].inspection, Inspection::Loading));
+    assert!(matches!(app.rows[0].inspection(), Inspection::Loading));
     assert_eq!(app.rows[0].usage(), "loading…");
 }
 
@@ -74,7 +74,7 @@ fn update_is_indexed_and_single_codex_window_is_weekly() {
     assert_eq!(app.completed, 1);
     assert_eq!(app.rows[1].account(), "person@example.com");
     assert_eq!(app.rows[1].usage(), "weekly 25%/7d");
-    assert!(matches!(app.rows[0].inspection, Inspection::Loading));
+    assert!(matches!(app.rows[0].inspection(), Inspection::Loading));
 }
 
 #[test]
@@ -95,12 +95,12 @@ fn duplicate_codex_window_durations_receive_the_same_role() {
 fn update_arriving_after_worker_completion_repairs_progress() {
     let mut app = app(homes());
     app.finish_inspection(None);
-    assert!(matches!(app.rows[0].inspection, Inspection::Unavailable));
+    assert!(matches!(app.rows[0].inspection(), Inspection::Unavailable));
 
     app.apply_update(ready_update(0));
 
     assert_eq!(app.completed, 1);
-    assert!(matches!(app.rows[0].inspection, Inspection::Ready(_)));
+    assert!(matches!(app.rows[0].inspection(), Inspection::Ready(_)));
 }
 
 #[test]
@@ -137,6 +137,21 @@ fn search_supports_fuzzy_subsequence_matching() {
 }
 
 #[test]
+fn inspection_updates_refresh_the_home_search_index() {
+    let mut app = app(homes());
+    for character in "person".chars() {
+        app.push_filter(character);
+    }
+    assert!(app.visible_indices().is_empty());
+    assert_eq!(app.selected, None);
+
+    app.apply_update(ready_update(1));
+
+    assert_eq!(app.visible_indices(), vec![1]);
+    assert_eq!(app.selected, Some(1));
+}
+
+#[test]
 fn search_prioritizes_home_names_over_a_matching_common_path() {
     let homes = vec![
         Home {
@@ -161,6 +176,28 @@ fn search_prioritizes_home_names_over_a_matching_common_path() {
         app.selected_path(),
         Some(PathBuf::from("/Users/workman/.codex-work"))
     );
+}
+
+#[test]
+fn large_home_list_search_filters_and_ranks_stably() {
+    let mut homes = (0..2_048)
+        .map(|index| Home {
+            path: PathBuf::from(format!("/tmp/codex-home-{index}")),
+            name: format!("codex-{index}"),
+            current: index == 0,
+        })
+        .collect::<Vec<_>>();
+    homes[1_024].name = "production".into();
+    homes[1_536].name = "production-secondary".into();
+    homes[2_047].path = PathBuf::from("/tmp/production-archive");
+    let mut app = app(homes);
+
+    for character in "PrOdUcTiOn".chars() {
+        app.push_filter(character);
+    }
+
+    assert_eq!(app.visible_indices(), vec![1_024, 1_536, 2_047]);
+    assert_eq!(app.selected, Some(1_024));
 }
 
 #[test]

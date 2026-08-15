@@ -28,12 +28,14 @@
 - Change brokered run authorization/audit orchestration: `src/broker.rs`.
 - Change child-process secret delivery after resolution: `src/run.rs`.
 - Change audit record shape: `src/audit.rs`.
+- Change metadata snapshots, verified activity projection, or atomic field/item transformations: `src/vault.rs` and `src/audit.rs`.
 - Add passphrase rotation or recovery flows: `src/crypto.rs`, `src/format.rs`, and `src/vault.rs`; v1 intentionally has no passphrase-change API.
 
 ## Invariants
 
 - Never store plaintext secrets outside encrypted vault state.
 - Never return plaintext secret values from public metadata/listing APIs.
+- `VaultSnapshot` must keep canonical fields disjoint from unrepresentable legacy entries and verify the audit chain under the same lock before returning metadata. `VaultActivityRecord` must project only action-specific safe metadata after complete chain verification; never expose arbitrary audit detail JSON through it.
 - Do not expose plaintext secret values through errors, logs, audit details, runtime JSON, or `Debug` output.
 - Canonical references are contextual `jig://ITEM/FIELD` names. Scope selection belongs to the caller; do not add repository identity or cross-vault routing to a reference.
 - Version 1 remains readable with every value treated as concealed. Version 2 adds encrypted handling kinds; require explicit one-way migration before field mutation, import, passphrase change, or backup, and keep older readers failing closed on version 2.
@@ -41,7 +43,7 @@
 - Public reveal/injection operations must consume directly into an immediate caller-selected sink and finish their lifecycle audit. Do not expose abandonable prepared reveals or plaintext accessors.
 - Transparent exec inherits ordinary stdin/environment, streams independently redacted byte output, and preserves normal child status; it must not inherit the constrained broker's timeout, output cap, or cleaned-environment contract. Keep brokered run behavior compatible.
 - Backup envelopes keep vault and audit bytes encrypted, and restore installs only into a proven absent home through private sibling staging; no restore path may resolve or overwrite an existing target.
-- `SecretBytes::extend_from_slice` must remain non-growing; callers should preallocate to their hard cap before reading secret-bearing streams.
+- `SecretBytes::extend_from_slice` must remain non-growing; callers should preallocate to their hard cap before reading secret-bearing streams. Truncation and clearing must overwrite removed bytes while retaining that allocation for protected editors.
 - Authenticate vault header bytes as AEAD associated data and include a payload role so wrapped-key and state ciphertexts do not share an AEAD context.
 - Keep vault state outside `.agent/state`.
 - Secret names are operator metadata, not secret material. They may appear in audit details, may contain path-shaped labels like `/` and `.`, and must never be treated as filesystem-safe path components without a separate encoding/newtype.
@@ -51,6 +53,8 @@
 - Treat redaction as a backup control, not as the core security boundary.
 - Verify the audit chain before appending new audit events.
 - Vault mutations append audit intent before saving the new state; crashes may leave audit leading state, but state should not lead audit.
+- Field kind changes, field/item renames, item removal, and legacy conversion must remain single-lock atomic mutations. They must never be implemented by exposing plaintext or composing separate public read/remove/set calls.
+- Interactive create, replace, and required-remove operations must recheck their existence precondition inside the same audited vault edit lock. Keep the backwards-compatible CLI setters as explicit upserts; do not emulate stale-state protection with a metadata read followed by a separate mutation.
 - The local HMAC audit chain detects edited records and broken links, but deletion, truncation, or rollback still requires external checkpoints or backups to prove.
 - Brokered env injection must not override the cleaned child process' preserved environment allowlist, such as `PATH`, `HOME`, `TMPDIR`, and locale variables.
 - Child-process environment injection necessarily gives `std::process::Command` a non-zeroizable copy of each injected secret; prefer future OS-specific delivery primitives for stronger isolation.
