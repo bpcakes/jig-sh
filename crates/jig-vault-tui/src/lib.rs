@@ -6,11 +6,11 @@
 
 use std::{fmt, io::Write, path::PathBuf};
 
-pub use jig_vault::VaultMutation;
 use jig_vault::{
     AuditVerification, FieldKind, SecretBytes, VaultItem, VaultReference, VaultRevision,
     VaultSnapshot, VerifiedVaultActivity,
 };
+pub use jig_vault::{VaultHomeState, VaultMutation};
 use ulid::Ulid;
 
 mod browse;
@@ -39,27 +39,8 @@ pub struct VaultDescriptor {
     pub repo_name: Option<String>,
     /// Exact selected vault home.
     pub home: PathBuf,
-    /// Whether the complete vault currently exists.
-    pub exists: bool,
-}
-
-/// Authoritative presence of initialized vault state at the fixed scope.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum VaultPresence {
-    Missing,
-    Present,
-}
-
-impl VaultPresence {
-    /// Converts a protected-state existence result into the typed UI state.
-    pub const fn from_exists(exists: bool) -> Self {
-        if exists { Self::Present } else { Self::Missing }
-    }
-
-    /// Returns whether initialized vault state is present.
-    pub const fn is_present(self) -> bool {
-        matches!(self, Self::Present)
-    }
+    /// Exact filesystem state of the selected vault home.
+    pub home_state: VaultHomeState,
 }
 
 /// Stable classification used by the UI to fail closed on authentication loss.
@@ -359,8 +340,8 @@ pub trait VaultBackend: Send + Sync + 'static {
     /// Returns scope and existence metadata without unlocking or creating a home.
     fn descriptor(&self) -> VaultDescriptor;
 
-    /// Rechecks initialized state without unlocking or creating a home.
-    fn presence(&self) -> Result<VaultPresence, VaultUiError>;
+    /// Rechecks vault-home state without unlocking or creating a home.
+    fn home_state(&self) -> Result<VaultHomeState, VaultUiError>;
 
     /// Authenticates and returns a complete metadata snapshot.
     fn unlock(&self, passphrase: SecretBytes) -> Result<VaultSnapshot, VaultUiError>;

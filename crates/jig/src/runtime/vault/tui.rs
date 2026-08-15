@@ -8,12 +8,12 @@ use anyhow::Result;
 use anyhow::anyhow;
 use jig_vault::{
     PreparedPrivateFile, PrivateFilePrecondition, SecretBytes, Vault, VaultError, VaultErrorKind,
-    VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
+    VaultHomeState, VaultImportPrecondition, VaultReference, VaultRevision, VaultSnapshot,
 };
 use jig_vault_tui::{
     ImportFieldChange, ImportPlanToken, ImportPreview, ImportPreviewAuthorization,
     ImportPreviewRow, VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction,
-    VaultDescriptor, VaultMutation, VaultPresence, VaultUiError, VaultUiErrorKind,
+    VaultDescriptor, VaultMutation, VaultUiError, VaultUiErrorKind,
 };
 use secrecy::SecretString;
 
@@ -105,7 +105,7 @@ impl VaultTuiBackend {
             scope_id: resolved.scope_id.clone(),
             repo_name: resolved.repo_name.clone(),
             home: status.root,
-            exists: status.exists,
+            home_state: status.home_state,
         };
         Ok(Self {
             resolved,
@@ -375,9 +375,9 @@ impl VaultBackend for VaultTuiBackend {
         self.descriptor.clone()
     }
 
-    fn presence(&self) -> std::result::Result<VaultPresence, VaultUiError> {
+    fn home_state(&self) -> std::result::Result<VaultHomeState, VaultUiError> {
         Vault::status(Some(self.descriptor.home.clone()))
-            .map(|status| VaultPresence::from_exists(status.exists))
+            .map(|status| status.home_state)
             .map_err(map_vault_error)
     }
 
@@ -595,13 +595,14 @@ mod tests {
 
         let backend = VaultTuiBackend::new(request(home.clone())).unwrap();
 
-        assert!(!backend.descriptor().exists);
-        assert_eq!(backend.presence().unwrap(), VaultPresence::Missing);
+        assert_eq!(backend.descriptor().home_state, VaultHomeState::Absent);
+        assert_eq!(backend.home_state().unwrap(), VaultHomeState::Absent);
         assert!(!home.exists());
 
         std::fs::create_dir(&home).unwrap();
+        assert_eq!(backend.home_state().unwrap(), VaultHomeState::Uninitialized);
         std::fs::write(home.join("vault.json"), b"installed").unwrap();
-        assert_eq!(backend.presence().unwrap(), VaultPresence::Present);
+        assert_eq!(backend.home_state().unwrap(), VaultHomeState::Initialized);
     }
 
     #[test]

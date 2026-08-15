@@ -338,7 +338,7 @@ impl UiCommand {
                 }
             }
             Self::RestoreBackup => {
-                if app.snapshot().is_some() || app.descriptor.exists {
+                if app.snapshot().is_some() || app.descriptor.home_state.is_initialized() {
                     CommandAvailability::Disabled("Restore requires a completely absent vault.")
                 } else {
                     CommandAvailability::Enabled
@@ -373,7 +373,7 @@ impl UiCommand {
 
     pub(crate) fn visible_in_state(self, app: &App) -> bool {
         if app.snapshot().is_none() {
-            return self == Self::RestoreBackup && !app.descriptor.exists;
+            return self == Self::RestoreBackup && !app.descriptor.home_state.is_initialized();
         }
         match app.snapshot().map(|snapshot| snapshot.format_version) {
             Some(1) => matches!(

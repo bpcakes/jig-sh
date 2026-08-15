@@ -15,7 +15,7 @@ use fs4::fs_std::FileExt;
 use zeroize::Zeroizing;
 
 use crate::crypto::KdfParams;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
 mod existing;
 
@@ -56,23 +56,12 @@ impl VaultStore {
         prepare_private_dir(root, initialization_kdf)
     }
 
-    pub(crate) fn inspect(explicit_home: Option<PathBuf>) -> Result<(PathBuf, bool)> {
+    pub(crate) fn inspect(explicit_home: Option<PathBuf>) -> Result<(PathBuf, VaultHomeState)> {
         let root = resolve_root(explicit_home)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?;
-        if path_is_symlink(&root)
-            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?
-        {
-            return Err(VaultError::new(
-                VaultErrorKind::Io,
-                format!(
-                    "Vault home {} must not be a symlink. Use a dedicated real directory.",
-                    root.display()
-                ),
-            ));
-        }
-        let exists = text_file_exists_no_follow(&root.join(VAULT_FILE))
+        let home_state = inspect_home_state(&root)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?;
-        Ok((root, exists))
+        Ok((root, home_state))
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -286,6 +275,26 @@ impl VaultStore {
                 "vault operation failed; additionally failed to unlock vault lock: {unlock_error}"
             ))),
         }
+    }
+}
+
+fn inspect_home_state(root: &Path) -> AnyResult<VaultHomeState> {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "Vault home {} must not be a symlink. Use a dedicated real directory.",
+                root.display()
+            )
+        }
+        Ok(_) => {
+            if text_file_exists_no_follow(&root.join(VAULT_FILE))? {
+                Ok(VaultHomeState::Initialized)
+            } else {
+                Ok(VaultHomeState::Uninitialized)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(VaultHomeState::Absent),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", root.display())),
     }
 }
 

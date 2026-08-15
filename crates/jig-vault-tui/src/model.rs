@@ -7,8 +7,8 @@ use jig_vault::{
 };
 
 use crate::{
-    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultMutation,
-    VaultPresence, VaultUiError,
+    ImportPreview, ImportPreviewAuthorization, VaultAction, VaultDescriptor, VaultHomeState,
+    VaultMutation, VaultUiError,
     browse::{BrowseEntryKind, BrowseState},
     commands::{CommandOutcome, CommandPalette, CommandPaletteScope, UiCommand},
     line_editor::{LineEdit, LineEditor},
@@ -34,7 +34,7 @@ pub(crate) struct App {
 
 impl App {
     pub(crate) fn new(descriptor: VaultDescriptor) -> Self {
-        let screen = if descriptor.exists {
+        let screen = if descriptor.home_state.is_initialized() {
             Screen::Locked(SecretInput::new())
         } else {
             Screen::Missing
@@ -120,7 +120,7 @@ impl App {
     fn install_snapshot(&mut self, snapshot: VaultSnapshot) {
         let previous_item = self.selected_item.clone();
         let previous_entry = self.selected_entry.clone();
-        self.descriptor.exists = true;
+        self.descriptor.home_state = VaultHomeState::Initialized;
         self.browser = Some(BrowseState::new(snapshot, self.filter.as_str()));
         self.screen = Screen::Browse;
         self.status = None;
@@ -147,13 +147,13 @@ impl App {
         self.status = Some(StatusMessage::error(error.message()));
     }
 
-    pub(crate) fn fail_lifecycle(&mut self, error: &VaultUiError, presence: VaultPresence) {
+    pub(crate) fn fail_lifecycle(&mut self, error: &VaultUiError, home_state: VaultHomeState) {
         self.browser = None;
         self.next_selection = None;
-        self.descriptor.exists = presence.is_present();
-        self.screen = match presence {
-            VaultPresence::Missing => Screen::Missing,
-            VaultPresence::Present => Screen::Locked(SecretInput::new()),
+        self.descriptor.home_state = home_state;
+        self.screen = match home_state {
+            VaultHomeState::Absent | VaultHomeState::Uninitialized => Screen::Missing,
+            VaultHomeState::Initialized => Screen::Locked(SecretInput::new()),
         };
         self.status = Some(StatusMessage::error(error.message()));
     }
@@ -591,7 +591,7 @@ impl App {
     }
 
     pub(crate) fn apply_restore(&mut self) {
-        self.descriptor.exists = true;
+        self.descriptor.home_state = VaultHomeState::Initialized;
         self.browser = None;
         self.next_selection = None;
         self.screen = Screen::Locked(SecretInput::new());

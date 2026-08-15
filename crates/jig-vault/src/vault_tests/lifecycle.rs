@@ -2,6 +2,28 @@ use super::*;
 use crate::crypto::KdfParams;
 
 #[test]
+fn status_distinguishes_vault_home_lifecycle_without_creating_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("vault");
+
+    let absent = Vault::status(Some(home.clone())).unwrap();
+    assert_eq!(absent.home_state, VaultHomeState::Absent);
+    assert!(!absent.exists);
+    assert!(!home.exists());
+
+    std::fs::create_dir(&home).unwrap();
+    let uninitialized = Vault::status(Some(home.clone())).unwrap();
+    assert_eq!(uninitialized.home_state, VaultHomeState::Uninitialized);
+    assert!(!uninitialized.exists);
+
+    let vault = Vault::resolve_for_test(Some(home.clone())).unwrap();
+    vault.init(&passphrase()).unwrap();
+    let initialized = Vault::status(Some(home)).unwrap();
+    assert_eq!(initialized.home_state, VaultHomeState::Initialized);
+    assert!(initialized.exists);
+}
+
+#[test]
 fn passphrase_change_preserves_identity_keys_state_and_rotates_encryption() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();

@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use jig_vault::{FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes, Vault, VaultSnapshot};
+use jig_vault::{
+    FieldKind, MAX_SECRET_VALUE_LEN, SecretBytes, Vault, VaultHomeState, VaultSnapshot,
+};
 use ratatui::{Terminal, backend::TestBackend};
 use secrecy::SecretString;
 use tempfile::tempdir;
@@ -32,7 +34,11 @@ fn descriptor(exists: bool) -> VaultDescriptor {
         scope_id: Some("scope_123".to_owned()),
         repo_name: Some("demo".to_owned()),
         home: PathBuf::from("/tmp/demo-vault"),
-        exists,
+        home_state: if exists {
+            VaultHomeState::Initialized
+        } else {
+            VaultHomeState::Absent
+        },
     }
 }
 

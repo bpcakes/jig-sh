@@ -63,10 +63,31 @@ pub struct Vault {
     store: VaultStore,
 }
 
+/// Filesystem state of one resolved vault home.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultHomeState {
+    /// The vault home itself does not exist.
+    Absent,
+    /// The vault home exists, but initialized vault state does not.
+    Uninitialized,
+    /// Initialized vault state exists inside the vault home.
+    Initialized,
+}
+
+impl VaultHomeState {
+    /// Returns whether initialized vault state exists.
+    pub const fn is_initialized(self) -> bool {
+        matches!(self, Self::Initialized)
+    }
+}
+
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VaultStatus {
     pub root: PathBuf,
+    /// Exact filesystem state of the selected vault home.
+    pub home_state: VaultHomeState,
+    /// Compatibility projection of [`VaultStatus::home_state`].
     pub exists: bool,
 }
 
@@ -119,8 +140,12 @@ impl Vault {
     /// Returns an error when the vault home or state path is invalid, unsafe,
     /// or cannot be inspected.
     pub fn status(explicit_home: Option<PathBuf>) -> Result<VaultStatus> {
-        let (root, exists) = VaultStore::inspect(explicit_home)?;
-        Ok(VaultStatus { root, exists })
+        let (root, home_state) = VaultStore::inspect(explicit_home)?;
+        Ok(VaultStatus {
+            root,
+            home_state,
+            exists: home_state.is_initialized(),
+        })
     }
 
     /// Initializes a new encrypted vault and audit chain.

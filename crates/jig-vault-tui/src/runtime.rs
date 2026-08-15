@@ -9,7 +9,7 @@ use jig_tui::{CooperativeWorker, TerminalSession, is_actionable_key, require_ter
 use jig_vault::{SecretBytes, VaultReference, VaultSnapshot};
 
 use crate::{
-    VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction, VaultPresence,
+    VaultAction, VaultActionResult, VaultBackend, VaultCommittedAction, VaultHomeState,
     VaultUiError, VaultUiErrorKind,
     commands::{CommandOutcome, CommandPaletteScope, UiCommand},
     line_editor::LineEdit,
@@ -39,7 +39,7 @@ pub(crate) fn run(
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
     let mut worker = None;
     if let Some(passphrase) = initial_passphrase {
-        if app.descriptor.exists {
+        if app.descriptor.home_state.is_initialized() {
             app.begin_loading("Unlocking vault");
             worker = Some(ActionWorker::spawn(
                 Arc::clone(&backend),
@@ -300,14 +300,14 @@ fn apply_peek_result(
             backend.lock();
             app.fail_unlock(&error);
         }
-        Err(error) => match presence_for_not_found(&error, backend.as_ref()) {
-            Some(Ok(VaultPresence::Missing)) => {
-                apply_lifecycle_failure(app, backend, error, Ok(VaultPresence::Missing));
+        Err(error) => match home_state_for_not_found(&error, backend.as_ref()) {
+            Some(Ok(home_state @ (VaultHomeState::Absent | VaultHomeState::Uninitialized))) => {
+                apply_lifecycle_failure(app, backend, error, Ok(home_state));
             }
-            Some(Err(presence_error)) => {
-                apply_lifecycle_failure(app, backend, error, Err(presence_error));
+            Some(Err(home_state_error)) => {
+                apply_lifecycle_failure(app, backend, error, Err(home_state_error));
             }
-            Some(Ok(VaultPresence::Present)) | None => app.fail_action(&error),
+            Some(Ok(VaultHomeState::Initialized)) | None => app.fail_action(&error),
         },
     }
 }
@@ -327,8 +327,8 @@ fn apply_completion(
     };
     match completion.outcome {
         BackendOutcome::Success(result) => apply_success(app, completion.kind, result),
-        BackendOutcome::LifecycleFailure { error, presence } => {
-            apply_lifecycle_failure(app, backend, error, presence);
+        BackendOutcome::LifecycleFailure { error, home_state } => {
+            apply_lifecycle_failure(app, backend, error, home_state);
         }
         BackendOutcome::CommittedWithoutSnapshot(committed) => {
             apply_committed_without_snapshot(app, backend, committed);
@@ -418,7 +418,7 @@ fn apply_committed_without_snapshot(
             ),
         ),
     };
-    apply_lifecycle_failure(app, backend, error, committed.presence);
+    apply_lifecycle_failure(app, backend, error, committed.home_state);
 }
 
 impl VaultCommittedAction {
@@ -471,7 +471,7 @@ fn apply_failure(
         BackendFailure::RefreshFailed {
             error,
             refresh_error,
-            presence,
+            home_state,
         } => {
             let error = VaultUiError::new(
                 refresh_error.kind(),
@@ -481,7 +481,7 @@ fn apply_failure(
                     refresh_error.message()
                 ),
             );
-            apply_lifecycle_failure(app, backend, error, presence);
+            apply_lifecycle_failure(app, backend, error, home_state);
         }
         BackendFailure::Primary(error) => apply_primary_failure(app, kind, &error),
     }
@@ -491,23 +491,23 @@ fn apply_lifecycle_failure(
     app: &mut App,
     backend: &Arc<dyn VaultBackend>,
     error: VaultUiError,
-    presence: Result<VaultPresence, VaultUiError>,
+    home_state: Result<VaultHomeState, VaultUiError>,
 ) {
     backend.lock();
-    match presence {
-        Ok(presence) => {
-            app.fail_lifecycle(&error, presence);
+    match home_state {
+        Ok(home_state) => {
+            app.fail_lifecycle(&error, home_state);
         }
-        Err(presence_error) => {
+        Err(home_state_error) => {
             let error = VaultUiError::new(
-                presence_error.kind(),
+                home_state_error.kind(),
                 format!(
                     "{} Vault presence reconciliation also failed: {}",
                     error.message(),
-                    presence_error.message()
+                    home_state_error.message()
                 ),
             );
-            app.fail_lifecycle(&error, VaultPresence::Present);
+            app.fail_lifecycle(&error, VaultHomeState::Initialized);
         }
     }
 }
@@ -516,7 +516,7 @@ fn apply_primary_failure(app: &mut App, kind: OperationKind, error: &VaultUiErro
     match kind {
         OperationKind::Unlock => app.fail_unlock(error),
         OperationKind::Initialize | OperationKind::Restore => {
-            app.fail_lifecycle(error, VaultPresence::Present);
+            app.fail_lifecycle(error, VaultHomeState::Initialized);
         }
         OperationKind::Refresh
         | OperationKind::Migrate
@@ -595,9 +595,9 @@ enum OperationKind {
 impl OperationKind {
     const fn failure_recovery(self, error: &VaultUiError) -> FailureRecovery {
         match self {
-            Self::Initialize | Self::Restore => FailureRecovery::ReconcilePresence,
+            Self::Initialize | Self::Restore => FailureRecovery::ReconcileHomeState,
             Self::Unlock | Self::Refresh if matches!(error.kind(), VaultUiErrorKind::NotFound) => {
-                FailureRecovery::ReconcilePresence
+                FailureRecovery::ReconcileHomeState
             }
             Self::Migrate
             | Self::Mutation
@@ -632,7 +632,7 @@ impl OperationKind {
 enum FailureRecovery {
     Primary,
     RefreshSnapshot,
-    ReconcilePresence,
+    ReconcileHomeState,
 }
 
 struct BackendCompletion {
@@ -666,14 +666,14 @@ impl BackendCompletion {
                             action,
                             refresh_error,
                             retry_error: Some(retry_error),
-                            presence: backend.presence(),
+                            home_state: backend.home_state(),
                         })
                     }
                     None => BackendOutcome::CommittedWithoutSnapshot(CommittedWithoutSnapshot {
                         action,
                         refresh_error,
                         retry_error: None,
-                        presence: backend.presence(),
+                        home_state: backend.home_state(),
                     }),
                 }
             }
@@ -688,17 +688,19 @@ impl BackendCompletion {
         error: VaultUiError,
         backend: &dyn VaultBackend,
     ) -> BackendOutcome {
-        let not_found_presence = presence_for_not_found(&error, backend);
-        match not_found_presence {
-            Some(Ok(VaultPresence::Missing)) => BackendOutcome::LifecycleFailure {
+        let not_found_home_state = home_state_for_not_found(&error, backend);
+        match not_found_home_state {
+            Some(Ok(home_state @ (VaultHomeState::Absent | VaultHomeState::Uninitialized))) => {
+                BackendOutcome::LifecycleFailure {
+                    error,
+                    home_state: Ok(home_state),
+                }
+            }
+            Some(Err(home_state_error)) => BackendOutcome::LifecycleFailure {
                 error,
-                presence: Ok(VaultPresence::Missing),
+                home_state: Err(home_state_error),
             },
-            Some(Err(presence_error)) => BackendOutcome::LifecycleFailure {
-                error,
-                presence: Err(presence_error),
-            },
-            known_presence => match kind.failure_recovery(&error) {
+            known_home_state => match kind.failure_recovery(&error) {
                 FailureRecovery::Primary => BackendOutcome::Failure(BackendFailure::Primary(error)),
                 FailureRecovery::RefreshSnapshot => {
                     let failure = match backend.refresh() {
@@ -706,25 +708,25 @@ impl BackendCompletion {
                         Err(refresh_error) => BackendFailure::RefreshFailed {
                             error,
                             refresh_error,
-                            presence: backend.presence(),
+                            home_state: backend.home_state(),
                         },
                     };
                     BackendOutcome::Failure(failure)
                 }
-                FailureRecovery::ReconcilePresence => BackendOutcome::LifecycleFailure {
+                FailureRecovery::ReconcileHomeState => BackendOutcome::LifecycleFailure {
                     error,
-                    presence: known_presence.unwrap_or_else(|| backend.presence()),
+                    home_state: known_home_state.unwrap_or_else(|| backend.home_state()),
                 },
             },
         }
     }
 }
 
-fn presence_for_not_found(
+fn home_state_for_not_found(
     error: &VaultUiError,
     backend: &dyn VaultBackend,
-) -> Option<Result<VaultPresence, VaultUiError>> {
-    (error.kind() == VaultUiErrorKind::NotFound).then(|| backend.presence())
+) -> Option<Result<VaultHomeState, VaultUiError>> {
+    (error.kind() == VaultUiErrorKind::NotFound).then(|| backend.home_state())
 }
 
 enum BackendOutcome {
@@ -732,7 +734,7 @@ enum BackendOutcome {
     CommittedWithoutSnapshot(CommittedWithoutSnapshot),
     LifecycleFailure {
         error: VaultUiError,
-        presence: Result<VaultPresence, VaultUiError>,
+        home_state: Result<VaultHomeState, VaultUiError>,
     },
     Failure(BackendFailure),
 }
@@ -741,7 +743,7 @@ struct CommittedWithoutSnapshot {
     action: VaultCommittedAction,
     refresh_error: VaultUiError,
     retry_error: Option<VaultUiError>,
-    presence: Result<VaultPresence, VaultUiError>,
+    home_state: Result<VaultHomeState, VaultUiError>,
 }
 
 enum BackendFailure {
@@ -753,7 +755,7 @@ enum BackendFailure {
     RefreshFailed {
         error: VaultUiError,
         refresh_error: VaultUiError,
-        presence: Result<VaultPresence, VaultUiError>,
+        home_state: Result<VaultHomeState, VaultUiError>,
     },
 }
 
@@ -1454,9 +1456,9 @@ mod tests {
 
     struct TrackingBackend {
         locks: AtomicUsize,
-        presence_reads: AtomicUsize,
+        home_state_reads: AtomicUsize,
         refreshes: AtomicUsize,
-        presence_result: Mutex<Option<std::result::Result<VaultPresence, VaultUiError>>>,
+        home_state_result: Mutex<Option<std::result::Result<VaultHomeState, VaultUiError>>>,
         refresh_result: Mutex<Option<std::result::Result<VaultSnapshot, VaultUiError>>>,
         events: Mutex<Vec<&'static str>>,
         started: Mutex<Option<mpsc::Sender<()>>>,
@@ -1467,9 +1469,9 @@ mod tests {
         fn immediate() -> Self {
             Self {
                 locks: AtomicUsize::new(0),
-                presence_reads: AtomicUsize::new(0),
+                home_state_reads: AtomicUsize::new(0),
                 refreshes: AtomicUsize::new(0),
-                presence_result: Mutex::new(None),
+                home_state_result: Mutex::new(None),
                 refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(None),
@@ -1483,27 +1485,27 @@ mod tests {
             backend
         }
 
-        fn with_presence(result: std::result::Result<VaultPresence, VaultUiError>) -> Self {
+        fn with_home_state(result: std::result::Result<VaultHomeState, VaultUiError>) -> Self {
             let backend = Self::immediate();
-            *backend.presence_result.lock().unwrap() = Some(result);
+            *backend.home_state_result.lock().unwrap() = Some(result);
             backend
         }
 
-        fn with_refresh_and_presence(
+        fn with_refresh_and_home_state(
             refresh: std::result::Result<VaultSnapshot, VaultUiError>,
-            presence: std::result::Result<VaultPresence, VaultUiError>,
+            home_state: std::result::Result<VaultHomeState, VaultUiError>,
         ) -> Self {
             let backend = Self::with_refresh(refresh);
-            *backend.presence_result.lock().unwrap() = Some(presence);
+            *backend.home_state_result.lock().unwrap() = Some(home_state);
             backend
         }
 
         fn blocking(started: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
             Self {
                 locks: AtomicUsize::new(0),
-                presence_reads: AtomicUsize::new(0),
+                home_state_reads: AtomicUsize::new(0),
                 refreshes: AtomicUsize::new(0),
-                presence_result: Mutex::new(None),
+                home_state_result: Mutex::new(None),
                 refresh_result: Mutex::new(None),
                 events: Mutex::new(Vec::new()),
                 started: Mutex::new(Some(started)),
@@ -1519,17 +1521,17 @@ mod tests {
                 scope_id: None,
                 repo_name: None,
                 home: std::path::PathBuf::from("/tmp/test-vault"),
-                exists: true,
+                home_state: VaultHomeState::Initialized,
             }
         }
 
-        fn presence(&self) -> std::result::Result<VaultPresence, VaultUiError> {
-            self.presence_reads.fetch_add(1, Ordering::SeqCst);
-            self.presence_result
+        fn home_state(&self) -> std::result::Result<VaultHomeState, VaultUiError> {
+            self.home_state_reads.fetch_add(1, Ordering::SeqCst);
+            self.home_state_result
                 .lock()
                 .unwrap()
                 .take()
-                .unwrap_or(Ok(VaultPresence::Present))
+                .unwrap_or(Ok(VaultHomeState::Initialized))
         }
 
         fn unlock(&self, _: SecretBytes) -> std::result::Result<VaultSnapshot, VaultUiError> {
@@ -1601,7 +1603,7 @@ mod tests {
             scope_id: None,
             repo_name: None,
             home: temp.path().join("vault"),
-            exists: true,
+            home_state: VaultHomeState::Initialized,
         });
         app.apply_snapshot(vault.snapshot(&passphrase).unwrap());
         app
@@ -1633,7 +1635,7 @@ mod tests {
             );
             apply_completion(&mut app, &erased, Ok(completion));
             assert_eq!(backend.refreshes.load(Ordering::SeqCst), 0);
-            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 0);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot().is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
@@ -1672,14 +1674,14 @@ mod tests {
         for kind in [OperationKind::Initialize, OperationKind::Restore] {
             assert_eq!(
                 kind.failure_recovery(&recoverable),
-                FailureRecovery::ReconcilePresence
+                FailureRecovery::ReconcileHomeState
             );
         }
         let missing = VaultUiError::new(VaultUiErrorKind::NotFound, "safe missing failure");
         for kind in [OperationKind::Unlock, OperationKind::Refresh] {
             assert_eq!(
                 kind.failure_recovery(&missing),
-                FailureRecovery::ReconcilePresence
+                FailureRecovery::ReconcileHomeState
             );
         }
         for fatal_kind in [VaultUiErrorKind::Authentication, VaultUiErrorKind::Audit] {
@@ -1692,17 +1694,25 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_failures_reconcile_authoritative_presence() {
+    fn lifecycle_failures_reconcile_authoritative_home_state() {
         for kind in [OperationKind::Initialize, OperationKind::Restore] {
-            for presence in [VaultPresence::Missing, VaultPresence::Present] {
-                let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+            for home_state in [
+                VaultHomeState::Absent,
+                VaultHomeState::Uninitialized,
+                VaultHomeState::Initialized,
+            ] {
+                let backend = Arc::new(TrackingBackend::with_home_state(Ok(home_state)));
                 let erased: Arc<dyn VaultBackend> = backend.clone();
                 let mut app = App::new(VaultDescriptor {
                     scope: "test".to_owned(),
                     scope_id: None,
                     repo_name: None,
                     home: std::path::PathBuf::from("/tmp/test-vault"),
-                    exists: !presence.is_present(),
+                    home_state: if home_state.is_initialized() {
+                        VaultHomeState::Absent
+                    } else {
+                        VaultHomeState::Initialized
+                    },
                 });
                 let completion = BackendCompletion::new(
                     kind,
@@ -1715,12 +1725,16 @@ mod tests {
 
                 apply_completion(&mut app, &erased, Ok(completion));
 
-                assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+                assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
                 assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-                assert_eq!(app.descriptor.exists, presence.is_present());
-                match presence {
-                    VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
-                    VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
+                assert_eq!(app.descriptor.home_state, home_state);
+                match home_state {
+                    VaultHomeState::Absent | VaultHomeState::Uninitialized => {
+                        assert!(matches!(app.screen, Screen::Missing));
+                    }
+                    VaultHomeState::Initialized => {
+                        assert!(matches!(app.screen, Screen::Locked(_)));
+                    }
                 }
                 assert_eq!(app.status.as_ref().unwrap().text, "safe lifecycle failure");
             }
@@ -1728,10 +1742,14 @@ mod tests {
     }
 
     #[test]
-    fn missing_unlock_and_refresh_reconcile_authoritative_presence() {
+    fn missing_unlock_and_refresh_reconcile_authoritative_home_state() {
         for kind in [OperationKind::Unlock, OperationKind::Refresh] {
-            for presence in [VaultPresence::Missing, VaultPresence::Present] {
-                let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+            for home_state in [
+                VaultHomeState::Absent,
+                VaultHomeState::Uninitialized,
+                VaultHomeState::Initialized,
+            ] {
+                let backend = Arc::new(TrackingBackend::with_home_state(Ok(home_state)));
                 let erased: Arc<dyn VaultBackend> = backend.clone();
                 let mut app = unlocked_app();
                 let completion = BackendCompletion::new(
@@ -1745,13 +1763,17 @@ mod tests {
 
                 apply_completion(&mut app, &erased, Ok(completion));
 
-                assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+                assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
                 assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-                assert_eq!(app.descriptor.exists, presence.is_present());
+                assert_eq!(app.descriptor.home_state, home_state);
                 assert!(app.snapshot().is_none());
-                match presence {
-                    VaultPresence::Missing => assert!(matches!(app.screen, Screen::Missing)),
-                    VaultPresence::Present => assert!(matches!(app.screen, Screen::Locked(_))),
+                match home_state {
+                    VaultHomeState::Absent | VaultHomeState::Uninitialized => {
+                        assert!(matches!(app.screen, Screen::Missing));
+                    }
+                    VaultHomeState::Initialized => {
+                        assert!(matches!(app.screen, Screen::Locked(_)));
+                    }
                 }
                 assert_eq!(app.status.as_ref().unwrap().text, "safe missing failure");
             }
@@ -1765,7 +1787,7 @@ mod tests {
             OperationKind::VerifyAudit,
             OperationKind::ImportPreview,
         ] {
-            let backend = Arc::new(TrackingBackend::with_presence(Ok(VaultPresence::Missing)));
+            let backend = Arc::new(TrackingBackend::with_home_state(Ok(VaultHomeState::Absent)));
             let erased: Arc<dyn VaultBackend> = backend.clone();
             let mut app = unlocked_app();
             let completion = BackendCompletion::new(
@@ -1779,10 +1801,10 @@ mod tests {
 
             apply_completion(&mut app, &erased, Ok(completion));
 
-            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot().is_none());
-            assert!(!app.descriptor.exists);
+            assert_eq!(app.descriptor.home_state, VaultHomeState::Absent);
             assert!(matches!(app.screen, Screen::Missing));
             assert_eq!(
                 app.status.as_ref().unwrap().text,
@@ -1793,7 +1815,9 @@ mod tests {
 
     #[test]
     fn entity_not_found_in_a_present_vault_remains_an_action_error() {
-        let backend = Arc::new(TrackingBackend::with_presence(Ok(VaultPresence::Present)));
+        let backend = Arc::new(TrackingBackend::with_home_state(Ok(
+            VaultHomeState::Initialized,
+        )));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let mut app = unlocked_app();
         let completion = BackendCompletion::new(
@@ -1807,7 +1831,7 @@ mod tests {
 
         apply_completion(&mut app, &erased, Ok(completion));
 
-        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
         assert!(app.snapshot().is_some());
         assert!(matches!(app.screen, Screen::Browse));
@@ -1815,9 +1839,13 @@ mod tests {
     }
 
     #[test]
-    fn peek_not_found_uses_the_same_presence_reconciliation() {
-        for presence in [VaultPresence::Missing, VaultPresence::Present] {
-            let backend = Arc::new(TrackingBackend::with_presence(Ok(presence)));
+    fn peek_not_found_uses_the_same_home_state_reconciliation() {
+        for home_state in [
+            VaultHomeState::Absent,
+            VaultHomeState::Uninitialized,
+            VaultHomeState::Initialized,
+        ] {
+            let backend = Arc::new(TrackingBackend::with_home_state(Ok(home_state)));
             let erased: Arc<dyn VaultBackend> = backend.clone();
             let mut app = unlocked_app();
 
@@ -1830,14 +1858,14 @@ mod tests {
                 )),
             );
 
-            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
-            match presence {
-                VaultPresence::Missing => {
+            assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
+            match home_state {
+                VaultHomeState::Absent | VaultHomeState::Uninitialized => {
                     assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
                     assert!(app.snapshot().is_none());
                     assert!(matches!(app.screen, Screen::Missing));
                 }
-                VaultPresence::Present => {
+                VaultHomeState::Initialized => {
                     assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
                     assert!(app.snapshot().is_some());
                     assert!(matches!(app.screen, Screen::Browse));
@@ -1848,10 +1876,10 @@ mod tests {
     }
 
     #[test]
-    fn failed_lifecycle_presence_check_fails_closed() {
-        let backend = Arc::new(TrackingBackend::with_presence(Err(VaultUiError::new(
+    fn failed_lifecycle_home_state_check_fails_closed() {
+        let backend = Arc::new(TrackingBackend::with_home_state(Err(VaultUiError::new(
             VaultUiErrorKind::Io,
-            "safe presence failure",
+            "safe home-state failure",
         ))));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let mut app = App::new(VaultDescriptor {
@@ -1859,7 +1887,7 @@ mod tests {
             scope_id: None,
             repo_name: None,
             home: std::path::PathBuf::from("/tmp/test-vault"),
-            exists: false,
+            home_state: VaultHomeState::Absent,
         });
         let completion = BackendCompletion::new(
             OperationKind::Restore,
@@ -1872,13 +1900,13 @@ mod tests {
 
         apply_completion(&mut app, &erased, Ok(completion));
 
-        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-        assert!(app.descriptor.exists);
+        assert_eq!(app.descriptor.home_state, VaultHomeState::Initialized);
         assert!(matches!(app.screen, Screen::Locked(_)));
         assert_eq!(
             app.status.unwrap().text,
-            "safe restore failure Vault presence reconciliation also failed: safe presence failure"
+            "safe restore failure Vault presence reconciliation also failed: safe home-state failure"
         );
     }
 
@@ -1939,7 +1967,7 @@ mod tests {
         apply_completion(&mut app, &erased, Ok(completion));
 
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 0);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 0);
         assert_eq!(app.snapshot(), Some(&refreshed));
         assert!(matches!(app.screen, Screen::Browse));
@@ -1948,12 +1976,12 @@ mod tests {
 
     #[test]
     fn committed_result_remains_successful_when_snapshot_recovery_fails() {
-        let backend = Arc::new(TrackingBackend::with_refresh_and_presence(
+        let backend = Arc::new(TrackingBackend::with_refresh_and_home_state(
             Err(VaultUiError::new(
                 VaultUiErrorKind::Io,
                 "safe retry failure",
             )),
-            Ok(VaultPresence::Present),
+            Ok(VaultHomeState::Initialized),
         ));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let mut app = unlocked_app();
@@ -1972,7 +2000,7 @@ mod tests {
         apply_completion(&mut app, &erased, Ok(completion));
 
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
         assert!(app.snapshot().is_none());
         assert!(matches!(app.screen, Screen::Locked(_)));
@@ -2007,7 +2035,7 @@ mod tests {
             apply_completion(&mut app, &erased, Ok(completion));
 
             assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
-            assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+            assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
             assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
             assert!(app.snapshot().is_none());
             assert!(matches!(app.screen, Screen::Locked(_)));
@@ -2020,12 +2048,12 @@ mod tests {
 
     #[test]
     fn failed_recovery_refresh_transitions_to_missing_when_vault_vanished() {
-        let backend = Arc::new(TrackingBackend::with_refresh_and_presence(
+        let backend = Arc::new(TrackingBackend::with_refresh_and_home_state(
             Err(VaultUiError::new(
                 VaultUiErrorKind::NotFound,
                 "safe recovery failure",
             )),
-            Ok(VaultPresence::Missing),
+            Ok(VaultHomeState::Absent),
         ));
         let erased: Arc<dyn VaultBackend> = backend.clone();
         let mut app = unlocked_app();
@@ -2041,9 +2069,9 @@ mod tests {
         apply_completion(&mut app, &erased, Ok(completion));
 
         assert_eq!(backend.refreshes.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.presence_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.home_state_reads.load(Ordering::SeqCst), 1);
         assert_eq!(backend.locks.load(Ordering::SeqCst), 1);
-        assert!(!app.descriptor.exists);
+        assert_eq!(app.descriptor.home_state, VaultHomeState::Absent);
         assert!(app.snapshot().is_none());
         assert!(matches!(app.screen, Screen::Missing));
         assert_eq!(
