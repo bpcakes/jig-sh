@@ -7,52 +7,59 @@ use super::*;
 
 #[test]
 fn bootstrap_vault_capture_is_deferred_only_for_interactive_prompts() {
-    assert!(!should_pre_capture_bootstrap_vault(
-        true, false, false, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, true, false, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, true, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, false, true, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, false, false, false
-    ));
-    assert!(!should_pre_capture_bootstrap_vault(
-        false, true, true, true, false
-    ));
+    use BootstrapInputMode::{Defaults, Interactive, NoInput};
+    use BootstrapPassphraseAvailability::{Environment, Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
+    use BootstrapVaultPlan::{CaptureAfterRender, PreCaptured};
+
+    let resolve = |intent, mode, availability| {
+        BootstrapVaultPlan::resolve(intent, mode, availability, BootstrapVaultCommand::Init)
+    };
+
+    assert_eq!(BootstrapInputMode::from_flags(true, true), NoInput);
+    assert_eq!(
+        resolve(Initialize, Interactive, Prompt).unwrap(),
+        CaptureAfterRender
+    );
+    assert_eq!(
+        resolve(Initialize, NoInput, Environment).unwrap(),
+        PreCaptured
+    );
+    assert_eq!(resolve(Initialize, Defaults, Prompt).unwrap(), PreCaptured);
+    assert_eq!(
+        resolve(Initialize, Interactive, Environment).unwrap(),
+        PreCaptured
+    );
+    assert_eq!(
+        resolve(Disabled, NoInput, Unavailable).unwrap(),
+        BootstrapVaultPlan::Disabled
+    );
+    assert!(resolve(Initialize, Interactive, Unavailable).is_err());
+    assert!(resolve(Initialize, NoInput, Prompt).is_err());
 }
 
 #[test]
 fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
-    reject_missing_bootstrap_vault_passphrase(true, true, true, false, BootstrapVaultCommand::Init)
-        .unwrap();
-    reject_missing_bootstrap_vault_passphrase(
-        false,
-        true,
-        false,
-        false,
-        BootstrapVaultCommand::Init,
-    )
-    .unwrap();
-    reject_missing_bootstrap_vault_passphrase(
-        true,
-        false,
-        false,
-        true,
-        BootstrapVaultCommand::Init,
-    )
-    .unwrap();
+    use BootstrapInputMode::{Interactive, NoInput};
+    use BootstrapPassphraseAvailability::{Environment, Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
 
-    let error = reject_missing_bootstrap_vault_passphrase(
-        true,
-        false,
-        false,
-        false,
+    BootstrapVaultPlan::resolve(
+        Initialize,
+        NoInput,
+        Environment,
+        BootstrapVaultCommand::Init,
+    )
+    .unwrap();
+    BootstrapVaultPlan::resolve(Disabled, NoInput, Unavailable, BootstrapVaultCommand::Init)
+        .unwrap();
+    BootstrapVaultPlan::resolve(Initialize, Interactive, Prompt, BootstrapVaultCommand::Init)
+        .unwrap();
+
+    let error = BootstrapVaultPlan::resolve(
+        Initialize,
+        Interactive,
+        Unavailable,
         BootstrapVaultCommand::Init,
     )
     .unwrap_err()
@@ -63,15 +70,10 @@ fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
     assert!(error.contains("--no-vault"));
     assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
 
-    let no_input_error = reject_missing_bootstrap_vault_passphrase(
-        true,
-        true,
-        false,
-        true,
-        BootstrapVaultCommand::Adopt,
-    )
-    .unwrap_err()
-    .to_string();
+    let no_input_error =
+        BootstrapVaultPlan::resolve(Initialize, NoInput, Prompt, BootstrapVaultCommand::Adopt)
+            .unwrap_err()
+            .to_string();
     assert!(no_input_error.contains("`jig adopt --write`"));
 }
 
@@ -175,7 +177,8 @@ allow_global = false
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "correct horse battery staple");
     let bootstrap = json!({ "destination": repo.display().to_string() });
 
-    let output = ensure_bootstrap_vault(&bootstrap, true, true).unwrap();
+    let output =
+        ensure_bootstrap_vault(&bootstrap, BootstrapVaultPlan::CaptureAfterRender).unwrap();
 
     assert_eq!(output["requested"], true);
     assert_eq!(output["initialized"], true);
@@ -212,7 +215,7 @@ allow_global = false
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
     let bootstrap = json!({ "destination": repo.display().to_string() });
 
-    let error = ensure_bootstrap_vault(&bootstrap, true, true)
+    let error = ensure_bootstrap_vault(&bootstrap, BootstrapVaultPlan::CaptureAfterRender)
         .unwrap_err()
         .to_string();
 

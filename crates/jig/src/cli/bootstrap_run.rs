@@ -13,13 +13,12 @@ pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool)
     prepare_init_interaction(&mut opts)?;
     preflight_init_package_manager(&opts)?;
     let vault_setup = prepare_bootstrap_vault(
-        !opts.no_vault,
-        opts.no_input,
-        opts.defaults,
+        BootstrapVaultIntent::from_requested(!opts.no_vault),
+        BootstrapInputMode::from_flags(opts.no_input, opts.defaults),
         BootstrapVaultCommand::Init,
     )?;
     let mut output = bootstrap::run_init(opts)?;
-    let vault = ensure_bootstrap_vault(&output, vault_setup.requested, !vault_setup.pre_captured)?;
+    let vault = ensure_bootstrap_vault(&output, vault_setup)?;
     attach_bootstrap_vault(&mut output, vault, "bootstrap::run_init")?;
     if json_output {
         print_json(&output)
@@ -39,13 +38,12 @@ pub(super) fn run_presets_command(json_output: bool) -> Result<()> {
 
 pub(super) fn run_adopt_command(opts: bootstrap::AdoptOpts, json_output: bool) -> Result<()> {
     let vault_setup = prepare_bootstrap_vault(
-        opts.write && !opts.no_vault,
-        opts.no_input,
-        opts.defaults,
+        BootstrapVaultIntent::from_requested(opts.write && !opts.no_vault),
+        BootstrapInputMode::from_flags(opts.no_input, opts.defaults),
         BootstrapVaultCommand::Adopt,
     )?;
     let mut output = bootstrap::run_adopt(opts)?;
-    let vault = ensure_bootstrap_vault(&output, vault_setup.requested, !vault_setup.pre_captured)?;
+    let vault = ensure_bootstrap_vault(&output, vault_setup)?;
     attach_bootstrap_vault(&mut output, vault, "bootstrap::run_adopt")?;
     if json_output {
         print_json(&output)
@@ -71,10 +69,65 @@ fn attach_bootstrap_vault(output: &mut Value, vault: Value, source: &str) -> Res
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-struct BootstrapVaultSetup {
-    requested: bool,
-    pre_captured: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapVaultIntent {
+    Disabled,
+    Initialize,
+}
+
+impl BootstrapVaultIntent {
+    const fn from_requested(requested: bool) -> Self {
+        if requested {
+            Self::Initialize
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapInputMode {
+    Interactive,
+    Defaults,
+    NoInput,
+}
+
+impl BootstrapInputMode {
+    const fn from_flags(no_input: bool, defaults: bool) -> Self {
+        if no_input {
+            Self::NoInput
+        } else if defaults {
+            Self::Defaults
+        } else {
+            Self::Interactive
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapPassphraseAvailability {
+    Environment,
+    Prompt,
+    Unavailable,
+}
+
+impl BootstrapPassphraseAvailability {
+    const fn resolve(env_present: bool, prompt_available: bool) -> Self {
+        if env_present {
+            Self::Environment
+        } else if prompt_available {
+            Self::Prompt
+        } else {
+            Self::Unavailable
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BootstrapVaultPlan {
+    Disabled,
+    PreCaptured,
+    CaptureAfterRender,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -93,73 +146,59 @@ impl BootstrapVaultCommand {
 }
 
 fn prepare_bootstrap_vault(
-    requested: bool,
-    no_input: bool,
-    defaults: bool,
+    intent: BootstrapVaultIntent,
+    input_mode: BootstrapInputMode,
     command: BootstrapVaultCommand,
-) -> Result<BootstrapVaultSetup> {
-    let env_present = runtime::vault_passphrase_env_present();
-    let prompt_available = runtime::vault_passphrase_prompt_available();
-    let pre_captured = should_pre_capture_bootstrap_vault(
-        requested,
-        no_input,
-        defaults,
-        env_present,
-        prompt_available,
+) -> Result<BootstrapVaultPlan> {
+    let availability = BootstrapPassphraseAvailability::resolve(
+        runtime::vault_passphrase_env_present(),
+        runtime::vault_passphrase_prompt_available(),
     );
-    reject_missing_bootstrap_vault_passphrase(
-        requested,
-        no_input,
-        env_present,
-        prompt_available,
-        command,
-    )?;
-    if pre_captured {
+    let plan = BootstrapVaultPlan::resolve(intent, input_mode, availability, command)?;
+    if plan == BootstrapVaultPlan::PreCaptured {
         runtime::capture_new_vault_passphrase()?;
     }
-    Ok(BootstrapVaultSetup {
-        requested,
-        pre_captured,
-    })
+    Ok(plan)
 }
 
-pub(super) const fn should_pre_capture_bootstrap_vault(
-    requested: bool,
-    no_input: bool,
-    defaults: bool,
-    env_present: bool,
-    prompt_available: bool,
-) -> bool {
-    // `--defaults` is treated as automation intent for vault setup even though
-    // it can still leave ordinary answer prompts interactive.
-    requested && (no_input || defaults || env_present || !prompt_available)
-}
-
-pub(super) fn reject_missing_bootstrap_vault_passphrase(
-    requested: bool,
-    no_input: bool,
-    env_present: bool,
-    prompt_available: bool,
-    command: BootstrapVaultCommand,
-) -> Result<()> {
-    if requested && !env_present && (no_input || !prompt_available) {
-        anyhow::bail!(
-            "JIG_VAULT_PASSPHRASE is required because `{}` cannot prompt for an initial vault passphrase in non-interactive mode; pass --no-vault to skip initial vault setup, or export JIG_VAULT_PASSPHRASE",
-            command.invocation()
-        );
+impl BootstrapVaultPlan {
+    fn resolve(
+        intent: BootstrapVaultIntent,
+        input_mode: BootstrapInputMode,
+        availability: BootstrapPassphraseAvailability,
+        command: BootstrapVaultCommand,
+    ) -> Result<Self> {
+        if intent == BootstrapVaultIntent::Disabled {
+            return Ok(Self::Disabled);
+        }
+        if availability == BootstrapPassphraseAvailability::Unavailable
+            || (input_mode == BootstrapInputMode::NoInput
+                && availability != BootstrapPassphraseAvailability::Environment)
+        {
+            anyhow::bail!(
+                "JIG_VAULT_PASSPHRASE is required because `{}` cannot prompt for an initial vault passphrase in non-interactive mode; pass --no-vault to skip initial vault setup, or export JIG_VAULT_PASSPHRASE",
+                command.invocation()
+            );
+        }
+        if input_mode == BootstrapInputMode::Interactive
+            && availability == BootstrapPassphraseAvailability::Prompt
+        {
+            return Ok(Self::CaptureAfterRender);
+        }
+        // `--defaults` is treated as automation intent for vault setup even though
+        // it can still leave ordinary answer prompts interactive.
+        Ok(Self::PreCaptured)
     }
-    Ok(())
 }
 
-pub(super) fn ensure_bootstrap_vault(
+fn ensure_bootstrap_vault(
     output: &serde_json::Value,
-    requested: bool,
-    capture_passphrase: bool,
+    plan: BootstrapVaultPlan,
 ) -> Result<serde_json::Value> {
     let destination = output["destination"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("bootstrap output did not include destination"))?;
-    if !requested {
+    if plan == BootstrapVaultPlan::Disabled {
         return Ok(json!({
             "requested": false,
             "initialized": false,
@@ -197,7 +236,7 @@ pub(super) fn ensure_bootstrap_vault(
         }));
     }
 
-    if capture_passphrase {
+    if plan == BootstrapVaultPlan::CaptureAfterRender {
         runtime::capture_new_vault_passphrase().context(
             "vault auto-init passphrase capture failed after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue",
         )?;
