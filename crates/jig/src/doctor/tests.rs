@@ -2413,6 +2413,52 @@ fn sqlx_probe_signal_session_does_not_swallow_later_default_termination() {
 }
 
 #[cfg(unix)]
+#[test]
+fn sqlx_probe_signal_session_drop_restores_previous_handlers() {
+    const HELPER: &str = "JIG_SQLX_PROBE_DROP_RESTORE_HELPER";
+    if std::env::var_os(HELPER).is_none() {
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "doctor::tests::sqlx_probe_signal_session_drop_restores_previous_handlers",
+                "--nocapture",
+            ])
+            .env(HELPER, "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "drop-restore helper exited with {status}");
+        return;
+    }
+
+    // SAFETY: zero initializes the sigaction storage before its fields and
+    // mask are populated below.
+    let mut ignored = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    ignored.sa_sigaction = libc::SIG_IGN;
+    ignored.sa_flags = 0;
+    // SAFETY: the mask is writable storage owned by this helper process.
+    assert_eq!(unsafe { libc::sigemptyset(&mut ignored.sa_mask) }, 0);
+    // SAFETY: ignored is fully initialized and this isolated helper owns its
+    // process-wide SIGINT disposition.
+    assert_eq!(
+        unsafe { libc::sigaction(libc::SIGINT, &ignored, std::ptr::null_mut()) },
+        0,
+    );
+
+    {
+        let _session = DoctorSignalSession::start().unwrap();
+    }
+
+    // SAFETY: current points to writable storage and a null action requests
+    // the process's current disposition without changing it.
+    let mut current = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    assert_eq!(
+        unsafe { libc::sigaction(libc::SIGINT, std::ptr::null(), &mut current) },
+        0,
+    );
+    assert_eq!(current.sa_sigaction, libc::SIG_IGN);
+}
+
+#[cfg(unix)]
 // These guards serialize generations and are consumed only by explicit finish.
 #[allow(clippy::significant_drop_tightening)]
 #[test]
@@ -2460,7 +2506,7 @@ fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
     let (finished_tx, finished_rx) = mpsc::channel();
     let owner = std::thread::spawn(move || {
         let session = DoctorSignalSession::start().unwrap();
-        ready_tx.send(session.generation).unwrap();
+        ready_tx.send(session.generation()).unwrap();
         finish_rx.recv().unwrap();
         finished_tx
             .send(finish_doctor_signal_session(session).is_ok())
@@ -2480,7 +2526,7 @@ fn sqlx_probe_signal_session_serializes_then_reuses_a_fresh_generation() {
     let (next_tx, next_rx) = mpsc::channel();
     let next = std::thread::spawn(move || {
         let session = DoctorSignalSession::start().unwrap();
-        let generation = session.generation;
+        let generation = session.generation();
         let redelivered = SQLX_PROBE_TEST_REDELIVERED_SIGNAL_COUNT.load(Ordering::SeqCst);
         let finished = finish_doctor_signal_session(session).is_ok();
         next_tx.send((generation, redelivered, finished)).unwrap();
@@ -2549,7 +2595,7 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
     );
 
     let first = DoctorSignalSession::start().unwrap();
-    let first_generation = first.generation;
+    let first_generation = first.generation();
     let delayed = std::thread::spawn(|| record_doctor_signal(libc::SIGTERM));
     let pause_deadline = Instant::now() + Duration::from_secs(1);
     while !SQLX_PROBE_TEST_HANDLER_PAUSED_BEFORE_CLAIM.load(Ordering::SeqCst) {
@@ -2562,7 +2608,7 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
 
     finish_doctor_signal_session(first).unwrap();
     let second = DoctorSignalSession::start().unwrap();
-    let second_generation = second.generation;
+    let second_generation = second.generation();
     assert!(second_generation > first_generation);
 
     SQLX_PROBE_TEST_RELEASE_HANDLER_BEFORE_CLAIM.store(true, Ordering::SeqCst);
@@ -2579,7 +2625,7 @@ fn sqlx_probe_signal_session_assigns_a_delayed_entry_to_the_current_generation()
     );
 
     let third = DoctorSignalSession::start().unwrap();
-    assert!(third.generation > second_generation);
+    assert!(third.generation() > second_generation);
     finish_doctor_signal_session(third).unwrap();
 }
 

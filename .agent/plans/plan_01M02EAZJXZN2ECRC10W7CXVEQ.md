@@ -13,7 +13,7 @@ Each slice must compile, pass its focused tests, and land in its own commit befo
 - [x] (2026-08-15) Read the repo and crate guides, Fowler Rust refactoring instructions, principles, and catalog.
 - [x] (2026-08-15) Built the development `jig` binary and opened plan `plan_01M02EAZJXZN2ECRC10W7CXVEQ` in session `session_01M02EAZCJQ3P96FK27PM827G0`.
 - [x] (2026-08-15) Slice 1: replaced internal work-gate JSON reparsing with typed evaluation/report types and explicit wire conversion; `cargo test -p jig-sh --lib --locked` passed 1,399 tests with 2 ignored, and strict crate Clippy passed. Commit pending at this checkpoint.
-- [ ] Slice 2: extract the doctor signal lifecycle into a focused module, encode active/retired state without a boolean flag, test, and commit.
+- [x] (2026-08-15) Slice 2: extracted the doctor signal lifecycle into `doctor/signal_session.rs`, represented live restoration state as `Option<ActiveDoctorSignalSession>`, and added a subprocess Drop-restoration test; all 120 doctor tests and strict test-target Clippy passed. Commit pending at this checkpoint.
 - [ ] Slice 3: add shared Unix process-safety primitives to `jig-owned-process`, migrate the specialized supervisors without merging their policy, test, and commit.
 - [ ] Run configured repository gates, record evidence, close the plan/session, and summarize the three commits.
 
@@ -23,6 +23,7 @@ Each slice must compile, pass its focused tests, and land in its own commit befo
 - The harness reports several older open plans unrelated to this work. This plan is independently scoped and must not close or rewrite those records.
 - The complete `jig-sh` library suite is intentionally broad and took 662 seconds because many environment-sensitive bootstrap/vault fixtures serialize behind shared locks; it nevertheless passed without failures.
 - Review evidence historically projects `freshness_receipt_id` as null even though its review receipt is also the freshness source. The typed projection preserves that wire detail while check evidence continues to expose its batch freshness receipt id.
+- The signal tests intentionally inspect process-global state and handler races. Keeping their existing `doctor::tests::*` subprocess names while re-exporting only test support into the parent avoided changing the behavioral harness or widening production visibility.
 
 ## Decision Log
 
