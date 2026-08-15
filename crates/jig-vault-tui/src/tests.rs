@@ -554,6 +554,63 @@ fn protected_values_remain_append_only_and_outside_the_metadata_editor() {
 }
 
 #[test]
+fn modified_space_neither_edits_form_inputs_nor_toggles_choices() {
+    let mut metadata_app = browsing_app();
+    metadata_app.begin_create_item();
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        assert!(matches!(
+            handle_key(
+                &mut metadata_app,
+                KeyEvent::new(KeyCode::Char(' '), modifiers)
+            ),
+            RuntimeAction::Ignore
+        ));
+    }
+    let Screen::Form(ManagementForm::WriteField { item, .. }) = &metadata_app.screen else {
+        panic!("expected create-item form");
+    };
+    assert!(item.as_str().is_empty());
+
+    let mut protected_app = browsing_app();
+    protected_app.focus = Focus::Fields;
+    protected_app.begin_replace();
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        assert!(matches!(
+            handle_key(
+                &mut protected_app,
+                KeyEvent::new(KeyCode::Char(' '), modifiers)
+            ),
+            RuntimeAction::Ignore
+        ));
+    }
+    let Screen::Form(ManagementForm::WriteField { value, .. }) = &protected_app.screen else {
+        panic!("expected replacement form");
+    };
+    assert!(value.is_empty());
+
+    let mut choice_app = browsing_app();
+    choice_app.focus = Focus::Fields;
+    choice_app.begin_change_kind();
+    let Screen::Form(ManagementForm::ChangeKind { to: initial, .. }) = &choice_app.screen else {
+        panic!("expected change-kind form");
+    };
+    let initial = *initial;
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        assert!(matches!(
+            handle_key(
+                &mut choice_app,
+                KeyEvent::new(KeyCode::Char(' '), modifiers)
+            ),
+            RuntimeAction::Ignore
+        ));
+    }
+    assert!(matches!(
+        choice_app.screen,
+        Screen::Form(ManagementForm::ChangeKind { to, .. }) if to == initial
+    ));
+}
+
+#[test]
 fn typed_confirmations_can_be_corrected_at_the_cursor() {
     let mut app = browsing_app();
     app.focus = Focus::Items;

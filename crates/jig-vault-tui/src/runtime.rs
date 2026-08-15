@@ -1055,6 +1055,13 @@ fn handle_edit_form_key(
             return RuntimeAction::Redraw;
         }
     }
+    if matches!(key.code, KeyCode::Char(_))
+        && key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return RuntimeAction::Ignore;
+    }
     match key.code {
         KeyCode::Esc => {
             app.close_overlay();
@@ -1079,13 +1086,7 @@ fn handle_edit_form_key(
         KeyCode::Enter => submit(app).map_or(RuntimeAction::Redraw, |action| {
             RuntimeAction::Start(BackendRequest::Execute(action))
         }),
-        KeyCode::Char(character)
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-        {
-            push_form_character(app, character)
-        }
+        KeyCode::Char(character) => push_form_character(app, character),
         _ => RuntimeAction::Ignore,
     }
 }
