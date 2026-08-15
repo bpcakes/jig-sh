@@ -44,6 +44,7 @@ fn run_init_uses_native_renderer_and_git() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert_eq!(output["git_initialized"], true);
     let log = fs::read_to_string(&log_path).unwrap();
@@ -141,6 +142,7 @@ fn run_init_explicit_harness_only_writes_no_starter_application() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     let top_level_keys = output
         .as_object()
@@ -231,6 +233,7 @@ fn run_init_normalizes_minimal_answers_to_harness_only() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert!(output["scaffold"].is_null());
     assert!(destination.join(".agent/jig-contract.json").is_file());
@@ -306,6 +309,7 @@ proxy = false
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert!(destination.join("apps/file-app-api").is_dir());
     assert!(destination.join("clients/portal/package.json").is_file());
@@ -553,6 +557,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     let next_steps = output["next_steps"].as_array().unwrap();
     let database_config = next_steps

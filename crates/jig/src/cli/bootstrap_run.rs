@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::init_wizard::{preflight_init_package_manager, prepare_init_interaction};
 use super::output::print_json;
@@ -18,10 +18,10 @@ pub(super) fn run_init_command(mut opts: bootstrap::InitOpts, json_output: bool)
         BootstrapVaultCommand::Init,
     )?;
     let mut output = bootstrap::run_init(opts)?;
-    let vault = ensure_bootstrap_vault(&output, vault_setup)?;
-    attach_bootstrap_vault(&mut output, vault, "bootstrap::run_init")?;
+    let vault = ensure_bootstrap_vault(output.destination(), vault_setup)?;
+    output.attach_vault(vault)?;
     if json_output {
-        print_json(&output)
+        print_json(&serde_json::to_value(&output)?)
     } else {
         print_human_summary(format_init_human_summary(&output))
     }
@@ -43,7 +43,10 @@ pub(super) fn run_adopt_command(opts: bootstrap::AdoptOpts, json_output: bool) -
         BootstrapVaultCommand::Adopt,
     )?;
     let mut output = bootstrap::run_adopt(opts)?;
-    let vault = ensure_bootstrap_vault(&output, vault_setup)?;
+    let destination = output["destination"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("bootstrap output did not include destination"))?;
+    let vault = ensure_bootstrap_vault(destination, vault_setup)?;
     attach_bootstrap_vault(&mut output, vault, "bootstrap::run_adopt")?;
     if json_output {
         print_json(&output)
@@ -61,11 +64,15 @@ pub(super) fn run_update_command(opts: bootstrap::UpdateOpts, json_output: bool)
     }
 }
 
-fn attach_bootstrap_vault(output: &mut Value, vault: Value, source: &str) -> Result<()> {
+fn attach_bootstrap_vault(
+    output: &mut Value,
+    vault: bootstrap::BootstrapVaultReport,
+    source: &str,
+) -> Result<()> {
     if output.get("vault").is_some() {
         anyhow::bail!("{source} output unexpectedly included a vault field");
     }
-    output["vault"] = vault;
+    output["vault"] = serde_json::to_value(vault)?;
     Ok(())
 }
 
@@ -192,19 +199,11 @@ impl BootstrapVaultPlan {
 }
 
 fn ensure_bootstrap_vault(
-    output: &serde_json::Value,
+    destination: &str,
     plan: BootstrapVaultPlan,
-) -> Result<serde_json::Value> {
-    let destination = output["destination"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("bootstrap output did not include destination"))?;
+) -> Result<bootstrap::BootstrapVaultReport> {
     if plan == BootstrapVaultPlan::Disabled {
-        return Ok(json!({
-            "requested": false,
-            "initialized": false,
-            "created": false,
-            "skipped_reason": "disabled",
-        }));
+        return Ok(bootstrap::BootstrapVaultReport::disabled());
     }
 
     let ctx =
@@ -212,12 +211,7 @@ fn ensure_bootstrap_vault(
             "vault auto-init could not load the rendered repo context after repo files were written; fix the reported .jig.toml or .agent/jig-contract.json issue before rerunning `jig vault init`"
         })?;
     let Some(vault) = runtime::repo_vault_options_for_context(&ctx) else {
-        return Ok(json!({
-            "requested": true,
-            "initialized": false,
-            "created": false,
-            "skipped_reason": "repo has no [vault] scope",
-        }));
+        return Ok(bootstrap::BootstrapVaultReport::missing_scope());
     };
     let status = runtime::dispatch_vault(crate::command::VaultCommand::Status(
         crate::command::VaultStatusRequest {
@@ -226,14 +220,7 @@ fn ensure_bootstrap_vault(
     ))
     .context("vault auto-init status check failed after repo files were written; rerun `jig vault status` from the repo after fixing the reported vault issue")?;
     if status["exists"].as_bool().unwrap_or(false) {
-        return Ok(json!({
-            "requested": true,
-            "initialized": true,
-            "created": false,
-            "vault_home": status["vault_home"],
-            "vault_scope": status["vault_scope"],
-            "vault_scope_id": status["vault_scope_id"],
-        }));
+        return Ok(bootstrap::BootstrapVaultReport::initialized(false, &status));
     }
 
     if plan == BootstrapVaultPlan::CaptureAfterRender {
@@ -245,14 +232,7 @@ fn ensure_bootstrap_vault(
         crate::command::VaultInitRequest { vault },
     ))
     .context("vault auto-init failed after repo files were written; rerun `jig vault init` from the repo after fixing the reported vault issue")?;
-    Ok(json!({
-        "requested": true,
-        "initialized": true,
-        "created": true,
-        "vault_home": init["vault_home"],
-        "vault_scope": init["vault_scope"],
-        "vault_scope_id": init["vault_scope_id"],
-    }))
+    Ok(bootstrap::BootstrapVaultReport::initialized(true, &init))
 }
 
 fn print_human_summary(summary: String) -> Result<()> {
@@ -332,13 +312,13 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
     summary
 }
 
-pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
+pub(super) fn format_init_human_summary(output: &bootstrap::InitReport) -> String {
     let mut summary = String::new();
     summary.push_str("init summary\n");
-    push_summary_field(&mut summary, "target", output["destination"].as_str());
-    push_summary_field(&mut summary, "template", output["template"].as_str());
+    push_summary_field(&mut summary, "target", Some(output.destination()));
+    push_summary_field(&mut summary, "template", Some(output.template()));
 
-    let report = &output["render_report"];
+    let report = output.render_report();
     let created = array_len(&report["files_created"]);
     let modified = array_len(&report["files_modified"]);
     let removed = array_len(&report["files_removed"]);
@@ -347,7 +327,7 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
         "  managed files: {created} created, {modified} modified, {removed} removed"
     );
 
-    if let Some(scaffold) = output.get("scaffold").filter(|value| !value.is_null()) {
+    if let Some(scaffold) = output.scaffold() {
         let preset = scaffold["preset"].as_str().unwrap_or("<unknown>");
         let db = scaffold["db"].as_str().unwrap_or("<unknown>");
         let _ = write!(summary, "  scaffold: {preset}");
@@ -384,38 +364,36 @@ pub(super) fn format_init_human_summary(output: &serde_json::Value) -> String {
         }
     }
 
-    if let Some(git_initialized) = output["git_initialized"].as_bool() {
-        let _ = writeln!(
-            summary,
-            "  git: {}",
-            if git_initialized {
-                "initialized"
-            } else {
-                "already present"
-            }
-        );
+    let _ = writeln!(
+        summary,
+        "  git: {}",
+        if output.git_initialized() {
+            "initialized"
+        } else {
+            "already present"
+        }
+    );
+
+    if let Some(vault) = output.vault() {
+        push_bootstrap_vault_summary(&mut summary, vault);
     }
 
-    push_vault_summary(&mut summary, &output["vault"]);
-
-    if let Some(notes) = output["notes"].as_array() {
-        if !notes.is_empty() {
-            summary.push_str("  notes:\n");
-            for note in notes.iter().take(5).filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {note}");
-            }
-            if notes.len() > 5 {
-                let _ = writeln!(summary, "    - and {} more", notes.len() - 5);
-            }
+    let notes = output.notes();
+    if !notes.is_empty() {
+        summary.push_str("  notes:\n");
+        for note in notes.iter().take(5) {
+            let _ = writeln!(summary, "    - {note}");
+        }
+        if notes.len() > 5 {
+            let _ = writeln!(summary, "    - and {} more", notes.len() - 5);
         }
     }
 
-    if let Some(steps) = output["next_steps"].as_array() {
-        if !steps.is_empty() {
-            summary.push_str("  next steps:\n");
-            for step in steps.iter().filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {step}");
-            }
+    let steps = output.next_steps();
+    if !steps.is_empty() {
+        summary.push_str("  next steps:\n");
+        for step in steps {
+            let _ = writeln!(summary, "    - {step}");
         }
     }
 
@@ -565,6 +543,29 @@ fn push_vault_summary(summary: &mut String, vault: &serde_json::Value) {
     };
     let _ = write!(summary, "  vault: {status}");
     if let Some(scope) = vault["vault_scope"].as_str() {
+        let _ = write!(summary, " ({scope})");
+    }
+    summary.push('\n');
+}
+
+fn push_bootstrap_vault_summary(summary: &mut String, vault: &bootstrap::BootstrapVaultReport) {
+    if !vault.requested() {
+        summary.push_str("  vault: skipped\n");
+        return;
+    }
+    if let Some(reason) = vault.skipped_reason() {
+        let _ = writeln!(summary, "  vault: skipped ({reason})");
+        return;
+    }
+    let status = if vault.created() {
+        "created"
+    } else if vault.initialized_status() {
+        "already initialized"
+    } else {
+        "not initialized"
+    };
+    let _ = write!(summary, "  vault: {status}");
+    if let Some(scope) = vault.vault_scope() {
         let _ = write!(summary, " ({scope})");
     }
     summary.push('\n');

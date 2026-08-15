@@ -288,6 +288,7 @@ fn run_init_falls_back_only_for_unsupported_git_branch_flag() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert_eq!(output["git_initialized"], true);
     let log = fs::read_to_string(&log_path).unwrap();

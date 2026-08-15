@@ -422,6 +422,7 @@ command = "cargo run -p demo-api"
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     let rendered = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(rendered.contains("[[dev.apps]]\nname = \"api\""));
@@ -478,6 +479,7 @@ fn init_reports_and_preserves_legacy_dev_command_answer() {
         },
     })
     .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert!(output["notes"].as_array().unwrap().iter().any(|note| {
         note.as_str()

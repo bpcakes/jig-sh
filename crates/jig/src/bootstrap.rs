@@ -450,7 +450,135 @@ pub(crate) fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {
     answers::should_default_init_sqlx_disabled(answers)
 }
 
-pub fn run_init(mut opts: InitOpts) -> Result<Value> {
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct InitReport {
+    ok: bool,
+    command: String,
+    render_mode: String,
+    template: String,
+    destination: String,
+    answers_file: String,
+    git_initialized: bool,
+    scaffold: Option<Value>,
+    render_report: Value,
+    next_steps: Vec<String>,
+    notes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault: Option<BootstrapVaultReport>,
+}
+
+impl InitReport {
+    pub(crate) fn destination(&self) -> &str {
+        &self.destination
+    }
+
+    pub(crate) fn template(&self) -> &str {
+        &self.template
+    }
+
+    pub(crate) const fn git_initialized(&self) -> bool {
+        self.git_initialized
+    }
+
+    pub(crate) fn scaffold(&self) -> Option<&Value> {
+        self.scaffold.as_ref()
+    }
+
+    pub(crate) const fn render_report(&self) -> &Value {
+        &self.render_report
+    }
+
+    pub(crate) fn next_steps(&self) -> &[String] {
+        &self.next_steps
+    }
+
+    pub(crate) fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    pub(crate) fn vault(&self) -> Option<&BootstrapVaultReport> {
+        self.vault.as_ref()
+    }
+
+    pub(crate) fn attach_vault(&mut self, vault: BootstrapVaultReport) -> Result<()> {
+        if self.vault.is_some() {
+            bail!("bootstrap::run_init output unexpectedly included a vault field");
+        }
+        self.vault = Some(vault);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct BootstrapVaultReport {
+    requested: bool,
+    initialized: bool,
+    created: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_home: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_scope: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_scope_id: Option<Value>,
+}
+
+impl BootstrapVaultReport {
+    pub(crate) fn disabled() -> Self {
+        Self::skipped(false, "disabled")
+    }
+
+    pub(crate) fn missing_scope() -> Self {
+        Self::skipped(true, "repo has no [vault] scope")
+    }
+
+    fn skipped(requested: bool, reason: &str) -> Self {
+        Self {
+            requested,
+            initialized: false,
+            created: false,
+            skipped_reason: Some(reason.to_string()),
+            vault_home: None,
+            vault_scope: None,
+            vault_scope_id: None,
+        }
+    }
+
+    pub(crate) fn initialized(created: bool, runtime_report: &Value) -> Self {
+        Self {
+            requested: true,
+            initialized: true,
+            created,
+            skipped_reason: None,
+            vault_home: Some(runtime_report["vault_home"].clone()),
+            vault_scope: Some(runtime_report["vault_scope"].clone()),
+            vault_scope_id: Some(runtime_report["vault_scope_id"].clone()),
+        }
+    }
+
+    pub(crate) const fn requested(&self) -> bool {
+        self.requested
+    }
+
+    pub(crate) const fn initialized_status(&self) -> bool {
+        self.initialized
+    }
+
+    pub(crate) const fn created(&self) -> bool {
+        self.created
+    }
+
+    pub(crate) fn skipped_reason(&self) -> Option<&str> {
+        self.skipped_reason.as_deref()
+    }
+
+    pub(crate) fn vault_scope(&self) -> Option<&str> {
+        self.vault_scope.as_ref().and_then(Value::as_str)
+    }
+}
+
+pub(crate) fn run_init(mut opts: InitOpts) -> Result<InitReport> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
     let destination = path::resolve_init_destination(&opts.path, &invocation_cwd)?;
     // This first validation deliberately precedes answer loading and template
@@ -491,7 +619,7 @@ pub fn run_init(mut opts: InitOpts) -> Result<Value> {
     ))?;
     let mut transaction = InitMutationTransaction::create(&destination)?;
     let work_destination = transaction.work_destination().to_path_buf();
-    let init_result = (|| -> Result<Value> {
+    let init_result = (|| -> Result<InitReport> {
         // Revalidate after creation: another process may have populated a path
         // between the initial preflight and our atomic create_dir calls.
         progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
@@ -592,17 +720,17 @@ pub fn run_init(mut opts: InitOpts) -> Result<Value> {
                 transaction.verify_destination_identity()
             })?;
 
-        Ok(json!({
-            "ok": true,
-            "command": "init",
-            "render_mode": "copy",
-            "template": template.source(),
-            "destination": destination.display().to_string(),
-            "answers_file": ANSWERS_FILE,
-            "git_initialized": git_initialized,
-            "scaffold": scaffold_report,
-            "render_report": initial_render_report(&copy_result),
-            "next_steps": initial_next_steps(
+        Ok(InitReport {
+            ok: true,
+            command: "init".to_string(),
+            render_mode: "copy".to_string(),
+            template: template.source().to_string(),
+            destination: destination.display().to_string(),
+            answers_file: ANSWERS_FILE.to_string(),
+            git_initialized,
+            scaffold: scaffold_report,
+            render_report: initial_render_report(&copy_result),
+            next_steps: initial_next_steps(
                 InitialCommand::Init,
                 &destination,
                 &copy_result,
@@ -610,13 +738,14 @@ pub fn run_init(mut opts: InitOpts) -> Result<Value> {
                     .as_ref()
                     .is_some_and(scaffold::InitScaffoldPlan::database_enabled),
             ),
-            "notes": initial_notes(
+            notes: initial_notes(
                 copy_result.notes,
                 copy_result.frontend_apps_configured,
                 scaffold_plan.as_ref(),
                 false,
             ),
-        }))
+            vault: None,
+        })
     })();
 
     match init_result {

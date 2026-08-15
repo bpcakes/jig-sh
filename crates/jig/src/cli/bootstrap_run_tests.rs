@@ -5,6 +5,10 @@ use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
+fn init_report(value: serde_json::Value) -> bootstrap::InitReport {
+    serde_json::from_value(value).unwrap()
+}
+
 #[test]
 fn bootstrap_vault_capture_is_deferred_only_for_interactive_prompts() {
     use BootstrapInputMode::{Defaults, Interactive, NoInput};
@@ -175,10 +179,12 @@ allow_global = false
         .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "correct horse battery staple");
-    let bootstrap = json!({ "destination": repo.display().to_string() });
-
-    let output =
-        ensure_bootstrap_vault(&bootstrap, BootstrapVaultPlan::CaptureAfterRender).unwrap();
+    let output = ensure_bootstrap_vault(
+        repo.to_str().unwrap(),
+        BootstrapVaultPlan::CaptureAfterRender,
+    )
+    .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert_eq!(output["requested"], true);
     assert_eq!(output["initialized"], true);
@@ -213,11 +219,12 @@ allow_global = false
         .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
-    let bootstrap = json!({ "destination": repo.display().to_string() });
-
-    let error = ensure_bootstrap_vault(&bootstrap, BootstrapVaultPlan::CaptureAfterRender)
-        .unwrap_err()
-        .to_string();
+    let error = ensure_bootstrap_vault(
+        repo.to_str().unwrap(),
+        BootstrapVaultPlan::CaptureAfterRender,
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("repo files were written"));
     assert!(error.contains("rerun `jig vault init`"));
@@ -251,9 +258,13 @@ fn presets_summary_explains_defaults_and_ownership() {
 
 #[test]
 fn init_summary_calls_out_custom_bare_frontend_names() {
-    let output = json!({
+    let output = init_report(json!({
+        "ok": true,
+        "command": "init",
+        "render_mode": "copy",
         "destination": "/tmp/demo",
         "template": "embedded",
+        "answers_file": ".jig.toml",
         "render_report": {
             "files_created": [],
             "files_modified": [],
@@ -272,10 +283,15 @@ fn init_summary_calls_out_custom_bare_frontend_names() {
             "files_unchanged": []
         },
         "git_initialized": true,
-        "vault": { "requested": false },
+        "vault": {
+            "requested": false,
+            "initialized": false,
+            "created": false,
+            "skipped_reason": "disabled"
+        },
         "notes": [],
         "next_steps": []
-    });
+    }));
 
     let summary = format_init_human_summary(&output);
 
@@ -324,9 +340,13 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
 
 #[test]
 fn init_human_summary_includes_scaffold_and_next_steps() {
-    let output = serde_json::json!({
+    let output = init_report(serde_json::json!({
+        "ok": true,
+        "command": "init",
+        "render_mode": "copy",
         "destination": "/tmp/repo",
         "template": "embedded",
+        "answers_file": ".jig.toml",
         "git_initialized": true,
         "scaffold": {
             "preset": "rust-react",
@@ -353,7 +373,7 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
             "cd /tmp/repo",
             "scripts/jig setup"
         ]
-    });
+    }));
 
     let summary = format_init_human_summary(&output);
 

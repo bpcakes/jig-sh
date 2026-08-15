@@ -932,6 +932,7 @@ fn existing_empty_default_init_succeeds_with_256_soft_handle_limit_helper() {
         run_init(rollback_test_init_opts(destination.clone(), false))
     })
     .unwrap();
+    let report = serde_json::to_value(report).unwrap();
 
     assert_eq!(report["scaffold"]["preset"], "rust-react");
     assert!(destination.join(".jig.toml").is_file());
