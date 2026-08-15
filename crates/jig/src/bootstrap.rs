@@ -578,7 +578,22 @@ impl BootstrapVaultReport {
     }
 }
 
-pub(crate) fn run_init(mut opts: InitOpts) -> Result<InitReport> {
+struct PreparedInit {
+    destination: PathBuf,
+    answers: AnswerOpts,
+    answer_input: AnswerInput,
+    scaffold_plan: Option<scaffold::InitScaffoldPlan>,
+    template: template_source::PreparedTemplateSource,
+    force: bool,
+    use_defaults: bool,
+    progress: CliProgress,
+}
+
+pub(crate) fn run_init(opts: InitOpts) -> Result<InitReport> {
+    execute_init(prepare_init(opts)?)
+}
+
+fn prepare_init(mut opts: InitOpts) -> Result<PreparedInit> {
     let invocation_cwd = bootstrap_invocation_cwd()?;
     let destination = path::resolve_init_destination(&opts.path, &invocation_cwd)?;
     // This first validation deliberately precedes answer loading and template
@@ -617,15 +632,38 @@ pub(crate) fn run_init(mut opts: InitOpts) -> Result<InitReport> {
         opts.template_mode,
         &invocation_cwd,
     ))?;
+    Ok(PreparedInit {
+        destination,
+        answers,
+        answer_input,
+        scaffold_plan,
+        template,
+        force: opts.force,
+        use_defaults: opts.defaults,
+        progress,
+    })
+}
+
+fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
+    let PreparedInit {
+        destination,
+        answers,
+        answer_input,
+        scaffold_plan,
+        template,
+        force,
+        use_defaults,
+        progress,
+    } = prepared;
     let mut transaction = InitMutationTransaction::create(&destination)?;
     let work_destination = transaction.work_destination().to_path_buf();
     let init_result = (|| -> Result<InitReport> {
         // Revalidate after creation: another process may have populated a path
         // between the initial preflight and our atomic create_dir calls.
-        progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
+        progress.log_blocked_on_err(validate_init_destination(&destination, force))?;
         if let Some(plan) = &scaffold_plan {
             progress.step("preflight project scaffold", plan.summary());
-            progress.log_blocked_on_err(plan.preflight(&work_destination, opts.force))?;
+            progress.log_blocked_on_err(plan.preflight(&work_destination, force))?;
             progress.log_blocked_on_err(path::validate_repository_regular_file_leaf(
                 &work_destination,
                 Path::new(managed_paths::AGENT_MAP_PATH),
@@ -637,8 +675,8 @@ pub(crate) fn run_init(mut opts: InitOpts) -> Result<InitReport> {
             template: &template,
             answers: &answers,
             answer_input: Some(answer_input),
-            use_defaults: opts.defaults,
-            force: opts.force,
+            use_defaults,
+            force,
             dry_run: false,
             backup_root: None,
             seed_repo_path: None,
@@ -664,7 +702,7 @@ pub(crate) fn run_init(mut opts: InitOpts) -> Result<InitReport> {
             let report = progress.log_blocked_on_err(plan.write_rendered_with_transaction(
                 &work_destination,
                 files,
-                opts.force,
+                force,
                 Some(&mut transaction),
             ))?;
             progress.step("refresh agent map", "include scaffold crate guides");
