@@ -110,10 +110,9 @@ fn generated_dependency_dirs_are_skipped_without_depth_warnings() {
                 .join("terraform/environments/production/.terraform/providers/registry.terraform.io/hashicorp/aws"),
         )
         .unwrap();
-    fs::create_dir_all(
-        temp.path()
-            .join("Perdify-iOS/PerdifyGRPC/.build/checkouts/swift-nio-transport-services/Sources"),
-    )
+    fs::create_dir_all(temp.path().join(
+        "ExampleApp-iOS/ExampleAppGRPC/.build/checkouts/swift-nio-transport-services/Sources",
+    ))
     .unwrap();
 
     let mut warnings = Vec::new();

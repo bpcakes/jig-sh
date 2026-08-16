@@ -56,10 +56,10 @@ sqlx = "0.8"
 "#,
     )
     .unwrap();
-    fs::create_dir_all(temp.path().join("crates/perdify-db/migrations")).unwrap();
+    fs::create_dir_all(temp.path().join("crates/example-db/migrations")).unwrap();
     fs::write(
         temp.path()
-            .join("crates/perdify-db/migrations/20260101000000_init.sql"),
+            .join("crates/example-db/migrations/20260101000000_init.sql"),
         "select 1;",
     )
     .unwrap();
@@ -69,7 +69,7 @@ sqlx = "0.8"
     assert_eq!(inference.sqlx_enabled, Some(true));
     assert_eq!(
         inference.rust_migration_dir.as_deref(),
-        Some("crates/perdify-db/migrations")
+        Some("crates/example-db/migrations")
     );
     assert!(
         inference
