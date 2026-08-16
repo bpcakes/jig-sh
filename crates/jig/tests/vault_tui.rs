@@ -7,14 +7,12 @@ use std::{
     io::{Read, Write},
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
 };
 
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
-use wait_timeout::ChildExt;
-
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
@@ -146,6 +144,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "controlled Peek value survived into the metadata redraw"
     );
 
+    drain_until_quiet(
+        &mut master,
+        &mut output,
+        Duration::from_millis(100),
+        Duration::from_secs(2),
+    );
     let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
@@ -183,17 +187,14 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     master.write_all(b"\x03").unwrap();
 
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            let _ = child.kill();
-            panic!(
-                "vault TUI did not exit after q; output: {}",
-                String::from_utf8_lossy(&output)
-            )
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after Ctrl-C; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "vault TUI exited with {status}");
     let restored = terminal_attributes(&slave);
     assert_eq!(
@@ -277,23 +278,14 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let status = loop {
-        read_available(&mut master, &mut output);
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!(
-                "vault TUI did not exit after SIGTERM; output: {}",
-                String::from_utf8_lossy(&output)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after SIGTERM; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
         "vault TUI exited with {status}; output: {}",
@@ -462,6 +454,56 @@ fn read_until_from(
             "timed out waiting for {needle:?}; output: {}",
             String::from_utf8_lossy(output)
         );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn drain_until_quiet(
+    file: &mut File,
+    output: &mut Vec<u8>,
+    quiet_period: Duration,
+    timeout: Duration,
+) {
+    let deadline = Instant::now() + timeout;
+    let mut last_output = Instant::now();
+    let mut output_len = output.len();
+    loop {
+        read_available(file, output);
+        if output.len() != output_len {
+            output_len = output.len();
+            last_output = Instant::now();
+        }
+        if last_output.elapsed() >= quiet_period {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "PTY output did not become quiet; output: {}",
+            String::from_utf8_lossy(output)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_child_while_draining(
+    child: &mut Child,
+    master: &mut File,
+    output: &mut Vec<u8>,
+    timeout: Duration,
+) -> Option<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        read_available(master, output);
+        if let Some(status) = child.try_wait().unwrap() {
+            read_available(master, output);
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            read_available(master, output);
+            return None;
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
 }

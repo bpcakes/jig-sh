@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
@@ -241,13 +241,15 @@ sleep 30
         "\x1b[?1049l",
         Duration::from_secs(1),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after launching; invocations: {}; output: {}",
+                    fs::read_to_string(&invocations).unwrap_or_default(),
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "picker exited with {status}");
     assert_eq!(
         fs::read_to_string(launched).unwrap().trim(),
@@ -287,19 +289,14 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        read_available(&mut master, &mut output);
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            break child.wait().unwrap();
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "large picker did not exit after quit; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     assert!(
         status.success(),
@@ -350,14 +347,14 @@ sleep 30
         "Codex homes: 2 found",
         Duration::from_secs(5),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(2))
+            .unwrap_or_else(|| {
+                panic!(
+                    "homes did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -427,14 +424,14 @@ sleep 30
         "Codex resume: dry run",
         Duration::from_secs(5),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(2))
+            .unwrap_or_else(|| {
+                panic!(
+                    "resume did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -509,18 +506,14 @@ sleep 30
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
         0
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        read_available(&mut master, &mut output);
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            break child.wait().unwrap();
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after SIGINT; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGINT) || status.code() == Some(130),
         "picker exited with {status}; output: {}",
@@ -720,6 +713,29 @@ fn read_available(file: &mut File, output: &mut Vec<u8>) {
             Err(error) if pty_master_reached_eof(&error) => return,
             Err(error) => panic!("reading PTY output failed: {error}"),
         }
+    }
+}
+
+fn wait_for_child_while_draining(
+    child: &mut Child,
+    master: &mut File,
+    output: &mut Vec<u8>,
+    timeout: Duration,
+) -> Option<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        read_available(master, output);
+        if let Some(status) = child.try_wait().unwrap() {
+            read_available(master, output);
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            read_available(master, output);
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
