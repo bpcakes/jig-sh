@@ -197,7 +197,7 @@ fn verified_route_publication_abandons_contended_lock_without_verifying() {
                 created_at_ms: now_ms(),
             },
             &|| true,
-            || {
+            |_| {
                 verifier_calls.set(verifier_calls.get() + 1);
                 Ok(())
             },
@@ -283,7 +283,7 @@ fn verified_route_rolls_back_if_post_write_verification_fails() {
                 mode: RouteMode::Alias,
                 created_at_ms: now_ms(),
             },
-            || {
+            |_| {
                 calls += 1;
                 if calls == 2 {
                     Err(anyhow::anyhow!("listener changed after publish"))
@@ -300,6 +300,59 @@ fn verified_route_rolls_back_if_post_write_verification_fails() {
     let routes = store.read_routes(false).unwrap();
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0].target_port, 3999);
+}
+
+#[cfg(unix)]
+#[test]
+fn verified_route_reports_when_post_write_rollback_cannot_be_confirmed() {
+    struct RestorePermissions {
+        path: PathBuf,
+        permissions: fs::Permissions,
+    }
+
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            fs::set_permissions(&self.path, self.permissions.clone()).unwrap();
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let original_permissions = fs::metadata(store.root()).unwrap().permissions();
+    let restore = RestorePermissions {
+        path: store.root().to_path_buf(),
+        permissions: original_permissions,
+    };
+    let mut calls = 0usize;
+
+    let error = store
+        .add_verified_route(
+            Route {
+                hostname: "rollback-uncertain.localhost".into(),
+                target_host: "127.0.0.1".into(),
+                target_port: 4000,
+                owner_pid: None,
+                owner_start_token: None,
+                mode: RouteMode::Alias,
+                created_at_ms: now_ms(),
+            },
+            |_| {
+                calls += 1;
+                if calls == 2 {
+                    fs::set_permissions(store.root(), fs::Permissions::from_mode(0o500)).unwrap();
+                    Err(anyhow::anyhow!("listener changed after publish"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+    drop(restore);
+
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("listener changed after publish"));
+    assert!(diagnostic.contains("rollback also failed"));
+    assert!(!diagnostic.contains("route was not published"));
 }
 
 #[test]

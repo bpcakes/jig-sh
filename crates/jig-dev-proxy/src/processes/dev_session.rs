@@ -16,13 +16,13 @@ use crate::{DevPreflightError, DevPreflightResult};
 
 use super::{
     PROXY_HEALTH_CHECK_INTERVAL, PreparedApp, RunningChild, SpawnChildFailure, SpawnedChild,
-    TerminationReason, app_display_interruptible, arm_owned_resources, child_exit_status,
-    choose_app_port, cleanup_children, command_argv, dev_app_environment_interruptible,
-    ensure_not_interrupted_with, ensure_process_routes_supported,
-    ensure_proxy_running_interruptible, force_cleanup_requested, interruption_error,
-    interruption_reason, is_interruption, lock_outcome_or_interruption, new_route_cleanup_deadline,
-    preflight_process_routes, prepare_certs_for_hosts_interruptible, print_dev_table,
-    process_route_parts, proxy_health_failed, proxy_ready_interruptible,
+    StartupOutputDisposition, TerminationReason, app_display_interruptible, arm_owned_resources,
+    child_exit_status, choose_app_port, cleanup_children, command_argv,
+    dev_app_environment_interruptible, ensure_not_interrupted_with,
+    ensure_process_routes_supported, ensure_proxy_running_interruptible, force_cleanup_requested,
+    interruption_error, interruption_reason, is_interruption, lock_outcome_or_interruption,
+    new_route_cleanup_deadline, preflight_process_routes, prepare_certs_for_hosts_interruptible,
+    print_dev_table, process_route_parts, proxy_health_failed, proxy_ready_interruptible,
     publish_process_route_interruptible, require_cleanup_for_success, select_interruption,
     select_primary_outcome, spawn_child_with_cleanup_report, start_termination_cleanup_session,
     terminate_and_reap_logged, termination_requested, try_wait_preserving_process_group,
@@ -326,12 +326,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 &mut children,
             );
             if interrupted {
-                output.discard();
+                output.finish_start_failure(StartupOutputDisposition::Interrupted);
                 for running in &mut children {
-                    running.output.discard();
+                    running
+                        .output
+                        .finish_start_failure(StartupOutputDisposition::Interrupted);
                 }
             } else {
-                output.print_failure(&spec.name);
+                output.finish_start_failure(StartupOutputDisposition::Failure);
             }
             return Err(error).with_context(|| {
                 format!(
@@ -357,9 +359,14 @@ fn run_apps_with_session_and_interrupt_probe(
                         &mut children,
                     );
                     if is_interruption(&error) {
-                        output.discard();
+                        output.finish_start_failure(StartupOutputDisposition::Interrupted);
+                        for running in &mut children {
+                            running
+                                .output
+                                .finish_start_failure(StartupOutputDisposition::Interrupted);
+                        }
                     } else {
-                        output.print_failure(&spec.name);
+                        output.finish_start_failure(StartupOutputDisposition::Failure);
                     }
                     return Err(error);
                 }
@@ -379,6 +386,7 @@ fn run_apps_with_session_and_interrupt_probe(
                     "could not clean up app after missing owner identity",
                     &mut children,
                 );
+                output.finish_start_failure(StartupOutputDisposition::Failure);
                 bail!(
                     "Could not verify start identity for child process {child_pid}; refusing to publish process route"
                 );
@@ -392,6 +400,7 @@ fn run_apps_with_session_and_interrupt_probe(
                     "could not clean up app after its process identity changed during readiness",
                     &mut children,
                 );
+                output.finish_start_failure(StartupOutputDisposition::Failure);
                 bail!(
                     "Development app '{}' changed process identity before its route could be published",
                     spec.name
@@ -406,6 +415,7 @@ fn run_apps_with_session_and_interrupt_probe(
                     "could not clean up app after route preparation failure",
                     &mut children,
                 );
+                output.finish_start_failure(StartupOutputDisposition::Failure);
                 bail!(
                     "Could not prepare process route for child process {child_pid}; refusing to publish route"
                 );
@@ -424,10 +434,8 @@ fn run_apps_with_session_and_interrupt_probe(
             if let Err(error) = publish_process_route_interruptible(
                 &store,
                 route.clone(),
-                &spec,
-                port,
-                child_pid,
-                route.owner_start_token.as_deref(),
+                &spec.name,
+                &mut child,
                 &interrupt_requested,
             ) {
                 let interrupted = is_interruption(&error);
@@ -436,6 +444,7 @@ fn run_apps_with_session_and_interrupt_probe(
                 } else {
                     select_primary_outcome();
                 }
+                let failed_child = children.len();
                 children.push(RunningChild {
                     name: spec.name,
                     store: store.clone(),
@@ -451,8 +460,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 cleanup_dev_session_children(session, &mut children);
                 if interrupted {
                     for running in &mut children {
-                        running.output.discard();
+                        running
+                            .output
+                            .finish_start_failure(StartupOutputDisposition::Interrupted);
                     }
+                } else {
+                    children[failed_child]
+                        .output
+                        .finish_start_failure(StartupOutputDisposition::Failure);
                 }
                 return Err(error);
             }
@@ -472,7 +487,9 @@ fn run_apps_with_session_and_interrupt_probe(
                 });
                 cleanup_dev_session_children(session, &mut children);
                 for running in &mut children {
-                    running.output.discard();
+                    running
+                        .output
+                        .finish_start_failure(StartupOutputDisposition::Interrupted);
                 }
                 return Err(error);
             }
@@ -491,6 +508,7 @@ fn run_apps_with_session_and_interrupt_probe(
                 } else {
                     select_primary_outcome();
                 }
+                let failed_child = children.len();
                 children.push(RunningChild {
                     name: spec.name,
                     store,
@@ -506,8 +524,14 @@ fn run_apps_with_session_and_interrupt_probe(
                 cleanup_dev_session_children(session, &mut children);
                 if interrupted {
                     for running in &mut children {
-                        running.output.discard();
+                        running
+                            .output
+                            .finish_start_failure(StartupOutputDisposition::Interrupted);
                     }
+                } else {
+                    children[failed_child]
+                        .output
+                        .finish_start_failure(StartupOutputDisposition::Failure);
                 }
                 return Err(error);
             }
@@ -623,7 +647,7 @@ fn run_apps_with_session_and_interrupt_probe(
         }
     } else if let Some(index) = failed_child {
         let failed = &mut children[index];
-        failed.output.print_failure(&failed.name);
+        failed.output.print_failure();
     }
 
     if proxy_stopped {
