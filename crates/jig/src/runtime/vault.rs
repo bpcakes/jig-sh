@@ -1048,10 +1048,10 @@ mod tests {
     fn repo_scope_resolves_under_vault_base_home() {
         let _env = lock_env();
         let temp = tempdir().unwrap();
-        let base = temp.path().join("vault-base");
+        let base = temp.path().canonicalize().unwrap().join("vault-base");
         let repo = temp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let _home = EnvVarGuard::set(VAULT_HOME_ENV, &base);
+        let _home = EnvVarGuard::set(VAULT_HOME_ENV, temp.path().join("vault-base"));
 
         let output = status(VaultStatusRequest {
             vault: VaultRuntimeOptions::repo("scope_123", "demo", &repo),
