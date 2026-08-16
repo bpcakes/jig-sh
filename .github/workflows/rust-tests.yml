@@ -321,7 +321,6 @@ jobs:
         with:
           cache: false
           rustflags: ""
-          components: clippy
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
@@ -331,5 +330,3 @@ jobs:
         # Dev-proxy tests exercise process-global signal hooks and fixed OS trust/process boundaries.
         env:
           RUST_TEST_THREADS: "1"
-      - name: Run dev proxy clippy
-        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings

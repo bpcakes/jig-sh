@@ -350,7 +350,14 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         }
     }
     if let Some(runner) = inference.ci_github_runner.as_deref() {
-        inference.signals.push(format!("GitHub runner: {runner}"));
+        let suffix = if github_ci.runner_was_synthesized {
+            " (synthesized supported-host fallback)"
+        } else {
+            ""
+        };
+        inference
+            .signals
+            .push(format!("GitHub runner: {runner}{suffix}"));
     }
     if inference.ci_shape.has_workflows() {
         inference.signals.push(format!(

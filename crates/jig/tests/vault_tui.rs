@@ -21,6 +21,7 @@ use secrecy::SecretString;
 use pty_support::{read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
+const FULL_CLEAR_MARKER: &str = "\u{1b}[2J";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
@@ -151,14 +152,6 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "controlled Peek value survived into the metadata redraw"
     );
 
-    // The periodic spinner runs only while loading. This unlocked browser
-    // state is otherwise dirty-gated, so quiet output is a reliable barrier.
-    drain_until_quiet(
-        &mut master,
-        &mut output,
-        Duration::from_millis(250),
-        Duration::from_secs(5),
-    );
     let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
@@ -171,6 +164,19 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         resize_offset,
+        FULL_CLEAR_MARKER,
+        Duration::from_secs(8),
+    );
+    let resized_frame_offset = resize_offset
+        + output[resize_offset..]
+            .windows(FULL_CLEAR_MARKER.len())
+            .position(|window| window == FULL_CLEAR_MARKER.as_bytes())
+            .expect("resize redraw emitted the awaited full-clear marker")
+        + FULL_CLEAR_MARKER.len();
+    read_until_from(
+        &mut master,
+        &mut output,
+        resized_frame_offset,
         "Production",
         Duration::from_secs(8),
     );
@@ -461,33 +467,6 @@ fn read_until_from(
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {needle:?}; output: {}",
-            String::from_utf8_lossy(output)
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn drain_until_quiet(
-    file: &mut File,
-    output: &mut Vec<u8>,
-    quiet_period: Duration,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
-    let mut last_output = Instant::now();
-    let mut output_len = output.len();
-    loop {
-        read_available(file, output);
-        if output.len() != output_len {
-            output_len = output.len();
-            last_output = Instant::now();
-        }
-        if last_output.elapsed() >= quiet_period {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "stable browser PTY output did not become quiet; a loading spinner or redraw may be active; output: {}",
             String::from_utf8_lossy(output)
         );
         std::thread::sleep(Duration::from_millis(10));

@@ -326,7 +326,7 @@ fn github_runner_tie_break_prefers_newer_ubuntu_label() {
 fn github_runner_tie_break_recognizes_mixed_case_ubuntu_label() {
     let runners = BTreeMap::from([
         ("Ubuntu-24.04".to_string(), 1),
-        ("macos-latest".to_string(), 1),
+        ("ubuntu-22.04".to_string(), 1),
     ]);
 
     assert_eq!(
@@ -428,9 +428,15 @@ sqlx = "0.8"
             .is_some_and(|warning| warning.contains("was synthesized"))
     );
     assert_eq!(report["metadata"]["ci_github_runner"]["sources"], json!([]));
-    assert!(inference.warnings.iter().any(|warning| {
-        warning.contains("Windows GitHub Actions runners are unsupported by Jig")
-    }));
+    assert!(
+        inference
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("ubuntu-latest was synthesized") })
+    );
+    assert!(inference.signals.iter().any(
+        |signal| signal == "GitHub runner: ubuntu-latest (synthesized supported-host fallback)"
+    ));
     assert!(
         inference
             .warnings

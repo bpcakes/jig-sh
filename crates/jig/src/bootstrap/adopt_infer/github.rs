@@ -9,6 +9,8 @@ use super::scan::{
 };
 
 const DEFAULT_SUPPORTED_GITHUB_RUNNER: &str = "ubuntu-latest";
+const WINDOWS_RUNNER_EXCLUSION_WARNING: &str = "Windows GitHub Actions runners are unsupported by Jig and were excluded from generated-check runner inference";
+const WINDOWS_RUNNER_FALLBACK_WARNING: &str = "ubuntu-latest was synthesized because every statically detected GitHub Actions runner targets unsupported Windows hosts";
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct GithubCiInference {
@@ -93,9 +95,9 @@ pub(super) fn infer_ci_github_runner_with_metadata(
     let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_windows_runners.is_empty();
     let unsupported_runner_warning = (!unsupported_windows_runners.is_empty()).then_some({
         if fallback_to_ubuntu {
-            "Windows GitHub Actions runners are unsupported by Jig; using ubuntu-latest because no supported static runner was detected"
+            WINDOWS_RUNNER_FALLBACK_WARNING
         } else {
-            "Windows GitHub Actions runners are unsupported by Jig and were excluded from generated-check runner inference"
+            WINDOWS_RUNNER_EXCLUSION_WARNING
         }
     });
     if let Some(warning) = unsupported_runner_warning {
@@ -104,17 +106,10 @@ pub(super) fn infer_ci_github_runner_with_metadata(
     let runner = selected_runner
         .clone()
         .or_else(|| fallback_to_ubuntu.then(|| DEFAULT_SUPPORTED_GITHUB_RUNNER.to_string()));
-    let runner_warnings = if fallback_to_ubuntu {
-        vec![
-            "ubuntu-latest was synthesized because every statically detected GitHub Actions runner targets unsupported Windows hosts"
-                .to_string(),
-        ]
-    } else {
-        unsupported_runner_warning
-            .map(str::to_string)
-            .into_iter()
-            .collect()
-    };
+    let runner_warnings = unsupported_runner_warning
+        .map(str::to_string)
+        .into_iter()
+        .collect();
     let sources = selected_runner
         .as_ref()
         .and_then(|runner| sources_by_runner.remove(runner))
@@ -140,6 +135,7 @@ pub(super) fn select_github_runner(runners: &BTreeMap<String, usize>) -> Option<
             left_count
                 .cmp(right_count)
                 .then_with(|| runner_preference(left).cmp(&runner_preference(right)))
+                .then_with(|| left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase()))
                 .then_with(|| left.cmp(right))
         })
         .map(|(runner, _)| runner.clone())
