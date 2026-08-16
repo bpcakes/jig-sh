@@ -26,6 +26,7 @@ use crate::context::{RepoContext, find_repo_root_from_or_env};
 use crate::tool_defs::tool;
 
 const COMMAND: &str = "doctor";
+const NODE_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROXY_LIST_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(120);
@@ -101,6 +102,9 @@ pub(crate) fn run() -> Result<Value> {
             checks.push(contract_check(ctx));
             let context_checks = doctor_context_checks(ctx);
             checks.push(context_checks.required_tools);
+            if let Some(node_runtime) = context_checks.node_runtime {
+                checks.push(node_runtime);
+            }
             checks.push(context_checks.agent);
             checks.push(context_checks.proxy);
         }
@@ -645,6 +649,7 @@ fn inherited_shell_environment_issue(
 #[derive(Debug)]
 struct DoctorContextChecks {
     required_tools: DoctorCheck,
+    node_runtime: Option<DoctorCheck>,
     agent: DoctorCheck,
     proxy: DoctorCheck,
 }
@@ -703,10 +708,12 @@ fn doctor_context_checks_with_process_control(
         environment,
         process_control,
     );
+    let node_runtime = node_runtime_check(ctx, environment, process_control);
     let agent = agent_check(ctx, process_control);
     let proxy = proxy_check_with_process_control(ctx, process_control);
     DoctorContextChecks {
         required_tools,
+        node_runtime,
         agent,
         proxy,
     }
@@ -719,7 +726,16 @@ fn doctor_process_session_required(ctx: &RepoContext) -> bool {
             .required_commands()
             .iter()
             .any(|command| command == "sqlx_check_command");
-    sqlx_probe_required || !ctx.codex_marketplaces().is_empty() || proxy_configured(ctx)
+    sqlx_probe_required
+        || node_runtime_probe_required(ctx)
+        || !ctx.codex_marketplaces().is_empty()
+        || proxy_configured(ctx)
+}
+
+#[cfg(unix)]
+fn node_runtime_probe_required(ctx: &RepoContext) -> bool {
+    !ctx.frontend_apps().is_empty()
+        && fs::symlink_metadata(ctx.root().join(".node-version")).is_ok()
 }
 
 #[cfg(unix)]
@@ -736,6 +752,17 @@ fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorC
         checks.required_tools.detail.push_str(
             "; SQLx capability verification is incomplete because the process-wide doctor signal session could not retire safely",
         );
+    }
+    if let Some(node_runtime) = checks.node_runtime.as_mut() {
+        if node_runtime.ok {
+            node_runtime.ok = false;
+            node_runtime.status = "unverified".to_string();
+            node_runtime.detail.push_str(
+                "; Node runtime verification is incomplete because the process-wide doctor signal session could not retire safely",
+            );
+            node_runtime.fix =
+                Some("Run `scripts/jig doctor` again before starting frontend work.".into());
+        }
     }
     if !ctx.codex_marketplaces().is_empty() {
         checks.agent.ok = false;
@@ -1215,6 +1242,311 @@ fn required_tools_check_with_environment_and_process_control(
     check("required_tools", "Required tools", true, ok, status, detail)
         .with_optional_fix(fix.as_deref())
         .with_data(json!({ "tools": tools }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct NumericNodeVersion {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl std::fmt::Display for NumericNodeVersion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+fn parse_numeric_node_version(value: &str, allow_v_prefix: bool) -> Option<NumericNodeVersion> {
+    let value = if allow_v_prefix {
+        value.strip_prefix('v').unwrap_or(value)
+    } else {
+        value
+    };
+    let mut components = value.split('.');
+    let major = parse_numeric_version_component(components.next()?)?;
+    let minor = parse_numeric_version_component(components.next()?)?;
+    let patch = parse_numeric_version_component(components.next()?)?;
+    components.next().is_none().then_some(NumericNodeVersion {
+        major,
+        minor,
+        patch,
+    })
+}
+
+fn parse_numeric_version_component(value: &str) -> Option<u64> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn node_runtime_check(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    process_control: DoctorProcessControl<'_>,
+) -> Option<DoctorCheck> {
+    if ctx.frontend_apps().is_empty() {
+        return None;
+    }
+    let authority_path = ctx.root().join(".node-version");
+    let required = match node_version_authority(&authority_path) {
+        Ok(Some(required)) => required,
+        Ok(None) => return None,
+        Err(reason) => {
+            return Some(
+                check(
+                    "node_runtime",
+                    "Node runtime",
+                    true,
+                    false,
+                    "invalid authority",
+                    reason,
+                )
+                .with_fix(
+                    "Replace `.node-version` with one exact numeric version, then run `scripts/jig doctor`.",
+                )
+                .with_data(json!({ "authority": authority_path.display().to_string() })),
+            );
+        }
+    };
+    let Some(resolution) = resolve_program(
+        ctx.root(),
+        "node",
+        environment.search_path.as_deref(),
+        environment.path_extensions.as_deref(),
+    ) else {
+        return Some(
+            check(
+                "node_runtime",
+                "Node runtime",
+                true,
+                false,
+                "missing",
+                format!("Node {required} or newer is required, but node was not found on PATH"),
+            )
+            .with_fix(&node_runtime_fix(required))
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    };
+    if let Some(reason) = process_control.unavailable_reason {
+        return Some(
+            check(
+                "node_runtime",
+                "Node runtime",
+                true,
+                false,
+                "unverified",
+                format!("Could not verify Node {required} or newer ({reason})"),
+            )
+            .with_fix("Run `scripts/jig doctor` again before starting frontend work.")
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    }
+    let actual = match probe_node_version(
+        &resolution.path,
+        ctx.root(),
+        environment,
+        process_control.cancellation,
+    ) {
+        Ok(actual) => actual,
+        Err(reason) => {
+            return Some(
+                check(
+                    "node_runtime",
+                    "Node runtime",
+                    true,
+                    false,
+                    "unverified",
+                    format!("Could not verify Node {required} or newer ({reason})"),
+                )
+                .with_fix("Run `node --version`, correct the active runtime, then rerun `scripts/jig doctor`.")
+                .with_data(json!({
+                    "authority": authority_path.display().to_string(),
+                    "required": required.to_string(),
+                    "actual": null,
+                })),
+            );
+        }
+    };
+    let compatible = actual >= required;
+    let status = if compatible {
+        "compatible"
+    } else {
+        "incompatible"
+    };
+    let detail = if compatible {
+        format!("Node {actual} satisfies the required version {required}")
+    } else {
+        format!("Node {actual} is active, but this repository requires {required} or newer")
+    };
+    let check = check(
+        "node_runtime",
+        "Node runtime",
+        true,
+        compatible,
+        status,
+        detail,
+    )
+    .with_data(json!({
+        "authority": authority_path.display().to_string(),
+        "required": required.to_string(),
+        "actual": actual.to_string(),
+    }));
+    Some(if compatible {
+        check
+    } else {
+        check.with_fix(&node_runtime_fix(required))
+    })
+}
+
+fn node_version_authority(path: &Path) -> std::result::Result<Option<NumericNodeVersion>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(format!(
+                "Could not inspect the Node version authority at {}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "Node version authority {} must be a real regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > 128 {
+        return Err(format!(
+            "Node version authority {} must contain exactly one bounded version token",
+            path.display()
+        ));
+    }
+    let contents = fs::read_to_string(path).map_err(|_| {
+        format!(
+            "Node version authority {} must contain valid UTF-8",
+            path.display()
+        )
+    })?;
+    let mut tokens = contents.split_ascii_whitespace();
+    let Some(token) = tokens.next() else {
+        return Err(format!(
+            "Node version authority {} is empty",
+            path.display()
+        ));
+    };
+    if tokens.next().is_some() {
+        return Err(format!(
+            "Node version authority {} must contain exactly one version token",
+            path.display()
+        ));
+    }
+    parse_numeric_node_version(token, false)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Node version authority {} must contain an exact numeric version such as 24.19.0",
+                path.display()
+            )
+        })
+}
+
+fn probe_node_version(
+    executable: &Path,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<NumericNodeVersion, String> {
+    let temp = tempfile::tempdir()
+        .map_err(|_| "could not create an isolated probe directory".to_string())?;
+    let mut command = Command::new(executable);
+    command
+        .arg("--version")
+        .current_dir(root)
+        .env_clear()
+        .env("NO_COLOR", "1")
+        .env("LC_ALL", "C")
+        .env("HOME", temp.path())
+        .env("USERPROFILE", temp.path())
+        .env("TMPDIR", temp.path())
+        .env("TMP", temp.path())
+        .env("TEMP", temp.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(path) = sanitized_probe_search_path(root, executable) {
+        command.env("PATH", path);
+    }
+    #[cfg(windows)]
+    if let Some(path_extensions) = sanitized_windows_pathext(environment.path_extensions.as_deref())
+    {
+        command.env("PATHEXT", path_extensions);
+    }
+    for (key, value) in &environment.probe_environment {
+        command.env(key, value);
+    }
+
+    let output =
+        run_owned_process_tree_with_output(&mut command, NODE_VERSION_PROBE_TIMEOUT, || {
+            cancellation.is_some_and(|cancelled| cancelled())
+        })
+        .map_err(|error| node_probe_reason(&error).to_string())?;
+    let stdout = output
+        .stdout
+        .ok_or_else(|| "the version probe output was not captured".to_string())?;
+    let stderr = output
+        .stderr
+        .ok_or_else(|| "the version probe output was not captured".to_string())?;
+    if !stdout.complete || !stderr.complete {
+        return Err("the version probe output capture did not complete".into());
+    }
+    if stdout.truncated || stderr.truncated {
+        return Err("the version probe output exceeded the diagnostic capture limit".into());
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "node --version exited with status {}",
+            output.status
+        ));
+    }
+    let stdout = stdout.to_string_lossy();
+    let mut tokens = stdout.split_ascii_whitespace();
+    let version = tokens
+        .next()
+        .and_then(|token| parse_numeric_node_version(token, true))
+        .filter(|_| tokens.next().is_none())
+        .ok_or_else(|| "node --version returned an invalid version".to_string())?;
+    Ok(version)
+}
+
+const fn node_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
+    match error {
+        OwnedProcessTreeError::Start(_) => "the version probe could not start",
+        OwnedProcessTreeError::TimedOut => "the version probe timed out",
+        OwnedProcessTreeError::Cancelled => "the version probe was cancelled",
+        OwnedProcessTreeError::Await => "the version probe could not be awaited",
+        OwnedProcessTreeError::Cleanup => {
+            "the version probe process tree could not be cleaned up safely"
+        }
+    }
+}
+
+fn node_runtime_fix(required: NumericNodeVersion) -> String {
+    format!(
+        "Activate Node {required} or newer with your version manager, then run `scripts/jig doctor`."
+    )
 }
 
 fn required_tools_fix(

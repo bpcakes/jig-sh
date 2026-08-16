@@ -46,6 +46,21 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: "vendor",
+              test: /node_modules/,
+              maxSize: 350_000,
+            },
+          ],
+        },
+      },
+    },
+  },
   server: {
     ...server,
     proxy: {

@@ -37,14 +37,21 @@ container_started=1
 
 ready=0
 for _ in $(seq 1 60); do
-  if docker exec "$container_name" pg_isready --username postgres --dbname "$database_name" >/dev/null 2>&1; then
+  if docker exec "$container_name" \
+    psql \
+    --no-psqlrc \
+    --set ON_ERROR_STOP=1 \
+    --username postgres \
+    --dbname "$database_name" \
+    --tuples-only \
+    --command 'SELECT 1' >/dev/null 2>&1; then
     ready=1
     break
   fi
   sleep 1
 done
 if [ "$ready" -ne 1 ]; then
-  echo "PostgreSQL did not become ready within 60 seconds." >&2
+  echo "PostgreSQL database '$database_name' did not become queryable within 60 seconds." >&2
   docker logs "$container_name" >&2 || true
   exit 1
 fi

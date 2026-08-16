@@ -8,10 +8,10 @@ Prerequisites: Rust, Node <<[ node_version ]>> or newer, and <<[ package_manager
 
 ```sh
 scripts/jig doctor
-scripts/check-webapps.sh bootstrap
+<<[ web_run_command ]>> bootstrap
 ```
 
-The second command installs every frontend workspace dependency and deterministically creates the selected root lockfile. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. It does not require a database.
+The second command enters Jig's dependency bootstrap, installs every frontend workspace dependency, and deterministically creates the selected root lockfile. A fresh init intentionally has no lockfile, so do not start with `<<[ web_install_command ]>>`; frozen installation is only valid after bootstrap has created the first lock. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. Bootstrap does not require a database.
 
 [% if db != "none" %]
 Configure the application database before the remaining setup:

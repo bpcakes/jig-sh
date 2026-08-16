@@ -229,7 +229,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_status_is_protected_and_available_after_authorization() {
+    async fn admin_status_is_protected_and_reflects_readiness_after_authorization() {
         let denied = request(
             router(AppState::new(), DenyAllAdminAuthorizer),
             "/admin-api/status",
@@ -237,16 +237,14 @@ mod tests {
         .await;
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        let allowed = request(
-            router(AppState::new(), AllowAllAdminAuthorizer),
-            "/admin-api/status",
-        )
-        .await;
+        let state = AppState::new();
+        let expected_ready = state.is_ready();
+        let allowed = request(router(state, AllowAllAdminAuthorizer), "/admin-api/status").await;
         assert_eq!(allowed.status(), StatusCode::OK);
         let body: serde_json::Value =
             serde_json::from_slice(&to_bytes(allowed.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
-        assert_eq!(body["ready"], true);
+        assert_eq!(body["ready"], expected_ready);
     }
 
     #[tokio::test]

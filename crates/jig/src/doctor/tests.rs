@@ -4721,6 +4721,14 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "present",
             "present",
         ),
+        node_runtime: Some(check(
+            "node_runtime",
+            "Node runtime",
+            true,
+            true,
+            "compatible",
+            "compatible",
+        )),
         agent: check(
             "agent_skills",
             "Agent skills",
@@ -4741,6 +4749,10 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             .detail
             .contains("could not retire safely")
     );
+    let node_runtime = checks.node_runtime.as_ref().unwrap();
+    assert!(!node_runtime.ok);
+    assert_eq!(node_runtime.status, "unverified");
+    assert!(node_runtime.detail.contains("could not retire safely"));
     for process_check in [&checks.agent, &checks.proxy] {
         assert!(!process_check.ok);
         assert_eq!(process_check.status, "error");
@@ -5352,11 +5364,106 @@ fn doctor_environment(bin: &Path, database_url: Option<&str>) -> DoctorEnvironme
 }
 
 #[cfg(unix)]
+#[test]
+fn node_runtime_check_rejects_an_active_version_below_the_repo_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_frontend_doctor_fixture(&root);
+    fs::write(root.join(".node-version"), "24.19.0\n").unwrap();
+    write_test_executable(&bin.join("node"), "#!/bin/sh\nprintf 'v22.23.2\\n'\n");
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = node_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok);
+    assert_eq!(check.status, "incompatible");
+    assert_eq!(check.data["required"], "24.19.0");
+    assert_eq!(check.data["actual"], "22.23.2");
+    assert!(
+        check
+            .fix
+            .as_deref()
+            .unwrap()
+            .contains("Activate Node 24.19.0")
+    );
+    let summary = format_summary(&output(None, vec![check]));
+    assert!(summary.contains("Jig doctor: needs attention"));
+    assert!(summary.contains("Node runtime: needs setup"));
+}
+
+#[cfg(unix)]
+#[test]
+fn node_runtime_check_accepts_an_active_version_at_or_above_the_repo_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_frontend_doctor_fixture(&root);
+    fs::write(root.join(".node-version"), "24.19.0\n").unwrap();
+    write_test_executable(&bin.join("node"), "#!/bin/sh\nprintf 'v24.20.1\\n'\n");
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = node_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(check.ok);
+    assert_eq!(check.status, "compatible");
+    assert_eq!(check.data["actual"], "24.20.1");
+    assert!(check.fix.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn node_runtime_check_rejects_a_non_regular_version_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_frontend_doctor_fixture(&root);
+    fs::create_dir(root.join(".node-version")).unwrap();
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = node_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok);
+    assert_eq!(check.status, "invalid authority");
+    assert!(check.detail.contains("real regular file"));
+}
+
+#[cfg(unix)]
 fn write_test_executable(path: &Path, body: &str) {
     use std::os::unix::fs::PermissionsExt;
 
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn write_frontend_doctor_fixture(root: &Path) {
+    write_doctor_fixture(root);
+    let config_path = root.join(".jig.toml");
+    let config = format!(
+        "{}\n[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\ncoverage_threshold = 80\nkind = \"vite\"\nrole = \"spa\"\n\n[dev]\n\n[[dev.apps]]\nname = \"web\"\ndir = \"web\"\nkind = \"vite\"\nargv = [\"bun\", \"run\", \"dev\"]\n",
+        fs::read_to_string(&config_path).unwrap()
+    );
+    fs::write(config_path, config).unwrap();
+    fs::create_dir(root.join("web")).unwrap();
 }
 
 fn write_sqlx_doctor_fixture_with_command(root: &Path, command: &str) {

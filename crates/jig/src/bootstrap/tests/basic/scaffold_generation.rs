@@ -694,6 +694,10 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(workspace_package.contains(r#""contract:check""#));
     assert!(workspace_package.contains(r#""public:artifacts:check""#));
     assert_eq!(
+        workspace_package_json["scripts"]["bootstrap"],
+        "bash scripts/check-webapps.sh bootstrap"
+    );
+    assert_eq!(
         workspace_package_json["scripts"]["test:postgres"],
         "bash scripts/test-postgres.sh"
     );
@@ -1034,6 +1038,9 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(admin_vite_config.contains("path.resolve(import.meta.dirname, \"./src\")"));
     assert!(!admin_vite_config.contains("__dirname"));
     assert!(admin_vite_config.contains("autoCodeSplitting: true"));
+    assert!(admin_vite_config.contains("codeSplitting:"));
+    assert!(admin_vite_config.contains("name: \"vendor\""));
+    assert!(admin_vite_config.contains("maxSize: 350_000"));
     assert!(admin_vite_config.contains("const devPort = Number(process.env.PORT)"));
     assert!(admin_vite_config.contains("port: devPort"));
     assert!(admin_vite_config.contains("strictPort: true"));
@@ -1310,7 +1317,12 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(admin_http_lib.contains("components(schemas(ApiErrorResponse))"));
     assert!(admin_http_lib.contains(r#"path = "/admin-api/status""#));
     assert!(admin_http_lib.contains("operation_id = \"getAdminStatus\""));
-    assert!(admin_http_lib.contains("admin_status_is_protected_and_available_after_authorization"));
+    assert!(
+        admin_http_lib
+            .contains("admin_status_is_protected_and_reflects_readiness_after_authorization")
+    );
+    assert!(admin_http_lib.contains("let expected_ready = state.is_ready();"));
+    assert!(admin_http_lib.contains("assert_eq!(body[\"ready\"], expected_ready);"));
     let http_common_lib =
         fs::read_to_string(destination.join("crates/my-app-http-common/src/lib.rs")).unwrap();
     assert!(http_common_lib.contains("pub struct ApiErrorResponse"));
@@ -1385,9 +1397,12 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(postgres_script.contains("docker rm --force"));
     assert!(postgres_script.contains("TEST_DATABASE_URL="));
     assert!(postgres_script.contains("test_db_my_app"));
+    assert!(postgres_script.contains("--command 'SELECT 1'"));
+    assert!(!postgres_script.contains("pg_isready"));
     assert!(postgres_script.contains("-- --ignored --nocapture"));
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
-    assert!(root_readme.contains("scripts/check-webapps.sh bootstrap"));
+    assert!(root_readme.contains("bun run bootstrap"));
+    assert!(root_readme.contains("do not start with `bun install --frozen-lockfile`"));
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
     assert!(root_readme.contains("DenyAllAdminAuthorizer"));
     assert!(root_readme.contains("bun run test:postgres"));

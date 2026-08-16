@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "<<[ package_manager_spec ]>>",
   "scripts": {
+    "bootstrap": "bash scripts/check-webapps.sh bootstrap",
     "contract:generate": "node scripts/contracts.mjs generate",
     "contract:check": "node scripts/contracts.mjs check",
     "public:artifacts:check": "node scripts/contracts.mjs public-check",
