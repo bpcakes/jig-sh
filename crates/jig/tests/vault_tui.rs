@@ -267,16 +267,22 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(8))
-        .unwrap()
-        .unwrap_or_else(|| {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let status = loop {
+        read_available(&mut master, &mut output);
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
             let _ = child.kill();
+            let _ = child.wait();
             panic!(
                 "vault TUI did not exit after SIGTERM; output: {}",
                 String::from_utf8_lossy(&output)
-            )
-        });
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     read_available(&mut master, &mut output);
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
