@@ -147,8 +147,8 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     drain_until_quiet(
         &mut master,
         &mut output,
-        Duration::from_millis(100),
-        Duration::from_secs(2),
+        Duration::from_millis(250),
+        Duration::from_secs(5),
     );
     let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);

@@ -169,7 +169,7 @@ fn npm_shrinkwrap_is_inferred_and_precedes_package_lock() {
 
     let mut warnings = Vec::new();
     let scan = RepoScan::collect(temp.path(), &mut warnings);
-    let inference = super::package_manager::infer_package_manager_with_metadata(
+    let inference = super::super::package_manager::infer_package_manager_with_metadata(
         temp.path(),
         &scan,
         &mut warnings,
@@ -181,7 +181,7 @@ fn npm_shrinkwrap_is_inferred_and_precedes_package_lock() {
 
     fs::write(temp.path().join("package-lock.json"), "{}").unwrap();
     let scan = RepoScan::collect(temp.path(), &mut warnings);
-    let inference = super::package_manager::infer_package_manager_with_metadata(
+    let inference = super::super::package_manager::infer_package_manager_with_metadata(
         temp.path(),
         &scan,
         &mut warnings,
@@ -191,7 +191,7 @@ fn npm_shrinkwrap_is_inferred_and_precedes_package_lock() {
 
     fs::remove_file(temp.path().join("npm-shrinkwrap.json")).unwrap();
     let scan = RepoScan::collect(temp.path(), &mut warnings);
-    let inference = super::package_manager::infer_package_manager_with_metadata(
+    let inference = super::super::package_manager::infer_package_manager_with_metadata(
         temp.path(),
         &scan,
         &mut warnings,
@@ -203,7 +203,7 @@ fn npm_shrinkwrap_is_inferred_and_precedes_package_lock() {
     fs::create_dir_all(temp.path().join("apps/web")).unwrap();
     fs::write(temp.path().join("apps/web/npm-shrinkwrap.json"), "{}").unwrap();
     let scan = RepoScan::collect(temp.path(), &mut warnings);
-    let inference = super::package_manager::infer_package_manager_with_metadata(
+    let inference = super::super::package_manager::infer_package_manager_with_metadata(
         temp.path(),
         &scan,
         &mut warnings,

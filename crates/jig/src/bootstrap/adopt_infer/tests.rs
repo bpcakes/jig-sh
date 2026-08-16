@@ -10,7 +10,8 @@ use crate::bootstrap::adopt_infer::scan::{MAX_SCAN_DEPTH, MAX_SCAN_WARNINGS};
 
 mod diagnostics_and_ci;
 mod ecosystem;
-mod frontend;
+#[path = "tests/frontend.rs"]
+mod frontend_tests;
 mod rust_and_scan;
 
 fn infer_sqlx(root: &Path, warnings: &mut Vec<String>) -> super::rust_sqlx::SqlxInference {
