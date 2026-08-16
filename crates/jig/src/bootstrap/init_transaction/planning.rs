@@ -23,15 +23,46 @@ impl InitMutationTransaction {
         // one additional Jig generation beyond its staged-render publication.
         let repeated_generation_count = usize::from(!reserved_output_paths.is_empty());
         self.ensure_planned_noreplace_filesystems(&planned)?;
-        validate_retained_generation_budget(
+        // Enforce the generation-count ceiling before retaining any snapshots.
+        validate_retained_generation_budget_with_preimages(
             &planned,
             repeated_generation_count,
-            process_soft_handle_limit(),
-            current_open_handle_count(),
+            0,
+            None,
+            0,
         )?;
+        let soft_limit = process_soft_handle_limit();
+        let open_handles = current_open_handle_count();
         for relative in &planned {
+            // Snapshotting an existing leaf retains one handle. Check one
+            // increment at a time so a large existing tree fails cleanly,
+            // while missing leaves do not consume a pessimistic preimage slot.
+            let current_open_handles = current_open_handle_count();
+            if soft_limit.is_some_and(|limit| {
+                current_open_handles
+                    .saturating_add(1)
+                    .saturating_add(RETAINED_GENERATION_HANDLE_HEADROOM)
+                    > limit
+            }) {
+                bail!(
+                    "Existing-destination init cannot safely retain another planning snapshot under the process soft handle limit of {}. Use a wholly missing destination, reduce the output set, or raise the process file-descriptor limit before retrying.",
+                    soft_limit.expect("checked above")
+                );
+            }
             self.ensure_file_mutation(relative)?;
         }
+        let retained_preimage_count = planned
+            .iter()
+            .filter_map(|relative| self.files.get(relative))
+            .filter(|mutation| !matches!(mutation.before, InitPathSnapshot::Missing))
+            .count();
+        validate_retained_generation_budget_with_preimages(
+            &planned,
+            repeated_generation_count,
+            retained_preimage_count,
+            soft_limit,
+            open_handles,
+        )?;
         self.existing_generation_budget_sealed = true;
         Ok(())
     }

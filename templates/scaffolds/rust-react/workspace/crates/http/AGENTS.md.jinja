@@ -2,22 +2,26 @@
 
 ## Purpose
 
-Owns the Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, handlers, middleware, extractors, and HTTP DTOs.
+Owns only the public Axum and HTTP boundary for `<<[ repo_name ]>>`: routes, handlers, middleware, extractors, and HTTP DTOs.
 
 ## Key entrypoints
 
-- `src/lib.rs`: builds the public router, request middleware, health endpoints, and API handlers.
+- `src/lib.rs`: mounts the public router, applies shared middleware, and exposes the public OpenAPI document.
+- `src/public.rs`: owns public routes, HTTP DTOs, and OpenAPI operations.
 
 ## Edit here for X
 
 - Add or change routes, handler functions, HTTP response codes, headers, request IDs, tracing middleware, and extractors here.
 - Call app-crate use cases through `AppState` instead of placing business logic in handlers.
+- Regenerate committed contracts and clients with the root `contract:generate` package script.
 
 ## Invariants
 
 - Keep handlers thin and delegate domain work to `<<[ package_name ]>>`.
 - Keep observability middleware at this HTTP boundary.
 - Preserve `/health/live` for process liveness and `/health/ready` for dependency readiness.
+- Never depend on `<<[ package_name ]>>-admin-http` or mount privileged routes here. Admin transport has a separate crate and binary deployment boundary.
+- Return JSON errors through `<<[ package_name ]>>-http-common`; never disclose internal error chains.
 
 ## Common commands
 

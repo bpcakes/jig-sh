@@ -18,6 +18,10 @@ use super::{FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind};
 
 const FRONTEND_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
+        template: "rust-react/frontend/workspace/README.md.jinja",
+        output: "README.md",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/frontend/workspace/package.json.jinja",
         output: "package.json",
     },
@@ -25,7 +29,16 @@ const FRONTEND_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         template: "rust-react/frontend/workspace/.node-version.jinja",
         output: ".node-version",
     },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/workspace/contracts.mjs.jinja",
+        output: "scripts/contracts.mjs",
+    },
 ];
+
+const REACT_ESLINT_TEMPLATE: ScaffoldTemplateFile = ScaffoldTemplateFile {
+    template: "rust-react/frontend/workspace/eslint.config.shared.mjs.jinja",
+    output: "eslint.config.shared.mjs",
+};
 
 const PNPM_WORKSPACE_TEMPLATE: ScaffoldTemplateFile = ScaffoldTemplateFile {
     template: "rust-react/frontend/workspace/pnpm-workspace.yaml.jinja",
@@ -43,7 +56,171 @@ const E2E_WORKFLOW_TEMPLATE: ScaffoldTemplateFile = ScaffoldTemplateFile {
 };
 
 const ADMIN_TEMPLATE_PREFIX: &str = "rust-react/frontend/admin-shadcn/";
-pub(super) const SHADCN_CLI_VERSION: &str = "4.13.0";
+const PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/package.json.jinja",
+        output: "packages/public-api-client/package.json",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/index.ts.jinja",
+        output: "packages/public-api-client/src/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/client.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/client.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/client/client.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/client/index.ts.jinja",
+        output: "packages/public-api-client/src/generated/client/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/client/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/client/utils.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/auth.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/bodySerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/params.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/pathSerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/queryKeySerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/serverSentEvents.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/core/utils.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/types.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/index.ts.jinja",
+        output: "packages/public-api-client/src/generated/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/sdk.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/zod.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja",
+        output: "packages/public-api-client/src/generated/@tanstack/react-query.gen.ts",
+    },
+];
+const ADMIN_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/package.json.jinja",
+        output: "packages/admin-api-client/package.json",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/index.ts.jinja",
+        output: "packages/admin-api-client/src/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/client.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/client.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/client/client.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/client/client.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/client/index.ts.jinja",
+        output: "packages/admin-api-client/src/generated/client/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/client/types.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/client/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/client/utils.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/client/utils.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/auth.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/auth.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/bodySerializer.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/bodySerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/params.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/params.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/pathSerializer.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/pathSerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/queryKeySerializer.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/queryKeySerializer.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/serverSentEvents.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/serverSentEvents.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/types.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/core/utils.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/core/utils.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/types.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/types.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/index.ts.jinja",
+        output: "packages/admin-api-client/src/generated/index.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/sdk.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/sdk.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/zod.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/zod.gen.ts",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/frontend/api-client-admin/src/generated/@tanstack/react-query.gen.ts.jinja",
+        output: "packages/admin-api-client/src/generated/@tanstack/react-query.gen.ts",
+    },
+];
+pub(super) const SHADCN_CLI_VERSION: &str = "4.18.0";
 pub(super) const SHADCN_PRESET: &str = "nova";
 pub(super) const SHADCN_BASE: &str = "radix";
 pub(super) const SHADCN_STYLE: &str = "radix-nova";
@@ -293,6 +470,8 @@ impl FrontendScaffold {
             "package_manager": package_manager,
             "node_types_version": GENERATED_NODE_TYPES_VERSION,
             "repo_name": repo_name,
+            "public_api_client_package": format!("{repo_name}-public-api-client"),
+            "admin_api_client_package": format!("{repo_name}-admin-api-client"),
             "repo_dns_label": repo_dns_label,
             "module_name": module_name,
             "e2e_database_name": e2e_database_name,
@@ -309,6 +488,7 @@ impl FrontendScaffold {
                 "Product workspace"
             },
             "package_exec": scaffold_package_exec(package_manager),
+            "web_run_command": web_run_command(package_manager),
             "shadcn_cli_version": SHADCN_CLI_VERSION,
             "shadcn_preset": SHADCN_PRESET,
             "shadcn_base": SHADCN_BASE,
@@ -386,17 +566,15 @@ pub(super) fn scaffold_bootstrap_command(
     frontends: &[FrontendScaffold],
 ) -> String {
     let mut commands = Vec::new();
+    commands.push(optional_cargo_command("cargo fetch", "bootstrap"));
+    if !frontends.is_empty() {
+        commands.push("scripts/check-webapps.sh bootstrap".into());
+    }
     if db != ScaffoldDb::None {
         commands.push(DATABASE_CONFIG_GUARD.into());
-    }
-    commands.push(optional_cargo_command("cargo fetch", "bootstrap"));
-    if db != ScaffoldDb::None {
         commands.push(format!(
             "cargo run -p {package_name}-api -- --bootstrap-database"
         ));
-    }
-    if !frontends.is_empty() {
-        commands.push("scripts/check-webapps.sh bootstrap".into());
     }
     commands.join(" && ")
 }
@@ -430,6 +608,9 @@ pub(super) fn render_frontend_workspace_files(
         return Ok(Vec::new());
     }
     let default_branch_yaml = serde_json::to_string(default_branch)?;
+    let admin_api_enabled = frontends
+        .iter()
+        .any(|frontend| frontend.kind == ScaffoldFrontendKind::Admin);
     let context = json!({
         "package_name": package_name,
         "package_manager": package_manager,
@@ -447,6 +628,15 @@ pub(super) fn render_frontend_workspace_files(
         "sqlx_metadata_dir": sqlx_metadata_dir,
         "default_branch_yaml": default_branch_yaml,
         "ci_github_runner": ci_github_runner,
+        "admin_api_enabled": admin_api_enabled,
+        "react_frontend_enabled": frontends.iter().any(|frontend| matches!(
+            frontend.kind,
+            ScaffoldFrontendKind::Spa | ScaffoldFrontendKind::Admin
+        )),
+        "public_frontend_dirs": frontends.iter()
+            .filter(|frontend| frontend.kind == ScaffoldFrontendKind::Spa)
+            .map(|frontend| frontend.dir.as_str())
+            .collect::<Vec<_>>(),
         "e2e_workflow_paths": e2e_workflow_paths(
             db,
             migration_dir,
@@ -538,6 +728,10 @@ fn e2e_workflow_paths(
             "pnpm-workspace.yaml",
             "yarn.lock",
             "scripts/check-webapps.sh",
+            "scripts/contracts.mjs",
+            "eslint.config.shared.mjs",
+            "openapi/**",
+            "packages/public-api-client/**",
             ".github/workflows/e2e.yml",
         ]
         .map(str::to_owned),
@@ -567,12 +761,30 @@ fn frontend_workspace_template_files(
     let has_spa = frontends
         .iter()
         .any(|frontend| frontend.kind == ScaffoldFrontendKind::Spa);
+    let has_admin = frontends
+        .iter()
+        .any(|frontend| frontend.kind == ScaffoldFrontendKind::Admin);
+    let has_react = frontends.iter().any(|frontend| {
+        matches!(
+            frontend.kind,
+            ScaffoldFrontendKind::Spa | ScaffoldFrontendKind::Admin
+        )
+    });
     FRONTEND_WORKSPACE_TEMPLATES
         .iter()
         .copied()
+        .chain(has_react.then_some(REACT_ESLINT_TEMPLATE))
         .chain((package_manager == "pnpm").then_some(PNPM_WORKSPACE_TEMPLATE))
         .chain((package_manager == "yarn").then_some(YARN_WORKSPACE_TEMPLATE))
         .chain(has_spa.then_some(E2E_WORKFLOW_TEMPLATE))
+        .chain(PUBLIC_API_CLIENT_TEMPLATES.iter().copied())
+        .chain(
+            has_admin
+                .then_some(ADMIN_API_CLIENT_TEMPLATES)
+                .into_iter()
+                .flatten()
+                .copied(),
+        )
         .collect()
 }
 
@@ -663,15 +875,24 @@ mod tests {
         let pnpm = std::slice::from_ref(&PNPM_WORKSPACE_TEMPLATE);
         let yarn = std::slice::from_ref(&YARN_WORKSPACE_TEMPLATE);
         let e2e = std::slice::from_ref(&E2E_WORKFLOW_TEMPLATE);
+        let react_eslint = std::slice::from_ref(&REACT_ESLINT_TEMPLATE);
         let admin = admin_template_files();
 
         assert_complete("rust-react/frontend/vite-react/", &[VITE_REACT_TEMPLATES]);
         assert_complete("rust-react/frontend/astro/", &[ASTRO_TEMPLATES]);
         assert_complete(
             "rust-react/frontend/workspace/",
-            &[FRONTEND_WORKSPACE_TEMPLATES, pnpm, yarn, e2e],
+            &[FRONTEND_WORKSPACE_TEMPLATES, pnpm, yarn, e2e, react_eslint],
         );
         assert_complete("rust-react/frontend/admin-shadcn/", &[admin.as_slice()]);
+        assert_complete(
+            "rust-react/frontend/api-client-public/",
+            &[PUBLIC_API_CLIENT_TEMPLATES],
+        );
+        assert_complete(
+            "rust-react/frontend/api-client-admin/",
+            &[ADMIN_API_CLIENT_TEMPLATES],
+        );
         assert_complete(
             "rust-react/frontend/",
             &[
@@ -682,7 +903,10 @@ mod tests {
                 pnpm,
                 yarn,
                 e2e,
+                react_eslint,
                 admin.as_slice(),
+                PUBLIC_API_CLIENT_TEMPLATES,
+                ADMIN_API_CLIENT_TEMPLATES,
             ],
         );
     }

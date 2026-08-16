@@ -430,7 +430,7 @@ fn generated_web_checks_recover_interrupted_and_contended_stale_install_locks() 
     )
     .unwrap();
     fs::write(repo.join("package-lock.json"), "{\"lockfileVersion\":3}\n").unwrap();
-    fs::write(repo.join(".node-version"), "22.22.2\n").unwrap();
+    fs::write(repo.join(".node-version"), "24.19.0\n").unwrap();
 
     let fake_bin = repo.join("fake-bin");
     fs::create_dir_all(&fake_bin).unwrap();

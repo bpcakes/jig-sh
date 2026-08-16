@@ -1,0 +1,21 @@
+use ::<<[ module_name ]>>_test_support::db::DatabaseTestConfig;
+use ::<<[ module_name ]>>_test_support::db::TestDatabase;
+use ::<<[ module_name ]>>_test_support::db::validate_test_database_name;
+
+#[tokio::test]
+#[ignore = "run with the root test:postgres package script"]
+async fn disposable_postgres_connects_and_applies_migrations() -> anyhow::Result<()> {
+    let config = DatabaseTestConfig::from_test_env()?;
+    let database = TestDatabase::connect(&config).await?;
+    let database_name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(database.pool())
+        .await?;
+
+    validate_test_database_name(&database_name)?;
+    database.migrate().await?;
+
+    let _applied_migrations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(database.pool())
+        .await?;
+    Ok(())
+}

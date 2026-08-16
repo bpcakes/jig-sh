@@ -7,8 +7,9 @@ use serde_json::Value;
 use crate::context::validate_web_package_manager;
 
 use super::{
-    AnswerOpts, DevApp, FrontendApp, RUST_REACT_BACKEND_DEV_APP_NAME, ScaffoldDb, ScaffoldFrontend,
-    ScaffoldFrontendKind, ScaffoldOpts, ScaffoldPreset,
+    AnswerOpts, DevApp, FrontendApp, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
+    RUST_REACT_BACKEND_DEV_APP_NAME, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind,
+    ScaffoldOpts, ScaffoldPreset,
 };
 
 #[derive(Clone, Debug)]
@@ -135,6 +136,23 @@ impl InitScaffoldPlan {
                 host: None,
                 proxy: true,
             }];
+            if self.has_admin_frontend() {
+                answers.dev_apps.push(DevApp {
+                    name: RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME.into(),
+                    dir: Some(".".into()),
+                    kind: "env-port".into(),
+                    command: None,
+                    argv: vec![
+                        "cargo".into(),
+                        "run".into(),
+                        "-p".into(),
+                        format!("{}-admin-api", self.package_name),
+                    ],
+                    port: None,
+                    host: None,
+                    proxy: true,
+                });
+            }
         }
     }
 

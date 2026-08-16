@@ -1,0 +1,88 @@
+# <<[ package_name ]>>
+
+Generated Rust, Axum, React, and OpenAPI workspace.
+
+## Quickstart
+
+Prerequisites: Rust, Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] PostgreSQL setup and integration tests also require Docker.[% endif %]
+
+```sh
+scripts/jig doctor
+scripts/check-webapps.sh bootstrap
+```
+
+The second command installs every frontend workspace dependency and deterministically creates the selected root lockfile. Commit the generated [% if package_manager == "npm" %]`package-lock.json`[% elif package_manager == "pnpm" %]`pnpm-lock.yaml`[% elif package_manager == "yarn" %]`yarn.lock`[% else %]`bun.lock`[% endif %]. It does not require a database.
+
+[% if db != "none" %]
+Configure the application database before the remaining setup:
+
+```sh
+cp .env.example .env
+```
+
+Edit `DATABASE_URL` if the example does not match your local database, then run:
+
+[% endif %]
+```sh
+scripts/jig setup
+scripts/jig dev
+```
+
+If a web check reports missing or stale dependencies, run `scripts/check-webapps.sh bootstrap` from this directory.
+
+## Contracts
+
+The public[% if admin_api_enabled %] and admin[% endif %] OpenAPI contract[% if admin_api_enabled %]s have separate Rust exporters and generated TypeScript packages[% else %] has a Rust exporter and generated TypeScript package[% endif %]. Regenerate [% if admin_api_enabled %]them[% else %]it[% endif %] atomically and verify committed output with:
+
+```sh
+<<[ web_run_command ]>> contract:generate
+<<[ web_run_command ]>> contract:check
+```
+
+`contract:generate` stages all documents and clients before replacing committed files. `public:artifacts:check` proves that public frontend builds and the public server dependency graph contain no admin contract or client artifacts.
+
+[% if react_frontend_enabled %]
+## Frontend linting
+
+React applications share `eslint.config.shared.mjs`, which enables type-aware TypeScript linting, the React Hooks and TanStack Query recommended rules, and test-only Vitest and Testing Library rules. Package lint scripts reject warnings and stale ESLint suppressions. Use the cached package script during local iteration:
+
+```sh
+scripts/check-webapps.sh run-script <app-dir> lint:cached
+```
+
+Keep application-specific exceptions narrow. Product SPAs cannot import the admin API client, API client internals must be accessed through package entrypoints, components cannot import route modules, and modules under `src/domain` must remain independent of React and TanStack Router.
+
+[% endif %]
+
+[% if db == "postgres" %]
+## Disposable PostgreSQL test
+
+Run the database integration test against a fresh PostgreSQL 18 container:
+
+```sh
+<<[ web_run_command ]>> test:postgres
+```
+
+The command binds PostgreSQL to a random loopback port, uses a `test_db_` database, and removes the container on exit. It never falls back to `DATABASE_URL`.
+
+[% endif %]
+[% if admin_api_enabled %]
+## Admin boundary
+
+The admin API is a separate binary and HTTP crate; it is not mounted by the public server. The generated admin binary explicitly uses `DenyAllAdminAuthorizer`, so future matched admin routes return `401 Unauthorized` until you implement `AdminAuthorizer` and pass that implementation to `<<[ package_name ]>>_admin_http::router`. Keep the admin listener private at the network/deployment layer as well.
+
+Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, and do not publish the admin client with public frontend or documentation artifacts.
+
+[% endif %]
+## Common checks
+
+```sh
+scripts/jig check test
+scripts/jig check fmt
+scripts/jig check clippy
+scripts/jig check contract
+```
+
+Enabled frontend workspaces:[% for frontend in frontends %]
+
+- `<<[ frontend.dir ]>>` (`<<[ frontend.name ]>>`)[% endfor %]

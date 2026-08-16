@@ -791,6 +791,30 @@ fn retained_generation_budget_fails_before_a_low_soft_handle_limit() {
 }
 
 #[test]
+fn retained_generation_budget_only_reserves_preimages_that_were_snapshotted() {
+    let planned = (0..12)
+        .map(|index| PathBuf::from(format!("nested/{index}/generated")))
+        .collect::<BTreeSet<_>>();
+    let repeated_generation_count = 2;
+    let pessimistic = retained_generation_handle_requirement(&planned, repeated_generation_count);
+    let all_missing = retained_generation_handle_requirement_with_preimages(
+        &planned,
+        repeated_generation_count,
+        0,
+    );
+
+    assert_eq!(pessimistic - all_missing, planned.len());
+    validate_retained_generation_budget_with_preimages(
+        &planned,
+        repeated_generation_count,
+        0,
+        Some(all_missing + 10),
+        10,
+    )
+    .unwrap();
+}
+
+#[test]
 fn retained_generation_budget_caps_planned_and_repeated_generations_together() {
     let planned = (0..MAX_EXISTING_INIT_RETAINED_GENERATIONS)
         .map(|index| PathBuf::from(format!("generated-{index}")))

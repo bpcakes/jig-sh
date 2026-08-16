@@ -32,7 +32,9 @@ use init_transaction::InitMutationTransaction;
 use init_transaction::{
     InitPathSnapshot, MAX_EXISTING_INIT_RETAINED_GENERATIONS, RETAINED_GENERATION_HANDLE_HEADROOM,
     process_soft_handle_limit, retained_generation_handle_requirement,
+    retained_generation_handle_requirement_with_preimages,
     validate_existing_init_directory_after_create_error, validate_retained_generation_budget,
+    validate_retained_generation_budget_with_preimages,
 };
 #[cfg(test)]
 use initial_copy::seed_answers_toml;
@@ -99,16 +101,17 @@ const REMOTE_TEMPLATE_MODE_ERROR: &str = "--template-mode only applies to local 
 const ALWAYS_TASK_MUTATED_PATHS: &[&str] = &[".jig.toml", "agent-map.md"];
 const TEMPLATE_MODE_KEY: &str = "_template_mode";
 const TEMPLATE_LOCAL_PATH_KEY: &str = "_template_local_path";
-const GENERATED_NODE_VERSION: &str = "22.22.2";
-const GENERATED_NODE_TYPES_VERSION: &str = "22.20.1";
+const GENERATED_NODE_VERSION: &str = "24.19.0";
+const GENERATED_NODE_TYPES_VERSION: &str = "24.13.3";
 pub(crate) const RUST_REACT_BACKEND_DEV_APP_NAME: &str = "api";
+pub(crate) const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
 fn generated_package_manager_spec(package_manager: &str) -> &'static str {
     match package_manager {
         "bun" => "bun@1.3.14",
-        "npm" => "npm@12.0.1",
-        "pnpm" => "pnpm@11.13.0",
-        "yarn" => "yarn@4.17.1",
+        "npm" => "npm@12.0.2",
+        "pnpm" => "pnpm@11.22.0",
+        "yarn" => "yarn@4.18.0",
         _ => unreachable!("web package manager was already validated"),
     }
 }
@@ -392,7 +395,7 @@ pub struct ScaffoldOpts {
         long = "frontend",
         help_heading = "Project Shape",
         value_parser = parse_scaffold_frontend,
-        help = "Frontend scaffold as name[:kind], e.g. web:spa, landing:astro, admin-panel:admin; may be repeated. Bare web, landing, and admin use preset shorthands. Rust-react reserves api for its backend dev app."
+        help = "Frontend scaffold as name[:kind], e.g. web:spa, landing:astro, admin-panel:admin; may be repeated. Bare web, landing, and admin use preset shorthands. Rust-react reserves api and admin-api for backend dev apps."
     )]
     pub frontends: Vec<ScaffoldFrontend>,
     #[arg(
@@ -400,7 +403,7 @@ pub struct ScaffoldOpts {
         help_heading = "Project Shape",
         value_delimiter = ',',
         value_parser = parse_scaffold_frontend,
-        help = "Comma-separated frontend scaffolds, e.g. web,landing,admin. Bare web, landing, and admin use preset shorthands. Rust-react reserves api for its backend dev app."
+        help = "Comma-separated frontend scaffolds, e.g. web,landing,admin. Bare web, landing, and admin use preset shorthands. Rust-react reserves api and admin-api for backend dev apps."
     )]
     pub frontend_list: Vec<ScaffoldFrontend>,
 }
@@ -1375,7 +1378,10 @@ impl ScaffoldOpts {
             );
         }
         if self.preset == Some(ScaffoldPreset::RustReact) {
-            let backend_prefix = jig_core::dev_app_env_prefix(RUST_REACT_BACKEND_DEV_APP_NAME);
+            let reserved_backends = [
+                RUST_REACT_BACKEND_DEV_APP_NAME,
+                RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
+            ];
             for frontend_name in self
                 .frontends
                 .iter()
@@ -1388,10 +1394,13 @@ impl ScaffoldOpts {
                         .map(|frontend| frontend.name.as_str()),
                 )
             {
-                if jig_core::dev_app_env_prefix(frontend_name) == backend_prefix {
-                    bail!(
-                        "Rust React frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{RUST_REACT_BACKEND_DEV_APP_NAME}' because both derive dev environment prefix {backend_prefix}; choose another frontend name"
-                    );
+                for backend_name in reserved_backends {
+                    let backend_prefix = jig_core::dev_app_env_prefix(backend_name);
+                    if jig_core::dev_app_env_prefix(frontend_name) == backend_prefix {
+                        bail!(
+                            "Rust React frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{backend_name}' because both derive dev environment prefix {backend_prefix}; choose another frontend name"
+                        );
+                    }
                 }
             }
         }

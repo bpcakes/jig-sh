@@ -24,6 +24,11 @@ const apiOrigin =
   // direct-Vite override when no managed API was selected.
   firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN) ??
   "http://api.<<[ repo_dns_label ]>>.localhost:1355"
+const adminApiOrigin =
+  firstNonEmpty(
+    process.env.JIG_DEV_ADMIN_API_ORIGIN,
+    process.env.ADMIN_API_ORIGIN
+  ) ?? "http://admin-api.<<[ repo_dns_label ]>>.localhost:1355"
 
 export default defineConfig({
   plugins: [
@@ -38,7 +43,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   server: {
@@ -46,6 +51,7 @@ export default defineConfig({
     proxy: {
       "/api": { target: apiOrigin, changeOrigin: true },
       "/health": { target: apiOrigin, changeOrigin: true },
+      "/admin-api": { target: adminApiOrigin, changeOrigin: true },
     },
   },
   test: {

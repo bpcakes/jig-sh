@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Harden the Rust/React OpenAPI split with an optional, independently deployable admin HTTP crate and binary, transactional all-contract generation, public-artifact boundary scans, and request-ID-bearing JSON API errors.
+- Generate split Utoipa public/admin OpenAPI contracts and separately owned Hey API TypeScript clients in the Rust/React scaffold.
+- Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
+
+### Changed
+- Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
+- Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
+
+### Fixed
+- Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
+
 ## v0.2.0 - 2026-08-05
 
 ### Added

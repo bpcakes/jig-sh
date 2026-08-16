@@ -285,6 +285,9 @@ proxy = false
     assert!(destination.join("clients/portal/package.json").is_file());
     assert!(!destination.join("web").exists());
     assert_eq!(output["scaffold"]["frontends"][0]["name"], "portal");
+    let portal_eslint =
+        fs::read_to_string(destination.join("clients/portal/eslint.config.js")).unwrap();
+    assert!(portal_eslint.contains(r#"from "../../eslint.config.shared.mjs""#));
     let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
     assert!(workspace_package.contains(r#""packageManager": "pnpm@"#));
     assert!(destination.join("pnpm-workspace.yaml").is_file());
@@ -551,7 +554,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     )
     .unwrap();
     assert_eq!(agent_map_check["ok"], true);
-    assert_eq!(agent_map_check["agents"], 5);
+    assert_eq!(agent_map_check["agents"], 7);
     assert!(
         agent_map_check["missing_agents"]
             .as_array()
@@ -568,7 +571,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     let agent_guides_check =
         crate::policy::run_check(&context, crate::policy::PolicyCheckCommand::AgentGuides).unwrap();
     assert_eq!(agent_guides_check["ok"], true);
-    assert_eq!(agent_guides_check["guide_count"], 4);
+    assert_eq!(agent_guides_check["guide_count"], 6);
     assert!(
         agent_guides_check["missing_entry_ref"]
             .as_array()
@@ -586,7 +589,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert_eq!(output["scaffold"]["frontends"][2]["role"], "admin");
     assert_eq!(
         output["scaffold"]["frontends"][2]["ui"]["cli_version"],
-        "4.13.0"
+        "4.18.0"
     );
     assert!(destination.join(".env.example").exists());
     assert!(destination.join("Cargo.toml").exists());
@@ -595,7 +598,41 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(destination.join("crates/my-app/src/lib.rs").exists());
     assert!(destination.join("crates/my-app/AGENTS.md").exists());
     assert!(destination.join("crates/my-app-http/src/lib.rs").exists());
+    assert!(
+        destination
+            .join("crates/my-app-http/src/public.rs")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("crates/my-app-http-common/src/lib.rs")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("crates/my-app-admin-http/src/lib.rs")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("apps/my-app-admin-api/src/main.rs")
+            .exists()
+    );
     assert!(destination.join("crates/my-app-http/AGENTS.md").exists());
+    assert!(
+        destination
+            .join("apps/my-app-api/src/bin/export-openapi.rs")
+            .exists()
+    );
+    assert!(destination.join("openapi/public.json").exists());
+    assert!(destination.join("openapi/admin.json").exists());
+    assert!(destination.join("README.md").exists());
+    assert!(destination.join("scripts/test-postgres.sh").exists());
+    assert!(
+        destination
+            .join("crates/my-app-test-support/tests/postgres.rs")
+            .exists()
+    );
     assert!(destination.join("crates/my-app-db/src/lib.rs").exists());
     assert!(destination.join("crates/my-app-db/AGENTS.md").exists());
     assert!(
@@ -651,6 +688,35 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         Some(expected_node_engine.as_str())
     );
     assert!(workspace_package.contains(r#""admin-panel""#));
+    assert!(workspace_package.contains(r#""api:generate""#));
+    assert!(workspace_package.contains(r#""api:check""#));
+    assert!(workspace_package.contains(r#""contract:generate""#));
+    assert!(workspace_package.contains(r#""contract:check""#));
+    assert!(workspace_package.contains(r#""public:artifacts:check""#));
+    assert_eq!(
+        workspace_package_json["scripts"]["test:postgres"],
+        "bash scripts/test-postgres.sh"
+    );
+    assert_eq!(workspace_package_json["overrides"]["js-yaml"], "4.3.1");
+    assert!(workspace_package.contains(r#""packages/public-api-client""#));
+    assert!(workspace_package.contains(r#""packages/admin-api-client""#));
+    let shared_eslint = fs::read_to_string(destination.join("eslint.config.shared.mjs")).unwrap();
+    assert!(shared_eslint.contains("tseslint.configs.recommendedTypeChecked"));
+    assert!(shared_eslint.contains("reactHooks.configs.flat.recommended"));
+    assert!(shared_eslint.contains("testingLibrary.configs[\"flat/react\"]"));
+    assert!(shared_eslint.contains("vitest.configs.recommended"));
+    assert!(shared_eslint.contains("reportUnusedDisableDirectives: \"error\""));
+    assert!(shared_eslint.contains("reportUnusedInlineConfigs: \"error\""));
+    assert!(shared_eslint.contains("src/components/**/*.{ts,tsx}"));
+    assert!(shared_eslint.contains("src/domain/**/*.{ts,tsx}"));
+    let contracts_script = fs::read_to_string(destination.join("scripts/contracts.mjs")).unwrap();
+    assert!(contracts_script.contains("await withStagedContracts(mode)"));
+    assert!(contracts_script.contains("async function publishAtomically("));
+    assert!(contracts_script.contains("async function assertPublicBoundary("));
+    assert!(contracts_script.contains(r#"["tree", "--quiet", "-p", "my-app-api""#));
+    assert!(contracts_script.contains(r#"cargoPackage: "my-app-api""#));
+    assert!(contracts_script.contains(r#"cargoPackage: "my-app-admin-api""#));
+    assert!(contracts_script.contains("Contract recovery data was preserved"));
     assert_eq!(
         fs::read_to_string(destination.join(".node-version")).unwrap(),
         format!("{GENERATED_NODE_VERSION}\n")
@@ -662,22 +728,65 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         Some(GENERATED_NODE_TYPES_VERSION)
     );
     assert!(web_package.contains(r#""dev": "vite""#));
-    assert!(web_package.contains(r#""shadcn": "4.13.0""#));
-    assert!(web_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(web_package.contains(r#""shadcn": "4.18.0""#));
+    assert!(web_package.contains(r#""tailwindcss": "4.3.3""#));
     assert!(web_package.contains(r#""@tanstack/react-query": "5.101.4""#));
-    assert!(web_package.contains(r#""@tanstack/react-router": "1.170.18""#));
+    assert!(web_package.contains(r#""@tanstack/react-router": "1.170.29""#));
     assert!(web_package.contains(r#""@tanstack/eslint-plugin-query": "5.101.4""#));
-    assert!(web_package.contains(r#""@tanstack/router-plugin": "1.168.23""#));
+    assert!(web_package.contains(r#""@tanstack/router-plugin": "1.168.32""#));
+    assert!(web_package.contains(r#""@vitest/eslint-plugin": "1.6.27""#));
+    assert!(web_package.contains(r#""eslint-plugin-testing-library": "7.16.2""#));
+    assert!(web_package.contains(r#""my-app-public-api-client": "*""#));
+    assert!(!web_package.contains("my-app-admin-api-client"));
     assert!(web_package.contains(r#""build": "vite build && tsc -b""#));
     assert!(web_package.contains(r#""@testing-library/dom": "10.4.1""#));
-    assert!(web_package.contains(r#""@playwright/test": "1.61.1""#));
+    assert!(web_package.contains(r#""@playwright/test": "1.62.1""#));
     assert!(web_package.contains(r#""test:e2e": "playwright test""#));
     assert!(web_package.contains(r#""test:e2e:install": "playwright install chromium""#));
     assert!(
         web_package.contains(r#""test:e2e:install:ci": "playwright install --with-deps chromium""#)
     );
     assert!(!web_package.contains(" install && "));
+    assert!(web_package.contains(r#""lint": "eslint . --max-warnings 0""#));
+    assert!(web_package.contains(r#""lint:cached": "eslint . --cache --cache-location node_modules/.cache/eslint --max-warnings 0""#));
+    let web_eslint = fs::read_to_string(destination.join("web/eslint.config.js")).unwrap();
+    assert!(web_eslint.contains(r#"from "../eslint.config.shared.mjs""#));
+    assert!(web_eslint.contains("forbiddenApiClientPackages"));
+    assert!(web_eslint.contains(r#""my-app-admin-api-client""#));
     assert!(destination.join("web/src/api.ts").exists());
+    assert!(
+        destination
+            .join("packages/public-api-client/src/generated/sdk.gen.ts")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("packages/admin-api-client/src/generated/sdk.gen.ts")
+            .exists()
+    );
+    assert!(
+        destination
+            .join("packages/admin-api-client/src/generated/zod.gen.ts")
+            .exists()
+    );
+    let admin_query = fs::read_to_string(
+        destination.join("packages/admin-api-client/src/generated/@tanstack/react-query.gen.ts"),
+    )
+    .unwrap();
+    assert!(admin_query.contains("getAdminStatusOptions"));
+    for client in ["public-api-client", "admin-api-client"] {
+        let client_index = fs::read_to_string(
+            destination
+                .join("packages")
+                .join(client)
+                .join("src/index.ts"),
+        )
+        .unwrap();
+        assert!(
+            client_index.contains(r#"export * from "./generated/@tanstack/react-query.gen";"#),
+            "{client} must export generated React Query helpers"
+        );
+    }
     assert!(destination.join("web/src/app/providers.tsx").exists());
     assert!(destination.join("web/src/app/router-context.ts").exists());
     assert!(destination.join("web/src/app/router.ts").exists());
@@ -716,8 +825,10 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_app.contains("useQueryErrorResetBoundary()"));
     assert!(web_app.contains("appStatusQueryOptions"));
     let web_api = fs::read_to_string(destination.join("web/src/api.ts")).unwrap();
-    assert!(web_api.contains("queryOptions({"));
-    assert!(web_api.contains(r#"queryKey: ["app-status"]"#));
+    assert!(web_api.contains("export const appStatusQueryOptions = getAppStatusOptions({"));
+    assert!(web_api.contains("baseUrl: globalThis.location.origin"));
+    assert!(web_api.contains("export type AppStatus = AppStatusResponse"));
+    assert!(web_api.contains("my-app-public-api-client"));
     let web_providers = fs::read_to_string(destination.join("web/src/app/providers.tsx")).unwrap();
     assert!(web_providers.contains("<QueryClientProvider client={client}>"));
     let web_router = fs::read_to_string(destination.join("web/src/app/router.ts")).unwrap();
@@ -735,6 +846,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_query_client.contains("retry: 1"));
     let web_vite_config = fs::read_to_string(destination.join("web/vite.config.ts")).unwrap();
     assert!(web_vite_config.contains(r#"from "@tanstack/router-plugin/vite""#));
+    assert!(web_vite_config.contains("path.resolve(import.meta.dirname, \"./src\")"));
+    assert!(!web_vite_config.contains("__dirname"));
     assert!(web_vite_config.contains("autoCodeSplitting: true"));
     assert!(web_vite_config.contains("const devPort = Number(process.env.PORT);"));
     assert!(web_vite_config.contains("port: devPort"));
@@ -796,7 +909,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(web_playwright.contains("JIG_DEV_API_ORIGIN: apiOrigin"));
     let web_e2e = fs::read_to_string(destination.join("web/e2e/app.spec.ts")).unwrap();
     assert!(web_e2e.contains("page.waitForResponse"));
-    assert!(web_e2e.contains(r#"versionResponse.headers()["x-request-id"]"#));
+    assert!(web_e2e.contains(r#"statusResponse.headers()["x-request-id"]"#));
     assert!(web_e2e.contains(r#"name: "my-app""#));
     assert!(web_e2e.contains(r#"getByRole("group", { name: "Application", exact: true })"#));
     assert!(web_e2e.contains(r#"locator('[data-slot="card-title"]')"#));
@@ -891,24 +1004,35 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         admin_package_json["devDependencies"]["@types/node"].as_str(),
         Some(GENERATED_NODE_TYPES_VERSION)
     );
-    assert!(admin_package.contains(r#""shadcn": "4.13.0""#));
-    assert!(admin_package.contains(r#""tailwindcss": "4.3.2""#));
+    assert!(admin_package.contains(r#""shadcn": "4.18.0""#));
+    assert!(admin_package.contains(r#""tailwindcss": "4.3.3""#));
     assert!(admin_package.contains(r#""@tanstack/react-query": "5.101.4""#));
-    assert!(admin_package.contains(r#""@tanstack/react-router": "1.170.18""#));
+    assert!(admin_package.contains(r#""@tanstack/react-router": "1.170.29""#));
     assert!(admin_package.contains(r#""@tanstack/eslint-plugin-query": "5.101.4""#));
-    assert!(admin_package.contains(r#""@tanstack/router-plugin": "1.168.23""#));
+    assert!(admin_package.contains(r#""@tanstack/router-plugin": "1.168.32""#));
+    assert!(admin_package.contains(r#""@vitest/eslint-plugin": "1.6.27""#));
+    assert!(admin_package.contains(r#""eslint-plugin-testing-library": "7.16.2""#));
+    assert!(admin_package.contains(r#""my-app-public-api-client": "*""#));
+    assert!(admin_package.contains(r#""my-app-admin-api-client": "*""#));
     assert!(admin_package.contains(r#""build": "vite build && tsc -b""#));
     assert!(!admin_package.contains("react-router-dom"));
     assert!(admin_package.contains(r#""@testing-library/dom": "10.4.1""#));
-    assert!(admin_package.contains(r#""lint": "eslint . && prettier --check .""#));
+    assert!(admin_package.contains(r#""lint": "eslint . --max-warnings 0 && prettier --check .""#));
+    assert!(admin_package.contains(r#""lint:cached": "eslint . --cache --cache-location node_modules/.cache/eslint --max-warnings 0 && prettier --check .""#));
     assert!(admin_package.contains(r#""format": "prettier --write .""#));
     assert!(admin_package.contains(r#""format:check": "prettier --check .""#));
     assert!(!admin_package.contains("@playwright/test"));
+    let admin_eslint =
+        fs::read_to_string(destination.join("admin-panel/eslint.config.js")).unwrap();
+    assert!(admin_eslint.contains(r#"from "../eslint.config.shared.mjs""#));
+    assert!(!admin_eslint.contains("forbiddenApiClientPackages"));
     let admin_readme = fs::read_to_string(destination.join("admin-panel/README.md")).unwrap();
     assert!(admin_readme.contains("real-backend Playwright starter for product SPA roles only"));
     let admin_vite_config =
         fs::read_to_string(destination.join("admin-panel/vite.config.ts")).unwrap();
     assert!(admin_vite_config.contains(r#"from "@tanstack/router-plugin/vite""#));
+    assert!(admin_vite_config.contains("path.resolve(import.meta.dirname, \"./src\")"));
+    assert!(!admin_vite_config.contains("__dirname"));
     assert!(admin_vite_config.contains("autoCodeSplitting: true"));
     assert!(admin_vite_config.contains("const devPort = Number(process.env.PORT)"));
     assert!(admin_vite_config.contains("port: devPort"));
@@ -918,6 +1042,10 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         admin_vite_config
             .contains("firstNonEmpty(process.env.JIG_DEV_API_ORIGIN, process.env.API_ORIGIN)")
     );
+    assert!(admin_vite_config.contains("process.env.JIG_DEV_ADMIN_API_ORIGIN"));
+    assert!(admin_vite_config.contains("process.env.ADMIN_API_ORIGIN"));
+    assert!(admin_vite_config.contains(r#""/admin-api""#));
+    assert!(admin_vite_config.contains("target: adminApiOrigin"));
     assert!(
         !admin_vite_config
             .contains("firstNonEmpty(process.env.API_ORIGIN, process.env.JIG_DEV_API_ORIGIN)")
@@ -1007,6 +1135,9 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
             .exists()
     );
     assert!(destination.join("admin-panel/src/lib/api.ts").exists());
+    let admin_api = fs::read_to_string(destination.join("admin-panel/src/lib/api.ts")).unwrap();
+    assert!(admin_api.contains("getAdminStatusOptions"));
+    assert!(admin_api.contains("adminStatusQueryOptions"));
     assert!(
         destination
             .join("admin-panel/src/lib/query-client.ts")
@@ -1125,16 +1256,26 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(jig_toml.contains("kind = \"env-port\""));
     assert!(!jig_toml.contains("proxy = false"));
     assert!(jig_toml.contains("argv = [\"cargo\", \"run\", \"-p\", \"my-app-api\"]"));
+    assert!(jig_toml.contains("[[dev.apps]]\nname = \"admin-api\""));
+    assert!(jig_toml.contains("argv = [\"cargo\", \"run\", \"-p\", \"my-app-admin-api\"]"));
     assert!(!jig_toml.contains("BIND_ADDR=\"${HOST}:${PORT}\""));
     assert!(!jig_toml.contains("port = 3000"));
     assert_eq!(
         fs::read_to_string(destination.join(".env.example")).unwrap(),
-        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
+        "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
     );
     let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
+    assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
+    assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
+    assert!(workspace_cargo.contains(r#""crates/my-app-http-common""#));
     let api_cargo = fs::read_to_string(destination.join("apps/my-app-api/Cargo.toml")).unwrap();
     assert!(api_cargo.contains("dotenvy.workspace = true"));
+    assert!(!api_cargo.contains("my-app-admin-http"));
+    let admin_api_cargo =
+        fs::read_to_string(destination.join("apps/my-app-admin-api/Cargo.toml")).unwrap();
+    assert!(admin_api_cargo.contains("my-app-admin-http"));
+    assert!(!admin_api_cargo.contains("my-app-http ="));
     let app_lib = fs::read_to_string(destination.join("crates/my-app/src/lib.rs")).unwrap();
     assert!(app_lib.contains("pub struct AppConfig"));
     assert!(app_lib.contains("pub fn from_env() -> Result<Self>"));
@@ -1157,9 +1298,34 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(http_lib.contains("pub fn router(state: AppState) -> Router"));
     assert!(http_lib.contains("TraceLayer::new_for_http()"));
     assert!(http_lib.contains("SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid)"));
-    assert!(http_lib.contains(r#".route("/health/live", get(live))"#));
-    assert!(http_lib.contains(r#".route("/health/ready", get(ready))"#));
-    assert!(http_lib.contains(r#".route("/api/version", get(version))"#));
+    assert!(http_lib.contains("Router::from(public::routes()).fallback(not_found)"));
+    assert!(!http_lib.contains("admin"));
+    let admin_http_lib =
+        fs::read_to_string(destination.join("crates/my-app-admin-http/src/lib.rs")).unwrap();
+    assert!(admin_http_lib.contains("pub trait AdminAuthorizer"));
+    assert!(admin_http_lib.contains("pub struct DenyAllAdminAuthorizer"));
+    assert!(admin_http_lib.contains("pub fn router<A: AdminAuthorizer>"));
+    assert!(admin_http_lib.contains("require_admin_authorization::<A>"));
+    assert!(admin_http_lib.contains("pub fn openapi() -> OpenApiDocument"));
+    assert!(admin_http_lib.contains("components(schemas(ApiErrorResponse))"));
+    assert!(admin_http_lib.contains(r#"path = "/admin-api/status""#));
+    assert!(admin_http_lib.contains("operation_id = \"getAdminStatus\""));
+    assert!(admin_http_lib.contains("admin_status_is_protected_and_available_after_authorization"));
+    let http_common_lib =
+        fs::read_to_string(destination.join("crates/my-app-http-common/src/lib.rs")).unwrap();
+    assert!(http_common_lib.contains("pub struct ApiErrorResponse"));
+    assert!(http_common_lib.contains("pub request_id: String"));
+    let public_http =
+        fs::read_to_string(destination.join("crates/my-app-http/src/public.rs")).unwrap();
+    for handler in ["health", "live", "ready", "version", "status"] {
+        assert!(public_http.contains(&format!(".routes(routes!({handler}))")));
+    }
+    assert!(public_http.contains(r#"path = "/health/live""#));
+    assert!(public_http.contains(r#"path = "/health/ready""#));
+    assert!(public_http.contains(r#"path = "/api/version""#));
+    assert!(public_http.contains(r#"path = "/api/status""#));
+    assert!(public_http.contains("body = ApiErrorResponse"));
+    assert!(public_http.contains(r#""dependency_unavailable""#));
     let test_support_cargo =
         fs::read_to_string(destination.join("crates/my-app-test-support/Cargo.toml")).unwrap();
     assert!(test_support_cargo.contains(r#"my-app = { path = "../my-app""#));
@@ -1182,7 +1348,15 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(test_support_http_test.contains("async fn readiness_reflects_state()"));
     assert!(test_support_http_test.contains("StatusCode::SERVICE_UNAVAILABLE"));
     assert!(test_support_http_test.contains("async fn responses_include_request_id()"));
+    assert!(
+        test_support_http_test
+            .contains("async fn unknown_routes_return_a_standard_error_with_the_request_id()")
+    );
     assert!(test_support_http_test.contains("async fn version_returns_json()"));
+    assert!(
+        test_support_http_test
+            .contains("async fn status_returns_application_identity_and_readiness()")
+    );
     let db_lib = fs::read_to_string(destination.join("crates/my-app-db/src/lib.rs")).unwrap();
     assert!(db_lib.contains("PgPool"));
     assert!(db_lib.contains("sqlx::Postgres::database_exists"));
@@ -1196,8 +1370,30 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         fs::read_to_string(destination.join("crates/my-app-test-support/src/db.rs")).unwrap();
     assert!(test_support_db.contains("pub struct DatabaseTestConfig"));
     assert!(test_support_db.contains("validate_test_database_name"));
+    assert!(test_support_db.contains("pub fn from_test_env()"));
+    assert!(test_support_db.contains("pub async fn migrate(&self)"));
+    let postgres_test =
+        fs::read_to_string(destination.join("crates/my-app-test-support/tests/postgres.rs"))
+            .unwrap();
+    assert!(postgres_test.contains("SELECT current_database()"));
+    assert!(postgres_test.contains("validate_test_database_name(&database_name)?"));
+    assert!(
+        postgres_test.contains("#[ignore = \"run with the root test:postgres package script\"]")
+    );
+    let postgres_script = fs::read_to_string(destination.join("scripts/test-postgres.sh")).unwrap();
+    assert!(postgres_script.contains("--publish 127.0.0.1::5432"));
+    assert!(postgres_script.contains("docker rm --force"));
+    assert!(postgres_script.contains("TEST_DATABASE_URL="));
+    assert!(postgres_script.contains("test_db_my_app"));
+    assert!(postgres_script.contains("-- --ignored --nocapture"));
+    let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
+    assert!(root_readme.contains("scripts/check-webapps.sh bootstrap"));
+    assert!(root_readme.contains("Commit the generated `bun.lock`"));
+    assert!(root_readme.contains("DenyAllAdminAuthorizer"));
+    assert!(root_readme.contains("bun run test:postgres"));
     let http_agents = fs::read_to_string(destination.join("crates/my-app-http/AGENTS.md")).unwrap();
-    assert!(http_agents.contains("routes, handlers, middleware, extractors, and HTTP DTOs"));
+    assert!(http_agents.contains("`src/public.rs`: owns public routes"));
+    assert!(http_agents.contains("Never depend on `my-app-admin-http`"));
     let app_agents = fs::read_to_string(destination.join("crates/my-app/AGENTS.md")).unwrap();
     assert!(app_agents.contains("Parse environment configuration once at startup"));
 
@@ -1213,9 +1409,13 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(answers.contains("cargo run -p my-app-api -- --bootstrap-database"));
     assert!(answers.contains("export it or copy .env.example to .env before bootstrap"));
     assert!(answers.contains("${DATABASE_URL:-}"));
-    assert!(answers.contains(
-        "cargo run -p my-app-api -- --bootstrap-database && scripts/check-webapps.sh bootstrap"
-    ));
+    let web_bootstrap = answers.find("scripts/check-webapps.sh bootstrap").unwrap();
+    let database_guard = answers.find("Missing DATABASE_URL").unwrap();
+    let database_bootstrap = answers
+        .find("cargo run -p my-app-api -- --bootstrap-database")
+        .unwrap();
+    assert!(web_bootstrap < database_guard);
+    assert!(database_guard < database_bootstrap);
     assert!(!answers.contains("(cd web && bun install)"));
     assert!(answers.contains("name = \"web\""));
     assert!(answers.contains("dir = \"landing\""));
@@ -1224,6 +1424,109 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(answers.contains("role = \"spa\""));
     assert!(answers.contains("role = \"astro\""));
     assert!(answers.contains("role = \"admin\""));
+}
+
+#[test]
+fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("public-app");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: vec![parse_scaffold_frontend("web").unwrap()],
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts::default(),
+    })
+    .unwrap();
+
+    assert!(destination.join("openapi/public.json").exists());
+    assert!(
+        destination
+            .join("packages/public-api-client/src/generated/sdk.gen.ts")
+            .exists()
+    );
+    assert!(!destination.join("openapi/admin.json").exists());
+    assert!(!destination.join("crates/public-app-admin-http").exists());
+    assert!(!destination.join("apps/public-app-admin-api").exists());
+    assert!(!destination.join("packages/admin-api-client").exists());
+
+    let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
+    assert!(workspace_package.contains(r#""packages/public-api-client""#));
+    assert!(!workspace_package.contains(r#""packages/admin-api-client""#));
+    let exporter =
+        fs::read_to_string(destination.join("apps/public-app-api/src/bin/export-openapi.rs"))
+            .unwrap();
+    assert!(exporter.contains("public_openapi"));
+    assert!(!exporter.contains("admin"));
+    let public_api_manifest =
+        fs::read_to_string(destination.join("apps/public-app-api/Cargo.toml")).unwrap();
+    assert!(!public_api_manifest.contains("admin"));
+    let contracts = fs::read_to_string(destination.join("scripts/contracts.mjs")).unwrap();
+    assert!(!contracts.contains("cargoPackage: \"public-app-admin-api\""));
+    assert!(!contracts.contains("name: \"admin\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn generated_dependency_failure_names_the_exact_bootstrap_recovery_command() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("dependency-recovery");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::RustReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: vec![parse_scaffold_frontend("web").unwrap()],
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            web_package_manager: Some("npm".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let package_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(destination.join("package.json")).unwrap())
+            .unwrap();
+    assert_eq!(package_json["packageManager"], "npm@12.0.2");
+    assert_eq!(package_json["allowScripts"]["esbuild@0.28.2"], true);
+
+    let output = Command::new("bash")
+        .args(["scripts/check-webapps.sh", "dependencies-install", "web"])
+        .current_dir(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing package-lock.json"), "{stderr}");
+    assert!(
+        stderr.contains("Run 'scripts/check-webapps.sh bootstrap' from the repository root"),
+        "{stderr}"
+    );
 }
 
 // Repeat the dependency-backed proof with:
@@ -1508,6 +1811,23 @@ fn reserved_backend_dev_identity_is_scoped_to_rust_react() {
 }
 
 #[test]
+fn rust_react_reserves_the_separate_admin_backend_identity() {
+    let opts = ScaffoldOpts {
+        preset: Some(ScaffoldPreset::RustReact),
+        frontends: vec![parse_scaffold_frontend("admin_api:spa").unwrap()],
+        ..ScaffoldOpts::default()
+    };
+
+    let error = opts
+        .validate_init_invariants(&AnswerOpts::default())
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("reserved backend dev app 'admin-api'"));
+    assert!(error.contains("JIG_DEV_ADMIN_API"));
+}
+
+#[test]
 fn run_init_rejects_merged_backend_named_frontend_before_template_or_destination_writes() {
     let temp = tempdir().unwrap();
     let answers_file = temp.path().join("answers.toml");
@@ -1744,7 +2064,18 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
                 &ScaffoldOpts {
                     preset: Some(ScaffoldPreset::RustReact),
                     db: Some(db),
-                    frontends: Vec::new(),
+                    frontends: vec![
+                        ScaffoldFrontend {
+                            name: "web".into(),
+                            kind: ScaffoldFrontendKind::Spa,
+                            custom_default_name: false,
+                        },
+                        ScaffoldFrontend {
+                            name: "admin".into(),
+                            kind: ScaffoldFrontendKind::Admin,
+                            custom_default_name: false,
+                        },
+                    ],
                     frontend_list: Vec::new(),
                 },
                 &AnswerOpts {

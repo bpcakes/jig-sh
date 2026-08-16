@@ -478,7 +478,7 @@ fn scaffold_bootstrap_command_records_shared_web_dependency_state() {
 }
 
 #[test]
-fn scaffold_database_bootstrap_validates_env_then_creates_and_migrates_database() {
+fn scaffold_bootstraps_frontend_before_validating_and_migrating_database() {
     let temp = tempdir().unwrap();
     let plan = scaffold::InitScaffoldPlan::from_opts(
         &ScaffoldOpts {
@@ -510,9 +510,9 @@ fn scaffold_database_bootstrap_validates_env_then_creates_and_migrates_database(
         .find("cargo run -p demo-api -- --bootstrap-database")
         .unwrap();
     let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
-    assert!(env_check < cargo_fetch);
-    assert!(cargo_fetch < database_bootstrap);
-    assert!(database_bootstrap < frontend_bootstrap);
+    assert!(cargo_fetch < frontend_bootstrap);
+    assert!(frontend_bootstrap < env_check);
+    assert!(env_check < database_bootstrap);
 }
 
 #[test]
@@ -577,6 +577,11 @@ fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
                 pnpm_workspace_yaml["enableGlobalVirtualStore"].as_bool(),
                 Some(false)
             );
+            assert_eq!(
+                pnpm_workspace_yaml["linkWorkspacePackages"].as_bool(),
+                Some(true)
+            );
+            assert_eq!(pnpm_workspace_yaml["overrides"]["js-yaml"], "4.3.1");
             assert!(
                 pnpm_workspace.contains("pre-run validation rewrite installed executable shims")
             );

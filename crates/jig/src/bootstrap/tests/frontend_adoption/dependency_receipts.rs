@@ -564,7 +564,7 @@ esac
 
     let member_modules = repo.join("apps/web/node_modules");
     for node_modules in [repo.join("node_modules"), member_modules.clone()] {
-        for cache_name in [".cache", ".vite", ".vite-temp", ".tmp"] {
+        for cache_name in [".astro", ".cache", ".vite", ".vite-temp", ".tmp"] {
             let cache = node_modules.join(cache_name);
             fs::create_dir(&cache).unwrap();
             fs::write(cache.join("runtime-state"), "first\n").unwrap();
@@ -779,7 +779,7 @@ esac
         let command = |mode: &str| {
             let mut command = std::process::Command::new("bash");
             command.args(["scripts/check-webapps.sh", mode]);
-            if mode == "dependencies-ready" {
+            if matches!(mode, "dependencies-ready" | "dependencies-install") {
                 command.arg("apps/web");
             }
             command
@@ -801,8 +801,16 @@ esac
             String::from_utf8_lossy(&bootstrap.stdout),
             String::from_utf8_lossy(&bootstrap.stderr)
         );
+        assert!(
+            repo.join(lockfile).is_file(),
+            "{package_manager} bootstrap did not create the root workspace lockfile"
+        );
         assert_eq!(repo.join("node_modules").is_dir(), creates_empty_directory);
         assert!(command("dependencies-ready").status.success());
+        assert!(
+            command("dependencies-install").status.success(),
+            "{package_manager} frozen dependency path rejected the bootstrapped lock and receipt"
+        );
 
         fs::write(
             repo.join("apps/web/package.json"),

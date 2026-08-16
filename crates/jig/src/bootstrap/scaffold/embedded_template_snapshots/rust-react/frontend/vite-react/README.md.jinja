@@ -7,7 +7,17 @@ Add or inspect components from this directory with the selected package manager:
     <<[ package_exec ]>> shadcn@<<[ shadcn_cli_version ]>> info
     <<[ package_exec ]>> shadcn@<<[ shadcn_cli_version ]>> add <component>
 
-File-based routes live in `src/routes`. The TanStack Router Vite plugin watches them, generates `src/routeTree.gen.ts`, and automatically code-splits route components; run development or a bundle build after adding or renaming a route, and do not edit the generated tree directly. The index loader primes the shared TanStack Query cache before rendering, while Query owns freshness and the one-retry policy. The starter query passes its cancellation signal through both `/api/version` and `/health/ready` requests to the Vite proxy.
+File-based routes live in `src/routes`. The TanStack Router Vite plugin watches them, generates `src/routeTree.gen.ts`, and automatically code-splits route components; run development or a bundle build after adding or renaming a route, and do not edit the generated tree directly. The index loader primes the shared TanStack Query cache before rendering, while Query owns freshness and the one-retry policy. The starter query uses the generated public client for `/api/status`, validates successful responses with Zod, and passes Query's cancellation signal to Fetch.
+
+## API contract
+
+The public client is generated from `openapi/public.json` into `packages/public-api-client`. Import its operations, schemas, and TanStack Query options through the package instead of writing parallel request or response types in this app. Do not edit `src/generated` in that package.
+
+After changing Utoipa operations or HTTP DTOs, run the transactional contract command from the repository root. It stages every OpenAPI document and client before replacing committed output:
+
+    <<[ web_run_command ]>> contract:generate
+
+`cargo test` rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` runs `contract:check`, which regenerates every contract in a temporary directory and rejects drift without modifying the worktree. The build gate also scans public application artifacts for privileged package, contract, and binary markers.
 
 A full `scripts/jig dev` session supplies the current backend through `JIG_DEV_API_ORIGIN`, which takes precedence over an inherited generic override. For a direct Vite start or `scripts/jig dev --app <frontend-name>` against a separately managed backend, set `API_ORIGIN`. Replace the starter with the first product feature while keeping the tested API boundary or evolving it with the backend.
 
