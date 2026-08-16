@@ -51,6 +51,9 @@ use self::proxy::{MAX_PROXY_LOG_BYTES, ensure_requested_https, open_proxy_log};
 use self::proxy::{
     ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
 };
+use self::route_publication::publish_process_route_interruptible;
+#[cfg(test)]
+use self::route_publication::publish_process_route_interruptible_with_verifier;
 
 mod child_lifecycle;
 mod cleanup;
@@ -59,6 +62,9 @@ mod frameworks;
 mod listener_owner;
 mod output;
 mod proxy;
+mod route_publication;
+#[cfg(test)]
+mod startup_failure_tests;
 #[cfg(any(windows, test))]
 mod windows_launch;
 
@@ -604,75 +610,6 @@ fn preflight_process_routes(
         &cancelled,
     )?;
     lock_outcome_or_interruption(outcome, interrupt_requested)
-}
-
-fn publish_process_route_interruptible(
-    store: &StateStore,
-    route: Route,
-    app_name: &str,
-    child: &mut Child,
-    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
-) -> Result<()> {
-    publish_process_route_interruptible_with_verifier(
-        store,
-        route,
-        app_name,
-        child,
-        interrupt_requested,
-        verify_process_route_candidate,
-    )
-}
-
-fn publish_process_route_interruptible_with_verifier(
-    store: &StateStore,
-    route: Route,
-    app_name: &str,
-    child: &mut Child,
-    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
-    mut verify_owner: impl FnMut(&str, &Route, &mut Child) -> Result<()>,
-) -> Result<()> {
-    let cancelled = || interrupt_requested().is_some();
-    let outcome = store.add_verified_route_interruptible(route, &cancelled, |candidate| {
-        verify_listener_ownership_and_observe_child(
-            app_name,
-            candidate.target_host.as_str(),
-            candidate.target_port,
-            child,
-            |child| verify_owner(app_name, candidate, child),
-        )
-    })?;
-    lock_outcome_or_interruption(outcome, interrupt_requested)
-}
-
-fn verify_process_route_candidate(app_name: &str, route: &Route, child: &mut Child) -> Result<()> {
-    if route.mode != RouteMode::Process {
-        bail!(
-            "Route '{}' must use process mode before owner verification",
-            route.hostname
-        );
-    }
-    let child_pid = child.id();
-    if route.owner_pid != Some(child_pid) {
-        bail!(
-            "Process route '{}' records owner PID {:?}, but app '{}' is supervised as child PID {child_pid}; refusing to verify or publish a mismatched route",
-            route.hostname,
-            route.owner_pid,
-            app_name
-        );
-    }
-    let owner_start_token = route.owner_start_token.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Process route '{}' has no owner start token; refusing to verify or publish it",
-            route.hostname
-        )
-    })?;
-    verify_process_route_owner(
-        app_name,
-        route.target_host.as_str(),
-        route.target_port,
-        child_pid,
-        Some(owner_start_token),
-    )
 }
 
 fn lock_outcome_or_interruption<T>(
