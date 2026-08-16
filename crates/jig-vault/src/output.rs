@@ -389,7 +389,6 @@ mod unix {
 
     use super::{OutputFailureStage, OutputInstallFailure};
     use crate::VaultErrorKind;
-    use crate::path_security::is_trusted_root_alias;
 
     pub(super) fn preflight_private_destination(
         path: &Path,
@@ -586,12 +585,16 @@ mod unix {
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
         let precondition = preview(path)?;
         if precondition.destination_exists() && !overwrite {
-            return Err(PrivateOutputConflict::ExistingWithoutOverwrite(path.to_path_buf()).into());
+            return Err(PrivateOutputConflict::ExistingWithoutOverwrite(
+                precondition.destination.clone(),
+            )
+            .into());
         }
         prepared_path(&precondition)
     }
 
     fn preview(path: &Path) -> anyhow::Result<PrivateDestinationPrecondition> {
+        let path = crate::path_security::physical_path(path, "vault output")?;
         path.file_name()
             .ok_or_else(|| anyhow!("vault output path must name a file: {}", path.display()))?;
         let parent = match path.parent() {
@@ -614,10 +617,10 @@ mod unix {
                 parent.display()
             );
         }
-        let state = destination_state(path)?;
+        let state = destination_state(&path)?;
 
         Ok(PrivateDestinationPrecondition {
-            destination: path.to_path_buf(),
+            destination: path,
             parent,
             state,
         })
@@ -830,13 +833,7 @@ mod unix {
     }
 
     fn reject_symlinked_ancestors(path: &Path) -> anyhow::Result<()> {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .context("failed to resolve current directory for vault output")?
-                .join(path)
-        };
+        let absolute = crate::path_security::physical_path(path, "vault output")?;
         let mut ancestors = absolute.ancestors().collect::<Vec<_>>();
         ancestors.reverse();
         for ancestor in ancestors {
@@ -846,7 +843,7 @@ mod unix {
                     ancestor.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
+            if metadata.file_type().is_symlink() {
                 bail!(
                     "refusing private vault output through symlinked parent {}",
                     ancestor.display()
@@ -994,6 +991,25 @@ mod unix {
                 fs::metadata(&output).unwrap().permissions().mode() & 0o777,
                 0o600
             );
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn output_uses_the_verified_physical_macos_temp_path() {
+            let temp = tempfile::Builder::new()
+                .prefix("jig-vault-output-path-")
+                .tempdir_in("/tmp")
+                .unwrap();
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let logical_output = temp.path().join("result.bin");
+            let physical_output = fs::canonicalize(temp.path()).unwrap().join("result.bin");
+
+            let precondition = preview(&logical_output).unwrap();
+            assert!(precondition.destination.starts_with("/private/tmp"));
+            assert_eq!(precondition.destination, physical_output);
+
+            install_private_bytes(&logical_output, b"protected", false).unwrap();
+            assert_eq!(fs::read(physical_output).unwrap(), b"protected");
         }
 
         #[test]

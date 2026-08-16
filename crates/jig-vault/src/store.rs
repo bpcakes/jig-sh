@@ -313,14 +313,14 @@ fn text_file_exists_no_follow(path: &Path) -> AnyResult<bool> {
 }
 
 fn resolve_root(explicit_home: Option<PathBuf>) -> AnyResult<PathBuf> {
-    match explicit_home {
-        Some(path) => Ok(path),
+    let root = match explicit_home {
+        Some(path) => path,
         None => match std::env::var(VAULT_HOME_ENV) {
             Ok(value) if value.is_empty() => bail!("{VAULT_HOME_ENV} must not be empty"),
-            Ok(value) => Ok(PathBuf::from(value)),
-            Err(std::env::VarError::NotPresent) => Ok(dirs::home_dir()
+            Ok(value) => PathBuf::from(value),
+            Err(std::env::VarError::NotPresent) => dirs::home_dir()
                 .context("could not resolve home directory for Jig vault")?
-                .join(".jig/vault")),
+                .join(".jig/vault"),
             Err(std::env::VarError::NotUnicode(value)) => {
                 bail!(
                     "{VAULT_HOME_ENV} must be valid Unicode: {}",
@@ -328,7 +328,8 @@ fn resolve_root(explicit_home: Option<PathBuf>) -> AnyResult<PathBuf> {
                 )
             }
         },
-    }
+    };
+    crate::path_security::physical_path(&root, "vault home")
 }
 
 fn prepare_private_dir(root: PathBuf, initialization_kdf: KdfParams) -> AnyResult<VaultStore> {
@@ -668,6 +669,22 @@ mod tests {
             fs::metadata(store.root()).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn resolve_uses_the_verified_physical_macos_temp_path() {
+        let temp = tempfile::Builder::new()
+            .prefix("jig-vault-path-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let logical_root = temp.path().join("vault");
+
+        let store = VaultStore::resolve_for_test(Some(logical_root.clone())).unwrap();
+
+        assert!(store.root().starts_with("/private/tmp"));
+        assert_eq!(store.root(), fs::canonicalize(logical_root).unwrap());
     }
 
     #[cfg(unix)]
