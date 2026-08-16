@@ -585,10 +585,9 @@ mod unix {
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
         let precondition = preview(path)?;
         if precondition.destination_exists() && !overwrite {
-            return Err(PrivateOutputConflict::ExistingWithoutOverwrite(
-                precondition.destination.clone(),
-            )
-            .into());
+            return Err(
+                PrivateOutputConflict::ExistingWithoutOverwrite(precondition.destination).into(),
+            );
         }
         prepared_path(&precondition)
     }
