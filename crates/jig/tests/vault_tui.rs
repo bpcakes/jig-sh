@@ -4,15 +4,18 @@ mod support;
 
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
+
+use support::read_pty_available as read_available;
+
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
@@ -144,6 +147,8 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "controlled Peek value survived into the metadata redraw"
     );
 
+    // The periodic spinner runs only while loading. This unlocked browser
+    // state is otherwise dirty-gated, so quiet output is a reliable barrier.
     drain_until_quiet(
         &mut master,
         &mut output,
@@ -187,14 +192,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     master.write_all(b"\x03").unwrap();
 
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
-            .unwrap_or_else(|| {
-                panic!(
-                    "vault TUI did not exit after Ctrl-C; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "vault TUI did not exit after Ctrl-C; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
     assert!(status.success(), "vault TUI exited with {status}");
     let restored = terminal_attributes(&slave);
     assert_eq!(
@@ -278,14 +287,18 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
-            .unwrap_or_else(|| {
-                panic!(
-                    "vault TUI did not exit after SIGTERM; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(8),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "vault TUI did not exit after SIGTERM; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
         "vault TUI exited with {status}; output: {}",
@@ -482,43 +495,5 @@ fn drain_until_quiet(
             String::from_utf8_lossy(output)
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_for_child_while_draining(
-    child: &mut Child,
-    master: &mut File,
-    output: &mut Vec<u8>,
-    timeout: Duration,
-) -> Option<ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        read_available(master, output);
-        if let Some(status) = child.try_wait().unwrap() {
-            read_available(master, output);
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            read_available(master, output);
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn read_available(file: &mut File, output: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(read) => output.extend_from_slice(&buffer[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-            Err(error) if cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO) => {
-                return;
-            }
-            Err(error) => panic!("reading PTY failed: {error}"),
-        }
     }
 }

@@ -3,16 +3,18 @@
 mod support;
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
+
+use support::read_pty_available as read_available;
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
@@ -241,15 +243,19 @@ sleep 30
         "\x1b[?1049l",
         Duration::from_secs(1),
     );
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
-            .unwrap_or_else(|| {
-                panic!(
-                    "picker did not exit after launching; invocations: {}; output: {}",
-                    fs::read_to_string(&invocations).unwrap_or_default(),
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "picker did not exit after launching; invocations: {}; output: {}",
+            fs::read_to_string(&invocations).unwrap_or_default(),
+            String::from_utf8_lossy(&output)
+        )
+    });
     assert!(status.success(), "picker exited with {status}");
     assert_eq!(
         fs::read_to_string(launched).unwrap().trim(),
@@ -289,14 +295,18 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
-            .unwrap_or_else(|| {
-                panic!(
-                    "large picker did not exit after quit; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "large picker did not exit after quit; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
 
     assert!(
         status.success(),
@@ -347,14 +357,18 @@ sleep 30
         "Codex homes: 2 found",
         Duration::from_secs(5),
     );
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(2))
-            .unwrap_or_else(|| {
-                panic!(
-                    "homes did not exit after inspection; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "homes did not exit after inspection; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -424,14 +438,18 @@ sleep 30
         "Codex resume: dry run",
         Duration::from_secs(5),
     );
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(2))
-            .unwrap_or_else(|| {
-                panic!(
-                    "resume did not exit after inspection; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(2),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "resume did not exit after inspection; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -506,14 +524,18 @@ sleep 30
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
         0
     );
-    let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
-            .unwrap_or_else(|| {
-                panic!(
-                    "picker did not exit after SIGINT; output: {}",
-                    String::from_utf8_lossy(&output)
-                )
-            });
+    let status = support::wait_for_child_while_draining(
+        &mut child,
+        &mut master,
+        &mut output,
+        Duration::from_secs(5),
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "picker did not exit after SIGINT; output: {}",
+            String::from_utf8_lossy(&output)
+        )
+    });
     assert!(
         status.signal() == Some(libc::SIGINT) || status.code() == Some(130),
         "picker exited with {status}; output: {}",
@@ -701,46 +723,6 @@ fn read_until(file: &mut File, output: &mut Vec<u8>, needle: &str, timeout: Dura
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-}
-
-fn read_available(file: &mut File, output: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(read) => output.extend_from_slice(&buffer[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-            Err(error) if pty_master_reached_eof(&error) => return,
-            Err(error) => panic!("reading PTY output failed: {error}"),
-        }
-    }
-}
-
-fn wait_for_child_while_draining(
-    child: &mut Child,
-    master: &mut File,
-    output: &mut Vec<u8>,
-    timeout: Duration,
-) -> Option<ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        read_available(master, output);
-        if let Some(status) = child.try_wait().unwrap() {
-            read_available(master, output);
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            read_available(master, output);
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn pty_master_reached_eof(error: &std::io::Error) -> bool {
-    cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO)
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) {
