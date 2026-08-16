@@ -287,13 +287,19 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        read_available(&mut master, &mut output);
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
             child.kill().unwrap();
-            child.wait().unwrap()
-        });
+            break child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    read_available(&mut master, &mut output);
 
     assert!(
         status.success(),
