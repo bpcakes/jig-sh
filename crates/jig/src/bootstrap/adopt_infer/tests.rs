@@ -10,6 +10,7 @@ use crate::bootstrap::adopt_infer::scan::{MAX_SCAN_DEPTH, MAX_SCAN_WARNINGS};
 
 mod diagnostics_and_ci;
 mod ecosystem;
+// The suffix avoids shadowing the production `adopt_infer::frontend` module.
 mod frontend_tests;
 mod rust_and_scan;
 

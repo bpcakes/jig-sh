@@ -1191,6 +1191,21 @@ mod tests {
             assert_eq!(restored.fields.len(), 1);
         }
 
+        #[cfg(not(target_os = "linux"))]
+        {
+            let restored_home = temp.path().join("restored-vault");
+            let restored_backend = VaultTuiBackend::new(request(restored_home.clone())).unwrap();
+            let error = restored_backend
+                .execute(VaultAction::RestoreBackup {
+                    input: lifecycle_backup_path(&temp),
+                    passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
+                })
+                .unwrap_err();
+            assert_eq!(error.kind(), VaultUiErrorKind::InvalidInput);
+            assert!(error.message().contains("unsupported on this platform"));
+            assert!(!restored_home.exists());
+        }
+
         let new_passphrase = b"new correct horse battery staple";
         let VaultActionResult::Snapshot(rotated) = backend
             .execute(VaultAction::ChangePassphrase {

@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+// Load PTY helpers only in their two consumers; the general support module is
+// compiled into every integration target under `-D warnings`.
 #[path = "support/pty.rs"]
 mod pty_support;
 mod support;
@@ -16,7 +18,7 @@ use std::{
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
 
-use pty_support::read_available;
+use pty_support::{read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
@@ -194,18 +196,14 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     master.write_all(b"\x03").unwrap();
 
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(5),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "vault TUI did not exit after Ctrl-C; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after Ctrl-C; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "vault TUI exited with {status}");
     let restored = terminal_attributes(&slave);
     assert_eq!(
@@ -289,18 +287,14 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(8),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "vault TUI did not exit after SIGTERM; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after SIGTERM; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
         "vault TUI exited with {status}; output: {}",
@@ -493,7 +487,7 @@ fn drain_until_quiet(
         }
         assert!(
             Instant::now() < deadline,
-            "PTY output did not become quiet; output: {}",
+            "stable browser PTY output did not become quiet; a loading spinner or redraw may be active; output: {}",
             String::from_utf8_lossy(output)
         );
         std::thread::sleep(Duration::from_millis(10));

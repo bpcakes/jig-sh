@@ -44,5 +44,5 @@ pub fn wait_for_child_while_draining(
 }
 
 fn pty_master_reached_eof(error: &std::io::Error) -> bool {
-    cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO)
+    error.raw_os_error() == Some(libc::EIO)
 }

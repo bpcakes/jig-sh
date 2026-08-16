@@ -1,5 +1,7 @@
 #![cfg(unix)]
 
+// Load PTY helpers only in their two consumers; the general support module is
+// compiled into every integration target under `-D warnings`.
 #[path = "support/pty.rs"]
 mod pty_support;
 mod support;
@@ -16,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
 
-use pty_support::read_available;
+use pty_support::{read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
@@ -245,19 +247,15 @@ sleep 30
         "\x1b[?1049l",
         Duration::from_secs(1),
     );
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(5),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "picker did not exit after launching; invocations: {}; output: {}",
-            fs::read_to_string(&invocations).unwrap_or_default(),
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after launching; invocations: {}; output: {}",
+                    fs::read_to_string(&invocations).unwrap_or_default(),
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "picker exited with {status}");
     assert_eq!(
         fs::read_to_string(launched).unwrap().trim(),
@@ -297,18 +295,14 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(5),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "large picker did not exit after quit; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "large picker did not exit after quit; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     assert!(
         status.success(),
@@ -359,18 +353,14 @@ sleep 30
         "Codex homes: 2 found",
         Duration::from_secs(5),
     );
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(2),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "homes did not exit after inspection; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "homes did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -440,18 +430,14 @@ sleep 30
         "Codex resume: dry run",
         Duration::from_secs(5),
     );
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(2),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "resume did not exit after inspection; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "resume did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -526,18 +512,14 @@ sleep 30
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
         0
     );
-    let status = pty_support::wait_for_child_while_draining(
-        &mut child,
-        &mut master,
-        &mut output,
-        Duration::from_secs(5),
-    )
-    .unwrap_or_else(|| {
-        panic!(
-            "picker did not exit after SIGINT; output: {}",
-            String::from_utf8_lossy(&output)
-        )
-    });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after SIGINT; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGINT) || status.code() == Some(130),
         "picker exited with {status}; output: {}",
