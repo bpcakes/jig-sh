@@ -1,55 +1,120 @@
-use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Returns whether a symlink is an OS-managed alias outside an unprivileged
-/// caller's namespace control.
-pub(crate) fn is_trusted_root_alias(path: &Path, metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        // macOS exposes system paths such as /var through root-owned aliases.
-        // Restrict the exception to aliases directly beneath a root-owned,
-        // non-writable `/`; user-controlled and nested symlinks remain denied.
-        path.parent() == Some(Path::new("/"))
-            && metadata.uid() == 0
-            && fs::symlink_metadata("/").is_ok_and(|root| {
-                root.is_dir() && root.uid() == 0 && root.permissions().mode() & 0o022 == 0
-            })
+#[cfg(target_os = "macos")]
+use anyhow::bail;
+use anyhow::{Context, Result};
+
+/// Returns an absolute path with only known platform root aliases resolved.
+///
+/// This is deliberately narrower than canonicalizing the complete path: the
+/// caller still needs to reject symlinks in every user-controlled component.
+pub(crate) fn physical_path(path: &Path, purpose: &str) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .with_context(|| format!("failed to resolve current directory for {purpose}"))?
+            .join(path)
+    };
+    resolve_platform_root_alias(absolute, purpose)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_platform_root_alias(path: PathBuf, purpose: &str) -> Result<PathBuf> {
+    for (alias, expected) in [
+        (Path::new("/var"), Path::new("/private/var")),
+        (Path::new("/tmp"), Path::new("/private/tmp")),
+        (Path::new("/etc"), Path::new("/private/etc")),
+    ] {
+        let Ok(suffix) = path.strip_prefix(alias) else {
+            continue;
+        };
+        let physical = std::fs::canonicalize(alias).with_context(|| {
+            format!(
+                "failed to resolve macOS system path alias {} for {purpose}",
+                alias.display()
+            )
+        })?;
+        return resolve_verified_alias(&path, suffix, alias, expected, &physical, purpose);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, metadata);
-        false
+    Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_verified_alias(
+    path: &Path,
+    suffix: &Path,
+    alias: &Path,
+    expected: &Path,
+    physical: &Path,
+    purpose: &str,
+) -> Result<PathBuf> {
+    if physical == alias {
+        return Ok(path.to_path_buf());
     }
+    if physical != expected {
+        bail!(
+            "refusing unexpected macOS system path alias {} -> {} for {purpose}",
+            alias.display(),
+            physical.display()
+        );
+    }
+    Ok(physical.join(suffix))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_platform_root_alias(path: PathBuf, _purpose: &str) -> Result<PathBuf> {
+    Ok(path)
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::is_trusted_root_alias;
+    use super::*;
 
-    #[cfg(unix)]
     #[test]
-    fn rejects_user_controlled_aliases() {
-        use std::os::unix::fs::symlink;
-
-        let temp = tempfile::tempdir().unwrap();
-        let target = temp.path().join("target");
-        let alias = temp.path().join("alias");
-        std::fs::create_dir(&target).unwrap();
-        symlink(&target, &alias).unwrap();
-
-        let metadata = std::fs::symlink_metadata(&alias).unwrap();
-        assert!(!is_trusted_root_alias(&alias, &metadata));
+    fn makes_relative_paths_absolute() {
+        let resolved = physical_path(Path::new("relative/vault"), "test").unwrap();
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with("relative/vault"));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn accepts_macos_var_alias() {
-        let path = std::path::Path::new("/var");
-        let metadata = std::fs::symlink_metadata(path).unwrap();
-        assert!(metadata.file_type().is_symlink());
-        assert!(is_trusted_root_alias(path, &metadata));
+    fn resolves_only_verified_macos_system_root_aliases() {
+        assert_eq!(
+            physical_path(Path::new("/var/folders/example/output"), "test").unwrap(),
+            Path::new("/private/var/folders/example/output")
+        );
+        assert_eq!(
+            physical_path(Path::new("/tmp/output"), "test").unwrap(),
+            Path::new("/private/tmp/output")
+        );
+        assert_eq!(
+            physical_path(Path::new("/etc/hosts"), "test").unwrap(),
+            Path::new("/private/etc/hosts")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_real_system_root_and_rejects_unexpected_redirect() {
+        let path = Path::new("/tmp/vault");
+        let alias = Path::new("/tmp");
+        let expected = Path::new("/private/tmp");
+        let suffix = Path::new("vault");
+
+        assert_eq!(
+            resolve_verified_alias(path, suffix, alias, expected, alias, "test").unwrap(),
+            path
+        );
+
+        let unexpected = Path::new("/unexpected/tmp");
+        let error =
+            resolve_verified_alias(path, suffix, alias, expected, unexpected, "test").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected macOS system path alias")
+        );
     }
 }

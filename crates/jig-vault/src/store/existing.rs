@@ -8,7 +8,6 @@ use std::sync::{Arc, atomic::AtomicBool};
 use anyhow::{Context, Result as AnyResult, bail};
 
 use crate::crypto::KdfParams;
-use crate::path_security::is_trusted_root_alias;
 use crate::{Result, VaultError, VaultErrorKind};
 
 use super::{AUDIT_FILE, VAULT_FILE, VaultStore, ensure_tree_has_no_symlinks};
@@ -27,6 +26,7 @@ impl VaultStore {
 }
 
 fn open_existing_private_dir(root: PathBuf) -> AnyResult<VaultStore> {
+    let root = crate::path_security::physical_path(&root, "existing vault")?;
     validate_existing_private_dir(&root)?;
     let root = fs::canonicalize(&root)
         .with_context(|| format!("failed to canonicalize vault home {}", root.display()))?;
@@ -67,19 +67,13 @@ fn validate_existing_private_dir(root: &Path) -> AnyResult<()> {
 }
 
 fn reject_symlinked_path_components(path: &Path) -> AnyResult<()> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .context("failed to resolve current directory for existing vault")?
-            .join(path)
-    };
+    let absolute = crate::path_security::physical_path(path, "existing vault")?;
     let mut ancestors = absolute.ancestors().collect::<Vec<_>>();
     ancestors.reverse();
     for ancestor in ancestors {
         let metadata = fs::symlink_metadata(ancestor)
             .with_context(|| format!("failed to inspect path component {}", ancestor.display()))?;
-        if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
+        if metadata.file_type().is_symlink() {
             bail!(
                 "refusing existing vault through symlinked path component {}",
                 ancestor.display()
@@ -131,4 +125,32 @@ fn ensure_owned_private_file(path: &Path, metadata: &fs::Metadata) -> AnyResult<
     #[cfg(not(unix))]
     let _ = (path, metadata);
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn open_existing_uses_the_verified_physical_macos_temp_path() {
+        let temp = tempfile::Builder::new()
+            .prefix("jig-existing-vault-path-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let logical_root = temp.path().join("vault");
+        fs::create_dir(&logical_root).unwrap();
+        fs::set_permissions(&logical_root, fs::Permissions::from_mode(0o700)).unwrap();
+        for file_name in [VAULT_FILE, AUDIT_FILE] {
+            let path = logical_root.join(file_name);
+            fs::write(&path, b"fixture").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        let store = open_existing_private_dir(logical_root.clone()).unwrap();
+
+        assert!(store.root().starts_with("/private/tmp"));
+        assert_eq!(store.root(), fs::canonicalize(logical_root).unwrap());
+    }
 }
