@@ -8,6 +8,8 @@ use super::scan::{
     RepoScan, push_scan_warning, read_yaml_for_inference, relative_path_string, yaml_mapping_get,
 };
 
+const DEFAULT_SUPPORTED_GITHUB_RUNNER: &str = "ubuntu-latest";
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct GithubCiInference {
     pub(super) runner: Option<String>,
@@ -73,14 +75,37 @@ pub(super) fn infer_ci_github_runner_with_metadata(
         push_scan_warning(
             warnings,
             &workflows,
-            "multiple GitHub Actions runners detected; using the most common runner with an ubuntu tie-break",
+            "multiple GitHub Actions runners detected; using the most common non-Windows runner with an ubuntu tie-break",
         );
     }
-    let runner = select_github_runner(&runners);
-    let sources = runner
-        .as_ref()
-        .and_then(|runner| sources_by_runner.remove(runner))
-        .unwrap_or_default();
+    let unsupported_windows_runners = runners
+        .keys()
+        .filter(|runner| runner_is_windows_host(runner))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unsupported_windows_runners.is_empty() {
+        push_scan_warning(
+            warnings,
+            &workflows,
+            "Windows GitHub Actions runners are unsupported by Jig; excluding them from generated-check runner inference and using ubuntu-latest when no non-Windows static runner is available",
+        );
+    }
+    let selected_runner = select_github_runner(&runners);
+    let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_windows_runners.is_empty();
+    let runner = selected_runner
+        .clone()
+        .or_else(|| fallback_to_ubuntu.then(|| DEFAULT_SUPPORTED_GITHUB_RUNNER.to_string()));
+    let sources = if fallback_to_ubuntu {
+        unsupported_windows_runners
+            .iter()
+            .flat_map(|runner| sources_by_runner.remove(runner).unwrap_or_default())
+            .collect()
+    } else {
+        selected_runner
+            .as_ref()
+            .and_then(|runner| sources_by_runner.remove(runner))
+            .unwrap_or_default()
+    };
     GithubCiInference {
         runner,
         sources,
@@ -91,11 +116,12 @@ pub(super) fn infer_ci_github_runner_with_metadata(
 pub(super) fn select_github_runner(runners: &BTreeMap<String, usize>) -> Option<String> {
     runners
         .iter()
+        .filter(|(runner, _)| !runner_is_windows_host(runner))
         .max_by(|(left, left_count), (right, right_count)| {
-            // Prefer the most common runner; use ubuntu labels as the stable
-            // tie-break because the generated workflows are POSIX-oriented.
-            // The final lexical tie-break keeps newer ubuntu version labels
-            // such as ubuntu-24.04 ahead of older labels.
+            // Prefer the most common non-Windows runner; use ubuntu labels as
+            // the stable tie-break because generated workflows are POSIX-oriented.
+            // The lexical tie-break keeps newer labels such as ubuntu-24.04
+            // ahead of older labels.
             left_count
                 .cmp(right_count)
                 .then_with(|| runner_preference(left).cmp(&runner_preference(right)))
@@ -106,6 +132,10 @@ pub(super) fn select_github_runner(runners: &BTreeMap<String, usize>) -> Option<
 
 fn runner_preference(runner: &str) -> u8 {
     if runner.starts_with("ubuntu-") { 1 } else { 0 }
+}
+
+fn runner_is_windows_host(runner: &str) -> bool {
+    runner.to_ascii_lowercase().starts_with("windows-")
 }
 
 fn collect_github_ci_shape<F>(

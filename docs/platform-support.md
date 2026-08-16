@@ -18,7 +18,7 @@ Supported host does not mean that every platform-dependent capability is identic
 - Core CLI, init/adopt/update, generated repository commands, vault operation, and local development workflows are supported on Linux and macOS.
 - Vault backup restore currently requires Linux's atomic absent-directory installation guarantee. Backup creation and the remaining vault workflow are supported on both supported hosts.
 - Certificate trust, service installation, filesystem permissions, and process supervision use platform-specific implementations and prerequisites documented in [Configuration](configuration.md).
-- Generated PostgreSQL browser E2E jobs use Linux because GitHub Actions service containers require it. This does not prevent ordinary generated checks from using a repository's configured supported runner.
+- Generated PostgreSQL browser E2E jobs use Linux because GitHub Actions service containers require it. During adoption, known `windows-*` runner labels are excluded from generated-check runner inference; Jig uses another detected non-Windows static runner or falls back to `ubuntu-latest`. Explicit custom or self-hosted runner choices remain project-owned.
 
 ## Windows and portability
 

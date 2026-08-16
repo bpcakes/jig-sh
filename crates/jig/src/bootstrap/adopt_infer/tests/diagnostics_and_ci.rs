@@ -349,7 +349,7 @@ fn multiple_github_runners_are_reported_as_warnings() {
 }
 
 #[test]
-fn sqlx_with_windows_runner_reports_posix_command_warning() {
+fn windows_only_runner_falls_back_to_supported_host_with_warning() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
         temp.path().join("Cargo.toml"),
@@ -373,13 +373,23 @@ sqlx = "0.8"
     let inference = infer_adopt_answers(temp.path());
 
     assert_eq!(inference.sqlx_enabled, Some(true));
-    assert_eq!(
-        inference.ci_github_runner.as_deref(),
-        Some("windows-latest")
-    );
+    assert_eq!(inference.ci_github_runner.as_deref(), Some("ubuntu-latest"));
     assert!(inference.warnings.iter().any(|warning| {
-        warning.contains("SQLx check command inference uses POSIX shell syntax")
+        warning.contains("Windows GitHub Actions runners are unsupported by Jig")
     }));
+}
+
+#[test]
+fn supported_runner_is_preferred_over_more_common_windows_runner() {
+    let runners = BTreeMap::from([
+        ("macos-latest".to_string(), 1),
+        ("windows-latest".to_string(), 3),
+    ]);
+
+    assert_eq!(
+        select_github_runner(&runners).as_deref(),
+        Some("macos-latest")
+    );
 }
 
 #[test]
