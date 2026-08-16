@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+mod pty_support;
 mod support;
 
 use std::fs::{self, File};
@@ -14,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
 
-use support::read_pty_available as read_available;
+use pty_support::read_available;
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
@@ -243,7 +244,7 @@ sleep 30
         "\x1b[?1049l",
         Duration::from_secs(1),
     );
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
@@ -295,7 +296,7 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
@@ -357,7 +358,7 @@ sleep 30
         "Codex homes: 2 found",
         Duration::from_secs(5),
     );
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
@@ -438,7 +439,7 @@ sleep 30
         "Codex resume: dry run",
         Duration::from_secs(5),
     );
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
@@ -524,7 +525,7 @@ sleep 30
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
         0
     );
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,

@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+mod pty_support;
 mod support;
 
 use std::{
@@ -14,7 +15,7 @@ use std::{
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
 
-use support::read_pty_available as read_available;
+use pty_support::read_available;
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const PASSPHRASE: &str = "correct horse battery staple";
@@ -192,7 +193,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     master.write_all(b"\x03").unwrap();
 
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
@@ -287,7 +288,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status = support::wait_for_child_while_draining(
+    let status = pty_support::wait_for_child_while_draining(
         &mut child,
         &mut master,
         &mut output,
