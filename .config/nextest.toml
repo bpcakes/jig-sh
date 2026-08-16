@@ -24,7 +24,9 @@ test-group = 'frontend-node'
 threads-required = 2
 
 [[profile.default.overrides]]
-filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+# These tests launch process trees and env-port helpers from a shared local
+# range; serialize them so one test cannot claim another test's probed port.
+filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 test-group = 'process-signals'
 
 [[profile.default.overrides]]
