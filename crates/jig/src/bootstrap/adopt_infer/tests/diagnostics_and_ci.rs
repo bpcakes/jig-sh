@@ -323,6 +323,19 @@ fn github_runner_tie_break_prefers_newer_ubuntu_label() {
 }
 
 #[test]
+fn github_runner_tie_break_recognizes_mixed_case_ubuntu_label() {
+    let runners = BTreeMap::from([
+        ("Ubuntu-24.04".to_string(), 1),
+        ("macos-latest".to_string(), 1),
+    ]);
+
+    assert_eq!(
+        select_github_runner(&runners).as_deref(),
+        Some("Ubuntu-24.04")
+    );
+}
+
+#[test]
 fn multiple_github_runners_are_reported_as_warnings() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
@@ -349,6 +362,30 @@ fn multiple_github_runners_are_reported_as_warnings() {
 }
 
 #[test]
+fn windows_runner_is_reported_as_excluded_when_supported_runner_is_available() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
+    fs::write(
+        temp.path().join(".github/workflows/test.yml"),
+        "jobs:\n  linux:\n    runs-on: macos-latest\n  windows:\n    runs-on: windows-latest\n",
+    )
+    .unwrap();
+
+    let inference = infer_adopt_answers(temp.path());
+
+    assert_eq!(inference.ci_github_runner.as_deref(), Some("macos-latest"));
+    assert!(inference.warnings.iter().any(|warning| {
+        warning.contains("were excluded from generated-check runner inference")
+    }));
+    assert!(
+        inference
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("using ubuntu-latest because"))
+    );
+}
+
+#[test]
 fn windows_only_runner_falls_back_to_supported_host_with_warning() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
@@ -366,7 +403,7 @@ sqlx = "0.8"
     fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
     fs::write(
         temp.path().join(".github/workflows/test.yml"),
-        "jobs:\n  test:\n    runs-on: windows-latest\n",
+        "jobs:\n  test:\n    runs-on: windows-latest\n  lint:\n    runs-on: Windows-2025\n",
     )
     .unwrap();
 
@@ -381,9 +418,20 @@ sqlx = "0.8"
             .as_str()
             .is_some_and(|warning| warning.contains("was synthesized"))
     );
+    assert!(
+        report["metadata"]["ci_github_runner"]["sources"][0]
+            .as_str()
+            .is_some_and(|source| source.starts_with("excluded unsupported Windows runner:"))
+    );
     assert!(inference.warnings.iter().any(|warning| {
         warning.contains("Windows GitHub Actions runners are unsupported by Jig")
     }));
+    assert!(
+        inference
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("multiple GitHub Actions runners detected"))
+    );
 }
 
 #[test]

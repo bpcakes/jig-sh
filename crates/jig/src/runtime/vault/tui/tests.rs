@@ -19,8 +19,7 @@ fn request(home: std::path::PathBuf) -> VaultTuiRequest {
 
 #[cfg(unix)]
 fn lifecycle_backup_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
-    // Recompute the owned action path so the Linux-only restore use can be
-    // compiled out on macOS without leaving a redundant final clone.
+    // Each action consumes its path, so construct the shared fixture location on demand.
     temp.path().join("vault.backup")
 }
 

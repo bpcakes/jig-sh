@@ -73,7 +73,11 @@ pub(super) fn infer_ci_github_runner_with_metadata(
             },
         );
     }
-    if runners.len() > 1 {
+    let supported_runner_count = runners
+        .keys()
+        .filter(|runner| !runner_is_windows_host(runner))
+        .count();
+    if supported_runner_count > 1 {
         push_scan_warning(
             warnings,
             &workflows,
@@ -85,15 +89,16 @@ pub(super) fn infer_ci_github_runner_with_metadata(
         .filter(|runner| runner_is_windows_host(runner))
         .cloned()
         .collect::<Vec<_>>();
-    if !unsupported_windows_runners.is_empty() {
-        push_scan_warning(
-            warnings,
-            &workflows,
-            "Windows GitHub Actions runners are unsupported by Jig; excluding them from generated-check runner inference and using ubuntu-latest when no non-Windows static runner is available",
-        );
-    }
     let selected_runner = select_github_runner(&runners);
     let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_windows_runners.is_empty();
+    if !unsupported_windows_runners.is_empty() {
+        let warning = if fallback_to_ubuntu {
+            "Windows GitHub Actions runners are unsupported by Jig; using ubuntu-latest because no supported static runner was detected"
+        } else {
+            "Windows GitHub Actions runners are unsupported by Jig and were excluded from generated-check runner inference"
+        };
+        push_scan_warning(warnings, &workflows, warning);
+    }
     let runner = selected_runner
         .clone()
         .or_else(|| fallback_to_ubuntu.then(|| DEFAULT_SUPPORTED_GITHUB_RUNNER.to_string()));
@@ -108,6 +113,7 @@ pub(super) fn infer_ci_github_runner_with_metadata(
         unsupported_windows_runners
             .iter()
             .flat_map(|runner| sources_by_runner.remove(runner).unwrap_or_default())
+            .map(|source| format!("excluded unsupported Windows runner: {source}"))
             .collect()
     } else {
         selected_runner
@@ -142,7 +148,11 @@ pub(super) fn select_github_runner(runners: &BTreeMap<String, usize>) -> Option<
 }
 
 fn runner_preference(runner: &str) -> u8 {
-    if runner.starts_with("ubuntu-") { 1 } else { 0 }
+    if runner.to_ascii_lowercase().starts_with("ubuntu-") {
+        1
+    } else {
+        0
+    }
 }
 
 fn runner_is_windows_host(runner: &str) -> bool {
