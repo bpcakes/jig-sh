@@ -24,7 +24,8 @@ A later delivery adds `jig vault tui` as a process-local interactive management 
 - [x] (2026-08-10) Milestone 4: commit `2e4532a` adds atomic dotenv batch updates, a truthful dry-run, direct bounded `op read --no-newline` resolution, private destination installation, and the one-time 1Password dotenv importer.
 - [x] (2026-08-10) Milestone 5: commit `6b90c2e` adds full-reseal passphrase rotation, a strict bounded encrypted backup envelope, lifecycle audit events, and Linux absent-home restore with identity-checked staging and atomic no-replace installation.
 - [x] (2026-08-10) Milestone 6: commit `6807ca0` documents the cutover and compatibility model and adds a synthetic consumer acceptance flow while preserving the old `secret` and constrained `run` commands.
-- [x] (2026-08-10) Run focused, crate, workspace, MSRV, platform-sensitive, and Jig harness validation. Receipt `receipt_01KZMNAM88TT26JYS43HZBQ56N` records fresh passing contract and workspace-test gates; Windows/macOS runtime behavior remains CI-only.
+- [x] (2026-08-10) Run focused, crate, workspace, MSRV, platform-sensitive, and Jig harness validation. Receipt `receipt_01KZMNAM88TT26JYS43HZBQ56N` records fresh passing contract and workspace-test gates; at that milestone, Windows/macOS runtime behavior remained CI-only. The 2026-08-16 platform-policy work below supersedes that coverage statement.
+- [x] (2026-08-16) Declare Linux and macOS supported, add macOS workspace-test and Clippy coverage, and retire native-Windows CI under the explicit unsupported-host policy.
 
 ## Surprises & Discoveries
 
