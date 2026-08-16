@@ -654,6 +654,13 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn lifecycle_backup_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        // Recompute the owned action path so the Linux-only restore use can be
+        // compiled out on macOS without leaving a redundant final clone.
+        temp.path().join("vault.backup")
+    }
+
     fn mutate(
         backend: &VaultTuiBackend,
         snapshot: &VaultSnapshot,
@@ -1142,7 +1149,7 @@ mod tests {
             ..
         } = backend
             .execute(VaultAction::CreateBackup {
-                output: temp.path().join("vault.backup"),
+                output: lifecycle_backup_path(&temp),
                 overwrite: false,
             })
             .unwrap()
@@ -1153,7 +1160,7 @@ mod tests {
         assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
         let collision = backend
             .execute(VaultAction::CreateBackup {
-                output: temp.path().join("vault.backup"),
+                output: lifecycle_backup_path(&temp),
                 overwrite: false,
             })
             .unwrap_err();
@@ -1169,7 +1176,7 @@ mod tests {
                 ..
             } = restored_backend
                 .execute(VaultAction::RestoreBackup {
-                    input: temp.path().join("vault.backup"),
+                    input: lifecycle_backup_path(&temp),
                     passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
                 })
                 .unwrap()
