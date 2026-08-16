@@ -1,10 +1,14 @@
 #![cfg(unix)]
 
+// Load PTY helpers only in their two consumers; `tests/shared` holds helpers
+// that are intentionally separate from the general integration-test support module.
+#[path = "shared/pty.rs"]
+mod pty_support;
 mod support;
 
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
     process::{Command, Stdio},
@@ -13,9 +17,11 @@ use std::{
 
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
-use wait_timeout::ChildExt;
+
+use pty_support::{read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
+const FULL_CLEAR_MARKER: &str = "\u{1b}[2J";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
@@ -146,6 +152,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "controlled Peek value survived into the metadata redraw"
     );
 
+    let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
     // resize meaning.
@@ -153,12 +160,34 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGWINCH) },
         0
     );
-    master.write_all(b"L").unwrap();
-    read_until(
+    read_until_from(
         &mut master,
         &mut output,
+        resize_offset,
+        FULL_CLEAR_MARKER,
+        Duration::from_secs(8),
+    );
+    let resized_frame_offset = resize_offset
+        + output[resize_offset..]
+            .windows(FULL_CLEAR_MARKER.len())
+            .position(|window| window == FULL_CLEAR_MARKER.as_bytes())
+            .expect("resize redraw emitted the awaited full-clear marker")
+        + FULL_CLEAR_MARKER.len();
+    read_until_from(
+        &mut master,
+        &mut output,
+        resized_frame_offset,
+        "Production",
+        Duration::from_secs(8),
+    );
+    let lock_offset = output.len();
+    master.write_all(b"L").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        lock_offset,
         "Vault passphrase",
-        Duration::from_secs(3),
+        Duration::from_secs(8),
     );
 
     let resume_offset = output.len();
@@ -173,17 +202,14 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     );
     master.write_all(b"\x03").unwrap();
 
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            let _ = child.kill();
-            panic!(
-                "vault TUI did not exit after q; output: {}",
-                String::from_utf8_lossy(&output)
-            )
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after Ctrl-C; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "vault TUI exited with {status}");
     let restored = terminal_attributes(&slave);
     assert_eq!(
@@ -267,17 +293,14 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(8))
-        .unwrap()
-        .unwrap_or_else(|| {
-            let _ = child.kill();
-            panic!(
-                "vault TUI did not exit after SIGTERM; output: {}",
-                String::from_utf8_lossy(&output)
-            )
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after SIGTERM; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
         "vault TUI exited with {status}; output: {}",
@@ -447,20 +470,5 @@ fn read_until_from(
             String::from_utf8_lossy(output)
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn read_available(file: &mut File, output: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(read) => output.extend_from_slice(&buffer[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-            Err(error) if cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO) => {
-                return;
-            }
-            Err(error) => panic!("reading PTY failed: {error}"),
-        }
     }
 }
