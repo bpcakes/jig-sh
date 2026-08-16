@@ -146,6 +146,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         "controlled Peek value survived into the metadata redraw"
     );
 
+    let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
     // resize meaning.
@@ -153,12 +154,21 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGWINCH) },
         0
     );
-    master.write_all(b"L").unwrap();
-    read_until(
+    read_until_from(
         &mut master,
         &mut output,
+        resize_offset,
+        "Production",
+        Duration::from_secs(8),
+    );
+    let lock_offset = output.len();
+    master.write_all(b"L").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        lock_offset,
         "Vault passphrase",
-        Duration::from_secs(3),
+        Duration::from_secs(8),
     );
 
     let resume_offset = output.len();
