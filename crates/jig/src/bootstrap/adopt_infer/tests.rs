@@ -168,6 +168,7 @@ fn generated_dependency_dirs_are_skipped_without_depth_warnings() {
 
 #[test]
 fn gitignored_paths_are_excluded_from_repo_scan() {
+    let _guard = crate::test_env::lock_env();
     let temp = tempfile::tempdir().unwrap();
     git(temp.path(), ["init"]).unwrap();
     fs::write(temp.path().join(".gitignore"), "ignored/\n").unwrap();
