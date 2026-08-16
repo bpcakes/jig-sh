@@ -1152,9 +1152,13 @@ mod tests {
         };
         assert!(bytes_written > 0);
         assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
+        #[cfg(target_os = "linux")]
+        let collision_output = backup.clone();
+        #[cfg(not(target_os = "linux"))]
+        let collision_output = backup;
         let collision = backend
             .execute(VaultAction::CreateBackup {
-                output: backup.clone(),
+                output: collision_output,
                 overwrite: false,
             })
             .unwrap_err();

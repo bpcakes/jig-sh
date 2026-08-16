@@ -92,6 +92,30 @@ jobs:
           JIG_DEV_BIN: target/debug/jig
         run: scripts/jig check clippy
 
+  clippy-macos:
+    name: scripts/jig check clippy (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+          components: clippy
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Build current Jig binary
+        run: cargo build -p jig-sh --bin jig --locked
+      - name: Run clippy
+        env:
+          JIG_DEV_BIN: target/debug/jig
+        run: scripts/jig check clippy
+
   test:
     name: scripts/jig check test-locked
     runs-on: ubuntu-latest
