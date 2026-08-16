@@ -1136,14 +1136,13 @@ mod tests {
         assert_eq!(peeked_len, b"lifecycle-secret-sentinel".len());
         assert_eq!(&peeked[..], b"lifecycle-secret-sentinel");
 
-        let backup = temp.path().join("vault.backup");
         let VaultActionResult::BackupCreated {
             bytes_written,
             backup_version,
             ..
         } = backend
             .execute(VaultAction::CreateBackup {
-                output: backup.clone(),
+                output: temp.path().join("vault.backup"),
                 overwrite: false,
             })
             .unwrap()
@@ -1152,13 +1151,9 @@ mod tests {
         };
         assert!(bytes_written > 0);
         assert_eq!(backup_version, jig_vault::BACKUP_FORMAT_VERSION);
-        #[cfg(target_os = "linux")]
-        let collision_output = backup.clone();
-        #[cfg(not(target_os = "linux"))]
-        let collision_output = backup;
         let collision = backend
             .execute(VaultAction::CreateBackup {
-                output: collision_output,
+                output: temp.path().join("vault.backup"),
                 overwrite: false,
             })
             .unwrap_err();
@@ -1174,7 +1169,7 @@ mod tests {
                 ..
             } = restored_backend
                 .execute(VaultAction::RestoreBackup {
-                    input: backup,
+                    input: temp.path().join("vault.backup"),
                     passphrase: SecretBytes::new(b"correct horse battery staple".to_vec()),
                 })
                 .unwrap()

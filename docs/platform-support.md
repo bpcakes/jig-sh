@@ -4,8 +4,8 @@ Jig supports running the CLI, generated harness, and machine-local runtime servi
 
 | Host platform | Status | Continuous integration |
 | --- | --- | --- |
-| Linux | Supported | Required pull-request checks run on `ubuntu-latest` |
-| macOS | Supported | Required pull-request checks run on `macos-latest` |
+| Linux | Supported | Rust-affecting pull requests run checks on `ubuntu-latest` |
+| macOS | Supported | Rust-affecting pull requests run checks on `macos-latest` |
 | Native Windows | Unsupported | No compatibility or CI guarantee |
 | Android, BSD, and other targets | Unsupported | No compatibility or CI guarantee |
 
