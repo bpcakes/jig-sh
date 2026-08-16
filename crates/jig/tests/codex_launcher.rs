@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+#[path = "support/pty.rs"]
 mod pty_support;
 mod support;
 
