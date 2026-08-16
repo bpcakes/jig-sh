@@ -66,8 +66,21 @@ impl SecretBytes {
         Ok(())
     }
 
-    pub(crate) fn truncate(&mut self, len: usize) {
+    /// Removes bytes beyond `len`, overwriting the removed region first.
+    ///
+    /// This never changes the allocation capacity, so a protected editor can
+    /// delete and subsequently append without reallocating secret material.
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len() {
+            return;
+        }
+        self.value[len..].zeroize();
         self.value.truncate(len);
+    }
+
+    /// Overwrites and removes every byte while retaining the allocation.
+    pub fn clear(&mut self) {
+        self.value.zeroize();
     }
 
     /// Converts the bytes into a protected UTF-8 string.
@@ -112,5 +125,22 @@ impl fmt::Debug for SecretBytes {
             .field("len", &self.len())
             .field("value", &"[REDACTED]")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SecretBytes;
+
+    #[test]
+    fn truncate_and_clear_retain_the_preallocated_capacity() {
+        let mut bytes = SecretBytes::with_capacity(32);
+        bytes.extend_from_slice(b"sensitive").unwrap();
+        bytes.truncate(4);
+        assert_eq!(bytes.as_slice(), b"sens");
+        bytes.clear();
+        assert!(bytes.is_empty());
+        bytes.extend_from_slice(b"replacement").unwrap();
+        assert_eq!(bytes.as_slice(), b"replacement");
     }
 }

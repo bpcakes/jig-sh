@@ -181,6 +181,17 @@ pub(crate) fn strip_vault_passphrase_environment() {
     vault::strip_passphrase_environment();
 }
 
+pub(crate) fn take_optional_vault_tui_passphrase() -> Result<Option<jig_vault::SecretBytes>> {
+    vault::take_optional_tui_passphrase()
+}
+
+pub(crate) fn run_vault_tui(
+    request: crate::command::VaultTuiRequest,
+    initial_passphrase: Option<jig_vault::SecretBytes>,
+) -> Result<()> {
+    vault::tui::run(request, initial_passphrase)
+}
+
 pub(crate) fn vault_passphrase_prompt_available() -> bool {
     vault::passphrase_prompt_available()
 }

@@ -52,6 +52,20 @@ impl VaultError {
             source,
         }
     }
+
+    pub(crate) fn into_classified_anyhow(self) -> anyhow::Error {
+        let Self {
+            kind,
+            message,
+            source,
+        } = self;
+        ClassifiedVaultError {
+            kind,
+            message,
+            source,
+        }
+        .into()
+    }
 }
 
 impl fmt::Display for VaultError {

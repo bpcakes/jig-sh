@@ -12,7 +12,10 @@ use secrecy::{ExposeSecret, SecretString};
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
-use crate::audit::{AuditAction, AuditEvent, AuditVerification, verify_chain_unlocked};
+use crate::audit::{
+    AuditAction, AuditEvent, AuditVerification, MAX_VAULT_ACTIVITY_RECORDS, VerifiedVaultActivity,
+    verified_activity_unlocked, verify_chain_unlocked,
+};
 use crate::broker::BrokeredRun;
 use crate::crypto::KEY_LEN;
 #[cfg(test)]
@@ -31,12 +34,14 @@ use crate::exec_process::{
 #[cfg(test)]
 use crate::format::{AeadRole, decode_b64_array, payload_aad};
 use crate::format::{FORMAT_VERSION, SecretEntry, V1_FORMAT_VERSION, VaultFile, VaultState};
-use crate::output::{OutputInstallFailure, install_private_bytes};
+use crate::output::{
+    OutputInstallFailure, PreparedPrivateFile, PrivateFilePrecondition, install_private_bytes,
+};
 use crate::redact::MIN_REDACTABLE_LEN;
 use crate::run::RunOutput;
 use crate::store::VaultStore;
 use crate::template::InjectionTemplate;
-use crate::types::{EnvVarName, FieldKind, SecretName, VaultReference};
+use crate::types::{EnvVarName, FieldKind, SecretName, VaultItem, VaultReference};
 use crate::{Result, SecretBytes, VaultError, VaultErrorKind};
 
 mod envelope;
@@ -58,10 +63,36 @@ pub struct Vault {
     store: VaultStore,
 }
 
+/// Filesystem state of one resolved vault home.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultHomeState {
+    /// The vault home itself does not exist.
+    Absent,
+    /// The vault home exists, but initialized vault state does not.
+    Uninitialized,
+    /// Initialized vault state exists inside the vault home.
+    Initialized,
+}
+
+impl VaultHomeState {
+    /// Returns whether the vault home itself is absent.
+    pub const fn is_absent(self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    /// Returns whether initialized vault state exists.
+    pub const fn is_initialized(self) -> bool {
+        matches!(self, Self::Initialized)
+    }
+}
+
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VaultStatus {
     pub root: PathBuf,
+    /// Exact filesystem state of the selected vault home.
+    pub home_state: VaultHomeState,
+    /// Compatibility projection of [`VaultStatus::home_state`].
     pub exists: bool,
 }
 
@@ -114,8 +145,12 @@ impl Vault {
     /// Returns an error when the vault home or state path is invalid, unsafe,
     /// or cannot be inspected.
     pub fn status(explicit_home: Option<PathBuf>) -> Result<VaultStatus> {
-        let (root, exists) = VaultStore::inspect(explicit_home)?;
-        Ok(VaultStatus { root, exists })
+        let (root, home_state) = VaultStore::inspect(explicit_home)?;
+        Ok(VaultStatus {
+            root,
+            home_state,
+            exists: home_state.is_initialized(),
+        })
     }
 
     /// Initializes a new encrypted vault and audit chain.
@@ -142,7 +177,19 @@ impl Vault {
         name: &str,
         value: SecretBytes,
     ) -> Result<()> {
-        self.store.set_secret(passphrase, name, value)
+        self.write_secret(passphrase, name, value, VaultWriteMode::Upsert)
+    }
+
+    /// Creates or replaces one encrypted legacy secret under an atomic
+    /// existence precondition.
+    pub fn write_secret(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<()> {
+        self.store.write_secret(passphrase, name, value, mode)
     }
 
     /// Removes one encrypted secret when it exists.
@@ -154,6 +201,11 @@ impl Vault {
     /// safely.
     pub fn remove_secret(&self, passphrase: &SecretString, name: &str) -> Result<bool> {
         self.store.remove_secret(passphrase, name)
+    }
+
+    /// Removes one legacy secret and fails if it no longer exists.
+    pub fn remove_secret_required(&self, passphrase: &SecretString, name: &str) -> Result<()> {
+        self.store.remove_secret_required(passphrase, name)
     }
 
     /// Lists secret metadata without returning plaintext values.
@@ -198,6 +250,63 @@ impl Vault {
         self.store.list_fields(passphrase)
     }
 
+    /// Opens the vault once and returns the complete metadata needed by an
+    /// interactive browser.
+    ///
+    /// Canonical fields and unrepresentable legacy names are disjoint. The
+    /// audit chain is verified under the same vault lock before any metadata
+    /// is returned. No decrypted field value is exposed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the vault cannot be opened or its audit chain
+    /// cannot be verified.
+    pub fn snapshot(&self, passphrase: &SecretString) -> Result<VaultSnapshot> {
+        self.store.snapshot(passphrase)
+    }
+
+    /// Applies one interactive mutation only while the vault still matches the
+    /// authenticated metadata snapshot that authorized it.
+    ///
+    /// Existing operation-specific methods retain their non-interactive
+    /// semantics. This command boundary is for human-approved workflows where
+    /// an intervening state save must force a refresh and new approval.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict before editing or appending audit state when the
+    /// revision is stale, or the ordinary validation and persistence error for
+    /// the selected mutation.
+    pub fn mutate_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        revision: VaultRevision,
+        mutation: VaultMutation,
+    ) -> Result<()> {
+        self.store
+            .mutate_if_unchanged(passphrase, revision, mutation)
+    }
+
+    /// Returns verified audit metadata and the newest activity records first.
+    ///
+    /// Only action-specific metadata is projected. Raw audit details, command
+    /// arguments, errors, and secret values are never returned. Chain summary
+    /// metadata includes the latest MAC, event count, and any recoverable torn
+    /// tail instead of silently discarding verification state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `limit` is zero or exceeds
+    /// [`MAX_VAULT_ACTIVITY_RECORDS`], the vault cannot be opened, or the audit
+    /// chain cannot be verified.
+    pub fn activity(
+        &self,
+        passphrase: &SecretString,
+        limit: usize,
+    ) -> Result<VerifiedVaultActivity> {
+        self.store.activity(passphrase, limit)
+    }
+
     /// Creates or updates one canonical encrypted field.
     ///
     /// Fields can be set only after an explicit v1-to-v2 migration. Text
@@ -215,8 +324,21 @@ impl Vault {
         kind: FieldKind,
         value: SecretBytes,
     ) -> Result<FieldBatchResult> {
+        self.write_field(passphrase, reference, kind, value, VaultWriteMode::Upsert)
+    }
+
+    /// Creates or replaces one canonical field under an atomic existence
+    /// precondition.
+    pub fn write_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<FieldBatchResult> {
         self.store
-            .apply_field_batch(passphrase, vec![FieldMutation::set(reference, kind, value)])
+            .write_field(passphrase, reference, kind, value, mode)
     }
 
     /// Removes one canonical field when it exists.
@@ -232,6 +354,100 @@ impl Vault {
     ) -> Result<FieldBatchResult> {
         self.store
             .apply_field_batch(passphrase, vec![FieldMutation::remove(reference)])
+    }
+
+    /// Removes one canonical field and fails if it no longer exists.
+    pub fn remove_field_required(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.store.remove_field_required(passphrase, reference)
+    }
+
+    /// Changes one field's encrypted handling kind without exposing or
+    /// rewriting its value through a caller-visible plaintext buffer. Asking
+    /// for the current kind returns `changed: false` without rewriting state
+    /// or appending an audit event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the field is missing, the current vault format
+    /// is not writable v2, the new kind is incompatible with the stored value
+    /// length, or the audited atomic save fails.
+    pub fn change_field_kind(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> Result<FieldKindChangeResult> {
+        self.store.change_field_kind(passphrase, reference, kind)
+    }
+
+    /// Atomically renames or moves one canonical field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when source and destination match, the source is
+    /// missing, the destination exists, the vault is not writable v2, or the
+    /// audited atomic save fails.
+    pub fn rename_field(
+        &self,
+        passphrase: &SecretString,
+        from: VaultReference,
+        to: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.store.rename_field(passphrase, from, to)
+    }
+
+    /// Atomically moves every canonical field from one item to another.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when source and destination match, the source item is
+    /// empty, any destination field exists, the vault is not writable v2, or
+    /// the audited atomic save fails.
+    pub fn rename_item(
+        &self,
+        passphrase: &SecretString,
+        from: VaultItem,
+        to: VaultItem,
+    ) -> Result<FieldBatchResult> {
+        self.store.rename_item(passphrase, from, to)
+    }
+
+    /// Atomically removes every canonical field in one item.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the item is empty, the vault is not writable v2,
+    /// or the audited atomic save fails.
+    pub fn remove_item(
+        &self,
+        passphrase: &SecretString,
+        item: VaultItem,
+    ) -> Result<FieldBatchResult> {
+        self.store.remove_item(passphrase, item)
+    }
+
+    /// Atomically converts one unrepresentable legacy secret into a canonical
+    /// field while preserving its encrypted bytes and creation timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source is already canonical or missing, the
+    /// destination exists, the requested kind is incompatible with the stored
+    /// value length, the vault is not writable v2, or the audited atomic save
+    /// fails.
+    pub fn convert_legacy_secret(
+        &self,
+        passphrase: &SecretString,
+        secret_name: &str,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> Result<LegacyConversionResult> {
+        self.store
+            .convert_legacy_secret(passphrase, secret_name, reference, kind)
     }
 
     /// Applies validated field changes as one audited vault-state transition.
@@ -271,6 +487,25 @@ impl Vault {
         self.store.preview_import_fields(passphrase, references)
     }
 
+    /// Captures an opaque precondition for one proposed import field set.
+    ///
+    /// The precondition records the exact encrypted vault-state generation and
+    /// ordered prior field kinds observed under the vault lock. It can later be
+    /// consumed by [`Self::import_fields_if_unchanged`] so an interactive
+    /// approval cannot silently widen to a different state.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, migration, unlock, and audit errors as
+    /// [`Self::preview_import_fields`].
+    pub fn plan_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<VaultImportPrecondition> {
+        self.store.plan_import_fields(passphrase, references)
+    }
+
     /// Atomically imports one batch of canonical encrypted fields.
     ///
     /// Imports accept only set mutations. With `replace == false`, any field
@@ -294,6 +529,29 @@ impl Vault {
         self.store.import_fields(passphrase, mutations, replace)
     }
 
+    /// Atomically imports fields only when the vault still matches a prior
+    /// [`Self::plan_import_fields`] observation.
+    ///
+    /// The precondition is consumed once. Any intervening vault-state save, a
+    /// different vault identity, or a mismatched field set rejects the import
+    /// before audit append or state mutation and requires a new preview.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without mutation when the plan is stale or mismatched,
+    /// replacement was not authorized for a previewed collision, or ordinary
+    /// import validation and persistence fails.
+    pub fn import_fields_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: VaultImportPrecondition,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.store
+            .import_fields_if_unchanged(passphrase, mutations, precondition, replace)
+    }
+
     /// Writes one canonical field to a caller-selected stream as exact bytes.
     ///
     /// Start and resolution happen under the vault lock. The lock is released
@@ -315,6 +573,36 @@ impl Vault {
         self.store
             .prepare_field_read(passphrase, reference)?
             .write_to(writer)
+    }
+
+    /// Validates a private file destination outside this vault's owned home.
+    ///
+    /// The generic private-output checks are combined with the selected vault's
+    /// namespace ownership policy. Callers that separate preview from writing
+    /// should use [`Self::preview_private_output`] so the policy is retained and
+    /// rechecked by the consumed precondition.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination is inside the vault home, aliases
+    /// a vault-owned source file, cannot be hardened, or conflicts with the
+    /// requested overwrite policy.
+    pub fn preflight_private_output(&self, path: &Path, overwrite: bool) -> Result<()> {
+        PreparedPrivateFile::preflight_for_vault(&self.store, path, "private", overwrite)
+    }
+
+    /// Captures a hardened private destination outside this vault's owned home.
+    ///
+    /// The opaque result retains the vault namespace policy. Passing it to
+    /// [`PreparedPrivateFile::prepare_if_unchanged`] rechecks that policy both
+    /// before staging bytes and immediately before installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the destination is inside the vault home, aliases
+    /// a vault-owned source file, or cannot be hardened and inspected.
+    pub fn preview_private_output(&self, path: &Path) -> Result<PrivateFilePrecondition> {
+        PreparedPrivateFile::preview_for_vault(self.store.clone(), path, "private")
     }
 
     /// Atomically writes one canonical field to a hardened private file.
@@ -453,11 +741,192 @@ pub struct FieldRecord {
     pub value_len: usize,
 }
 
+/// Complete authenticated vault metadata for one interactive refresh.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultSnapshot {
+    pub vault_id: String,
+    /// Opaque identity of the exact encrypted state represented here.
+    pub revision: VaultRevision,
+    pub created_at_ms: i128,
+    pub format_version: u32,
+    pub fields: Vec<FieldRecord>,
+    pub legacy_secrets: Vec<SecretRecord>,
+    pub audit: AuditVerification,
+}
+
+/// Opaque identity of one authenticated encrypted vault-state generation.
+///
+/// Revisions are value-like capabilities created only by authenticated vault
+/// reads. Their representation remains private so callers cannot construct or
+/// weaken an interactive state precondition.
+#[derive(Clone, Eq, PartialEq)]
+pub struct VaultRevision {
+    vault_id: String,
+    state_nonce_b64: String,
+}
+
+impl std::fmt::Debug for VaultRevision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultRevision")
+            .field("state_generation", &"[OPAQUE]")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Metadata-only result of changing one field kind.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FieldKindChangeResult {
+    pub reference: VaultReference,
+    pub previous_kind: FieldKind,
+    pub kind: FieldKind,
+    pub changed: bool,
+}
+
+/// Metadata-only result of converting an unrepresentable legacy entry.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LegacyConversionResult {
+    pub secret_name: String,
+    pub reference: VaultReference,
+    pub kind: FieldKind,
+}
+
 /// Metadata-only result of a completed controlled reveal operation.
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RevealResult {
     pub bytes_written: usize,
+}
+
+/// Atomic existence policy for protected value writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultWriteMode {
+    /// Fail if the destination already exists.
+    Create,
+    /// Fail if the destination no longer exists.
+    Replace,
+    /// Create or replace for backwards-compatible CLI behavior.
+    Upsert,
+}
+
+/// One atomic field, item, or legacy-entry mutation.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum VaultMutation {
+    SetField {
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    },
+    ChangeFieldKind {
+        reference: VaultReference,
+        kind: FieldKind,
+    },
+    RenameField {
+        source: VaultReference,
+        destination: VaultReference,
+    },
+    RenameItem {
+        source: VaultItem,
+        destination: VaultItem,
+    },
+    RemoveField {
+        reference: VaultReference,
+    },
+    RemoveItem {
+        item: VaultItem,
+    },
+    SetLegacy {
+        name: String,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    },
+    RemoveLegacy {
+        name: String,
+    },
+    ConvertLegacy {
+        name: String,
+        reference: VaultReference,
+        kind: FieldKind,
+    },
+}
+
+/// Opaque, one-shot optimistic-concurrency precondition for a field import.
+///
+/// The encrypted-state generation is intentionally hidden so callers cannot
+/// construct or weaken a plan. Prior field kinds are metadata and remain
+/// available for rendering a safe preview.
+pub struct VaultImportPrecondition {
+    revision: VaultRevision,
+    fields: Vec<ImportFieldObservation>,
+}
+
+impl VaultImportPrecondition {
+    /// Iterates over the planned references and whether each one existed.
+    pub fn fields(&self) -> impl ExactSizeIterator<Item = (&VaultReference, bool)> {
+        self.fields
+            .iter()
+            .map(|field| (&field.reference, field.previous_kind.is_some()))
+    }
+
+    /// Iterates over the planned references and their previously stored kinds.
+    ///
+    /// `None` identifies a field that did not exist when the plan was created.
+    /// The observation is bound to the same opaque revision as the commit
+    /// precondition, so an interactive preview can describe kind transitions
+    /// without separately reopening the vault.
+    pub fn fields_with_previous_kinds(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&VaultReference, Option<FieldKind>)> {
+        self.fields
+            .iter()
+            .map(|field| (&field.reference, field.previous_kind))
+    }
+}
+
+impl std::fmt::Debug for VaultImportPrecondition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VaultImportPrecondition")
+            .field("field_count", &self.fields.len())
+            .field("state_generation", &"[OPAQUE]")
+            .finish_non_exhaustive()
+    }
+}
+
+struct ImportFieldObservation {
+    reference: VaultReference,
+    previous_kind: Option<FieldKind>,
+}
+
+#[derive(Clone, Copy)]
+enum VaultEditPrecondition<'a> {
+    Unconditional,
+    Revision(&'a VaultRevision),
+}
+
+impl VaultEditPrecondition<'_> {
+    fn enforce(self, vault: &OpenVault, stale_message: &'static str) -> AnyResult<()> {
+        match self {
+            Self::Unconditional => Ok(()),
+            Self::Revision(revision) if vault.matches_revision(revision) => Ok(()),
+            Self::Revision(_) => Err(classified(VaultErrorKind::AlreadyExists, stale_message)),
+        }
+    }
+}
+
+impl VaultWriteMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Replace => "replace",
+            Self::Upsert => "upsert",
+        }
+    }
 }
 
 /// One atomic field change.
@@ -668,6 +1137,16 @@ impl PreparedReveal {
     fn write_to_file(self, path: &Path, overwrite: bool) -> Result<RevealResult> {
         let Self { lifecycle, value } = self;
         let bytes_written = value.len();
+        if let Err(error) = lifecycle
+            .store
+            .validate_external_output(path, lifecycle.operation.label())
+        {
+            return Err(lifecycle.output_error(
+                "sink_preflight",
+                VaultErrorKind::InvalidInput,
+                error,
+            ));
+        }
         if let Err(OutputInstallFailure { stage, kind, error }) =
             install_private_bytes(path, value.as_slice(), overwrite)
         {
@@ -906,6 +1385,58 @@ impl VaultStore {
         edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
         details: impl FnOnce(&R) -> serde_json::Value,
     ) -> AnyResult<R> {
+        self.edit_with_audit_if(passphrase, action, edit, |_| true, details)
+    }
+
+    fn edit_with_audit_precondition<R>(
+        &self,
+        passphrase: &SecretString,
+        precondition: VaultEditPrecondition<'_>,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            precondition,
+            action,
+            edit,
+            |_| true,
+            details,
+        )
+    }
+
+    /// Runs a verified in-memory edit and persists it only when the result
+    /// identifies a real state transition. A skipped edit still opens the
+    /// vault and verifies the audit chain, but it neither seals state nor
+    /// appends an audit event.
+    pub(crate) fn edit_with_audit_if<R>(
+        &self,
+        passphrase: &SecretString,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        should_commit: impl FnOnce(&R) -> bool,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            VaultEditPrecondition::Unconditional,
+            action,
+            edit,
+            should_commit,
+            details,
+        )
+    }
+
+    fn edit_with_audit_if_precondition<R>(
+        &self,
+        passphrase: &SecretString,
+        precondition: VaultEditPrecondition<'_>,
+        action: AuditAction,
+        edit: impl FnOnce(&mut OpenVault) -> AnyResult<R>,
+        should_commit: impl FnOnce(&R) -> bool,
+        details: impl FnOnce(&R) -> serde_json::Value,
+    ) -> AnyResult<R> {
         self.with_lock(|| {
             let mut vault = self.open_unlocked(passphrase)?;
             verify_chain_unlocked(self, vault.audit_key.as_ref()).map_err(|error| {
@@ -915,7 +1446,14 @@ impl VaultStore {
                     error,
                 )
             })?;
+            precondition.enforce(
+                &vault,
+                "vault state changed since the metadata snapshot; refresh and retry",
+            )?;
             let result = edit(&mut vault)?;
+            if !should_commit(&result) {
+                return Ok(result);
+            }
             let envelope = vault.prepare_save_unlocked()?;
             let file_text = envelope.serialize_pretty()?;
             self.validate_vault_text_len(&file_text).map_err(|error| {
@@ -945,33 +1483,68 @@ impl VaultStore {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_secret(
         &self,
         passphrase: &SecretString,
         name: &str,
         value: SecretBytes,
     ) -> Result<()> {
+        self.write_secret(passphrase, name, value, VaultWriteMode::Upsert)
+    }
+
+    pub(crate) fn write_secret(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<()> {
+        self.write_secret_precondition(
+            passphrase,
+            name,
+            value,
+            mode,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn write_secret_precondition(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<()> {
         let name = SecretName::parse(name)?;
-        self.set_secret_inner(passphrase, name, value)
+        self.write_secret_inner(passphrase, name, value, mode, precondition)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
-    fn set_secret_inner(
+    fn write_secret_inner(
         &self,
         passphrase: &SecretString,
         name: SecretName,
         value: SecretBytes,
+        mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
     ) -> AnyResult<()> {
         // Reject too-short values before unlocking; `OpenVault::set_secret`
         // repeats this guard for internal callers that already hold a handle.
         validate_secret_value_len(value.len())?;
-        self.edit_with_audit(
+        self.edit_with_audit_precondition(
             passphrase,
+            precondition,
             AuditAction::SecretSet,
-            |vault| vault.set_secret(&name, value),
+            |vault| {
+                vault.ensure_write_mode(&name, mode, "vault secret")?;
+                vault.set_secret(&name, value)
+            },
             |()| {
                 serde_json::json!({
                     "secret_name": name.as_str(),
+                    "write_mode": mode.as_str(),
                 })
             },
         )
@@ -995,6 +1568,48 @@ impl VaultStore {
                 })
             },
         )
+    }
+
+    pub(crate) fn remove_secret_required(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+    ) -> Result<()> {
+        self.remove_secret_required_precondition(
+            passphrase,
+            name,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn remove_secret_required_precondition(
+        &self,
+        passphrase: &SecretString,
+        name: &str,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<()> {
+        let name = SecretName::parse(name)?;
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::SecretRemove,
+            |vault| {
+                if !vault.remove_secret(&name) {
+                    return Err(classified(
+                        VaultErrorKind::NotFound,
+                        format!("vault secret '{}' no longer exists", name.as_str()),
+                    ));
+                }
+                Ok(())
+            },
+            |()| {
+                serde_json::json!({
+                    "secret_name": name.as_str(),
+                    "removed": true,
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
     pub(crate) fn list(&self, passphrase: &SecretString) -> Result<Vec<SecretRecord>> {
@@ -1096,6 +1711,116 @@ impl VaultStore {
         .map_err(|error| self.map_open_error(error))
     }
 
+    pub(crate) fn snapshot(&self, passphrase: &SecretString) -> Result<VaultSnapshot> {
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            let audit = vault.verify_audit_unlocked(self).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit chain verification failed",
+                    error,
+                )
+            })?;
+            Ok(vault.snapshot(audit))
+        })
+        .map_err(|error| {
+            if error.is::<ClassifiedVaultError>() {
+                vault_error_from_anyhow(VaultErrorKind::Internal, error)
+            } else {
+                self.map_open_error(error)
+            }
+        })
+    }
+
+    fn mutate_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        revision: VaultRevision,
+        mutation: VaultMutation,
+    ) -> Result<()> {
+        let precondition = VaultEditPrecondition::Revision(&revision);
+        match mutation {
+            VaultMutation::SetField {
+                reference,
+                kind,
+                value,
+                mode,
+            } => self
+                .write_field_precondition(passphrase, reference, kind, value, mode, precondition)
+                .map(drop),
+            VaultMutation::ChangeFieldKind { reference, kind } => self
+                .change_field_kind_precondition(passphrase, reference, kind, precondition)
+                .map(drop),
+            VaultMutation::RenameField {
+                source,
+                destination,
+            } => self
+                .rename_field_precondition(passphrase, source, destination, precondition)
+                .map(drop),
+            VaultMutation::RenameItem {
+                source,
+                destination,
+            } => self
+                .rename_item_precondition(passphrase, source, destination, precondition)
+                .map(drop),
+            VaultMutation::RemoveField { reference } => self
+                .remove_field_required_precondition(passphrase, reference, precondition)
+                .map(drop),
+            VaultMutation::RemoveItem { item } => self
+                .remove_item_precondition(passphrase, item, precondition)
+                .map(drop),
+            VaultMutation::SetLegacy { name, value, mode } => {
+                self.write_secret_precondition(passphrase, &name, value, mode, precondition)
+            }
+            VaultMutation::RemoveLegacy { name } => {
+                self.remove_secret_required_precondition(passphrase, &name, precondition)
+            }
+            VaultMutation::ConvertLegacy {
+                name,
+                reference,
+                kind,
+            } => self
+                .convert_legacy_secret_precondition(
+                    passphrase,
+                    &name,
+                    reference,
+                    kind,
+                    precondition,
+                )
+                .map(drop),
+        }
+    }
+
+    pub(crate) fn activity(
+        &self,
+        passphrase: &SecretString,
+        limit: usize,
+    ) -> Result<VerifiedVaultActivity> {
+        if !(1..=MAX_VAULT_ACTIVITY_RECORDS).contains(&limit) {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                format!("vault activity limit must be between 1 and {MAX_VAULT_ACTIVITY_RECORDS}"),
+            ));
+        }
+        self.with_lock(|| {
+            let vault = self.open_unlocked(passphrase)?;
+            verified_activity_unlocked(self, vault.audit_key.as_ref(), limit).map_err(|error| {
+                classify_source(
+                    VaultErrorKind::AuditTampered,
+                    "vault audit activity verification failed",
+                    error,
+                )
+            })
+        })
+        .map_err(|error| {
+            if error.is::<ClassifiedVaultError>() {
+                vault_error_from_anyhow(VaultErrorKind::Internal, error)
+            } else {
+                self.map_open_error(error)
+            }
+        })
+    }
+
     pub(crate) fn apply_field_batch(
         &self,
         passphrase: &SecretString,
@@ -1117,11 +1842,332 @@ impl VaultStore {
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
+    pub(crate) fn write_field(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+    ) -> Result<FieldBatchResult> {
+        self.write_field_precondition(
+            passphrase,
+            reference,
+            kind,
+            value,
+            mode,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn write_field_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        value: SecretBytes,
+        mode: VaultWriteMode,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
+        let mutations = vec![FieldMutation::set(reference.clone(), kind, value)];
+        validate_field_mutations(&mutations)
+            .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        let audit_sets = field_batch_set_audit_metadata(&mutations);
+        let name = reference.to_secret_name();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.ensure_write_mode(&name, mode, "vault field")?;
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| {
+                let mut details = field_batch_audit_details(&audit_sets, &[], result);
+                details["write_mode"] = serde_json::json!(mode.as_str());
+                details
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn remove_field_required(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.remove_field_required_precondition(
+            passphrase,
+            reference,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn remove_field_required_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
+        let mutations = vec![FieldMutation::remove(reference.clone())];
+        let name = reference.to_secret_name();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::FieldBatchApply,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                if !vault.state.secrets.contains_key(name.as_str()) {
+                    return Err(classified(
+                        VaultErrorKind::NotFound,
+                        format!("vault field '{reference}' no longer exists"),
+                    ));
+                }
+                Ok(vault.apply_validated_field_batch(mutations))
+            },
+            |result| field_batch_audit_details(&[], std::slice::from_ref(&reference), result),
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn change_field_kind(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> Result<FieldKindChangeResult> {
+        self.change_field_kind_precondition(
+            passphrase,
+            reference,
+            kind,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn change_field_kind_precondition(
+        &self,
+        passphrase: &SecretString,
+        reference: VaultReference,
+        kind: FieldKind,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldKindChangeResult> {
+        let audit_reference = reference.clone();
+        self.edit_with_audit_if_precondition(
+            passphrase,
+            precondition,
+            AuditAction::FieldKindChange,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.change_field_kind(reference, kind)
+            },
+            |result| result.changed,
+            |result| {
+                serde_json::json!({
+                    "reference": audit_reference.to_string(),
+                    "from_kind": result.previous_kind.as_str(),
+                    "to_kind": result.kind.as_str(),
+                    "changed": result.changed,
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn rename_field(
+        &self,
+        passphrase: &SecretString,
+        from: VaultReference,
+        to: VaultReference,
+    ) -> Result<FieldBatchResult> {
+        self.rename_field_precondition(passphrase, from, to, VaultEditPrecondition::Unconditional)
+    }
+
+    fn rename_field_precondition(
+        &self,
+        passphrase: &SecretString,
+        from: VaultReference,
+        to: VaultReference,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
+        if from == to {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                "field rename source and destination must differ",
+            ));
+        }
+        let audit_from = from.clone();
+        let audit_to = to.clone();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::FieldRename,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.rename_field(from, to)
+            },
+            |result| {
+                serde_json::json!({
+                    "from": audit_from.to_string(),
+                    "to": audit_to.to_string(),
+                    "changed": !result.changed.is_empty(),
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn rename_item(
+        &self,
+        passphrase: &SecretString,
+        from: VaultItem,
+        to: VaultItem,
+    ) -> Result<FieldBatchResult> {
+        self.rename_item_precondition(passphrase, from, to, VaultEditPrecondition::Unconditional)
+    }
+
+    fn rename_item_precondition(
+        &self,
+        passphrase: &SecretString,
+        from: VaultItem,
+        to: VaultItem,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
+        if from == to {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                "item rename source and destination must differ",
+            ));
+        }
+        let audit_from = from.clone();
+        let audit_to = to.clone();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::ItemRename,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.rename_item(from, to)
+            },
+            |result| {
+                serde_json::json!({
+                    "from": audit_from.to_string(),
+                    "to": audit_to.to_string(),
+                    "field_count": result.changed.len(),
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn remove_item(
+        &self,
+        passphrase: &SecretString,
+        item: VaultItem,
+    ) -> Result<FieldBatchResult> {
+        self.remove_item_precondition(passphrase, item, VaultEditPrecondition::Unconditional)
+    }
+
+    fn remove_item_precondition(
+        &self,
+        passphrase: &SecretString,
+        item: VaultItem,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<FieldBatchResult> {
+        let audit_item = item.clone();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::ItemRemove,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.remove_item(item)
+            },
+            |result| {
+                serde_json::json!({
+                    "item": audit_item.to_string(),
+                    "removed_count": result.removed.len(),
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
+    pub(crate) fn convert_legacy_secret(
+        &self,
+        passphrase: &SecretString,
+        secret_name: &str,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> Result<LegacyConversionResult> {
+        self.convert_legacy_secret_precondition(
+            passphrase,
+            secret_name,
+            reference,
+            kind,
+            VaultEditPrecondition::Unconditional,
+        )
+    }
+
+    fn convert_legacy_secret_precondition(
+        &self,
+        passphrase: &SecretString,
+        secret_name: &str,
+        reference: VaultReference,
+        kind: FieldKind,
+        precondition: VaultEditPrecondition<'_>,
+    ) -> Result<LegacyConversionResult> {
+        let secret_name = SecretName::parse(secret_name)?;
+        if VaultReference::from_secret_name(&secret_name).is_some() {
+            return Err(VaultError::new(
+                VaultErrorKind::InvalidInput,
+                format!(
+                    "vault secret '{}' is already a canonical field and does not need conversion",
+                    secret_name.as_str()
+                ),
+            ));
+        }
+        let audit_name = secret_name.clone();
+        let audit_reference = reference.clone();
+        self.edit_with_audit_precondition(
+            passphrase,
+            precondition,
+            AuditAction::LegacySecretConvert,
+            |vault| {
+                vault.ensure_field_format_v2()?;
+                vault.convert_legacy_secret(secret_name, reference, kind)
+            },
+            |result| {
+                serde_json::json!({
+                    "secret_name": audit_name.as_str(),
+                    "reference": audit_reference.to_string(),
+                    "kind": result.kind.as_str(),
+                })
+            },
+        )
+        .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
+    }
+
     pub(crate) fn preview_import_fields(
         &self,
         passphrase: &SecretString,
         references: &[VaultReference],
     ) -> Result<Vec<bool>> {
+        self.plan_import_fields(passphrase, references)
+            .map(|precondition| {
+                precondition
+                    .fields
+                    .into_iter()
+                    .map(|field| field.previous_kind.is_some())
+                    .collect()
+            })
+    }
+
+    pub(crate) fn plan_import_fields(
+        &self,
+        passphrase: &SecretString,
+        references: &[VaultReference],
+    ) -> Result<VaultImportPrecondition> {
         validate_import_references(references)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         self.with_lock(|| {
@@ -1134,10 +2180,16 @@ impl VaultStore {
                 )
             })?;
             vault.ensure_field_format_v2()?;
-            Ok(references
-                .iter()
-                .map(|reference| vault.contains_field(reference))
-                .collect())
+            Ok(VaultImportPrecondition {
+                revision: vault.revision(),
+                fields: references
+                    .iter()
+                    .map(|reference| ImportFieldObservation {
+                        reference: reference.clone(),
+                        previous_kind: vault.field_kind(reference),
+                    })
+                    .collect(),
+            })
         })
         .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
@@ -1148,15 +2200,41 @@ impl VaultStore {
         mutations: Vec<FieldMutation>,
         replace: bool,
     ) -> Result<FieldBatchResult> {
+        self.import_fields_with_precondition(passphrase, mutations, None, replace)
+    }
+
+    pub(crate) fn import_fields_if_unchanged(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: VaultImportPrecondition,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
+        self.import_fields_with_precondition(passphrase, mutations, Some(precondition), replace)
+    }
+
+    fn import_fields_with_precondition(
+        &self,
+        passphrase: &SecretString,
+        mutations: Vec<FieldMutation>,
+        precondition: Option<VaultImportPrecondition>,
+        replace: bool,
+    ) -> Result<FieldBatchResult> {
         validate_import_mutations(&mutations)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
         let fields = field_batch_set_audit_metadata(&mutations);
+        if let Some(precondition) = &precondition {
+            validate_import_precondition(precondition, &fields)
+                .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
+        }
         self.edit_with_audit(
             passphrase,
             AuditAction::OnePasswordImport,
             |vault| {
                 vault.ensure_field_format_v2()?;
-                if !replace {
+                if let Some(precondition) = precondition {
+                    enforce_import_precondition(vault, &precondition, replace)?;
+                } else if !replace {
                     reject_import_collisions(vault, &fields)?;
                 }
                 Ok(vault.apply_validated_field_batch(mutations))
@@ -1415,6 +2493,28 @@ pub fn validate_new_vault_passphrase(passphrase: &SecretString) -> Result<()> {
 }
 
 impl OpenVault {
+    fn ensure_write_mode(
+        &self,
+        name: &SecretName,
+        mode: VaultWriteMode,
+        label: &str,
+    ) -> AnyResult<()> {
+        let exists = self.state.secrets.contains_key(name.as_str());
+        match (mode, exists) {
+            (VaultWriteMode::Create, true) => Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!("{label} '{}' already exists", name.as_str()),
+            )),
+            (VaultWriteMode::Replace, false) => Err(classified(
+                VaultErrorKind::NotFound,
+                format!("{label} '{}' no longer exists", name.as_str()),
+            )),
+            (VaultWriteMode::Create, false)
+            | (VaultWriteMode::Replace, true)
+            | (VaultWriteMode::Upsert, _) => Ok(()),
+        }
+    }
+
     pub(crate) fn list(&self) -> Vec<SecretRecord> {
         self.state
             .secrets
@@ -1446,8 +2546,48 @@ impl OpenVault {
             .collect()
     }
 
+    fn snapshot(&self, audit: AuditVerification) -> VaultSnapshot {
+        let legacy_secrets = self
+            .state
+            .secrets
+            .iter()
+            .filter_map(|(name, entry)| {
+                let canonical = SecretName::parse(name)
+                    .ok()
+                    .and_then(|name| VaultReference::from_secret_name(&name));
+                canonical.is_none().then(|| SecretRecord {
+                    name: name.clone(),
+                    created_at_ms: entry.created_at_ms,
+                    updated_at_ms: entry.updated_at_ms,
+                    value_len: entry.value_len,
+                })
+            })
+            .collect();
+        VaultSnapshot {
+            vault_id: self.file.header.vault_id.clone(),
+            revision: self.revision(),
+            created_at_ms: self.file.header.created_at_ms,
+            format_version: self.format_version(),
+            fields: self.list_fields(),
+            legacy_secrets,
+            audit,
+        }
+    }
+
     fn format_version(&self) -> u32 {
         self.file.header.version
+    }
+
+    fn revision(&self) -> VaultRevision {
+        VaultRevision {
+            vault_id: self.file.header.vault_id.clone(),
+            state_nonce_b64: self.file.state_nonce_b64.clone(),
+        }
+    }
+
+    fn matches_revision(&self, revision: &VaultRevision) -> bool {
+        self.file.header.vault_id == revision.vault_id
+            && self.file.state_nonce_b64 == revision.state_nonce_b64
     }
 
     fn ensure_field_format_v2(&self) -> AnyResult<()> {
@@ -1464,9 +2604,209 @@ impl OpenVault {
     }
 
     fn contains_field(&self, reference: &VaultReference) -> bool {
+        self.field_kind(reference).is_some()
+    }
+
+    fn field_kind(&self, reference: &VaultReference) -> Option<FieldKind> {
         self.state
             .secrets
-            .contains_key(reference.to_secret_name().as_str())
+            .get(reference.to_secret_name().as_str())
+            .map(|entry| entry.kind)
+    }
+
+    fn change_field_kind(
+        &mut self,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> AnyResult<FieldKindChangeResult> {
+        let name = reference.to_secret_name();
+        let entry = self.state.secrets.get(name.as_str()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::NotFound,
+                format!("vault field '{reference}' does not exist"),
+            )
+        })?;
+        validate_serialized_field_value_len(&name, entry)?;
+        validate_field_value_len(kind, entry.value_len)?;
+        let previous_kind = entry.kind;
+        let changed = previous_kind != kind;
+        if changed {
+            let entry = self
+                .state
+                .secrets
+                .get_mut(name.as_str())
+                .expect("validated field must remain present");
+            entry.kind = kind;
+            entry.updated_at_ms = now_ms();
+        }
+        Ok(FieldKindChangeResult {
+            reference,
+            previous_kind,
+            kind,
+            changed,
+        })
+    }
+
+    fn rename_field(
+        &mut self,
+        from: VaultReference,
+        to: VaultReference,
+    ) -> AnyResult<FieldBatchResult> {
+        let from_name = from.to_secret_name();
+        let to_name = to.to_secret_name();
+        let entry = self.state.secrets.get(from_name.as_str()).ok_or_else(|| {
+            classified(
+                VaultErrorKind::NotFound,
+                format!("vault field '{from}' does not exist"),
+            )
+        })?;
+        validate_serialized_field_value_len(&from_name, entry)?;
+        if self.state.secrets.contains_key(to_name.as_str()) {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!("vault field rename destination '{to}' already exists"),
+            ));
+        }
+        let mut entry = self
+            .state
+            .secrets
+            .remove(from_name.as_str())
+            .expect("validated field must remain present");
+        entry.updated_at_ms = now_ms();
+        self.state
+            .secrets
+            .insert(to_name.as_str().to_owned(), entry);
+        Ok(FieldBatchResult {
+            changed: vec![to],
+            removed: vec![from],
+        })
+    }
+
+    fn rename_item(&mut self, from: VaultItem, to: VaultItem) -> AnyResult<FieldBatchResult> {
+        let moves = self
+            .list_fields()
+            .into_iter()
+            .filter(|field| field.reference.item() == from.as_str())
+            .map(|field| {
+                let target = VaultReference::parse(&format!(
+                    "jig://{}/{}",
+                    to.as_str(),
+                    field.reference.field()
+                ))
+                .map_err(VaultError::into_classified_anyhow)?;
+                Ok((field.reference, target))
+            })
+            .collect::<AnyResult<Vec<_>>>()?;
+        if moves.is_empty() {
+            return Err(classified(
+                VaultErrorKind::NotFound,
+                format!("vault item '{from}' does not exist"),
+            ));
+        }
+        for (source, target) in &moves {
+            let source_name = source.to_secret_name();
+            let entry = self
+                .state
+                .secrets
+                .get(source_name.as_str())
+                .expect("listed field must remain present");
+            validate_serialized_field_value_len(&source_name, entry)?;
+            if self.contains_field(target) {
+                return Err(classified(
+                    VaultErrorKind::AlreadyExists,
+                    format!("vault item rename destination field '{target}' already exists"),
+                ));
+            }
+        }
+        let now = now_ms();
+        for (source, target) in &moves {
+            let source_name = source.to_secret_name();
+            let target_name = target.to_secret_name();
+            let mut entry = self
+                .state
+                .secrets
+                .remove(source_name.as_str())
+                .expect("validated field must remain present");
+            entry.updated_at_ms = now;
+            self.state
+                .secrets
+                .insert(target_name.as_str().to_owned(), entry);
+        }
+        Ok(FieldBatchResult {
+            changed: moves.iter().map(|(_, target)| target.clone()).collect(),
+            removed: moves.into_iter().map(|(source, _)| source).collect(),
+        })
+    }
+
+    fn remove_item(&mut self, item: VaultItem) -> AnyResult<FieldBatchResult> {
+        let references = self
+            .list_fields()
+            .into_iter()
+            .filter(|field| field.reference.item() == item.as_str())
+            .map(|field| field.reference)
+            .collect::<Vec<_>>();
+        if references.is_empty() {
+            return Err(classified(
+                VaultErrorKind::NotFound,
+                format!("vault item '{item}' does not exist"),
+            ));
+        }
+        for reference in &references {
+            let removed = self
+                .state
+                .secrets
+                .remove(reference.to_secret_name().as_str());
+            debug_assert!(removed.is_some());
+        }
+        Ok(FieldBatchResult {
+            changed: Vec::new(),
+            removed: references,
+        })
+    }
+
+    fn convert_legacy_secret(
+        &mut self,
+        secret_name: SecretName,
+        reference: VaultReference,
+        kind: FieldKind,
+    ) -> AnyResult<LegacyConversionResult> {
+        let target_name = reference.to_secret_name();
+        if self.state.secrets.contains_key(target_name.as_str()) {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!("vault field conversion destination '{reference}' already exists"),
+            ));
+        }
+        let entry = self
+            .state
+            .secrets
+            .get(secret_name.as_str())
+            .ok_or_else(|| {
+                classified(
+                    VaultErrorKind::NotFound,
+                    format!(
+                        "legacy vault secret '{}' does not exist",
+                        secret_name.as_str()
+                    ),
+                )
+            })?;
+        validate_serialized_field_value_len(&secret_name, entry)?;
+        validate_field_value_len(kind, entry.value_len)?;
+        let mut entry = self
+            .state
+            .secrets
+            .remove(secret_name.as_str())
+            .expect("validated legacy secret must remain present");
+        entry.kind = kind;
+        entry.updated_at_ms = now_ms();
+        self.state
+            .secrets
+            .insert(target_name.as_str().to_owned(), entry);
+        Ok(LegacyConversionResult {
+            secret_name: secret_name.as_str().to_owned(),
+            reference,
+            kind,
+        })
     }
 
     pub(crate) fn set_secret(&mut self, name: &SecretName, value: SecretBytes) -> AnyResult<()> {
@@ -1901,6 +3241,52 @@ fn validate_import_mutations(mutations: &[FieldMutation]) -> AnyResult<()> {
                 VaultErrorKind::InvalidInput,
                 format!(
                     "onepassword import exceeds the {MAX_IMPORT_VALUE_BYTES} byte decoded value limit"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_import_precondition(
+    precondition: &VaultImportPrecondition,
+    fields: &[(VaultReference, FieldKind)],
+) -> AnyResult<()> {
+    if precondition.fields.len() != fields.len()
+        || precondition
+            .fields
+            .iter()
+            .zip(fields)
+            .any(|(planned, (reference, _))| planned.reference != *reference)
+    {
+        return Err(classified(
+            VaultErrorKind::InvalidInput,
+            "vault import mutations do not match the previewed field set",
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_import_precondition(
+    vault: &OpenVault,
+    precondition: &VaultImportPrecondition,
+    replace: bool,
+) -> AnyResult<()> {
+    VaultEditPrecondition::Revision(&precondition.revision).enforce(
+        vault,
+        "vault state changed since the import preview; preview again",
+    )?;
+    if !replace {
+        if let Some(field) = precondition
+            .fields
+            .iter()
+            .find(|field| field.previous_kind.is_some())
+        {
+            return Err(classified(
+                VaultErrorKind::AlreadyExists,
+                format!(
+                    "vault field '{}' already exists; enable replacement and preview again",
+                    field.reference
                 ),
             ));
         }

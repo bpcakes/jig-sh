@@ -692,6 +692,29 @@ fn audited_edit_rejects_tampered_audit_before_saving_state() {
 }
 
 #[test]
+fn conditional_audited_edit_skips_persistence_when_unchanged() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
+    store.init(&passphrase()).unwrap();
+    let before_vault = store.read_vault_text().unwrap().unwrap();
+    let before_audit = store.read_audit_text().unwrap().unwrap();
+
+    let result = store
+        .edit_with_audit_if(
+            &passphrase(),
+            AuditAction::SecretSet,
+            |_| Ok("unchanged"),
+            |_| false,
+            |_| panic!("skipped edits must not construct audit details"),
+        )
+        .unwrap();
+
+    assert_eq!(result, "unchanged");
+    assert_eq!(store.read_vault_text().unwrap().unwrap(), before_vault);
+    assert_eq!(store.read_audit_text().unwrap().unwrap(), before_audit);
+}
+
+#[test]
 fn public_verify_audit_reports_torn_tail_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();

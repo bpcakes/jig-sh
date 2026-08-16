@@ -1,7 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::{
@@ -15,7 +15,7 @@ use fs4::fs_std::FileExt;
 use zeroize::Zeroizing;
 
 use crate::crypto::KdfParams;
-use crate::{Result, VaultError, VaultErrorKind};
+use crate::{Result, VaultError, VaultErrorKind, VaultHomeState};
 
 mod existing;
 
@@ -56,23 +56,12 @@ impl VaultStore {
         prepare_private_dir(root, initialization_kdf)
     }
 
-    pub(crate) fn inspect(explicit_home: Option<PathBuf>) -> Result<(PathBuf, bool)> {
+    pub(crate) fn inspect(explicit_home: Option<PathBuf>) -> Result<(PathBuf, VaultHomeState)> {
         let root = resolve_root(explicit_home)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?;
-        if path_is_symlink(&root)
-            .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?
-        {
-            return Err(VaultError::new(
-                VaultErrorKind::Io,
-                format!(
-                    "Vault home {} must not be a symlink. Use a dedicated real directory.",
-                    root.display()
-                ),
-            ));
-        }
-        let exists = text_file_exists_no_follow(&root.join(VAULT_FILE))
+        let home_state = inspect_home_state(&root)
             .map_err(|error| VaultError::from_anyhow(VaultErrorKind::Io, error))?;
-        Ok((root, exists))
+        Ok((root, home_state))
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -89,6 +78,48 @@ impl VaultStore {
 
     pub(crate) fn audit_path(&self) -> PathBuf {
         self.root.join(AUDIT_FILE)
+    }
+
+    pub(crate) fn validate_external_output(
+        &self,
+        output: &Path,
+        operation_label: &str,
+    ) -> AnyResult<()> {
+        let file_name = output
+            .file_name()
+            .with_context(|| format!("{operation_label} output path must name a file"))?;
+        let parent = match output.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        let canonical_parent = fs::canonicalize(parent).with_context(|| {
+            format!(
+                "failed to canonicalize {operation_label} output parent {}",
+                parent.display()
+            )
+        })?;
+        let normalized_output = canonical_parent.join(file_name);
+        if normalized_output.starts_with(self.root()) {
+            bail!("{operation_label} output must be outside the source vault home");
+        }
+
+        #[cfg(unix)]
+        if let Ok(output_metadata) = fs::metadata(&normalized_output) {
+            for source in [self.vault_path(), self.audit_path()] {
+                let source_metadata = fs::metadata(&source).with_context(|| {
+                    format!(
+                        "failed to inspect {operation_label} source {}",
+                        source.display()
+                    )
+                })?;
+                if output_metadata.dev() == source_metadata.dev()
+                    && output_metadata.ino() == source_metadata.ino()
+                {
+                    bail!("{operation_label} output must not alias a source vault file");
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn exists(&self) -> Result<bool> {
@@ -244,6 +275,26 @@ impl VaultStore {
                 "vault operation failed; additionally failed to unlock vault lock: {unlock_error}"
             ))),
         }
+    }
+}
+
+fn inspect_home_state(root: &Path) -> AnyResult<VaultHomeState> {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "Vault home {} must not be a symlink. Use a dedicated real directory.",
+                root.display()
+            )
+        }
+        Ok(_) => {
+            if text_file_exists_no_follow(&root.join(VAULT_FILE))? {
+                Ok(VaultHomeState::Initialized)
+            } else {
+                Ok(VaultHomeState::Uninitialized)
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(VaultHomeState::Absent),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", root.display())),
     }
 }
 

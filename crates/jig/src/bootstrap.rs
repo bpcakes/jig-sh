@@ -28,7 +28,6 @@ use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 use answers::{AnswerInput, RenderAnswers};
 #[cfg(test)]
 use file_copy::create_symlink;
-use git::init_git_repo_with_validation;
 #[cfg(test)]
 use git::{git, git_stdout};
 pub(crate) use git::{
@@ -73,6 +72,7 @@ mod embedded_templates;
 mod file_copy;
 mod gate_preview;
 mod git;
+mod init;
 mod init_transaction;
 mod initial_copy;
 mod initial_template;
@@ -108,6 +108,7 @@ use launcher_repair_cache::{
 use launcher_repair_cache::{is_root_owned_nonwritable_path, root_owned_nonwritable_component};
 
 pub use answers::HarnessFootprint;
+pub(crate) use init::run_init;
 pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
 pub use update::run_update;
@@ -504,182 +505,151 @@ pub(crate) fn should_default_init_sqlx_disabled(answers: &AnswerOpts) -> bool {
     answers::should_default_init_sqlx_disabled(answers)
 }
 
-pub fn run_init(mut opts: InitOpts) -> Result<Value> {
-    let invocation_cwd = bootstrap_invocation_cwd()?;
-    let destination = path::resolve_init_destination(&opts.path, &invocation_cwd)?;
-    // This first validation deliberately precedes answer loading and template
-    // resolution so unsafe or non-empty destinations fail without interaction.
-    validate_init_destination(&destination, opts.force)?;
-    ensure_init_destination_noreplace_supported(&destination)?;
-    let progress = CliProgress::new("init");
-    progress.header_for_path("render harness into new repo", &destination);
-    progress.step("validate destination", "empty directory or --force");
-    progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
-    progress.step("read init answers", "--answers-file and CLI precedence");
-    let answer_input =
-        progress.log_blocked_on_err(AnswerInput::from_opts_at(&opts.answers, &invocation_cwd))?;
-    let mut answers = progress.log_blocked_on_err(answer_input.effective_opts(&opts.answers))?;
-    opts.scaffold.normalize_minimal_harness_shape(&answers);
-    progress.log_blocked_on_err(opts.scaffold.validate_init_invariants(&answers))?;
-    opts.scaffold.apply_init_answer_defaults(&mut answers);
-    let scaffold_plan = progress.log_blocked_on_err(scaffold::InitScaffoldPlan::from_opts(
-        &opts.scaffold,
-        &answers,
-        &destination,
-    ))?;
-    if let Some(plan) = &scaffold_plan {
-        plan.apply_answer_defaults(&mut answers);
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct InitReport {
+    ok: bool,
+    command: String,
+    render_mode: String,
+    template: String,
+    destination: String,
+    answers_file: String,
+    git_initialized: bool,
+    scaffold: Option<Value>,
+    render_report: Value,
+    next_steps: Vec<String>,
+    notes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault: Option<BootstrapVaultReport>,
+    // Keep legacy JSON-style bootstrap assertions working without carrying a
+    // second representation in production reports.
+    #[cfg(test)]
+    #[serde(skip)]
+    serialized: std::sync::OnceLock<Value>,
+}
+
+impl InitReport {
+    pub(crate) fn destination(&self) -> &str {
+        &self.destination
     }
-    progress.step(
-        "resolve template",
-        template_progress_label(opts.template.as_deref()),
-    );
-    let template_request = progress.log_blocked_on_err(resolve_initial_template_request(
-        opts.template.as_deref(),
-        &opts.vcs_ref,
-    ))?;
-    let template = progress.log_blocked_on_err(prepare_initial_template_source(
-        &template_request,
-        opts.template_mode,
-        &invocation_cwd,
-    ))?;
-    let mut transaction = InitMutationTransaction::create(&destination)?;
-    let work_destination = transaction.work_destination().to_path_buf();
-    let init_result = (|| -> Result<Value> {
-        // Revalidate after creation: another process may have populated a path
-        // between the initial preflight and our atomic create_dir calls.
-        progress.log_blocked_on_err(validate_init_destination(&destination, opts.force))?;
-        if let Some(plan) = &scaffold_plan {
-            progress.step("preflight project scaffold", plan.summary());
-            progress.log_blocked_on_err(plan.preflight(&work_destination, opts.force))?;
-            progress.log_blocked_on_err(path::validate_repository_regular_file_leaf(
-                &work_destination,
-                Path::new(managed_paths::AGENT_MAP_PATH),
-            ))?;
+
+    pub(crate) fn template(&self) -> &str {
+        &self.template
+    }
+
+    pub(crate) const fn git_initialized(&self) -> bool {
+        self.git_initialized
+    }
+
+    pub(crate) fn scaffold(&self) -> Option<&Value> {
+        self.scaffold.as_ref()
+    }
+
+    pub(crate) const fn render_report(&self) -> &Value {
+        &self.render_report
+    }
+
+    pub(crate) fn next_steps(&self) -> &[String] {
+        &self.next_steps
+    }
+
+    pub(crate) fn notes(&self) -> &[String] {
+        &self.notes
+    }
+
+    pub(crate) fn vault(&self) -> Option<&BootstrapVaultReport> {
+        self.vault.as_ref()
+    }
+
+    pub(crate) fn attach_vault(&mut self, vault: BootstrapVaultReport) -> Result<()> {
+        if self.vault.is_some() {
+            bail!("bootstrap::run_init output unexpectedly included a vault field");
         }
-
-        let copy_result = render_and_copy_bootstrap_template(BootstrapCopyRequest {
-            destination: &work_destination,
-            template: &template,
-            answers: &answers,
-            answer_input: Some(answer_input),
-            use_defaults: opts.defaults,
-            force: opts.force,
-            dry_run: false,
-            backup_root: None,
-            seed_repo_path: None,
-            prior_harness_footprint: None,
-            prior_managed_paths: None,
-            reconcile_runtime_config: false,
-            allow_answers_overwrite: false,
-            allow_contract_overwrite: false,
-            reserved_output_paths: scaffold_plan
-                .as_ref()
-                .map(scaffold::InitScaffoldPlan::output_paths)
-                .unwrap_or_default(),
-            init_transaction: Some(&mut transaction),
-            progress,
-        })?;
-        let scaffold_report = if let Some(plan) = &scaffold_plan {
-            progress.step("scaffold project", plan.summary());
-            if let Some(note) = plan.sanitized_repo_name_note() {
-                progress.info("scaffold note", note);
-            }
-            let files = progress.log_blocked_on_err(plan.render_files())?;
-            progress.log_blocked_on_err(transaction.plan_scaffold_files(&files))?;
-            let report = progress.log_blocked_on_err(plan.write_rendered_with_transaction(
-                &work_destination,
-                files,
-                opts.force,
-                Some(&mut transaction),
-            ))?;
-            progress.step("refresh agent map", "include scaffold crate guides");
-            let agent_map_path = Path::new(managed_paths::AGENT_MAP_PATH);
-            let agent_map = progress.log_blocked_on_err(crate::policy::render_agent_map(
-                &work_destination,
-                agent_map_path,
-            ))?;
-            progress.log_blocked_on_err(
-                transaction.plan_regular_file_bytes(agent_map_path, &agent_map),
-            )?;
-            progress.log_blocked_on_err(transaction.prepare_file_publication(agent_map_path))?;
-            let agent_map_commit = if transaction.is_privately_staged() {
-                let expected_leaf = progress.log_blocked_on_err(
-                    path::validate_repository_regular_file_leaf(&work_destination, agent_map_path),
-                )?;
-                progress.log_blocked_on_err(path::write_repository_file_atomic_staged(
-                    &work_destination,
-                    agent_map_path,
-                    &agent_map,
-                    expected_leaf,
-                    || transaction.verify_destination_identity(),
-                ))?
-            } else {
-                let desired_permissions = transaction.publication_permissions(agent_map_path)?;
-                let temporary_directory = transaction
-                    .write_staging_path(agent_map_path)
-                    .context("Existing-destination init write staging is unavailable")?
-                    .to_path_buf();
-                progress.log_blocked_on_err(path::write_repository_file_atomic_guarded(
-                    &work_destination,
-                    agent_map_path,
-                    &agent_map,
-                    desired_permissions,
-                    &temporary_directory,
-                    || transaction.verify_destination_identity(),
-                ))?
-            };
-            progress.log_blocked_on_err(
-                transaction.record_regular_commit(agent_map_path, agent_map_commit),
-            )?;
-            Some(report)
-        } else {
-            None
-        };
-        let default_branch = copy_result
-            .default_branch
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Missing default_branch in staged {ANSWERS_FILE}"))?;
-        progress.step("initialize git", format!("default branch {default_branch}"));
-        let git_initialized =
-            init_git_repo_with_validation(&work_destination, default_branch, || {
-                transaction.verify_destination_identity()
-            })?;
-
-        Ok(json!({
-            "ok": true,
-            "command": "init",
-            "render_mode": "copy",
-            "template": template.source(),
-            "destination": destination.display().to_string(),
-            "answers_file": ANSWERS_FILE,
-            "git_initialized": git_initialized,
-            "scaffold": scaffold_report,
-            "render_report": initial_render_report(&copy_result),
-            "next_steps": initial_next_steps(
-                InitialCommand::Init,
-                &destination,
-                &copy_result,
-                scaffold_plan
-                    .as_ref()
-                    .is_some_and(scaffold::InitScaffoldPlan::database_enabled),
-            ),
-            "notes": initial_notes(
-                copy_result.notes,
-                copy_result.frontend_apps_configured,
-                scaffold_plan.as_ref(),
-                false,
-            ),
-        }))
-    })();
-
-    match init_result {
-        Ok(report) => {
-            transaction.commit()?;
-            progress.done("init complete");
-            Ok(report)
+        self.vault = Some(vault);
+        #[cfg(test)]
+        {
+            self.serialized = std::sync::OnceLock::new();
         }
-        Err(primary) => Err(transaction.finish_failed_init(primary)),
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for InitReport {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.serialized.get_or_init(|| {
+            serde_json::to_value(self).expect("typed init report should serialize for legacy tests")
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct BootstrapVaultReport {
+    requested: bool,
+    initialized: bool,
+    created: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skipped_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_home: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_scope: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vault_scope_id: Option<Value>,
+}
+
+impl BootstrapVaultReport {
+    pub(crate) fn disabled() -> Self {
+        Self::skipped(false, "disabled")
+    }
+
+    pub(crate) fn missing_scope() -> Self {
+        Self::skipped(true, "repo has no [vault] scope")
+    }
+
+    fn skipped(requested: bool, reason: &str) -> Self {
+        Self {
+            requested,
+            initialized: false,
+            created: false,
+            skipped_reason: Some(reason.to_string()),
+            vault_home: None,
+            vault_scope: None,
+            vault_scope_id: None,
+        }
+    }
+
+    pub(crate) fn initialized(created: bool, runtime_report: &Value) -> Self {
+        Self {
+            requested: true,
+            initialized: true,
+            created,
+            skipped_reason: None,
+            vault_home: Some(runtime_report["vault_home"].clone()),
+            vault_scope: Some(runtime_report["vault_scope"].clone()),
+            vault_scope_id: Some(runtime_report["vault_scope_id"].clone()),
+        }
+    }
+
+    pub(crate) const fn requested(&self) -> bool {
+        self.requested
+    }
+
+    pub(crate) const fn initialized_status(&self) -> bool {
+        self.initialized
+    }
+
+    pub(crate) const fn created(&self) -> bool {
+        self.created
+    }
+
+    pub(crate) fn skipped_reason(&self) -> Option<&str> {
+        self.skipped_reason.as_deref()
+    }
+
+    pub(crate) fn vault_scope(&self) -> Option<&str> {
+        self.vault_scope.as_ref().and_then(Value::as_str)
     }
 }
 

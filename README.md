@@ -21,7 +21,9 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 ## Install
 
-**Prerequisites:** Rust 1.85+, Bash, Python 3.8+, Node.js 22.22.2+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled. On Windows, run Jig from Git Bash or WSL so generated shell checks have Bash available; Git Bash dependency locking also requires its Linux-compatible `/proc` process records.
+**Supported hosts:** Linux and macOS. Native Windows and Git Bash are unsupported; see [Platform Support](docs/platform-support.md) for the WSL boundary and feature-specific limits.
+
+**Prerequisites:** Rust 1.85+, Bash, Python 3.8+, Node.js 22.22.2+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
 
 ```sh
 cargo install jig-sh
@@ -181,7 +183,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, and encrypted backup/absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
+Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, encrypted backup, and Linux-only absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
 
 ### Prompts
 
@@ -219,7 +221,7 @@ scripts/jig proxy cert generate
 scripts/jig proxy cert trust --accept-trust-scope
 ```
 
-`--accept-trust-scope` acknowledges platform trust-store mutation. Automatic cert management and process-owned routes are supported on macOS and Linux; on Windows and BSD-like platforms run apps directly with `scripts/jig proxy run --no-proxy` or manage loopback services with `scripts/jig proxy alias`. See [Developer UX](docs/developer-ux.md).
+`--accept-trust-scope` acknowledges platform trust-store mutation. Automatic certificate management and process-owned routes are supported on Linux and macOS. Other hosts are outside Jig's [platform support policy](docs/platform-support.md). See [Developer UX](docs/developer-ux.md).
 
 ## Required repo conventions
 
@@ -243,6 +245,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 ## Documentation
 
+- [Platform Support](docs/platform-support.md) — supported hosts, CI guarantees, and feature-specific limits
 - [Developer UX](docs/developer-ux.md) — the `jig` command surface and daily workflow
 - [Configuration](docs/configuration.md) — full `.jig.toml` reference and options
 - [Adoption](docs/adoption.md) — bring Jig into an existing repository

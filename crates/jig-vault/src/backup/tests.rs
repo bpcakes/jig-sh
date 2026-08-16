@@ -371,11 +371,25 @@ fn creates_and_restores_private_complete_vault() {
         before_refusal
     );
 
+    let inside_home = source.root().join("inside.backup");
+    let inside_error =
+        Vault::preflight_backup_create(source.root().to_path_buf(), &inside_home, false)
+            .unwrap_err();
+    assert_eq!(inside_error.kind(), VaultErrorKind::InvalidInput);
+    assert_eq!(
+        inside_error.to_string(),
+        "backup output must be outside the source vault home"
+    );
+
     let hardlink = temp.path().join("source-hardlink.backup");
     fs::hard_link(source.root().join("vault.json"), &hardlink).unwrap();
     let alias_error =
         Vault::preflight_backup_create(source.root().to_path_buf(), &hardlink, true).unwrap_err();
     assert_eq!(alias_error.kind(), VaultErrorKind::InvalidInput);
+    assert_eq!(
+        alias_error.to_string(),
+        "backup output must not alias a source vault file"
+    );
     fs::remove_file(&hardlink).unwrap();
 
     let output_two = temp.path().join("vault-two.backup");

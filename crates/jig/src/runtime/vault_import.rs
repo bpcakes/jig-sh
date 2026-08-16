@@ -8,7 +8,7 @@ use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_vault::{FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes};
+use jig_vault::{FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes, VaultItem};
 use zeroize::Zeroizing;
 
 use crate::command::{VaultImportEnvironment, VaultImportValueSource};
@@ -65,16 +65,25 @@ pub(crate) fn import_entries(environment: &VaultImportEnvironment) -> Vec<Import
 }
 
 pub(crate) fn resolve_import(environment: VaultImportEnvironment) -> Result<ResolvedImport> {
+    resolve_import_with_cancellation(environment, &|| false)
+}
+
+pub(crate) fn resolve_import_with_cancellation(
+    environment: VaultImportEnvironment,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ResolvedImport> {
+    ensure_import_active(cancelled)?;
     let entries = import_entries(&environment);
     let destination = destination_bytes(&entries)?;
     let mut mutations = Vec::with_capacity(environment.assignments.len());
     let mut total_value_len = 0_usize;
     for assignment in environment.assignments {
+        ensure_import_active(cancelled)?;
         let (kind, value) = match assignment.source {
             VaultImportValueSource::Literal(value) => (FieldKind::Text, value),
             VaultImportValueSource::OnePassword(reference) => (
                 FieldKind::Concealed,
-                resolve_onepassword_value(&assignment.name, reference)?,
+                resolve_onepassword_value(&assignment.name, reference, cancelled)?,
             ),
         };
         total_value_len = total_value_len
@@ -87,6 +96,7 @@ pub(crate) fn resolve_import(environment: VaultImportEnvironment) -> Result<Reso
         }
         mutations.push(FieldMutation::set(assignment.reference, kind, value));
     }
+    ensure_import_active(cancelled)?;
     Ok(ResolvedImport {
         entries,
         mutations,
@@ -116,6 +126,46 @@ pub(crate) fn preflight_destination(path: &Path) -> Result<bool> {
     }
 }
 
+pub(crate) fn recovery_command(
+    env_file: &Path,
+    item: &VaultItem,
+    out_env: &Path,
+    vault_home: &Path,
+) -> Result<String> {
+    let source = exact_recovery_path("source", env_file)?;
+    let destination = exact_recovery_path("destination", out_env)?;
+    let vault_home = exact_recovery_path("vault home", vault_home)?;
+    Ok([
+        "jig".to_owned(),
+        "vault".to_owned(),
+        "import".to_owned(),
+        "onepassword".to_owned(),
+        "--env-file".to_owned(),
+        shell_quote(source),
+        "--item".to_owned(),
+        shell_quote(item.as_str()),
+        "--out-env".to_owned(),
+        shell_quote(destination),
+        "--replace".to_owned(),
+        "--overwrite".to_owned(),
+        "--home".to_owned(),
+        shell_quote(vault_home),
+    ]
+    .join(" "))
+}
+
+fn exact_recovery_path<'a>(label: &str, path: &'a Path) -> Result<&'a str> {
+    path.to_str().ok_or_else(|| {
+        anyhow!(
+            "vault import {label} path is not valid UTF-8; choose a UTF-8 path so a post-commit recovery command can be exact"
+        )
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn destination_bytes(entries: &[ImportEntry]) -> Result<SecretBytes> {
     let total_len = entries.iter().try_fold(0_usize, |total, entry| {
         total
@@ -141,7 +191,12 @@ fn destination_bytes(entries: &[ImportEntry]) -> Result<SecretBytes> {
     Ok(SecretBytes::new(bytes))
 }
 
-fn resolve_onepassword_value(variable: &str, reference: SecretBytes) -> Result<SecretBytes> {
+fn resolve_onepassword_value(
+    variable: &str,
+    reference: SecretBytes,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<SecretBytes> {
+    ensure_import_active(cancelled)?;
     let reference_text = std::str::from_utf8(reference.as_slice())
         .expect("the restricted dotenv parser validated UTF-8");
     let mut command = Command::new("op");
@@ -204,8 +259,13 @@ fn resolve_onepassword_value(variable: &str, reference: SecretBytes) -> Result<S
         }
     };
 
-    let wait_outcome =
-        wait_child_bounded(&mut child, process_id, &mut stdout_pump, &mut stderr_pump);
+    let wait_outcome = wait_child_bounded(
+        &mut child,
+        process_id,
+        &mut stdout_pump,
+        &mut stderr_pump,
+        cancelled,
+    );
     finish_pipe_drain(process_id, &mut stdout_pump, &mut stderr_pump);
 
     if stdout_pump.overflowed {
@@ -239,6 +299,7 @@ fn resolve_onepassword_value(variable: &str, reference: SecretBytes) -> Result<S
                 "1Password CLI for variable '{variable}' exceeded the {OP_READ_TIMEOUT:?} resolution deadline and was terminated"
             )
         }
+        OpWaitOutcome::Cancelled => bail!("vault import was cancelled"),
         OpWaitOutcome::ObservationFailed(kind) => {
             bail!("failed to observe 1Password CLI for variable '{variable}' ({kind:?})")
         }
@@ -440,12 +501,17 @@ fn wait_child_bounded(
     process_id: u32,
     stdout: &mut CapturePump,
     stderr: &mut CapturePump,
+    cancelled: &dyn Fn() -> bool,
 ) -> OpWaitOutcome {
     let Some(deadline) = Instant::now().checked_add(OP_READ_TIMEOUT) else {
         terminate_and_reap(child, process_id);
         return OpWaitOutcome::TimedOut;
     };
     loop {
+        if cancelled() {
+            terminate_and_reap(child, process_id);
+            return OpWaitOutcome::Cancelled;
+        }
         stdout.poll();
         stderr.poll();
         if stdout.overflowed || stderr.overflowed {
@@ -544,10 +610,18 @@ fn terminate_process_group(_process_id: u32) {}
 
 enum OpWaitOutcome {
     Exited(ExitStatus),
+    Cancelled,
     OutputOverflow,
     CaptureFailed,
     TimedOut,
     ObservationFailed(ErrorKind),
+}
+
+fn ensure_import_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        bail!("vault import was cancelled");
+    }
+    Ok(())
 }
 
 fn status_label(status: ExitStatus) -> String {
@@ -566,7 +640,14 @@ fn status_label(status: ExitStatus) -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
+    use std::{
+        os::unix::fs::PermissionsExt,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+    };
 
     use crate::test_env::{EnvVarGuard, lock_env};
 
@@ -599,9 +680,12 @@ printf '%s' 'resolved-with-clean-environment'
         let _current = EnvVarGuard::set(PASSPHRASE_ENV, "current-must-not-reach-op");
         let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "new-must-not-reach-op");
 
-        let resolved =
-            resolve_onepassword_value("TOKEN", SecretBytes::new(b"op://Test/Login/TOKEN".to_vec()))
-                .unwrap();
+        let resolved = resolve_onepassword_value(
+            "TOKEN",
+            SecretBytes::new(b"op://Test/Login/TOKEN".to_vec()),
+            &|| false,
+        )
+        .unwrap();
 
         assert_eq!(resolved.as_slice(), b"resolved-with-clean-environment");
         assert_eq!(
@@ -612,5 +696,61 @@ printf '%s' 'resolved-with-clean-environment'
             std::env::var(NEW_PASSPHRASE_ENV).as_deref(),
             Ok("new-must-not-reach-op")
         );
+    }
+
+    #[test]
+    fn cancellation_terminates_a_stalled_op_process() {
+        let _env = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let op = bin.join("op");
+        let started = temp.path().join("op-started");
+        std::fs::write(
+            &op,
+            r#"#!/bin/sh
+set -eu
+: > "$OP_TEST_STARTED"
+while :; do
+  sleep 1
+done
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&op, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut path_parts = vec![bin];
+        if let Some(path) = std::env::var_os("PATH") {
+            path_parts.extend(std::env::split_paths(&path));
+        }
+        let _path = EnvVarGuard::set("PATH", std::env::join_paths(path_parts).unwrap());
+        let _started = EnvVarGuard::set("OP_TEST_STARTED", &started);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (result_sender, result_receiver) = mpsc::channel();
+
+        let worker = std::thread::spawn(move || {
+            let result = resolve_onepassword_value(
+                "TOKEN",
+                SecretBytes::new(b"op://Test/Login/TOKEN".to_vec()),
+                &|| worker_cancelled.load(Ordering::SeqCst),
+            )
+            .map(drop)
+            .map_err(|error| error.to_string());
+            result_sender.send(result).unwrap();
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !started.exists() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(started.exists(), "the fake op process did not start");
+
+        cancelled.store(true, Ordering::SeqCst);
+        let error = result_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancelled op resolution did not return")
+            .unwrap_err();
+        worker.join().unwrap();
+
+        assert!(error.contains("cancelled"), "{error}");
     }
 }

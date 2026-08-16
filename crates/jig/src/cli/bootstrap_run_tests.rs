@@ -5,54 +5,65 @@ use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
 use super::*;
 
+fn init_report(value: serde_json::Value) -> bootstrap::InitReport {
+    serde_json::from_value(value).unwrap()
+}
+
 #[test]
 fn bootstrap_vault_capture_is_deferred_only_for_interactive_prompts() {
-    assert!(!should_pre_capture_bootstrap_vault(
-        true, false, false, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, true, false, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, true, false, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, false, true, true
-    ));
-    assert!(should_pre_capture_bootstrap_vault(
-        true, false, false, false, false
-    ));
-    assert!(!should_pre_capture_bootstrap_vault(
-        false, true, true, true, false
-    ));
+    use BootstrapInputMode::{Defaults, Interactive, NoInput};
+    use BootstrapPassphraseAvailability::{Environment, Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
+    use BootstrapVaultPlan::{CaptureAfterRender, PreCaptured};
+
+    let resolve = |intent, mode, availability| {
+        BootstrapVaultPlan::resolve(intent, mode, availability, BootstrapVaultCommand::Init)
+    };
+
+    assert_eq!(BootstrapInputMode::from_flags(true, true), NoInput);
+    assert_eq!(
+        resolve(Initialize, Interactive, Prompt).unwrap(),
+        CaptureAfterRender
+    );
+    assert_eq!(
+        resolve(Initialize, NoInput, Environment).unwrap(),
+        PreCaptured
+    );
+    assert_eq!(resolve(Initialize, Defaults, Prompt).unwrap(), PreCaptured);
+    assert_eq!(
+        resolve(Initialize, Interactive, Environment).unwrap(),
+        PreCaptured
+    );
+    assert_eq!(
+        resolve(Disabled, NoInput, Unavailable).unwrap(),
+        BootstrapVaultPlan::Disabled
+    );
+    assert!(resolve(Initialize, Interactive, Unavailable).is_err());
+    assert!(resolve(Initialize, NoInput, Prompt).is_err());
 }
 
 #[test]
 fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
-    reject_missing_bootstrap_vault_passphrase(true, true, true, false, BootstrapVaultCommand::Init)
-        .unwrap();
-    reject_missing_bootstrap_vault_passphrase(
-        false,
-        true,
-        false,
-        false,
-        BootstrapVaultCommand::Init,
-    )
-    .unwrap();
-    reject_missing_bootstrap_vault_passphrase(
-        true,
-        false,
-        false,
-        true,
-        BootstrapVaultCommand::Init,
-    )
-    .unwrap();
+    use BootstrapInputMode::{Interactive, NoInput};
+    use BootstrapPassphraseAvailability::{Environment, Prompt, Unavailable};
+    use BootstrapVaultIntent::{Disabled, Initialize};
 
-    let error = reject_missing_bootstrap_vault_passphrase(
-        true,
-        false,
-        false,
-        false,
+    BootstrapVaultPlan::resolve(
+        Initialize,
+        NoInput,
+        Environment,
+        BootstrapVaultCommand::Init,
+    )
+    .unwrap();
+    BootstrapVaultPlan::resolve(Disabled, NoInput, Unavailable, BootstrapVaultCommand::Init)
+        .unwrap();
+    BootstrapVaultPlan::resolve(Initialize, Interactive, Prompt, BootstrapVaultCommand::Init)
+        .unwrap();
+
+    let error = BootstrapVaultPlan::resolve(
+        Initialize,
+        Interactive,
+        Unavailable,
         BootstrapVaultCommand::Init,
     )
     .unwrap_err()
@@ -63,15 +74,10 @@ fn noninteractive_init_vault_error_names_init_and_its_escape_hatches() {
     assert!(error.contains("--no-vault"));
     assert!(error.contains("export JIG_VAULT_PASSPHRASE"));
 
-    let no_input_error = reject_missing_bootstrap_vault_passphrase(
-        true,
-        true,
-        false,
-        true,
-        BootstrapVaultCommand::Adopt,
-    )
-    .unwrap_err()
-    .to_string();
+    let no_input_error =
+        BootstrapVaultPlan::resolve(Initialize, NoInput, Prompt, BootstrapVaultCommand::Adopt)
+            .unwrap_err()
+            .to_string();
     assert!(no_input_error.contains("`jig adopt --write`"));
 }
 
@@ -173,9 +179,12 @@ allow_global = false
         .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "correct horse battery staple");
-    let bootstrap = json!({ "destination": repo.display().to_string() });
-
-    let output = ensure_bootstrap_vault(&bootstrap, true, true).unwrap();
+    let output = ensure_bootstrap_vault(
+        repo.to_str().unwrap(),
+        BootstrapVaultPlan::CaptureAfterRender,
+    )
+    .unwrap();
+    let output = serde_json::to_value(output).unwrap();
 
     assert_eq!(output["requested"], true);
     assert_eq!(output["initialized"], true);
@@ -210,11 +219,12 @@ allow_global = false
         .write();
     let _vault_home = EnvVarGuard::set("JIG_VAULT_HOME", temp.path().join("vault-base"));
     let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", "short");
-    let bootstrap = json!({ "destination": repo.display().to_string() });
-
-    let error = ensure_bootstrap_vault(&bootstrap, true, true)
-        .unwrap_err()
-        .to_string();
+    let error = ensure_bootstrap_vault(
+        repo.to_str().unwrap(),
+        BootstrapVaultPlan::CaptureAfterRender,
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("repo files were written"));
     assert!(error.contains("rerun `jig vault init`"));
@@ -248,9 +258,13 @@ fn presets_summary_explains_defaults_and_ownership() {
 
 #[test]
 fn init_summary_calls_out_custom_bare_frontend_names() {
-    let output = json!({
+    let output = init_report(json!({
+        "ok": true,
+        "command": "init",
+        "render_mode": "copy",
         "destination": "/tmp/demo",
         "template": "embedded",
+        "answers_file": ".jig.toml",
         "render_report": {
             "files_created": [],
             "files_modified": [],
@@ -269,10 +283,15 @@ fn init_summary_calls_out_custom_bare_frontend_names() {
             "files_unchanged": []
         },
         "git_initialized": true,
-        "vault": { "requested": false },
+        "vault": {
+            "requested": false,
+            "initialized": false,
+            "created": false,
+            "skipped_reason": "disabled"
+        },
         "notes": [],
         "next_steps": []
-    });
+    }));
 
     let summary = format_init_human_summary(&output);
 
@@ -321,9 +340,13 @@ fn adopt_human_summary_includes_reviewable_next_steps() {
 
 #[test]
 fn init_human_summary_includes_scaffold_and_next_steps() {
-    let output = serde_json::json!({
+    let output = init_report(serde_json::json!({
+        "ok": true,
+        "command": "init",
+        "render_mode": "copy",
         "destination": "/tmp/repo",
         "template": "embedded",
+        "answers_file": ".jig.toml",
         "git_initialized": true,
         "scaffold": {
             "preset": "rust-react",
@@ -350,21 +373,29 @@ fn init_human_summary_includes_scaffold_and_next_steps() {
             "cd /tmp/repo",
             "scripts/jig setup"
         ]
-    });
+    }));
 
     let summary = format_init_human_summary(&output);
 
-    assert!(summary.contains("init summary"));
-    assert!(summary.contains("target: /tmp/repo"));
-    assert!(summary.contains("template: embedded"));
-    assert!(summary.contains("managed files: 2 created, 0 modified, 0 removed"));
-    assert!(summary.contains("scaffold: rust-react for demo (db: postgres)"));
-    assert!(summary.contains("scaffold files: 2 created, 0 modified, 1 unchanged"));
-    assert!(summary.contains("frontends: web, landing, admin-panel"));
-    assert!(summary.contains("git: initialized"));
-    assert!(summary.contains("SQLx disabled by default"));
-    assert!(summary.contains("scripts/jig setup"));
-    assert!(summary.contains("full report: rerun with --json"));
+    assert_eq!(
+        summary,
+        concat!(
+            "init summary\n",
+            "  target: /tmp/repo\n",
+            "  template: embedded\n",
+            "  managed files: 2 created, 0 modified, 0 removed\n",
+            "  scaffold: rust-react for demo (db: postgres)\n",
+            "  scaffold files: 2 created, 0 modified, 1 unchanged\n",
+            "  frontends: web, landing, admin-panel\n",
+            "  git: initialized\n",
+            "  notes:\n",
+            "    - SQLx disabled by default until configured.\n",
+            "  next steps:\n",
+            "    - cd /tmp/repo\n",
+            "    - scripts/jig setup\n",
+            "  full report: rerun with --json\n",
+        )
+    );
 }
 
 #[test]

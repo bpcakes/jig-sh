@@ -6,14 +6,16 @@ This ExecPlan is a living document. Keep `Progress`, `Surprises & Discoveries`, 
 
 This ExecPlan turns Jig Vault from a small secret store plus constrained broker into a general local command-line vault for a single project. After this work, a developer can keep a complete environment bundle encrypted in the current repository's vault, refer to fields as `jig://Production/RESTIC_PASSWORD`, reveal a selected field, render a template, or run an ordinary command from a reference-bearing dotenv file. A one-time importer can convert a 1Password-backed dotenv file without printing values. The plan also adds passphrase rotation and encrypted backup/restore so the resulting vault is operable rather than merely writable.
 
-The project is implicit in every reference. `jig://Production/RESTIC_PASSWORD` means item `Production`, field `RESTIC_PASSWORD`, in the vault selected by the current repository, `--global`, or an explicit `--home`. There is deliberately no `jig://IdentityPro/Production/RESTIC_PASSWORD` form and no cross-project reference syntax in this scope. IdentityPro is an end-to-end acceptance example, not a special data model.
+The project is implicit in every reference. `jig://Production/RESTIC_PASSWORD` means item `Production`, field `RESTIC_PASSWORD`, in the vault selected by the current repository, `--global`, or an explicit `--home`. There is deliberately no `jig://Project/Production/RESTIC_PASSWORD` form and no cross-project reference syntax in this scope. The end-to-end acceptance example uses only generic fixture names.
 
 This is local CLI replacement scope, not a clone of the whole 1Password product. It covers the workflows analogous to `op read`, `op inject`, and `op run --env-file`, along with field management, one-time import, passphrase change, and encrypted backup/restore. It excludes browser/mobile autofill, remote synchronization, team sharing, TOTP generation, hosted audit, enterprise access control, attachments, arbitrary 1Password item-schema reproduction, clipboard integration, and a long-lived unlock daemon.
+
+A later delivery adds `jig vault tui` as a process-local interactive management plane over this completed CLI/core scope. It does not reopen the exclusions above: the TUI fixes one vault scope, auto-locks its in-process credential, exports only through the existing private-file sink, and offers a warned, bounded, terminal-safe transient Peek rather than clipboard integration or a daemon. `exec`, `run`, and `inject` remain CLI-owned operational workflows.
 
 ## Progress
 
 - [x] (2026-08-09) Read the repository, crate, and ExecPlan guidance and inspect the current vault format, scope resolution, CLI/runtime boundaries, audit model, redactor, and brokered process behavior.
-- [x] (2026-08-09) Incorporate the adversarial review and the user's simplification: project context is implicit, all field values remain encrypted, and IdentityPro is only an acceptance example.
+- [x] (2026-08-09) Incorporate the adversarial review and the user's simplification: project context is implicit, all field values remain encrypted, and the acceptance fixture remains generic.
 - [x] (2026-08-09) Open structured Jig work `plan_01KZKVRN21MBBY6YSJC88D603R`, whose body points to this authoritative ExecPlan.
 - [x] (2026-08-09) Record the baseline: format/check and all 100 `jig-vault` tests passed before source edits. The long pre-edit `jig-sh` run was stopped after hundreds of tests to unblock implementation; the immediately preceding work receipt was green, and the complete post-milestone suite later passed.
 - [x] (2026-08-09) Milestone 1: commit `cd229af` adds canonical project-local references, encrypted field kinds, vault envelope v2, explicit v1-to-v2 migration, bounded atomic field batches, field CLI, and a static legacy fixture.
@@ -21,8 +23,9 @@ This is local CLI replacement scope, not a clone of the whole 1Password product.
 - [x] (2026-08-09) Milestone 3: commit `ad95ec3` adds restricted dotenv parsing, transparent inherited process execution, concealed-only byte-stream redaction, lifecycle audit events, and exact child status propagation.
 - [x] (2026-08-10) Milestone 4: commit `2e4532a` adds atomic dotenv batch updates, a truthful dry-run, direct bounded `op read --no-newline` resolution, private destination installation, and the one-time 1Password dotenv importer.
 - [x] (2026-08-10) Milestone 5: commit `6b90c2e` adds full-reseal passphrase rotation, a strict bounded encrypted backup envelope, lifecycle audit events, and Linux absent-home restore with identity-checked staging and atomic no-replace installation.
-- [x] (2026-08-10) Milestone 6: commit `6807ca0` documents the cutover and compatibility model and adds a synthetic IdentityPro-shaped acceptance flow while preserving the old `secret` and constrained `run` commands.
-- [x] (2026-08-10) Run focused, crate, workspace, MSRV, platform-sensitive, and Jig harness validation. Receipt `receipt_01KZMNAM88TT26JYS43HZBQ56N` records fresh passing contract and workspace-test gates; Windows/macOS runtime behavior remains CI-only.
+- [x] (2026-08-10) Milestone 6: commit `6807ca0` documents the cutover and compatibility model and adds a synthetic consumer acceptance flow while preserving the old `secret` and constrained `run` commands.
+- [x] (2026-08-10) Run focused, crate, workspace, MSRV, platform-sensitive, and Jig harness validation. Receipt `receipt_01KZMNAM88TT26JYS43HZBQ56N` records fresh passing contract and workspace-test gates; at that milestone, Windows/macOS runtime behavior remained CI-only. The 2026-08-16 platform-policy work below supersedes that coverage statement.
+- [x] (2026-08-16) Declare Linux and macOS supported, add macOS workspace-test and Clippy coverage, and retire native-Windows CI under the explicit unsupported-host policy.
 
 ## Surprises & Discoveries
 
@@ -104,11 +107,11 @@ Default-parallel core aggregates made pre-existing sub-second broker teardown as
 
 Implementation is active under structured work `plan_01KZKVRN21MBBY6YSJC88D603R`. Milestones 1–4 completed in commits `cd229af`, `d80f496`, `ad95ec3`, and `2e4532a`. Milestone 5 completed in commit `6b90c2e` after an adversarial storage/process review fixed current-KDF adoption, passphrase-environment stripping, strict nested archive validation, attacker-controlled diagnostic bounds, complete embedded-envelope validation, and private-temporary identity races. Its evidence includes a serial 193/193 `jig-vault` aggregate, focused lifecycle/tamper/race tests, all-target core Clippy, Rust 1.85 checks, and the Linux end-to-end lifecycle integration. Milestone 6 completed in `6807ca0`; the synthetic temporary-repository/fake-`op` acceptance passes import, reference-only dotenv generation, concealed redaction, visible encrypted text, injection, piped read, rekey, encrypted backup, absent-home restore, restored nonzero exec status, and no-value checks over repository files, JSON, audit, receipts, and Git diff. The complete post-change `jig-sh` run passed 1,374 unit tests with 2 ignored and every integration target after hardening one legacy reveal fixture's temporary parent to `0700`.
 
-IdentityPro can replace its `op run --env-file` and `op read` workflow with project-local Jig references while keeping both credentials and contextual values encrypted; the real checkout and real 1Password account were deliberately untouched. Remaining platform coverage is CI-only for Windows/macOS, and private importer/file/restore operations fail closed where their filesystem/process guarantees are not implemented. Audit growth remains a justified follow-up: the local chain is reverified on append and backup is intentionally capped rather than providing audit rotation or remote rollback evidence. The all-target Jig Clippy gate remains blocked only by the pre-existing `needless_return` in `crates/jig/tests/support/mod.rs`; every changed target is clean.
+A downstream consumer can replace an `op run --env-file` and `op read` workflow with project-local Jig references while keeping both credentials and contextual values encrypted; no real checkout or 1Password account is touched by the fixture. Private importer/file/restore operations fail closed where their filesystem/process guarantees are not implemented. Audit growth remains a justified follow-up: the local chain is reverified on append and backup is intentionally capped rather than providing audit rotation or remote rollback evidence. The earlier all-target Clippy blocker referenced a superseded test-support layout; supported-host CI now enforces that gate successfully.
 
 Final harness validation used a freshly built `target/debug/jig`. The first parallel workspace receipt exposed only the pre-existing one-second broker teardown timing assertion under concurrent Argon2 load; commit `5bb966a` preserves the bounded test while allowing three seconds of scheduler headroom, still below its five-second control sleep. The rerun passed `jig.contract_check` and the complete `cargo test --workspace` gate with a clean worktree; `work gates` and `work evidence` report both required gates fresh and passing under batch receipt `receipt_01KZMNAM88TT26JYS43HZBQ56N`.
 
-At completion, summarize whether IdentityPro can replace its `op run --env-file` and `op read` use with Jig references while retaining both secret and contextual values in encrypted storage. Also record any CI-only Windows/macOS signal or permission coverage and whether audit growth makes rotation a justified follow-up.
+At completion, summarize whether a generic consumer can replace `op run --env-file` and `op read` use with Jig references while retaining both secret and contextual values in encrypted storage. Also record supported-platform signal or permission coverage and whether audit growth makes rotation a justified follow-up.
 
 ## Context and orientation
 
@@ -230,13 +233,13 @@ Expose `jig vault backup create --out FILE [--overwrite]` and `jig vault backup 
 
 Tests must cover backup nondeterminism, wrong passphrase, ciphertext/header tamper, truncated/oversized input, permissions, symlinks, no-overwrite, embedded v1 rejection with the instruction to migrate first, audit tamper, staged failure cleanup, successful restore into a new home, restored field behavior, and source/restore audit verification. Commit this lifecycle milestone independently.
 
-### Milestone 6 — compatibility, documentation, and IdentityPro acceptance
+### Milestone 6 — compatibility, documentation, and consumer acceptance
 
 Update root and vault help examples, the nearest vault documentation, and crate guide invariants. Explain project-relative references, both encrypted field kinds, v1 migration, the safety difference between `exec` and `run`, reveal sinks, import recovery, passphrase rotation, and backup restore. Never put realistic credential-shaped values into examples or snapshots.
 
 Keep all old command parsing and output tests green. Add a compatibility matrix to the documentation: new Jig reads v1 and v2; v1 requires explicit migration before new mutation/lifecycle operations; old Jig rejects v2; `secret` remains an alias over concealed fields in v2; `run` remains constrained; `exec` is transparent. State clearly that local audit is not remote/independent evidence and that backup/restore, not reference qualification, moves a project vault.
 
-Create a temporary acceptance repository rather than reading or modifying `~/Documents/identitypro`. Give it a `.jig.toml` with a test scope ID, initialize and migrate a vault, and import a fixture dotenv containing fake `op://IdentityPro/...` references and fake literals through the fake `op` executable. Prove the generated file resembles:
+Create a temporary acceptance repository without reading or modifying any real project checkout. Give it a `.jig.toml` with a test scope ID, initialize and migrate a vault, and import a fixture dotenv containing fake `op://ExampleVault/...` references and fake literals through the fake `op` executable. Prove the generated file resembles:
 
     RESTIC_PASSWORD=jig://Production/RESTIC_PASSWORD
     RESTIC_REPOSITORY=jig://Production/RESTIC_REPOSITORY
@@ -244,7 +247,7 @@ Create a temporary acceptance repository rather than reading or modifying `~/Doc
 
 Mark the password concealed and the repository/compression values text. Run a fixture backup command with `jig vault exec --env-file ...`, inject a fixture config, read a selected field through a pipe, rotate the passphrase, create an encrypted backup, restore to another explicit test home, and repeat the exec. Assert that common text output is not masked, concealed output is masked, nonzero child status is preserved, and no plaintext appears in the repository, JSON, audit, errors, receipts, or Git diff.
 
-The acceptance test demonstrates how IdentityPro can migrate later, but it must not invoke the real `op`, inspect the real project, or mutate real secrets. Actual IdentityPro cutover is a separate operational change after this generic feature ships.
+The acceptance test demonstrates how a downstream consumer can migrate later, but it must not invoke a real `op`, inspect a real project, or mutate real secrets. Any actual consumer cutover is a separate operational change after this generic feature ships.
 
 ## Concrete steps
 
@@ -361,6 +364,6 @@ Revision note (2026-08-09): Recorded completed Milestone 2 and commit `d80f496`.
 
 Revision note (2026-08-10): Recorded completed Milestone 4 and commit `2e4532a`. The revision documents bounded process-group-owned 1Password resolution, Unix-only private importer output, exact non-lossy recovery metadata, the post-commit destination-race contract, and consolidated crate/package/MSRV/Clippy evidence.
 
-Revision note (2026-08-10): Recorded completed Milestones 5 and 6 in commits `6b90c2e` and `6807ca0`. The revision documents the adversarial KDF/environment/output-race fixes, Linux restore boundary, strict backup envelope, synthetic IdentityPro acceptance, structural LOC split, and consolidated crate/package evidence before final harness gates.
+Revision note (2026-08-10): Recorded completed Milestones 5 and 6 in commits `6b90c2e` and `6807ca0`. The revision documents the adversarial KDF/environment/output-race fixes, Linux restore boundary, strict backup envelope, synthetic consumer acceptance, structural LOC split, and consolidated crate/package evidence before final harness gates.
 
 Revision note (2026-08-10): Recorded final fresh harness evidence and timing-test stabilization commit `5bb966a`; all ExecPlan milestones and required gates are complete.

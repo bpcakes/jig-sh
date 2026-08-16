@@ -6,16 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
-#[cfg(unix)]
 use jig_vault::SecretBytes;
 use jig_vault::{Vault, validate_new_vault_passphrase};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
 
 use crate::command::{
     VaultBackupCommand, VaultBackupCreateRequest, VaultBackupRestoreRequest, VaultCommand,
-    VaultPassphraseChangeRequest, VaultPassphraseCommand,
+    VaultImportCommand, VaultPassphraseChangeRequest, VaultPassphraseCommand,
 };
 
 use super::{
@@ -66,6 +65,28 @@ pub(crate) fn preflight_scoped_command(command: &mut VaultCommand) -> Result<()>
             let resolved = resolve_vault_runtime(&request.vault)?;
             let home = concrete_vault_home(&resolved)?;
             Vault::preflight_passphrase_change(home)?;
+            Ok(())
+        }
+        VaultCommand::Import(VaultImportCommand::OnePassword(request)) => {
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            let selected = vault(&resolved)?;
+            request.destination = Some(selected.preview_private_output(&request.out_env)?);
+            Ok(())
+        }
+        VaultCommand::Inject(request) => {
+            let Some(output) = &request.out_file else {
+                return Ok(());
+            };
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            vault(&resolved)?.preflight_private_output(output, request.overwrite)?;
+            Ok(())
+        }
+        VaultCommand::Read(request) => {
+            let Some(output) = &request.out_file else {
+                return Ok(());
+            };
+            let resolved = resolve_vault_runtime(&request.vault)?;
+            vault(&resolved)?.preflight_private_output(output, request.overwrite)?;
             Ok(())
         }
         _ => Ok(()),
@@ -139,6 +160,21 @@ fn concrete_vault_home(resolved: &ResolvedVaultRuntime) -> Result<PathBuf> {
 
 pub(crate) fn capture_passphrase() -> Result<()> {
     capture_passphrase_with_prompt(PromptKind::Unlock)
+}
+
+pub(crate) fn take_optional_tui_passphrase() -> Result<Option<SecretBytes>> {
+    let value = std::env::var_os(PASSPHRASE_ENV);
+    // Unlike retryable non-interactive capture, the TUI immediately owns its
+    // optional credential and must never leave malformed process copies for
+    // later workers or child processes to inherit.
+    strip_passphrase_environment();
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let passphrase = passphrase_from_os(value, PASSPHRASE_ENV)?;
+    Ok(Some(SecretBytes::new(
+        passphrase.expose_secret().as_bytes().to_vec(),
+    )))
 }
 
 pub(crate) fn capture_new_passphrase() -> Result<()> {
@@ -420,6 +456,45 @@ mod tests {
         assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
         assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
         assert!(passphrase().is_err());
+    }
+
+    #[test]
+    fn tui_capture_returns_protected_bytes_and_strips_both_environment_values() {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, "correct horse battery staple");
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        let captured = take_optional_tui_passphrase().unwrap().unwrap();
+
+        assert_eq!(captured.as_slice(), b"correct horse battery staple");
+        assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+        assert!(passphrase().is_err());
+    }
+
+    #[test]
+    fn missing_tui_passphrase_still_strips_stale_rotation_value() {
+        let _env = lock_env();
+        let _passphrase = EnvVarGuard::remove(PASSPHRASE_ENV);
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        assert!(take_optional_tui_passphrase().unwrap().is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_tui_passphrase_still_strips_both_environment_values() {
+        let _env = lock_env();
+        let invalid = OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+        let _passphrase = EnvVarGuard::set(PASSPHRASE_ENV, invalid);
+        let _new = EnvVarGuard::set(NEW_PASSPHRASE_ENV, "stale rotation passphrase");
+
+        let error = take_optional_tui_passphrase().unwrap_err().to_string();
+
+        assert!(error.contains("valid UTF-8"));
+        assert!(std::env::var_os(PASSPHRASE_ENV).is_none());
+        assert!(std::env::var_os(NEW_PASSPHRASE_ENV).is_none());
     }
 
     #[test]

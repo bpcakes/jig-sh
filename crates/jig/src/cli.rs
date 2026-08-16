@@ -51,7 +51,7 @@ pub(crate) use vault::{
     VaultFieldRemoveOpts, VaultFieldSetOpts, VaultImportCommand, VaultImportOnePasswordOpts,
     VaultInitOpts, VaultInjectOpts, VaultMigrateOpts, VaultPassphraseChangeOpts,
     VaultPassphraseCommand, VaultReadOpts, VaultRunOpts, VaultRuntimeOpts, VaultSecretCommand,
-    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts,
+    VaultSecretListOpts, VaultSecretRemoveOpts, VaultSecretSetOpts, VaultStatusOpts, VaultTuiOpts,
 };
 pub(crate) use work::{
     WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
@@ -206,6 +206,7 @@ JIG_VAULT_PASSPHRASE. Command-line passphrases are not accepted.
 
 Quick start:
   jig vault init
+  jig vault tui
   jig vault migrate --to 2
   jig vault field set jig://Production/RESTIC_PASSWORD --value-prompt
   printf '%s' 'local' | jig vault field set jig://Production/MODE --text --value-stdin

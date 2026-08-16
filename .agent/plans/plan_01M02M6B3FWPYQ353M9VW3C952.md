@@ -1,0 +1,1 @@
+Model undersized viewport input policy, index browse metadata, and bound protected-input rendering. Commit and verify each slice independently.

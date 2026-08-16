@@ -164,14 +164,14 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
             let projection = row.projection();
             let stale = row.projection_is_stale_at(now);
             Row::new([
-                Cell::from(row_marker(*index, row.home.current, best)),
-                Cell::from(row.display_name.clone()),
+                Cell::from(row_marker(*index, row.is_current(), best)),
+                Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
                 Cell::from(row.usage()),
                 Cell::from(stale_projection_label(projection.label(), stale))
                     .style(stale_projection_style(projection, stale)),
             ])
-            .style(match &row.inspection {
+            .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
                 }
@@ -225,8 +225,8 @@ fn draw_projection_list(
             let projection = row.projection();
             let stale = row.projection_is_stale_at(now);
             Row::new([
-                Cell::from(row_marker(*index, row.home.current, best)),
-                Cell::from(format!("{}\n{}", row.display_name, row.account())),
+                Cell::from(row_marker(*index, row.is_current(), best)),
+                Cell::from(format!("{}\n{}", row.display_name(), row.account())),
                 Cell::from(row.usage()),
                 Cell::from(stale_projection_label(
                     projection.list_outcome_label(),
@@ -235,7 +235,7 @@ fn draw_projection_list(
                 .style(stale_projection_style(projection, stale)),
             ])
             .height(2)
-            .style(match &row.inspection {
+            .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
                 }
@@ -290,17 +290,17 @@ fn draw_compact_list(
             let projection = row.projection();
             let stale = row.projection_is_stale_at(now);
             Row::new([
-                Cell::from(row_marker(*index, row.home.current, best)),
+                Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!(
                     "{} · {}\n{}",
-                    row.display_name,
+                    row.display_name(),
                     row.account(),
                     stale_projection_label(projection.label(), stale)
                 ))
                 .style(stale_projection_style(projection, stale)),
             ])
             .height(2)
-            .style(match &row.inspection {
+            .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
                 }
@@ -363,16 +363,16 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
         return Vec::new();
     };
     let mut lines = vec![
-        key_value("Name", &row.display_name),
-        key_value("Path", &row.display_path),
-        key_value("Current", if row.home.current { "yes" } else { "no" }),
+        key_value("Name", row.display_name()),
+        key_value("Path", row.display_path()),
+        key_value("Current", if row.is_current() { "yes" } else { "no" }),
     ];
     if app.selected.is_some() && app.selected == best {
         if let Some(recommendation) = row.recommendation() {
             lines.push(key_value("Recommendation", recommendation.label));
         }
     }
-    match &row.inspection {
+    match row.inspection() {
         Inspection::Loading => {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -390,7 +390,7 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
         Inspection::Ready(details) => {
             lines.extend([
                 Line::from(""),
-                key_value("Account", &details.account_label()),
+                key_value("Account", details.account_label()),
                 key_value("Type", &details.account_type),
                 key_value("Plan", &details.plan),
                 key_value("Status", &details.status),

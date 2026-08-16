@@ -586,3 +586,43 @@ fn passphrase_free_vault_invocations_strip_both_reserved_environment_values() {
     assert!(std::env::var_os("JIG_VAULT_NEW_PASSPHRASE").is_none());
     assert!(!vault_home.exists());
 }
+
+#[test]
+fn vault_tui_rejects_json_and_redirected_streams_before_scope_or_environment_capture() {
+    let _env = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let vault_home = temp.path().join("must-remain-absent");
+    let passphrase = "tui-passphrase-must-not-be-consumed";
+    let _passphrase = EnvVarGuard::set("JIG_VAULT_PASSPHRASE", passphrase);
+
+    let command = || {
+        VaultCommand::Tui(super::super::vault::VaultTuiOpts {
+            vault: super::super::vault::VaultRuntimeOpts {
+                home: Some(vault_home.clone()),
+                global: false,
+            },
+        })
+    };
+
+    let json_error = run_vault_command_with_terminal_state(command(), true, true, true)
+        .unwrap_err()
+        .to_string();
+    assert!(json_error.contains("--json is not supported by vault tui"));
+
+    for (stdin, stdout, expected) in [
+        (false, false, "terminal input and output"),
+        (false, true, "terminal input"),
+        (true, false, "terminal output"),
+    ] {
+        let error = run_vault_command_with_terminal_state(command(), false, stdin, stdout)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    assert_eq!(
+        std::env::var("JIG_VAULT_PASSPHRASE").as_deref(),
+        Ok(passphrase)
+    );
+    assert!(!vault_home.exists());
+}

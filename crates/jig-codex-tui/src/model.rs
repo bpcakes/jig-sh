@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::{format_percent, sanitize_text};
+use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, format_percent, sanitize_text};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
@@ -71,10 +71,10 @@ impl App {
     }
 
     pub(crate) fn visible_indices(&self) -> Vec<usize> {
-        let filter = self.filter.to_lowercase();
-        if filter.is_empty() {
+        if self.filter.is_empty() {
             return (0..self.rows.len()).collect();
         }
+        let filter = PreparedFuzzyText::new(&self.filter);
         let mut matches = self
             .rows
             .iter()
@@ -134,10 +134,13 @@ impl App {
             ));
             return;
         };
-        if !matches!(row.inspection, Inspection::Ready(_)) {
+        if !matches!(row.inspection(), Inspection::Ready(_)) {
             self.completed += 1;
         }
-        row.inspection = Inspection::Ready(Details::from_value(update.details, observed_at));
+        row.set_inspection(Inspection::Ready(Details::from_value(
+            update.details,
+            observed_at,
+        )));
         self.reconcile_selection();
     }
 
@@ -147,8 +150,8 @@ impl App {
             self.record_inspection_error(&error);
         }
         for row in &mut self.rows {
-            if matches!(row.inspection, Inspection::Loading) {
-                row.inspection = Inspection::Unavailable;
+            if matches!(row.inspection(), Inspection::Loading) {
+                row.set_inspection(Inspection::Unavailable);
             }
         }
     }
@@ -307,52 +310,101 @@ pub(crate) enum ExitState {
 }
 
 #[derive(Clone, Debug)]
+struct SearchTerm {
+    priority: usize,
+    text: PreparedFuzzyText,
+}
+
+impl SearchTerm {
+    fn new(priority: usize, text: &str) -> Self {
+        Self {
+            priority,
+            text: PreparedFuzzyText::new(text),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct HomeRow {
-    pub(crate) home: Home,
-    pub(crate) display_name: String,
-    pub(crate) display_path: String,
-    pub(crate) inspection: Inspection,
+    home: Home,
+    display_name: String,
+    display_path: String,
+    inspection: Inspection,
+    search_terms: Vec<SearchTerm>,
 }
 
 impl HomeRow {
     fn new(home: Home) -> Self {
         let display_name = sanitize_text(&home.name);
         let display_path = sanitize_text(&home.path.to_string_lossy());
+        let inspection = Inspection::Loading;
+        let search_terms = Self::prepare_search_terms(&display_name, &display_path, &inspection);
         Self {
             home,
             display_name,
             display_path,
-            inspection: Inspection::Loading,
+            inspection,
+            search_terms,
         }
     }
 
-    fn match_score(&self, needle: &str) -> Option<(usize, TextMatchScore)> {
-        let mut matches = Vec::with_capacity(5);
-        if let Some(score) = field_match_score(&self.display_name, needle) {
-            matches.push((0, score));
+    pub(crate) fn is_current(&self) -> bool {
+        self.home.current
+    }
+
+    pub(crate) fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub(crate) fn display_path(&self) -> &str {
+        &self.display_path
+    }
+
+    pub(crate) fn inspection(&self) -> &Inspection {
+        &self.inspection
+    }
+
+    fn set_inspection(&mut self, inspection: Inspection) {
+        let search_terms =
+            Self::prepare_search_terms(&self.display_name, &self.display_path, &inspection);
+        self.inspection = inspection;
+        self.search_terms = search_terms;
+    }
+
+    fn prepare_search_terms(
+        display_name: &str,
+        display_path: &str,
+        inspection: &Inspection,
+    ) -> Vec<SearchTerm> {
+        let mut terms = Vec::with_capacity(5);
+        terms.push(SearchTerm::new(0, display_name));
+        if let Inspection::Ready(details) = inspection {
+            terms.extend([
+                SearchTerm::new(1, details.account_label()),
+                SearchTerm::new(2, &details.plan),
+                SearchTerm::new(3, &details.status),
+            ]);
         }
-        if let Inspection::Ready(details) = &self.inspection {
-            for (priority, field) in [
-                (1, details.account_label()),
-                (2, details.plan.clone()),
-                (3, details.status.clone()),
-            ] {
-                if let Some(score) = field_match_score(&field, needle) {
-                    matches.push((priority, score));
-                }
-            }
-        }
-        if let Some(score) = field_match_score(&self.display_path, needle) {
-            matches.push((4, score));
-        }
-        matches.into_iter().min()
+        terms.push(SearchTerm::new(4, display_path));
+        terms
+    }
+
+    fn match_score(&self, query: &PreparedFuzzyText) -> Option<(usize, FuzzyMatchScore)> {
+        self.search_terms
+            .iter()
+            .filter_map(|term| {
+                term.text
+                    .match_score(query)
+                    .map(|score| (term.priority, score))
+            })
+            .min()
     }
 
     pub(crate) fn account(&self) -> String {
         match &self.inspection {
             Inspection::Loading => "loading…".into(),
             Inspection::Unavailable => "unavailable".into(),
-            Inspection::Ready(details) => details.account_label(),
+            Inspection::Ready(details) => details.account_label().to_owned(),
         }
     }
 
@@ -439,11 +491,11 @@ impl Details {
         }
     }
 
-    pub(crate) fn account_label(&self) -> String {
+    pub(crate) fn account_label(&self) -> &str {
         if self.email != UNKNOWN {
-            self.email.clone()
+            &self.email
         } else {
-            self.account_type.clone()
+            &self.account_type
         }
     }
 
@@ -857,55 +909,4 @@ fn sanitize_value(value: &mut Value) {
         Value::Object(values) => values.values_mut().for_each(sanitize_value),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct TextMatchScore {
-    kind: u8,
-    span: usize,
-    start: usize,
-}
-
-fn field_match_score(haystack: &str, needle: &str) -> Option<TextMatchScore> {
-    let haystack = haystack.to_lowercase();
-    if haystack == needle {
-        return Some(TextMatchScore {
-            kind: 0,
-            span: 0,
-            start: 0,
-        });
-    }
-    if haystack.starts_with(needle) {
-        return Some(TextMatchScore {
-            kind: 1,
-            span: haystack.chars().count(),
-            start: 0,
-        });
-    }
-    if let Some(start) = haystack.find(needle) {
-        return Some(TextMatchScore {
-            kind: 2,
-            span: needle.chars().count(),
-            start,
-        });
-    }
-
-    let mut needle = needle.chars();
-    let mut expected = needle.next();
-    let mut start = None;
-    for (index, character) in haystack.chars().enumerate() {
-        if Some(character) == expected {
-            start.get_or_insert(index);
-            expected = needle.next();
-            if expected.is_none() {
-                let start = start.unwrap_or_default();
-                return Some(TextMatchScore {
-                    kind: 3,
-                    span: index.saturating_sub(start).saturating_add(1),
-                    start,
-                });
-            }
-        }
-    }
-    None
 }

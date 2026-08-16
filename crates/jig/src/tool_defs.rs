@@ -144,6 +144,7 @@ pub(crate) mod cli_command {
     pub(crate) const VAULT_SECRET_REMOVE: &str = "remove";
     pub(crate) const VAULT_SECRET_SET: &str = "set";
     pub(crate) const VAULT_STATUS: &str = "status";
+    pub(crate) const VAULT_TUI: &str = "tui";
     pub(crate) const WORK: &str = "work";
     pub(crate) const WORK_APPEND: &str = "append";
     pub(crate) const WORK_CHECK: &str = "check";

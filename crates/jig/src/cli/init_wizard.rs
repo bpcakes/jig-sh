@@ -378,37 +378,18 @@ struct InitPresetMetadata {
 
 impl InitPresetMetadata {
     fn load() -> Self {
-        let report = bootstrap::scaffold_presets_report();
-        let preset = report["presets"]
-            .as_array()
-            .and_then(|presets| presets.iter().find(|preset| preset["name"] == "rust-react"));
-        let preset_summary = preset
-            .and_then(|preset| preset["summary"].as_str())
-            .unwrap_or("Rust API workspace with optional React and Astro frontends.")
-            .to_string();
-        let frontends = preset
-            .and_then(|preset| preset["frontend_shorthands"].as_array())
-            .map(|frontends| {
-                frontends
-                    .iter()
-                    .filter_map(|frontend| {
-                        Some((
-                            frontend["name"].as_str()?.to_string(),
-                            frontend["expands_to"].as_str()?.to_string(),
-                        ))
-                    })
-                    .collect()
+        let descriptor = ScaffoldPreset::RustReact.descriptor();
+        let preset_summary = descriptor.summary().to_string();
+        let frontends = descriptor
+            .frontend_shorthands()
+            .iter()
+            .map(|frontend| {
+                (
+                    frontend.name().to_string(),
+                    frontend.expands_to().to_string(),
+                )
             })
-            .unwrap_or_else(|| {
-                vec![
-                    ("web".into(), "Vite React app in web/".into()),
-                    ("landing".into(), "Astro site in landing/".into()),
-                    (
-                        "admin".into(),
-                        "Vite React admin app in admin-panel/".into(),
-                    ),
-                ]
-            });
+            .collect();
         Self {
             preset_summary,
             frontends,

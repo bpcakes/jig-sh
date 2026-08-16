@@ -4,6 +4,7 @@ This plan closes every actionable finding discovered by creating fresh Rust + Re
 
 ## Progress
 
+- [x] The 2026-08-16 platform-support policy supersedes all earlier Windows-specific CI and validation instructions in this historical plan; those steps remain archival context only.
 - [x] Reproduce and source-triage all six manual QA findings in clean SQLite, PostgreSQL, and no-DB fixtures.
 - [x] Map each finding to an owning template/runtime boundary and a focused regression test.
 - [x] Implement template, init-order, doctor, and cancellation fixes.

@@ -4,8 +4,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use jig_vault::{
-    BackupCreateRequest, BackupRestoreRequest, InjectionTemplate, SecretBytes, VaultItem,
-    VaultReference,
+    BackupCreateRequest, BackupRestoreRequest, InjectionTemplate, PrivateFilePrecondition,
+    SecretBytes, VaultItem, VaultReference,
 };
 
 #[derive(Debug)]
@@ -14,6 +14,7 @@ pub(crate) enum VaultCommand {
     Backup(VaultBackupCommand),
     Init(VaultInitRequest),
     Status(VaultStatusRequest),
+    Tui(VaultTuiRequest),
     Migrate(VaultMigrateRequest),
     Passphrase(VaultPassphraseCommand),
     Exec(VaultExecRequest),
@@ -113,6 +114,11 @@ pub(crate) struct VaultInitRequest {
 
 #[derive(Debug)]
 pub(crate) struct VaultStatusRequest {
+    pub(crate) vault: VaultRuntimeOptions,
+}
+
+#[derive(Debug)]
+pub(crate) struct VaultTuiRequest {
     pub(crate) vault: VaultRuntimeOptions,
 }
 
@@ -242,7 +248,7 @@ pub(crate) struct VaultExecRequest {
 pub(crate) struct VaultImportOnePasswordRequest {
     pub(crate) env_file: PathBuf,
     pub(crate) environment: Option<VaultImportEnvironment>,
-    pub(crate) destination_exists: Option<bool>,
+    pub(crate) destination: Option<PrivateFilePrecondition>,
     pub(crate) item: VaultItem,
     pub(crate) out_env: PathBuf,
     pub(crate) replace: bool,
@@ -273,7 +279,7 @@ impl std::fmt::Debug for VaultImportOnePasswordRequest {
             .debug_struct("VaultImportOnePasswordRequest")
             .field("env_file", &self.env_file)
             .field("environment", &self.environment)
-            .field("destination_exists", &self.destination_exists)
+            .field("destination", &self.destination)
             .field("item", &self.item)
             .field("out_env", &self.out_env)
             .field("replace", &self.replace)
@@ -455,7 +461,7 @@ mod tests {
                     },
                 ],
             }),
-            destination_exists: Some(false),
+            destination: None,
             item: jig_vault::VaultItem::parse("jig://Production").unwrap(),
             out_env: ".env.jig".into(),
             replace: false,

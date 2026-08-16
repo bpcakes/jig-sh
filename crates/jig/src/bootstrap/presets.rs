@@ -4,29 +4,49 @@ use serde_json::{Value, json};
 
 use super::ScaffoldPreset;
 
-#[derive(Debug, Serialize)]
-struct ScaffoldPresetReport {
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct ScaffoldPresetDescriptor {
     name: &'static str,
     summary: &'static str,
-    defaults: Vec<&'static str>,
-    layout: Vec<&'static str>,
-    frontend_shorthands: Vec<ScaffoldFrontendShorthandReport>,
-    examples: Vec<&'static str>,
+    defaults: &'static [&'static str],
+    layout: &'static [&'static str],
+    frontend_shorthands: &'static [ScaffoldFrontendShorthand],
+    examples: &'static [&'static str],
     ownership: &'static str,
-    non_goals: Vec<&'static str>,
+    non_goals: &'static [&'static str],
 }
 
-#[derive(Debug, Serialize)]
-struct ScaffoldFrontendShorthandReport {
+impl ScaffoldPresetDescriptor {
+    pub(crate) const fn summary(self) -> &'static str {
+        self.summary
+    }
+
+    pub(crate) const fn frontend_shorthands(self) -> &'static [ScaffoldFrontendShorthand] {
+        self.frontend_shorthands
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct ScaffoldFrontendShorthand {
     name: &'static str,
     expands_to: &'static str,
+}
+
+impl ScaffoldFrontendShorthand {
+    pub(crate) const fn name(self) -> &'static str {
+        self.name
+    }
+
+    pub(crate) const fn expands_to(self) -> &'static str {
+        self.expands_to
+    }
 }
 
 pub fn scaffold_presets_report() -> Value {
     let presets = ScaffoldPreset::value_variants()
         .iter()
         .copied()
-        .map(ScaffoldPreset::report)
+        .map(ScaffoldPreset::descriptor)
         .collect::<Vec<_>>();
     json!({
         "ok": true,
@@ -36,12 +56,12 @@ pub fn scaffold_presets_report() -> Value {
 }
 
 impl ScaffoldPreset {
-    fn report(self) -> ScaffoldPresetReport {
+    pub(crate) const fn descriptor(self) -> ScaffoldPresetDescriptor {
         match self {
-            Self::RustReact => ScaffoldPresetReport {
+            Self::RustReact => ScaffoldPresetDescriptor {
                 name: "rust-react",
                 summary: "Rust API workspace plus shadcn React product/admin apps and an optional Astro site.",
-                defaults: vec![
+                defaults: &[
                     "Rust crate roots default to apps and crates.",
                     "Frontends default to web when omitted.",
                     "Database scaffolding defaults to none; pass --db postgres or --db sqlite when wanted.",
@@ -50,7 +70,7 @@ impl ScaffoldPreset {
                     "React frontends ship tested shadcn 4 sources and provenance without running a mutable CLI during init.",
                     "Schema dumps stay disabled until a command is configured.",
                 ],
-                layout: vec![
+                layout: &[
                     "apps/<repo>-api",
                     "crates/<repo>-core",
                     "crates/<repo>",
@@ -58,43 +78,43 @@ impl ScaffoldPreset {
                     "crates/<repo>-test-support",
                     "crates/<repo>-db when --db postgres or --db sqlite is selected",
                 ],
-                frontend_shorthands: vec![
-                    ScaffoldFrontendShorthandReport {
+                frontend_shorthands: &[
+                    ScaffoldFrontendShorthand {
                         name: "web",
                         expands_to: "shadcn Vite React product app in web/",
                     },
-                    ScaffoldFrontendShorthandReport {
+                    ScaffoldFrontendShorthand {
                         name: "landing",
                         expands_to: "Astro site in landing/",
                     },
-                    ScaffoldFrontendShorthandReport {
+                    ScaffoldFrontendShorthand {
                         name: "admin",
                         expands_to: "shadcn Vite React admin app in admin-panel/",
                     },
                 ],
-                examples: vec![
+                examples: &[
                     "jig init ./my-app --preset rust-react",
                     "jig init ./my-app --preset rust-react --db postgres --frontends web,landing,admin",
                     "jig init ./my-app --preset rust-react --db sqlite --frontends web",
                 ],
                 ownership: "Scaffolded application code is project-owned after creation; jig update keeps the Jig harness current and does not rewrite app code.",
-                non_goals: vec![
+                non_goals: &[
                     "jig update does not migrate or overwrite scaffolded application source.",
                     "Presets are starter shapes, not long-term application frameworks.",
                 ],
             },
-            Self::HarnessOnly => ScaffoldPresetReport {
+            Self::HarnessOnly => ScaffoldPresetDescriptor {
                 name: "harness-only",
                 summary: "Jig harness configuration without starter application code.",
-                defaults: vec![
+                defaults: &[
                     "SQLx defaults to disabled unless SQLx-shaped answers are supplied.",
                     "Existing frontend_apps answers are retained as project-owned configuration.",
                 ],
-                layout: vec![],
-                frontend_shorthands: vec![],
-                examples: vec!["jig init ./my-repo --preset harness-only --no-input --no-vault"],
+                layout: &[],
+                frontend_shorthands: &[],
+                examples: &["jig init ./my-repo --preset harness-only --no-input --no-vault"],
                 ownership: "Only the Jig harness is generated; application source remains entirely project-owned.",
-                non_goals: vec![
+                non_goals: &[
                     "The harness-only preset does not create Rust crates, databases, or frontend applications.",
                 ],
             },
