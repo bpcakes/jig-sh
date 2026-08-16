@@ -27,7 +27,9 @@ use self::rust_sqlx::{
     RustCrateRootSourceKind, infer_rust_crate_roots_from_scan,
     infer_rust_crate_roots_with_metadata, infer_sqlx,
 };
-use self::scan::{RepoScan, push_scan_warning};
+use self::scan::RepoScan;
+#[cfg(test)]
+use self::scan::push_scan_warning;
 use self::topology::{RepoTopology, infer_repo_topology};
 
 #[cfg(test)]
@@ -233,12 +235,17 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
         );
     }
     if let Some(value) = inference.ci_github_runner.clone() {
+        let confidence = if github_ci.runner_was_synthesized {
+            Confidence::Low
+        } else {
+            Confidence::High
+        };
         inference.record_metadata(
             "ci_github_runner",
             json!(value),
             github_ci.sources,
-            Confidence::High,
-            Vec::new(),
+            confidence,
+            github_ci.runner_warnings,
         );
     }
     if inference.ci_shape.has_workflows() {
@@ -320,19 +327,6 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             vec!["assumes online `cargo sqlx prepare --check` in a POSIX-like shell".into()],
         );
     }
-    if inference.sqlx_enabled == Some(true)
-        && inference
-            .ci_github_runner
-            .as_deref()
-            .is_some_and(|runner| runner.starts_with("windows-"))
-    {
-        push_scan_warning(
-            &mut inference.warnings,
-            root,
-            "SQLx check command inference uses POSIX shell syntax but the inferred GitHub runner is Windows; pass --sqlx-check-command if needed",
-        );
-    }
-
     if !inference.rust_crate_roots.is_empty() {
         inference.signals.push(format!(
             "Rust crate roots: {}",

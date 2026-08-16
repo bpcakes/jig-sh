@@ -38,7 +38,7 @@ This work closes the actionable branch-review findings without treating every sy
 
 Implementation is complete in fifteen independently verified commits after the planning commit. The deeper issues were concentrated at four boundaries—split-phase authorization, lifecycle state inference, incomplete verification results, and ambiguous edit intent. Platform environment/file handling, test partitioning, an unused dependency, and an inert marker were local omissions. No persisted vault or audit format changed, and compatibility entrypoints remain for non-TUI callers.
 
-The final `jig work check` passed the contract and complete two-part nextest suite with batch receipt `receipt_01M001PYSE04ZWKQPWV2TS6Q91`; `jig work gates` reported both required gates fresh with no receipt diff. Final formatter and workspace Clippy checks passed with receipts `receipt_01M001QH4J5DSWRHQ72WQXXSSC` and `receipt_01M001R9BGXS96KCXGF9MH5DQ3`. The local toolchain has only the Linux target installed, so the Windows reparse test is committed and selected by the expanded `vault-platforms` CI matrix rather than executed locally.
+The final `jig work check` passed the contract and complete two-part nextest suite with batch receipt `receipt_01M001PYSE04ZWKQPWV2TS6Q91`; `jig work gates` reported both required gates fresh with no receipt diff. Final formatter and workspace Clippy checks passed with receipts `receipt_01M001QH4J5DSWRHQ72WQXXSSC` and `receipt_01M001R9BGXS96KCXGF9MH5DQ3`. The Windows reparse test remains as archival implementation coverage. The later platform-support policy superseded the temporary cross-platform CI matrix described here, so supported-host CI no longer selects that test.
 
 ## Context and orientation
 

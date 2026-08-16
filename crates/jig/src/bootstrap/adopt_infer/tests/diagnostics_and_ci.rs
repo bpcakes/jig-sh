@@ -371,9 +371,16 @@ sqlx = "0.8"
     .unwrap();
 
     let inference = infer_adopt_answers(temp.path());
+    let report = inference.report();
 
     assert_eq!(inference.sqlx_enabled, Some(true));
     assert_eq!(inference.ci_github_runner.as_deref(), Some("ubuntu-latest"));
+    assert_eq!(report["metadata"]["ci_github_runner"]["confidence"], "low");
+    assert!(
+        report["metadata"]["ci_github_runner"]["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("was synthesized"))
+    );
     assert!(inference.warnings.iter().any(|warning| {
         warning.contains("Windows GitHub Actions runners are unsupported by Jig")
     }));

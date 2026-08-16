@@ -13,6 +13,8 @@ const DEFAULT_SUPPORTED_GITHUB_RUNNER: &str = "ubuntu-latest";
 #[derive(Clone, Debug, Default)]
 pub(super) struct GithubCiInference {
     pub(super) runner: Option<String>,
+    pub(super) runner_was_synthesized: bool,
+    pub(super) runner_warnings: Vec<String>,
     pub(super) sources: Vec<String>,
     pub(super) shape: GithubCiShapeInference,
 }
@@ -95,6 +97,13 @@ pub(super) fn infer_ci_github_runner_with_metadata(
     let runner = selected_runner
         .clone()
         .or_else(|| fallback_to_ubuntu.then(|| DEFAULT_SUPPORTED_GITHUB_RUNNER.to_string()));
+    let runner_warnings = fallback_to_ubuntu
+        .then(|| {
+            "ubuntu-latest was synthesized because every statically detected GitHub Actions runner targets unsupported Windows hosts"
+                .to_string()
+        })
+        .into_iter()
+        .collect();
     let sources = if fallback_to_ubuntu {
         unsupported_windows_runners
             .iter()
@@ -108,6 +117,8 @@ pub(super) fn infer_ci_github_runner_with_metadata(
     };
     GithubCiInference {
         runner,
+        runner_was_synthesized: fallback_to_ubuntu,
+        runner_warnings,
         sources,
         shape,
     }
