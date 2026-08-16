@@ -207,7 +207,7 @@ impl StateStore {
     #[cfg(test)]
     pub(crate) fn add_verified_route<F>(&self, route: Route, mut verify: F) -> Result<()>
     where
-        F: FnMut() -> Result<()>,
+        F: FnMut(&Route) -> Result<()>,
     {
         if route.mode == RouteMode::Process && !process_start_tokens_supported() {
             anyhow::bail!(
@@ -232,7 +232,7 @@ impl StateStore {
         mut verify: F,
     ) -> Result<LockOutcome<()>>
     where
-        F: FnMut() -> Result<()>,
+        F: FnMut(&Route) -> Result<()>,
     {
         if route.mode == RouteMode::Process && !process_start_tokens_supported() {
             anyhow::bail!(
@@ -854,18 +854,18 @@ fn add_route_to_path(path: &Path, route: Route) -> Result<()> {
 
 fn add_route_to_path_verified<F>(path: &Path, route: Route, verify: &mut F) -> Result<()>
 where
-    F: FnMut() -> Result<()>,
+    F: FnMut(&Route) -> Result<()>,
 {
     validate_route_for_write(&route)?;
     let mut routes = read_routes_from_path(path)?;
     ensure_no_live_process_route_replacement(&routes, &route)?;
-    verify()?;
+    verify(&route)?;
     let rollback_routes = routes.clone();
     routes.retain(|existing| existing.hostname != route.hostname);
     routes.retain(route_is_alive);
     routes.push(route.clone());
     write_routes_to_path(path, &routes)?;
-    if let Err(error) = verify() {
+    if let Err(error) = verify(&route) {
         if let Err(cleanup_error) = write_routes_to_path(path, &rollback_routes) {
             return Err(error).context(format!(
                 "verification failed for route '{}', and rollback also failed: {cleanup_error}",

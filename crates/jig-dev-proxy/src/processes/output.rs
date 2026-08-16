@@ -38,6 +38,12 @@ pub(super) struct CaptureStartFailure {
     pub(super) cleanup_confirmed: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StartupOutputDisposition {
+    Failure,
+    Interrupted,
+}
+
 impl CapturedAppOutput {
     pub(super) fn finish_progress(&mut self) {
         if let Some(diagnostic) = self.progress.finish() {
@@ -45,9 +51,10 @@ impl CapturedAppOutput {
         }
     }
 
-    pub(super) fn print_failure(&mut self, app_name: &str) {
+    pub(super) fn print_failure(&mut self) {
         self.finish_progress();
         self.finish_readers();
+        let app_name = &self.app_name;
         let Ok(buffer) = self.buffer.lock() else {
             self.diagnostics
                 .push("capture buffer mutex was poisoned".to_string());
@@ -77,6 +84,15 @@ impl CapturedAppOutput {
         self.finish_progress();
         self.finish_readers();
         print_capture_diagnostics(&self.app_name, &mut self.diagnostics);
+    }
+
+    pub(super) fn finish_start_failure(&mut self, disposition: StartupOutputDisposition) {
+        match disposition {
+            StartupOutputDisposition::Failure => {
+                self.print_failure();
+            }
+            StartupOutputDisposition::Interrupted => self.discard(),
+        }
     }
 
     fn finish_readers(&mut self) {
@@ -579,8 +595,8 @@ mod tests {
     #[test]
     fn progress_detail_cleans_compiler_output() {
         assert_eq!(
-            progress_detail("   Compiling creditkit-http v0.1.0\n").as_deref(),
-            Some("Compiling creditkit-http v0.1.0")
+            progress_detail("   Compiling example-app v0.1.0\n").as_deref(),
+            Some("Compiling example-app v0.1.0")
         );
         assert_eq!(progress_detail("   |\n"), None);
         assert_eq!(progress_detail("19 | unused();\n"), None);
