@@ -63,6 +63,7 @@ When a backend crate has a crate-level `AGENTS.md`, use these sections:
 - Never put names, paths, identifiers, or operational details from downstream, customer, or private projects in this repository.
 - Use unmistakably generic fixtures such as `ExampleProject`, `ExampleVault`, and `vault-consumer-fixture` in source, tests, documentation, plans, and generated evidence.
 - Check fixture and test names before running receipt-producing commands because repository paths can be captured in append-only state.
+- If an accidentally captured private identifier requires historical state redaction, treat the edit as an explicit privacy migration: preserve record IDs and every unaffected field, then append a durable decision naming the affected record IDs and the reason for redaction without repeating the removed text.
 
 ## Dogfooding This Harness
 
