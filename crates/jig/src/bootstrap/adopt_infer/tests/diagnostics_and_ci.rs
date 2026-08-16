@@ -372,8 +372,17 @@ fn windows_runner_is_reported_as_excluded_when_supported_runner_is_available() {
     .unwrap();
 
     let inference = infer_adopt_answers(temp.path());
+    let report = inference.report();
 
     assert_eq!(inference.ci_github_runner.as_deref(), Some("macos-latest"));
+    assert_eq!(report["metadata"]["ci_github_runner"]["confidence"], "high");
+    assert!(
+        report["metadata"]["ci_github_runner"]["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| {
+                warning.contains("were excluded from generated-check runner inference")
+            })
+    );
     assert!(inference.warnings.iter().any(|warning| {
         warning.contains("were excluded from generated-check runner inference")
     }));
@@ -418,11 +427,7 @@ sqlx = "0.8"
             .as_str()
             .is_some_and(|warning| warning.contains("was synthesized"))
     );
-    assert!(
-        report["metadata"]["ci_github_runner"]["sources"][0]
-            .as_str()
-            .is_some_and(|source| source.starts_with("excluded unsupported Windows runner:"))
-    );
+    assert_eq!(report["metadata"]["ci_github_runner"]["sources"], json!([]));
     assert!(inference.warnings.iter().any(|warning| {
         warning.contains("Windows GitHub Actions runners are unsupported by Jig")
     }));
@@ -436,10 +441,7 @@ sqlx = "0.8"
 
 #[test]
 fn supported_runner_is_preferred_over_more_common_windows_runner() {
-    let runners = BTreeMap::from([
-        ("macos-latest".to_string(), 1),
-        ("windows-latest".to_string(), 3),
-    ]);
+    let runners = BTreeMap::from([("macos-latest".to_string(), 1), ("windows".to_string(), 3)]);
 
     assert_eq!(
         select_github_runner(&runners).as_deref(),

@@ -28,8 +28,6 @@ use self::rust_sqlx::{
     infer_rust_crate_roots_with_metadata, infer_sqlx,
 };
 use self::scan::RepoScan;
-#[cfg(test)]
-use self::scan::push_scan_warning;
 use self::topology::{RepoTopology, infer_repo_topology};
 
 #[cfg(test)]

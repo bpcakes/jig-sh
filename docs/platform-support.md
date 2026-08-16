@@ -24,6 +24,6 @@ Supported host does not mean that every platform-dependent capability is identic
 
 Native Windows and Git Bash are not supported Jig hosts. WSL is not tested as a Windows integration environment; a workflow kept entirely inside its Linux userspace may follow the Linux path, but interoperability with Windows filesystems, shells, executables, and process management is outside the support contract.
 
-The source tree still contains some Windows-specific implementations and tests from earlier compatibility work. Their presence, or a successful Windows compilation, does not make Windows a supported host. Those paths may change or be removed without compatibility guarantees.
+The source tree still contains some Windows-specific implementations and tests from earlier compatibility work. Their presence, or a successful Windows compilation, does not make Windows a supported host. CI deliberately does not compile-check those archival paths; they may change or be removed without compatibility guarantees.
 
 Jig deliberately validates some paths and generated names for Windows portability. Those data-format checks protect repositories that may be consumed by other tools and operating systems; they do not expand Jig's host support policy.

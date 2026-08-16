@@ -1,4 +1,5 @@
 use super::*;
+use crate::bootstrap::adopt_infer::scan::push_scan_warning;
 
 #[test]
 fn parses_remote_repo_names() {

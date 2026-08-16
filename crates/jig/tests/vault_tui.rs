@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
-// Load PTY helpers only in their two consumers; the general support module is
-// compiled into every integration target under `-D warnings`.
-#[path = "support/pty.rs"]
+// Load PTY helpers only in their two consumers; `tests/shared` holds helpers
+// that are intentionally separate from the general integration-test support module.
+#[path = "shared/pty.rs"]
 mod pty_support;
 mod support;
 

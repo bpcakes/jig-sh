@@ -91,36 +91,34 @@ pub(super) fn infer_ci_github_runner_with_metadata(
         .collect::<Vec<_>>();
     let selected_runner = select_github_runner(&runners);
     let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_windows_runners.is_empty();
-    if !unsupported_windows_runners.is_empty() {
-        let warning = if fallback_to_ubuntu {
+    let unsupported_runner_warning = (!unsupported_windows_runners.is_empty()).then_some({
+        if fallback_to_ubuntu {
             "Windows GitHub Actions runners are unsupported by Jig; using ubuntu-latest because no supported static runner was detected"
         } else {
             "Windows GitHub Actions runners are unsupported by Jig and were excluded from generated-check runner inference"
-        };
+        }
+    });
+    if let Some(warning) = unsupported_runner_warning {
         push_scan_warning(warnings, &workflows, warning);
     }
     let runner = selected_runner
         .clone()
         .or_else(|| fallback_to_ubuntu.then(|| DEFAULT_SUPPORTED_GITHUB_RUNNER.to_string()));
-    let runner_warnings = fallback_to_ubuntu
-        .then(|| {
+    let runner_warnings = if fallback_to_ubuntu {
+        vec![
             "ubuntu-latest was synthesized because every statically detected GitHub Actions runner targets unsupported Windows hosts"
-                .to_string()
-        })
-        .into_iter()
-        .collect();
-    let sources = if fallback_to_ubuntu {
-        unsupported_windows_runners
-            .iter()
-            .flat_map(|runner| sources_by_runner.remove(runner).unwrap_or_default())
-            .map(|source| format!("excluded unsupported Windows runner: {source}"))
-            .collect()
+                .to_string(),
+        ]
     } else {
-        selected_runner
-            .as_ref()
-            .and_then(|runner| sources_by_runner.remove(runner))
-            .unwrap_or_default()
+        unsupported_runner_warning
+            .map(str::to_string)
+            .into_iter()
+            .collect()
     };
+    let sources = selected_runner
+        .as_ref()
+        .and_then(|runner| sources_by_runner.remove(runner))
+        .unwrap_or_default();
     GithubCiInference {
         runner,
         runner_was_synthesized: fallback_to_ubuntu,
@@ -156,7 +154,8 @@ fn runner_preference(runner: &str) -> u8 {
 }
 
 fn runner_is_windows_host(runner: &str) -> bool {
-    runner.to_ascii_lowercase().starts_with("windows-")
+    let runner = runner.to_ascii_lowercase();
+    runner == "windows" || runner.starts_with("windows-")
 }
 
 fn collect_github_ci_shape<F>(
