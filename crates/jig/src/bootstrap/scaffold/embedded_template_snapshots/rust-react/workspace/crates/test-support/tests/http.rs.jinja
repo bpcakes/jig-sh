@@ -20,6 +20,17 @@ async fn readiness_reflects_state() {
 
     [% if db_enabled %]
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .expect("readiness error includes request ID")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["code"], "dependency_unavailable");
+    assert_eq!(body["message"], "A required dependency is unavailable");
+    assert_eq!(body["request_id"], request_id);
     [% else %]
     assert_eq!(response.status(), StatusCode::OK);
     [% endif %]
@@ -35,10 +46,44 @@ async fn responses_include_request_id() {
 }
 
 #[tokio::test]
+async fn unknown_routes_return_a_standard_error_with_the_request_id() {
+    let app = TestApp::new();
+
+    let response = app.get("/does-not-exist").await;
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .expect("error response includes request ID")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body: serde_json::Value = response.json();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+    assert_eq!(body["message"], "The requested resource was not found");
+    assert_eq!(body["request_id"], request_id);
+}
+
+#[tokio::test]
 async fn version_returns_json() {
     let app = TestApp::new();
 
-    let version: app_core_crate::AppVersion = app.get_json("/api/version").await;
+    let version: serde_json::Value = app.get_json("/api/version").await;
 
-    assert_eq!(version.name, app_core_crate::APP_NAME);
+    assert_eq!(version["name"], app_core_crate::APP_NAME);
+}
+
+#[tokio::test]
+async fn status_returns_application_identity_and_readiness() {
+    let app = TestApp::new();
+
+    let status: serde_json::Value = app.get_json("/api/status").await;
+
+    assert_eq!(status["version"]["name"], app_core_crate::APP_NAME);
+    [% if db_enabled %]
+    assert_eq!(status["ready"], false);
+    [% else %]
+    assert_eq!(status["ready"], true);
+    [% endif %]
 }

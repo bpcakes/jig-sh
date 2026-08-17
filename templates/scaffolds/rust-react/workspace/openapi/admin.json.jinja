@@ -1,0 +1,91 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "<<[ repo_name ]>> admin API",
+    "description": "Privileged HTTP contract for <<[ repo_name ]>>",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/admin-api/status": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "operationId": "getAdminStatus",
+        "responses": {
+          "200": {
+            "description": "Privileged API identity and dependency readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminStatusResponse": {
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ApiErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable identifier suitable for client branching."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe user-facing description. Internal error details belong in logs."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlates this response with server logs."
+          }
+        }
+      }
+    }
+  }
+}

@@ -308,6 +308,62 @@ dependency_lockfile() {
   fi
 }
 
+expected_dependency_lockfile() {
+[% if web_package_manager == "bun" %]
+  printf '%s\n' "bun.lock"
+[% elif web_package_manager == "npm" %]
+  printf '%s\n' "package-lock.json"
+[% elif web_package_manager == "pnpm" %]
+  printf '%s\n' "pnpm-lock.yaml"
+[% elif web_package_manager == "yarn" %]
+  printf '%s\n' "yarn.lock"
+[% endif %]
+}
+
+dependency_recovery_hint() {
+  local app_dir="$1"
+  local scope="$2"
+  local detail="$3"
+
+  echo "Web dependencies for '$app_dir' are not ready in dependency scope '$scope': $detail." >&2
+  echo "Run 'scripts/check-webapps.sh bootstrap' from the repository root to create the workspace lockfile and install dependencies." >&2
+}
+
+require_dependency_lockfile() {
+  local app_dir="$1"
+  local scope status
+
+  scope="$(dependency_scope "$app_dir")" || {
+    status=$?
+    [ "$status" -eq 1 ] && status=2
+    return "$status"
+  }
+  if dependency_lockfile "$scope" >/dev/null; then
+    return 0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || return "$status"
+  dependency_recovery_hint "$app_dir" "$scope" "missing $(expected_dependency_lockfile)"
+  return 1
+}
+
+require_dependencies_present() {
+  local app_dir="$1"
+  local scope status
+
+  require_dependency_lockfile "$app_dir" || return
+  if dependencies_present "$app_dir"; then
+    return 0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || return "$status"
+  scope="$(dependency_scope "$app_dir")" || return 2
+  dependency_recovery_hint "$app_dir" "$scope" "installed dependency proof is absent or stale"
+  return 1
+}
+
 dependency_stamp_path() {
   local scope="$1"
 
@@ -1961,6 +2017,11 @@ run_dependency_install() {
     # The coordinator still owns the generation when handoff fails. Once a
     # handoff succeeds the worker owns cleanup and this call is a harmless no-op.
     release_install_lock
+    if [ "$install_kind" = "frozen" ]; then
+      # Preserve the package manager's primary error, then add one stable
+      # repository-level recovery command for missing or stale dependency state.
+      require_dependencies_present "$app_dir" || true
+    fi
     return "$worker_status"
   fi
 }
@@ -2014,7 +2075,15 @@ run_public_package_script() {
     return "$status"
   }
   "$node_bin" scripts/check-webapp-scripts.mjs "$app_dir" "$script_name"
-  run_package_script "$app_dir" "$script_name"
+  if run_package_script "$app_dir" "$script_name"; then
+    return 0
+  else
+    status=$?
+  fi
+  # `run-script` intentionally never installs. Add recovery guidance only when
+  # the selected script failed and the managed dependency proof is not ready.
+  require_dependencies_present "$app_dir" || true
+  return "$status"
 }
 
 run_check() {
@@ -2115,6 +2184,9 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "typecheck"
 [% endfor %]
+    if [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs check
+    fi
 [% else %]
     echo "No web apps configured."
 [% endif %]
@@ -2124,6 +2196,9 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
 [% endfor %]
+    if [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs public-check
+    fi
 [% else %]
     echo "No web apps configured."
 [% endif %]

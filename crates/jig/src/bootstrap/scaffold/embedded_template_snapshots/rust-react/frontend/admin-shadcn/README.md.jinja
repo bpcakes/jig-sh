@@ -7,9 +7,21 @@ Add or inspect components from this directory with the selected package manager:
     <<[ package_exec ]>> shadcn@<<[ shadcn_cli_version ]>> info
     <<[ package_exec ]>> shadcn@<<[ shadcn_cli_version ]>> add <component>
 
-File-based routes live in `src/routes`. The TanStack Router Vite plugin watches them, generates `src/routeTree.gen.ts`, and automatically code-splits route components; run development or a bundle build after adding or renaming a route, and do not edit the generated tree directly. The overview loader primes the shared TanStack Query cache before rendering, while Query owns freshness and the one-retry policy. The status query passes its cancellation signal through both `/api/version` and `/health/ready` requests to the Vite proxy.
+File-based routes live in `src/routes`. The TanStack Router Vite plugin watches them, generates `src/routeTree.gen.ts`, and automatically code-splits route components; run development or a bundle build after adding or renaming a route, and do not edit the generated tree directly. The overview loader primes the shared TanStack Query cache before rendering, while Query owns freshness and the one-retry policy. The status query uses the generated public client for `/api/status`, validates successful responses with Zod, and passes Query's cancellation signal to Fetch.
 
-A full `scripts/jig dev` session supplies the current backend through `JIG_DEV_API_ORIGIN`, which takes precedence over an inherited generic override. For a direct Vite start or `scripts/jig dev --app <frontend-name>` against a separately managed backend, set `API_ORIGIN`. Authentication is intentionally project-owned; add it at the root route/provider boundary before exposing privileged operations.
+## API contracts
+
+Public operations come from `openapi/public.json` through `packages/public-api-client`. Privileged operations belong in the separate `openapi/admin.json` contract and `packages/admin-api-client`; neither admin artifact is generated when the scaffold has no admin frontend, and product SPAs do not depend on the admin package. The OpenAPI files are committed build artifacts, not HTTP documentation endpoints. Privileged routes compile into the separate `<<[ repo_name ]>>-admin-http` crate and `<<[ repo_name ]>>-admin-api` binary, never into the public API binary.
+
+The starter admin contract includes the authorizer-protected `/admin-api/status` operation, and the admin client exports its generated `getAdminStatusOptions` React Query helper. Use that operation to verify authenticated admin connectivity once the project supplies its authorization implementation; the default deny-all authorizer intentionally rejects it.
+
+Do not edit either package's `src/generated` tree. After changing Utoipa operations or HTTP DTOs, run the transactional contract command from the repository root:
+
+    <<[ web_run_command ]>> contract:generate
+
+`cargo test` rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` stages and compares every contract and client without modifying the worktree. The build gate scans public frontend output and any supplied public deployment artifact for privileged markers; pass extracted container or documentation paths to `node scripts/contracts.mjs public-check <path>...` in deployment CI.
+
+A full `scripts/jig dev` session supplies the public and admin backends through `JIG_DEV_API_ORIGIN` and `JIG_DEV_ADMIN_API_ORIGIN`. For direct Vite starts against separately managed backends, set `API_ORIGIN` and `ADMIN_API_ORIGIN`. Authentication is intentionally project-owned; enforce authentication and authorization in the admin HTTP crate before adding privileged operations, then add browser session handling at the root route/provider boundary. Separate deployment reduces accidental exposure but is not an authorization control.
 
 Jig generates the real-backend Playwright starter for product SPA roles only. This admin role ships Vitest coverage for its API boundary and overview behavior; add a package-local Playwright suite when the project defines its privileged browser flows and authentication contract.
 

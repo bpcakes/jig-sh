@@ -52,12 +52,36 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "crates/{package}-http/src/lib.rs",
     },
     ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http/src/public.rs.jinja",
+        output: "crates/{package}-http/src/public.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/Cargo.toml.jinja",
+        output: "crates/{package}-http-common/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/AGENTS.md.jinja",
+        output: "crates/{package}-http-common/AGENTS.md",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/http-common/src/lib.rs.jinja",
+        output: "crates/{package}-http-common/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
         template: "rust-react/workspace/apps/api/Cargo.toml.jinja",
         output: "apps/{package}-api/Cargo.toml",
     },
     ScaffoldTemplateFile {
         template: "rust-react/workspace/apps/api/src/main.rs.jinja",
         output: "apps/{package}-api/src/main.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/apps/api/src/bin/export-openapi.rs.jinja",
+        output: "apps/{package}-api/src/bin/export-openapi.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/openapi/public.json.jinja",
+        output: "openapi/public.json",
     },
     ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/test-support/Cargo.toml.jinja",
@@ -89,6 +113,37 @@ const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     },
 ];
 
+const RUST_ADMIN_API_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/admin-http/Cargo.toml.jinja",
+        output: "crates/{package}-admin-http/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/admin-http/AGENTS.md.jinja",
+        output: "crates/{package}-admin-http/AGENTS.md",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/admin-http/src/lib.rs.jinja",
+        output: "crates/{package}-admin-http/src/lib.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/apps/admin-api/Cargo.toml.jinja",
+        output: "apps/{package}-admin-api/Cargo.toml",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/apps/admin-api/src/main.rs.jinja",
+        output: "apps/{package}-admin-api/src/main.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/apps/admin-api/src/bin/export-openapi.rs.jinja",
+        output: "apps/{package}-admin-api/src/bin/export-openapi.rs",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/openapi/admin.json.jinja",
+        output: "openapi/admin.json",
+    },
+];
+
 const RUST_DB_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/workspace/crates/db/Cargo.toml.jinja",
@@ -108,6 +163,17 @@ const RUST_DB_TEMPLATES: &[ScaffoldTemplateFile] = &[
     },
 ];
 
+const RUST_POSTGRES_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/scripts/test-postgres.sh.jinja",
+        output: "scripts/test-postgres.sh",
+    },
+    ScaffoldTemplateFile {
+        template: "rust-react/workspace/crates/test-support/tests/postgres.rs.jinja",
+        output: "crates/{package}-test-support/tests/postgres.rs",
+    },
+];
+
 // The rust-react preset currently places the db crate at crates/<name>-db.
 const DB_CRATE_TO_REPO_ROOT: &str = "../..";
 
@@ -116,6 +182,12 @@ impl InitScaffoldPlan {
         ensure_scaffold_template_paths(RUST_WORKSPACE_TEMPLATES)?;
         if self.db != ScaffoldDb::None {
             ensure_scaffold_template_paths(RUST_DB_TEMPLATES)?;
+        }
+        if self.db == ScaffoldDb::Postgres {
+            ensure_scaffold_template_paths(RUST_POSTGRES_TEMPLATES)?;
+        }
+        if self.has_admin_frontend() {
+            ensure_scaffold_template_paths(RUST_ADMIN_API_TEMPLATES)?;
         }
         let context = self.rust_workspace_template_context();
         let mut files = self
@@ -153,7 +225,21 @@ impl InitScaffoldPlan {
         } else {
             &[]
         };
-        RUST_WORKSPACE_TEMPLATES.iter().chain(db_templates)
+        let admin_templates = if self.has_admin_frontend() {
+            RUST_ADMIN_API_TEMPLATES
+        } else {
+            &[]
+        };
+        let postgres_templates = if self.db == ScaffoldDb::Postgres {
+            RUST_POSTGRES_TEMPLATES
+        } else {
+            &[]
+        };
+        RUST_WORKSPACE_TEMPLATES
+            .iter()
+            .chain(admin_templates)
+            .chain(db_templates)
+            .chain(postgres_templates)
     }
 
     fn template_output_path(&self, file: &ScaffoldTemplateFile) -> String {
@@ -170,6 +256,8 @@ impl InitScaffoldPlan {
             }
             ScaffoldDb::Sqlite => format!("sqlite:{}.db", self.module_name),
         };
+        let postgres_test_database_name =
+            bounded_postgres_identifier(&format!("test_db_{}", self.module_name));
 
         json!({
             "package_name": self.package_name,
@@ -193,6 +281,14 @@ impl InitScaffoldPlan {
             },
             "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", self.migration_dir),
             "database_url_example": database_url_example,
+            "postgres_test_database_name": postgres_test_database_name,
+            "admin_api_enabled": self.has_admin_frontend(),
         })
+    }
+
+    pub(super) fn has_admin_frontend(&self) -> bool {
+        self.frontends
+            .iter()
+            .any(|frontend| frontend.kind == super::ScaffoldFrontendKind::Admin)
     }
 }

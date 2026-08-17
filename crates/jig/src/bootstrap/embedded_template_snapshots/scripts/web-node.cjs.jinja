@@ -3058,7 +3058,7 @@ const memberManifests = process.argv.slice(5);
 const receipt = ".jig-web-dependencies-v3";
 // Vite, Vitest, TypeScript, and related tools write these caches inside the
 // nearest install root. They are runtime output, not installed dependencies.
-const runtimeCacheDirectories = new Set([".cache", ".vite", ".vite-temp", ".tmp"]);
+const runtimeCacheDirectories = new Set([".astro", ".cache", ".vite", ".vite-temp", ".tmp"]);
 [% if web_package_manager == "pnpm" %]
 // pnpm 10 and 11 rewrite these validation caches (including a timestamp) during
 // read-only commands. Their authoritative settings and installed package tree

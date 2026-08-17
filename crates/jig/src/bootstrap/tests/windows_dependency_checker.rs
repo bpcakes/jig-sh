@@ -461,7 +461,7 @@ fn pnpm_manifest_parser_launcher_quotes_corepack_cmd_and_allows_only_the_fixed_q
         r#"const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const fallbackSpec = "pnpm@11.13.0";
+const fallbackSpec = "pnpm@11.22.0";
 const calls = [];
 function spawnSync(command, args, options) {{
   calls.push({{ command, args, options }});
@@ -484,7 +484,7 @@ spawnManifestParser(fs.realpathSync.native(process.argv[2]), query, {{
 const call = calls.at(-1);
 assert.equal(call.command, environment.ComSpec);
 assert.deepEqual(call.args.slice(0, 4), ["/d", "/s", "/v:off", "/c"]);
-assert.match(call.args[4], /pnpm@11\.13\.0 pkg get packageManager devEngines\.packageManager --json/);
+assert.match(call.args[4], /pnpm@11\.22\.0 pkg get packageManager devEngines\.packageManager --json/);
 assert.equal(call.options.shell, false);
 assert.equal(call.options.windowsVerbatimArguments, true);
 assert.equal(call.options.timeout, 30000);

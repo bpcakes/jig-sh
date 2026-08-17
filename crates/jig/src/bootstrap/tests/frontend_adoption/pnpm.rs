@@ -222,7 +222,7 @@ esac
                     "fake {package_manager} root install unexpectedly populated its workspace member"
                 );
             }
-            for cache_name in [".cache", ".vite", ".vite-temp", ".tmp"] {
+            for cache_name in [".astro", ".cache", ".vite", ".vite-temp", ".tmp"] {
                 let cache = runtime_node_modules.join(cache_name);
                 fs::create_dir_all(cache.join("nested")).unwrap();
                 fs::write(
@@ -250,7 +250,7 @@ esac
             );
 
             if workspace_member {
-                for cache_name in [".cache", ".vite", ".vite-temp", ".tmp"] {
+                for cache_name in [".astro", ".cache", ".vite", ".vite-temp", ".tmp"] {
                     fs::remove_dir_all(runtime_node_modules.join(cache_name)).unwrap();
                 }
                 fs::remove_file(runtime_node_modules.join(".DS_Store")).unwrap();
@@ -462,7 +462,7 @@ esac
         &fake_corepack,
         r#"#!/bin/sh
 set -eu
-[ "${1:-}" = pnpm@11.13.0 ] || exit 21
+[ "${1:-}" = pnpm@11.22.0 ] || exit 21
 [ "${COREPACK_ENABLE_PROJECT_SPEC:-}" = 0 ] || exit 22
 [ "${COREPACK_ENABLE_AUTO_PIN:-}" = 0 ] || exit 23
 [ "${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" = 0 ] || exit 24
@@ -1182,7 +1182,7 @@ fn generated_pnpm_reads_alternate_manifests_without_loading_pnpmfile_hooks() {
     );
     assert_eq!(
         fs::read_to_string(&corepack_marker).unwrap().trim(),
-        "pnpm@11.13.0 pkg get packageManager devEngines.packageManager --json --ignore-workspace"
+        "pnpm@11.22.0 pkg get packageManager devEngines.packageManager --json --ignore-workspace"
     );
 
     fs::write(
@@ -1231,7 +1231,7 @@ fn generated_pnpm_reads_alternate_manifests_without_loading_pnpmfile_hooks() {
     );
     fs::remove_file(repo.join("apps/yaml/package.json")).unwrap();
 
-    let wrong_manager = resolve_alternate("apps/yaml", r#"{"packageManager":"yarn@4.17.1"}"#);
+    let wrong_manager = resolve_alternate("apps/yaml", r#"{"packageManager":"yarn@4.18.0"}"#);
     assert_eq!(wrong_manager.status.code(), Some(2));
     let invalid_readiness = std::process::Command::new("bash")
         .args([
@@ -1241,7 +1241,7 @@ fn generated_pnpm_reads_alternate_manifests_without_loading_pnpmfile_hooks() {
         ])
         .current_dir(&repo)
         .env("PATH", &path)
-        .env("PNPM_PKG_JSON", r#"{"packageManager":"yarn@4.17.1"}"#)
+        .env("PNPM_PKG_JSON", r#"{"packageManager":"yarn@4.18.0"}"#)
         .output()
         .unwrap();
     assert_eq!(

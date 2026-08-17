@@ -1,0 +1,119 @@
+use ::<<[ module_name ]>>::AppState;
+use ::<<[ module_name ]>>_core::AppVersion;
+use ::<<[ module_name ]>>_http_common::ApiError;
+use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+};
+use serde::Serialize;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+#[derive(OpenApi)]
+#[openapi(info(
+    title = "<<[ repo_name ]>> public API",
+    version = "0.1.0",
+    description = "Public HTTP contract for <<[ repo_name ]>>"
+))]
+struct PublicApi;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AppVersionResponse {
+    pub name: String,
+    pub version: String,
+}
+
+impl From<&AppVersion> for AppVersionResponse {
+    fn from(version: &AppVersion) -> Self {
+        Self {
+            name: version.name.clone(),
+            version: version.version.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AppStatusResponse {
+    pub version: AppVersionResponse,
+    pub ready: bool,
+}
+
+pub(super) fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(PublicApi::openapi())
+        .routes(routes!(health))
+        .routes(routes!(live))
+        .routes(routes!(ready))
+        .routes(routes!(version))
+        .routes(routes!(status))
+}
+
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    operation_id = "getLiveness",
+    responses((status = OK, description = "The API process is alive", body = String, content_type = "text/plain")),
+    tag = "public"
+)]
+async fn live() -> &'static str {
+    "ok"
+}
+
+#[utoipa::path(
+    get,
+    path = "/health",
+    operation_id = "getHealth",
+    responses((status = OK, description = "The API process is alive", body = String, content_type = "text/plain")),
+    tag = "public"
+)]
+async fn health() -> &'static str {
+    "ok"
+}
+
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    operation_id = "getReadiness",
+    responses(
+        (status = OK, description = "The API is ready to serve traffic"),
+        (status = SERVICE_UNAVAILABLE, description = "A required dependency is unavailable", body = ApiErrorResponse)
+    ),
+    tag = "public"
+)]
+async fn ready(State(state): State<AppState>, headers: HeaderMap) -> Result<StatusCode, ApiError> {
+    if state.is_ready() {
+        Ok(StatusCode::OK)
+    } else {
+        Err(ApiError::service_unavailable(
+            "dependency_unavailable",
+            "A required dependency is unavailable",
+            &headers,
+        ))
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/version",
+    operation_id = "getAppVersion",
+    responses((status = OK, description = "Application build identity", body = AppVersionResponse)),
+    tag = "public"
+)]
+async fn version(State(state): State<AppState>) -> Json<AppVersionResponse> {
+    Json(state.version().into())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/status",
+    operation_id = "getAppStatus",
+    responses((status = OK, description = "Application identity and dependency readiness", body = AppStatusResponse)),
+    tag = "public"
+)]
+async fn status(State(state): State<AppState>) -> Json<AppStatusResponse> {
+    Json(AppStatusResponse {
+        version: state.version().into(),
+        ready: state.is_ready(),
+    })
+}

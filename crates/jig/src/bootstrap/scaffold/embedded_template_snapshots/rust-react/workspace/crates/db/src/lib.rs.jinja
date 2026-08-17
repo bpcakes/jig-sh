@@ -267,7 +267,7 @@ fn sqlite_database_url_semantics(database_url: &str) -> SqliteDatabaseUrlSemanti
     };
 
     if let Some(params) = params {
-        // Keep this ordered update behavior aligned with SQLx 0.8.6. In
+        // Keep this ordered update behavior aligned with SQLx 0.9. In
         // particular, a later `mode=memory` re-enables shared cache while a
         // later `cache=private` disables it again.
         for (key, value) in url::form_urlencoded::parse(params.as_bytes()) {

@@ -1,0 +1,1 @@
+Make generated admin Rust imports stable across supported repository-name lengths, extend the formatting matrix to include admin artifacts, and rerun required gates.

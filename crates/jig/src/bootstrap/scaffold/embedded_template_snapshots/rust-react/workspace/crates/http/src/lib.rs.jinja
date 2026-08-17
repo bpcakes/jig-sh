@@ -1,42 +1,53 @@
+mod public;
+
 use ::<<[ module_name ]>>::AppState;
-use ::<<[ module_name ]>>_core::AppVersion;
-use axum::{
-    Json, Router,
-    extract::State,
-    http::{HeaderName, StatusCode},
-    routing::get,
-};
+use ::<<[ module_name ]>>_http_common::REQUEST_ID_HEADER;
+use ::<<[ module_name ]>>_http_common::not_found;
+use axum::Router;
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     trace::TraceLayer,
 };
-
-const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+use utoipa::openapi::OpenApi;
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(live))
-        .route("/health/live", get(live))
-        .route("/health/ready", get(ready))
-        .route("/api/version", get(version))
+    let router = Router::from(public::routes()).fallback(not_found);
+
+    router
         .with_state(state)
         .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
         .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
         .layer(TraceLayer::new_for_http())
 }
 
-async fn live() -> &'static str {
-    "ok"
+pub fn public_openapi() -> OpenApi {
+    public::routes().into_openapi()
 }
 
-async fn ready(State(state): State<AppState>) -> StatusCode {
-    if state.is_ready() {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn committed_public_openapi_is_current() {
+        assert_document_matches(
+            public_openapi(),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../openapi/public.json"
+            )),
+            "public",
+        );
     }
-}
 
-async fn version(State(state): State<AppState>) -> Json<AppVersion> {
-    Json(state.version().clone())
+    fn assert_document_matches(document: OpenApi, expected: &str, name: &str) {
+        let actual = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&document).expect("OpenAPI document serializes")
+        );
+        assert_eq!(
+            actual, expected,
+            "{name} OpenAPI document is stale; run the contract:generate package script"
+        );
+    }
 }

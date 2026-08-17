@@ -1,0 +1,28 @@
+# Admin HTTP crate guide
+
+## Purpose
+
+`<<[ package_name ]>>-admin-http` owns the privileged HTTP surface and its OpenAPI contract. It is deployed only through the separate `<<[ package_name ]>>-admin-api` binary and must never become a dependency of the public API binary.
+
+## Key entrypoints
+
+- `src/lib.rs`: privileged route assembly, middleware boundary, and admin OpenAPI document.
+
+## Edit here for X
+
+- Add privileged handlers, DTOs, and admin-only middleware here.
+- Implement `AdminAuthorizer` for the real authentication/session mechanism, then replace `DenyAllAdminAuthorizer` in `apps/<<[ package_name ]>>-admin-api/src/main.rs`.
+- Call application use cases through `AppState`; keep business logic in the owning application crate.
+
+## Invariants
+
+- Every matched privileged route passes through `AdminAuthorizer`; keep the generated deny-all authorizer until the real implementation and its tests are ready.
+- Keep the authorizer fail closed on missing, malformed, expired, or unverifiable credentials. Use `Forbidden` only for an authenticated principal that lacks permission.
+- Keep all privileged operations under `/admin-api` so public artifact checks can identify accidental bundling.
+- Never include secrets, credentials, internal stack traces, SQL, or sensitive examples in OpenAPI descriptions.
+- The public API binary and public frontend must not depend on this crate or its generated client.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-admin-http`
+- `cargo clippy -p <<[ package_name ]>>-admin-http --all-targets -- -D warnings`

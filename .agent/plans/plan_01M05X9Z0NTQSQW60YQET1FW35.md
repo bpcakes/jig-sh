@@ -1,0 +1,1 @@
+Generate the complete PostgreSQL Rust/React scaffold, delegate representative feature work, and evaluate usability, blockers, dependencies, and stack usefulness.
