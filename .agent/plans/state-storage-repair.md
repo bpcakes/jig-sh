@@ -4,7 +4,7 @@ This ExecPlan is a living document. The sections `Progress`, `Surprises & Discov
 
 ## Purpose / Big Picture
 
-Jig repositories currently keep sessions, plans, receipts, and decisions as Git-tracked JSON Lines files under `.agent/state`. A historical session-summary bug recursively copied earlier session summaries into later records. Jig no longer creates those recursive records, but a repository such as CreditKit still has an 861 MB `sessions.jsonl` containing only about 160 real events, and normal readers still buffer that entire file. Receipts also repeat unbounded changed-path arrays and successful command previews, while the existing archive command merely moves uncompressed bytes into another non-ignored directory.
+Jig repositories currently keep sessions, plans, receipts, and decisions as Git-tracked JSON Lines files under `.agent/state`. A historical session-summary bug recursively copied earlier session summaries into later records. Jig no longer creates those recursive records, but one audited repository still has an 861 MB `sessions.jsonl` containing only about 160 real events, and normal readers still buffer that entire file. Receipts also repeat unbounded changed-path arrays and successful command previews, while the existing archive command merely moves uncompressed bytes into another non-ignored directory.
 
 After this work, a developer can diagnose state size without loading it all into memory, compact legacy session summaries safely and idempotently, recover an exact pre-compaction backup, and archive or explicitly export old receipts as compressed local data. Runtime readers will collapse duplicate session event IDs created by line-union Git merges and reject conflicting envelopes. New receipts will exclude `.agent/**`, bound changed-path metadata, and retain smaller output previews. All behavior remains local and offline.
 
@@ -21,7 +21,7 @@ The observable entrypoints are:
 
 ## Progress
 
-- [x] (2026-07-28 19:18Z) Audited current state schemas, readers, archive behavior, merge attributes, and CreditKit’s pathological session graph.
+- [x] (2026-07-28 19:18Z) Audited current state schemas, readers, archive behavior, merge attributes, and an affected repository's pathological session graph.
 - [x] (2026-07-28 19:18Z) Recorded the implementation and compatibility contract in this ExecPlan.
 - [x] (2026-07-28 21:04Z) Added bounded streaming JSONL scan/rewrite primitives, stable-snapshot fallback, stale-inode reopening, atomic validation, and focused cancellation/failure tests.
 - [x] (2026-07-28 21:04Z) Added canonical session event-ID deduplication, divergent-record rejection, deterministic ordering, and a real union-merge regression test.
@@ -31,13 +31,13 @@ The observable entrypoints are:
 - [x] (2026-07-28 21:04Z) Replaced active receipt retention with verified compressed local archives, explicit non-mutating export, and an exact pre-archive recovery backup.
 - [x] (2026-07-28 21:21Z) Converted summary, gate, list, and UI consumers to streaming folds, bounded reverse scans, canonical maps, or one-scan request-scoped gate indexes.
 - [x] (2026-07-28 21:04Z) Updated CLI help, human output, public documentation, compatibility notes, recovery warnings, and local-vs-Git-history policy.
-- [x] (2026-07-28 21:21Z) Built the development binary; passed focused and full tests, strict Clippy, formatting, contract and configured test gates; dogfooded read-only diagnostics and compaction against CreditKit; and completed the requirement-by-requirement durability audit.
+- [x] (2026-07-28 21:21Z) Built the development binary; passed focused and full tests, strict Clippy, formatting, contract and configured test gates; dogfooded read-only diagnostics and compaction against an affected repository; and completed the requirement-by-requirement durability audit.
 - [x] (2026-07-29 19:32Z) Closed post-review findings by recursively validating every embedded summary before compaction and by changing successful setup output to the universally available `jig status`; added focused regressions for third-level divergence and repositories without development apps or a `scripts/jig` launcher.
 - [x] (2026-07-29 19:32Z) Re-ran focused compaction, maintenance, and setup tests plus formatting, strict Clippy, the development build, and the contract gate. The configured full test gate was attempted but is currently blocked by unrelated macOS listener-owner tests in `jig-dev-proxy`, which also fail in isolation because the spawned process exits before its process group can be read.
 
 ## Surprises & Discoveries
 
-- Observation: CreditKit’s 861,231,519-byte session file has only 161 unique top-level events. Normalizing direct recent-session references to `summary: null` produces 256,795 bytes, a 99.9702% reduction.
+- Observation: The affected repository's 861,231,519-byte session file has only 161 unique top-level events. Normalizing direct recent-session references to `summary: null` produces 256,795 bytes, a 99.9702% reduction.
   Evidence: A read-only forensic traversal found 2,063,197 event occurrences, all nested envelopes matching one of the 161 canonical top-level IDs.
 
 - Observation: The current session deserializer deliberately throws away every root summary, so it is safe for queries but unsafe for migration.
@@ -46,8 +46,8 @@ The observable entrypoints are:
 - Observation: Existing `state archive` is not a storage policy. It writes uncompressed files under `.agent/state/archive`, which is neither ignored nor read by normal queries, and protects latest evidence for every historical plan.
   Evidence: `crates/jig/src/state/receipts.rs::receipts_archive`, `templates/project/.gitignore.jinja`, and `crates/jig/src/state/timeline.rs`.
 
-- Observation: A raw-span, one-record-buffer compactor validates CreditKit’s live 861,237,444-byte session stream without loading the history graph.
-  Evidence: The final development binary’s read-only CreditKit dry run found 164 logical records, 64 records with recursive summaries, projected 262,720 bytes, and 860,974,724 reclaimable bytes. It completed in 93.50 seconds with 139,280,384 bytes maximum RSS. The source’s size, mtime, inode, and SHA-256 remained unchanged before and after dry-run and deep diagnosis.
+- Observation: A raw-span, one-record-buffer compactor validates the affected repository's live 861,237,444-byte session stream without loading the history graph.
+  Evidence: The final development binary's read-only affected-repository dry run found 164 logical records, 64 records with recursive summaries, projected 262,720 bytes, and 860,974,724 reclaimable bytes. It completed in 93.50 seconds with 139,280,384 bytes maximum RSS. The source's size, mtime, inode, and SHA-256 remained unchanged before and after dry-run and deep diagnosis.
 
 - Observation: A selected-record receipt archive alone cannot reconstruct exact physical order when protected and expired records were interleaved.
   Evidence: The archive path now writes a complete manifested pre-rewrite receipt backup and a regression restores the original byte stream exactly after such an interleaved rewrite.
@@ -74,7 +74,7 @@ The observable entrypoints are:
   Date/Author: 2026-07-28 / Codex.
 
 - Decision: Compact only nested session summaries and preserve every root write-time summary plus its ordered direct references.
-  Rationale: CreditKit’s nested graph is exactly redundant, while the root snapshot remains part of the documented durable format.
+  Rationale: The affected repository's nested graph is exactly redundant, while the root snapshot remains part of the documented durable format.
   Date/Author: 2026-07-28 / Codex.
 
 - Decision: Duplicate session IDs with identical event envelopes collapse at read time; the same ID with a different session ID, event kind, timestamp, or outcome is a hard error.
@@ -103,7 +103,7 @@ The observable entrypoints are:
 
 ## Outcomes & Retrospective
 
-Implementation and verification are complete. The final CreditKit dry run proves the migration is practical and bounded by one physical record rather than total history size: 861,237,444 bytes project to 262,720 bytes without mutating the repository, in 93.50 seconds and 139,280,384 bytes maximum RSS. Deep diagnosis reports the same 860,974,724-byte opportunity plus receipt-storage categories and completed in 17.96 seconds.
+Implementation and verification are complete. The final affected-repository dry run proves the migration is practical and bounded by one physical record rather than total history size: 861,237,444 bytes project to 262,720 bytes without mutating the repository, in 93.50 seconds and 139,280,384 bytes maximum RSS. Deep diagnosis reports the same 860,974,724-byte opportunity plus receipt-storage categories and completed in 17.96 seconds.
 
 Local repair, diagnostics, exact recovery, receipt bounding, compressed archive/export, canonical Git-union reads, and one-scan gate evaluation no longer depend on a hosted service. The full direct suite passed with 1,238 library tests, 12 integration tests, zero failures, and two deliberate ignores; formatting, strict all-target/all-feature Clippy, `jig.contract_check`, and `jig.test` also passed. The remaining operational limitation is explicit rather than hidden: stop processes launched with older pre-cache-lock Jig runtimes before a mutating state rewrite, and copy any recovery artifact that must be durable beyond the ignored local maintenance-cache lifecycle.
 
@@ -119,7 +119,7 @@ A JSON Lines file stores one JSON value per physical line. A canonical event is 
 
 Current `read_jsonl` locks a file, reads every byte into a `Vec<u8>`, and then deserializes each line. Current `write_jsonl_locked` writes a same-directory temporary file and renames it over the source, but does not preserve every unknown raw field, fsync the parent directory, or provide recovery metadata. Current receipt reverse scanning in `jsonl.rs` demonstrates that bounded reads are already feasible.
 
-CreditKit must not be mutated during development. Tests must create temporary fixture repositories with the same recursive shape at a smaller default size plus an ignored stress test capable of generating a record above 100 MB.
+The repository used for the forensic baseline must not be mutated during development. Tests must create temporary fixture repositories with the same recursive shape at a smaller default size plus an ignored stress test capable of generating a record above 100 MB.
 
 ## Plan of Work
 
@@ -197,11 +197,11 @@ Diagnosis and export never mutate canonical state. Session compaction is determi
 
 Every mutating operation writes and syncs its complete recovery artifact before replacing active state. It validates the new stream before publication, preserves original permissions, performs one replacement, and syncs the parent directory. If publication fails, the original path remains authoritative. If a failure is reported after publication, `state restore --backup <manifest-or-directory>` verifies and restores the exact original under exclusive locks.
 
-The maintenance commands must warn that working-tree compaction does not remove reachable Git blobs. They must never invoke Git history rewriting. CreditKit migration must happen only after this code passes synthetic tests and its active branches/worktrees are coordinated.
+The maintenance commands must warn that working-tree compaction does not remove reachable Git blobs. They must never invoke Git history rewriting. Migration of the audited repository must happen only after this code passes synthetic tests and its active branches/worktrees are coordinated.
 
 ## Artifacts and Notes
 
-CreditKit forensic baseline:
+Anonymized forensic baseline:
 
     sessions.jsonl bytes:       861,237,444
     physical records:                    164
@@ -218,7 +218,7 @@ Receipt baseline:
     stdout/stderr previews:      about 23.0 MB
     args plus evidence:          below 0.2 MB
 
-Plan revision note, 2026-07-28: Initial plan created from the completed local-state and CreditKit forensic audit. It intentionally avoids the unrelated bootstrap snapshot restructuring already present in the worktree.
+Plan revision note, 2026-07-28: Initial plan created from the completed local-state and anonymized forensic audit. It intentionally avoids the unrelated bootstrap snapshot restructuring already present in the worktree.
 
 ## Interfaces and Dependencies
 

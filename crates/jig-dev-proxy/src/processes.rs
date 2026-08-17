@@ -51,6 +51,9 @@ use self::proxy::{MAX_PROXY_LOG_BYTES, ensure_requested_https, open_proxy_log};
 use self::proxy::{
     ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
 };
+use self::route_publication::publish_process_route_interruptible;
+#[cfg(test)]
+use self::route_publication::publish_process_route_interruptible_with_verifier;
 
 mod child_lifecycle;
 mod cleanup;
@@ -59,6 +62,9 @@ mod frameworks;
 mod listener_owner;
 mod output;
 mod proxy;
+mod route_publication;
+#[cfg(test)]
+mod startup_failure_tests;
 #[cfg(any(windows, test))]
 mod windows_launch;
 
@@ -256,20 +262,18 @@ fn run_app_with_interrupt_probe(
         match wait_for_app_ready(&spec, port, &mut child) {
             Ok(token) => token,
             Err(error) => {
-                if is_interruption(&error) {
+                let disposition = if is_interruption(&error) {
                     select_interruption();
+                    StartupOutputDisposition::Interrupted
                 } else {
                     select_primary_outcome();
-                }
+                    StartupOutputDisposition::Failure
+                };
                 terminate_and_reap_logged(
                     &mut child,
                     "could not clean up app after readiness failure",
                 );
-                if is_interruption(&error) {
-                    output.discard();
-                } else {
-                    output.print_failure(&spec.name);
-                }
+                output.finish_start_failure(disposition);
                 return Err(error);
             }
         }
@@ -285,6 +289,7 @@ fn run_app_with_interrupt_probe(
                 &mut child,
                 "could not clean up app after missing owner identity",
             );
+            output.finish_start_failure(StartupOutputDisposition::Failure);
             bail!(
                 "Could not verify start identity for child process {pid}; refusing to publish process route"
             );
@@ -295,6 +300,7 @@ fn run_app_with_interrupt_probe(
                 &mut child,
                 "could not clean up app after route preparation failure",
             );
+            output.finish_start_failure(StartupOutputDisposition::Failure);
             bail!(
                 "Could not prepare process route for child process {pid}; refusing to publish route"
             );
@@ -308,15 +314,12 @@ fn run_app_with_interrupt_probe(
             mode: RouteMode::Process,
             created_at_ms: now_ms(),
         };
-        let ownership =
-            ProcessRouteOwnership::new(route.hostname.clone(), pid, owner_start_token.clone());
+        let ownership = ProcessRouteOwnership::new(route.hostname.clone(), pid, owner_start_token);
         if let Err(error) = publish_process_route_interruptible(
             &store,
             route,
-            &spec,
-            port,
-            pid,
-            Some(&owner_start_token),
+            &spec.name,
+            &mut child,
             &interrupt_requested,
         ) {
             let interrupted = is_interruption(&error);
@@ -330,9 +333,11 @@ fn run_app_with_interrupt_probe(
                 "could not clean up app after route verification failure",
             );
             remove_route_best_effort(&store, &ownership, &spec.name, process_cleaned);
-            if interrupted {
-                output.discard();
-            }
+            output.finish_start_failure(if interrupted {
+                StartupOutputDisposition::Interrupted
+            } else {
+                StartupOutputDisposition::Failure
+            });
             return Err(error);
         }
         if let Err(error) = ensure_not_interrupted_with(&interrupt_requested) {
@@ -341,7 +346,7 @@ fn run_app_with_interrupt_probe(
                 &mut child,
                 "could not clean up app interrupted after route publication",
             );
-            output.discard();
+            output.finish_start_failure(StartupOutputDisposition::Interrupted);
             remove_route_best_effort(&store, &ownership, &spec.name, process_cleaned);
             return Err(error);
         }
@@ -356,7 +361,6 @@ fn run_app_with_interrupt_probe(
             let interrupted = is_interruption(&error);
             if interrupted {
                 select_interruption();
-                output.discard();
             } else {
                 select_primary_outcome();
             }
@@ -367,6 +371,11 @@ fn run_app_with_interrupt_probe(
             if let Some(ownership) = route_ownership.as_ref() {
                 remove_route_best_effort(&store, ownership, &spec.name, process_cleaned);
             }
+            output.finish_start_failure(if interrupted {
+                StartupOutputDisposition::Interrupted
+            } else {
+                StartupOutputDisposition::Failure
+            });
             return Err(error);
         }
     };
@@ -455,7 +464,7 @@ fn run_app_with_interrupt_probe(
         }
     }
     finalize_single_app_cleanup(status.success(), process_cleaned, cleanup_error, || {
-        output.print_failure(&spec.name);
+        output.print_failure();
     })?;
 
     let exit_status = child_exit_status(&status);
@@ -600,28 +609,6 @@ fn preflight_process_routes(
             .map(|spec| spec.hostname.as_str()),
         &cancelled,
     )?;
-    lock_outcome_or_interruption(outcome, interrupt_requested)
-}
-
-fn publish_process_route_interruptible(
-    store: &StateStore,
-    route: Route,
-    spec: &AppRunSpec,
-    port: u16,
-    child_pid: u32,
-    owner_start_token: Option<&str>,
-    interrupt_requested: &impl Fn() -> Option<TerminationReason>,
-) -> Result<()> {
-    let cancelled = || interrupt_requested().is_some();
-    let outcome = store.add_verified_route_interruptible(route, &cancelled, || {
-        verify_process_route_owner(
-            &spec.name,
-            &spec.target_host,
-            port,
-            child_pid,
-            owner_start_token,
-        )
-    })?;
     lock_outcome_or_interruption(outcome, interrupt_requested)
 }
 

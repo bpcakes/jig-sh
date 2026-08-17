@@ -389,7 +389,6 @@ mod unix {
 
     use super::{OutputFailureStage, OutputInstallFailure};
     use crate::VaultErrorKind;
-    use crate::path_security::is_trusted_root_alias;
 
     pub(super) fn preflight_private_destination(
         path: &Path,
@@ -586,12 +585,15 @@ mod unix {
     fn preflight(path: &Path, overwrite: bool) -> anyhow::Result<PreparedPath> {
         let precondition = preview(path)?;
         if precondition.destination_exists() && !overwrite {
-            return Err(PrivateOutputConflict::ExistingWithoutOverwrite(path.to_path_buf()).into());
+            return Err(
+                PrivateOutputConflict::ExistingWithoutOverwrite(precondition.destination).into(),
+            );
         }
         prepared_path(&precondition)
     }
 
     fn preview(path: &Path) -> anyhow::Result<PrivateDestinationPrecondition> {
+        let path = crate::path_security::physical_path(path, "vault output")?;
         path.file_name()
             .ok_or_else(|| anyhow!("vault output path must name a file: {}", path.display()))?;
         let parent = match path.parent() {
@@ -614,10 +616,10 @@ mod unix {
                 parent.display()
             );
         }
-        let state = destination_state(path)?;
+        let state = destination_state(&path)?;
 
         Ok(PrivateDestinationPrecondition {
-            destination: path.to_path_buf(),
+            destination: path,
             parent,
             state,
         })
@@ -830,13 +832,7 @@ mod unix {
     }
 
     fn reject_symlinked_ancestors(path: &Path) -> anyhow::Result<()> {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .context("failed to resolve current directory for vault output")?
-                .join(path)
-        };
+        let absolute = crate::path_security::physical_path(path, "vault output")?;
         let mut ancestors = absolute.ancestors().collect::<Vec<_>>();
         ancestors.reverse();
         for ancestor in ancestors {
@@ -846,7 +842,7 @@ mod unix {
                     ancestor.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() && !is_trusted_root_alias(ancestor, &metadata) {
+            if metadata.file_type().is_symlink() {
                 bail!(
                     "refusing private vault output through symlinked parent {}",
                     ancestor.display()
@@ -922,6 +918,9 @@ mod unix {
             .chain()
             .any(|source| source.is::<PrivateOutputConflict>())
     }
+
+    #[cfg(all(test, target_os = "macos"))]
+    mod macos_path_tests;
 
     #[cfg(test)]
     mod tests {
