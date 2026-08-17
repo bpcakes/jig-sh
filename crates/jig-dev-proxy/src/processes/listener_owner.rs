@@ -2,19 +2,18 @@
 use std::collections::HashSet;
 #[cfg(target_os = "linux")]
 use std::fs;
+use std::io;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::process::Child;
 #[cfg(target_os = "macos")]
 use std::process::Command;
+use std::process::{Child, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(unix)]
-use anyhow::Context;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::ports::{is_port_free, is_tcp_listening};
 use crate::state::{process_start_token, process_start_tokens_supported};
@@ -22,7 +21,7 @@ use crate::types::AppRunSpec;
 
 use super::child_lifecycle::{terminate_and_reap_logged, try_wait_preserving_process_group};
 use super::cleanup::{TerminationReason, termination_requested};
-use super::interruption_error;
+use super::{child_exit_status, interruption_error};
 #[cfg(unix)]
 use crate::unix_pid;
 
@@ -32,10 +31,57 @@ const LISTENER_OWNER_RECHECK_ATTEMPTS: usize = 3;
 #[cfg(unix)]
 const LISTENER_OWNER_RECHECK_DELAY: Duration = Duration::from_millis(50);
 
-struct ReadinessProbes<Listens, PortFree, Interrupted> {
+struct ReadinessProbes<Listens, PortFree, Interrupted, VerifyOwner> {
     is_listening: Listens,
     port_is_free: PortFree,
     interrupt_requested: Interrupted,
+    verify_owner: VerifyOwner,
+}
+
+enum ListenerOwnershipOutcome {
+    Verified,
+    VerificationFailed(anyhow::Error),
+    ChildExited {
+        status: ExitStatus,
+        verification: Option<anyhow::Error>,
+    },
+    ObservationFailed {
+        observation: io::Error,
+        verification: Option<anyhow::Error>,
+    },
+}
+
+impl ListenerOwnershipOutcome {
+    fn into_result(self, name: &str, target_host: &str, port: u16) -> Result<()> {
+        match self {
+            Self::Verified => Ok(()),
+            Self::VerificationFailed(error) => Err(error),
+            Self::ChildExited {
+                status,
+                verification,
+            } => {
+                let exit_status = child_exit_status(&status);
+                let message = format!(
+                    "App '{name}' exited with status {exit_status} while listener ownership on {target_host}:{port} was being verified"
+                );
+                match verification {
+                    Some(error) => Err(error.context(message)),
+                    None => bail!(message),
+                }
+            }
+            Self::ObservationFailed {
+                observation,
+                verification,
+            } => match verification {
+                Some(error) => Err(error.context(format!(
+                    "Could not observe app '{name}' while listener ownership on {target_host}:{port} was being verified: {observation}; listener ownership verification also failed"
+                ))),
+                None => Err(anyhow::Error::new(observation).context(format!(
+                    "Could not observe app '{name}' while listener ownership on {target_host}:{port} was being verified"
+                ))),
+            },
+        }
+    }
 }
 
 pub(super) fn wait_for_app_ready(
@@ -139,6 +185,31 @@ pub(super) fn wait_for_app_ready_with_timeout_and_test_probe(
             is_listening: |_: &str, _: u16| false,
             port_is_free: |_: &str, _: u16| true,
             interrupt_requested: termination_requested,
+            verify_owner: verify_process_route_owner_with_child,
+        },
+    )
+}
+
+#[cfg(test)]
+pub(super) fn wait_for_app_ready_with_timeout_and_test_verifier(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    timeout: Duration,
+    verify_owner: impl Fn(&str, &str, u16, &mut Child, Option<&str>) -> Result<()>,
+) -> Result<Option<String>> {
+    wait_for_app_ready_until_with_probe(
+        name,
+        target_host,
+        port,
+        child,
+        Some(timeout),
+        ReadinessProbes {
+            is_listening: is_tcp_listening,
+            port_is_free: is_port_free,
+            interrupt_requested: termination_requested,
+            verify_owner,
         },
     )
 }
@@ -161,8 +232,19 @@ fn wait_for_app_ready_until(
             is_listening: is_tcp_listening,
             port_is_free: is_port_free,
             interrupt_requested,
+            verify_owner: verify_process_route_owner_with_child,
         },
     )
+}
+
+fn verify_process_route_owner_with_child(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    expected_start_token: Option<&str>,
+) -> Result<()> {
+    verify_process_route_owner(name, target_host, port, child.id(), expected_start_token)
 }
 
 fn wait_for_app_ready_until_with_probe(
@@ -175,6 +257,7 @@ fn wait_for_app_ready_until_with_probe(
         impl Fn(&str, u16) -> bool,
         impl Fn(&str, u16) -> bool,
         impl Fn() -> Option<TerminationReason>,
+        impl Fn(&str, &str, u16, &mut Child, Option<&str>) -> Result<()>,
     >,
 ) -> Result<Option<String>> {
     if let Some(status) = try_wait_preserving_process_group(child)? {
@@ -199,13 +282,15 @@ fn wait_for_app_ready_until_with_probe(
             return Err(interruption_error(reason));
         }
         if (probes.is_listening)(target_host, port) {
-            verify_process_route_owner(
-                name,
-                target_host,
-                port,
-                child_pid,
-                expected_start_token.as_deref(),
-            )?;
+            verify_listener_ownership_and_observe_child(name, target_host, port, child, |child| {
+                (probes.verify_owner)(
+                    name,
+                    target_host,
+                    port,
+                    child,
+                    expected_start_token.as_deref(),
+                )
+            })?;
             return Ok(expected_start_token);
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -223,6 +308,51 @@ fn wait_for_app_ready_until_with_probe(
             bail!(message);
         }
         thread::sleep(APP_READY_CHECK_INTERVAL);
+    }
+}
+
+pub(super) fn verify_listener_ownership_and_observe_child(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    verify: impl FnOnce(&mut Child) -> Result<()>,
+) -> Result<()> {
+    let verification = verify(child);
+    resolve_listener_ownership_result(name, target_host, port, child, verification)
+}
+
+fn resolve_listener_ownership_result(
+    name: &str,
+    target_host: &str,
+    port: u16,
+    child: &mut Child,
+    verification: Result<()>,
+) -> Result<()> {
+    classify_listener_ownership(verification, try_wait_preserving_process_group(child)).into_result(
+        name,
+        target_host,
+        port,
+    )
+}
+
+fn classify_listener_ownership(
+    verification: Result<()>,
+    observation: io::Result<Option<ExitStatus>>,
+) -> ListenerOwnershipOutcome {
+    match observation {
+        Ok(Some(status)) => ListenerOwnershipOutcome::ChildExited {
+            status,
+            verification: verification.err(),
+        },
+        Ok(None) => match verification {
+            Ok(()) => ListenerOwnershipOutcome::Verified,
+            Err(error) => ListenerOwnershipOutcome::VerificationFailed(error),
+        },
+        Err(observation) => ListenerOwnershipOutcome::ObservationFailed {
+            observation,
+            verification: verification.err(),
+        },
     }
 }
 
@@ -567,4 +697,22 @@ fn macos_pid_listens_on_target(pid: u32, target_host: &str, port: u16) -> Result
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+
+    #[test]
+    fn observation_failure_preserves_listener_verification_diagnostics() {
+        let outcome = classify_listener_ownership(
+            Err(anyhow::anyhow!("synthetic ownership failure")),
+            Err(io::Error::other("synthetic child observation failure")),
+        );
+
+        let error = outcome.into_result("web", "127.0.0.1", 4321).unwrap_err();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("synthetic child observation failure"));
+        assert!(diagnostic.contains("synthetic ownership failure"));
+    }
 }
