@@ -22,7 +22,7 @@ members = [
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -40,7 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa = "5.5.0"
 utoipa-axum = "0.2.0"
 [% if db_enabled %]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
 [% if sqlx_driver == "sqlite" %]
 fs4 = "0.13.1"
 url = "2"

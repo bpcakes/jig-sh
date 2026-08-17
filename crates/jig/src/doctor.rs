@@ -26,7 +26,8 @@ use crate::context::{RepoContext, find_repo_root_from_or_env};
 use crate::tool_defs::tool;
 
 const COMMAND: &str = "doctor";
-const NODE_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const CARGO_MANIFEST_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const PROXY_LIST_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(120);
@@ -102,8 +103,14 @@ pub(crate) fn run() -> Result<Value> {
             checks.push(contract_check(ctx));
             let context_checks = doctor_context_checks(ctx);
             checks.push(context_checks.required_tools);
+            if let Some(rust_runtime) = context_checks.rust_runtime {
+                checks.push(rust_runtime);
+            }
             if let Some(node_runtime) = context_checks.node_runtime {
                 checks.push(node_runtime);
+            }
+            if let Some(sqlx_cli) = context_checks.sqlx_cli {
+                checks.push(sqlx_cli);
             }
             checks.push(context_checks.agent);
             checks.push(context_checks.proxy);
@@ -622,10 +629,16 @@ impl DoctorEnvironment {
             cargo_alias_sqlx: env::var_os("CARGO_ALIAS_SQLX"),
             cargo_home: env::var_os("CARGO_HOME"),
             home: env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
-            probe_environment: ["SystemRoot", "WINDIR", "COMSPEC"]
-                .into_iter()
-                .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
-                .collect(),
+            probe_environment: [
+                "SystemRoot",
+                "WINDIR",
+                "COMSPEC",
+                "RUSTUP_HOME",
+                "RUSTUP_TOOLCHAIN",
+            ]
+            .into_iter()
+            .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
+            .collect(),
             shell_environment_issue,
         }
     }
@@ -649,7 +662,9 @@ fn inherited_shell_environment_issue(
 #[derive(Debug)]
 struct DoctorContextChecks {
     required_tools: DoctorCheck,
+    rust_runtime: Option<DoctorCheck>,
     node_runtime: Option<DoctorCheck>,
+    sqlx_cli: Option<DoctorCheck>,
     agent: DoctorCheck,
     proxy: DoctorCheck,
 }
@@ -708,12 +723,16 @@ fn doctor_context_checks_with_process_control(
         environment,
         process_control,
     );
+    let rust_runtime = rust_runtime_check(ctx, environment, process_control);
     let node_runtime = node_runtime_check(ctx, environment, process_control);
+    let sqlx_cli = sqlx_cli_version_check(ctx, environment, process_control);
     let agent = agent_check(ctx, process_control);
     let proxy = proxy_check_with_process_control(ctx, process_control);
     DoctorContextChecks {
         required_tools,
+        rust_runtime,
         node_runtime,
+        sqlx_cli,
         agent,
         proxy,
     }
@@ -727,9 +746,15 @@ fn doctor_process_session_required(ctx: &RepoContext) -> bool {
             .iter()
             .any(|command| command == "sqlx_check_command");
     sqlx_probe_required
+        || rust_runtime_probe_required(ctx)
         || node_runtime_probe_required(ctx)
         || !ctx.codex_marketplaces().is_empty()
         || proxy_configured(ctx)
+}
+
+#[cfg(unix)]
+fn rust_runtime_probe_required(ctx: &RepoContext) -> bool {
+    fs::symlink_metadata(ctx.root().join("Cargo.toml")).is_ok()
 }
 
 #[cfg(unix)]
@@ -762,6 +787,22 @@ fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorC
             );
             node_runtime.fix =
                 Some("Run `scripts/jig doctor` again before starting frontend work.".into());
+        }
+    }
+    for (runtime, label) in [
+        (checks.rust_runtime.as_mut(), "Rust runtime"),
+        (checks.sqlx_cli.as_mut(), "SQLx CLI"),
+    ] {
+        if let Some(runtime) = runtime {
+            if runtime.ok {
+                runtime.ok = false;
+                runtime.status = "unverified".to_string();
+                runtime.detail.push_str(&format!(
+                    "; {label} verification is incomplete because the process-wide doctor signal session could not retire safely"
+                ));
+                runtime.fix =
+                    Some("Run `scripts/jig doctor` again before starting database work.".into());
+            }
         }
     }
     if !ctx.codex_marketplaces().is_empty() {
@@ -1245,19 +1286,23 @@ fn required_tools_check_with_environment_and_process_control(
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct NumericNodeVersion {
+struct NumericVersion {
     major: u64,
     minor: u64,
     patch: u64,
 }
 
-impl std::fmt::Display for NumericNodeVersion {
+impl std::fmt::Display for NumericVersion {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
 
-fn parse_numeric_node_version(value: &str, allow_v_prefix: bool) -> Option<NumericNodeVersion> {
+fn parse_numeric_version(
+    value: &str,
+    allow_v_prefix: bool,
+    allow_missing_patch: bool,
+) -> Option<NumericVersion> {
     let value = if allow_v_prefix {
         value.strip_prefix('v').unwrap_or(value)
     } else {
@@ -1266,8 +1311,12 @@ fn parse_numeric_node_version(value: &str, allow_v_prefix: bool) -> Option<Numer
     let mut components = value.split('.');
     let major = parse_numeric_version_component(components.next()?)?;
     let minor = parse_numeric_version_component(components.next()?)?;
-    let patch = parse_numeric_version_component(components.next()?)?;
-    components.next().is_none().then_some(NumericNodeVersion {
+    let patch = match components.next() {
+        Some(patch) => parse_numeric_version_component(patch)?,
+        None if allow_missing_patch => 0,
+        None => return None,
+    };
+    components.next().is_none().then_some(NumericVersion {
         major,
         minor,
         patch,
@@ -1282,6 +1331,439 @@ fn parse_numeric_version_component(value: &str) -> Option<u64> {
         return None;
     }
     value.parse().ok()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VersionSeries {
+    major: u64,
+    minor: u64,
+}
+
+impl VersionSeries {
+    const fn contains(self, version: NumericVersion) -> bool {
+        self.major == version.major && self.minor == version.minor
+    }
+}
+
+impl std::fmt::Display for VersionSeries {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}", self.major, self.minor)
+    }
+}
+
+fn rust_runtime_check(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    process_control: DoctorProcessControl<'_>,
+) -> Option<DoctorCheck> {
+    let authority_path = ctx.root().join("Cargo.toml");
+    let required = match cargo_rust_version_authority(&authority_path) {
+        Ok(Some(required)) => required,
+        Ok(None) => return None,
+        Err(reason) => {
+            return Some(
+                check(
+                    "rust_runtime",
+                    "Rust runtime",
+                    true,
+                    false,
+                    "invalid authority",
+                    reason,
+                )
+                .with_fix(
+                    "Correct the root Cargo.toml rust-version authority, then run `scripts/jig doctor`.",
+                )
+                .with_data(json!({ "authority": authority_path.display().to_string() })),
+            );
+        }
+    };
+    let Some(resolution) = resolve_program(
+        ctx.root(),
+        "rustc",
+        environment.search_path.as_deref(),
+        environment.path_extensions.as_deref(),
+    ) else {
+        return Some(
+            check(
+                "rust_runtime",
+                "Rust runtime",
+                true,
+                false,
+                "missing",
+                format!("Rust {required} or newer is required, but rustc was not found on PATH"),
+            )
+            .with_fix(&rust_runtime_fix(required))
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    };
+    if let Some(reason) = process_control.unavailable_reason {
+        return Some(
+            check(
+                "rust_runtime",
+                "Rust runtime",
+                true,
+                false,
+                "unverified",
+                format!("Could not verify Rust {required} or newer ({reason})"),
+            )
+            .with_fix("Run `scripts/jig doctor` again before starting Rust work.")
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    }
+    let actual = match probe_rust_version(
+        &resolution.path,
+        ctx.root(),
+        environment,
+        process_control.cancellation,
+    ) {
+        Ok(actual) => actual,
+        Err(reason) => {
+            return Some(
+                check(
+                    "rust_runtime",
+                    "Rust runtime",
+                    true,
+                    false,
+                    "unverified",
+                    format!("Could not verify Rust {required} or newer ({reason})"),
+                )
+                .with_fix(
+                    "Run `rustc --version`, correct the active toolchain, then rerun `scripts/jig doctor`.",
+                )
+                .with_data(json!({
+                    "authority": authority_path.display().to_string(),
+                    "required": required.to_string(),
+                    "actual": null,
+                })),
+            );
+        }
+    };
+    let compatible = actual >= required;
+    let detail = if compatible {
+        format!("Rust {actual} satisfies the required version {required}")
+    } else {
+        format!("Rust {actual} is active, but this repository requires {required} or newer")
+    };
+    let check = check(
+        "rust_runtime",
+        "Rust runtime",
+        true,
+        compatible,
+        if compatible {
+            "compatible"
+        } else {
+            "incompatible"
+        },
+        detail,
+    )
+    .with_data(json!({
+        "authority": authority_path.display().to_string(),
+        "required": required.to_string(),
+        "actual": actual.to_string(),
+    }));
+    Some(if compatible {
+        check
+    } else {
+        check.with_fix(&rust_runtime_fix(required))
+    })
+}
+
+fn sqlx_cli_version_check(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    process_control: DoctorProcessControl<'_>,
+) -> Option<DoctorCheck> {
+    if !ctx.sqlx_enabled() {
+        return None;
+    }
+    let authority_path = ctx.root().join("Cargo.toml");
+    let required = match cargo_sqlx_version_authority(&authority_path) {
+        Ok(Some(required)) => required,
+        Ok(None) => return None,
+        Err(reason) => {
+            return Some(
+                check(
+                    "sqlx_cli",
+                    "SQLx CLI",
+                    true,
+                    false,
+                    "invalid authority",
+                    reason,
+                )
+                .with_fix(
+                    "Use one numeric SQLx dependency line in the root Cargo.toml, then run `scripts/jig doctor`.",
+                )
+                .with_data(json!({ "authority": authority_path.display().to_string() })),
+            );
+        }
+    };
+    let command = ctx.command_for_key("sqlx_check_command").ok()?;
+    let (program, style) = sqlx_cli_version_program(ctx.root(), command)?;
+    let Some(resolution) = resolve_program(
+        ctx.root(),
+        &program,
+        environment.search_path.as_deref(),
+        environment.path_extensions.as_deref(),
+    ) else {
+        return Some(
+            check(
+                "sqlx_cli",
+                "SQLx CLI",
+                true,
+                false,
+                "missing",
+                format!("SQLx CLI {required}.x is required, but {program} was not found on PATH"),
+            )
+            .with_fix(&sqlx_cli_version_fix(ctx, environment, required))
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    };
+    let Some(executable) = trusted_sqlx_probe_executable(ctx.root(), &program, &resolution) else {
+        return Some(
+            check(
+                "sqlx_cli",
+                "SQLx CLI",
+                true,
+                false,
+                "unverified",
+                "Could not verify the SQLx CLI version because the configured executable is not a trusted bare PATH command",
+            )
+            .with_fix("Use a bare `sqlx` or `cargo sqlx` command, then rerun `scripts/jig doctor`.")
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    };
+    if let Some(reason) = process_control.unavailable_reason {
+        return Some(
+            check(
+                "sqlx_cli",
+                "SQLx CLI",
+                true,
+                false,
+                "unverified",
+                format!("Could not verify SQLx CLI {required}.x ({reason})"),
+            )
+            .with_fix("Run `scripts/jig doctor` again before starting database work.")
+            .with_data(json!({
+                "authority": authority_path.display().to_string(),
+                "required": required.to_string(),
+                "actual": null,
+            })),
+        );
+    }
+    let actual = match probe_sqlx_cli_version(
+        &executable,
+        style,
+        ctx.root(),
+        environment,
+        process_control.cancellation,
+    ) {
+        Ok(actual) => actual,
+        Err(reason) => {
+            return Some(
+                check(
+                    "sqlx_cli",
+                    "SQLx CLI",
+                    true,
+                    false,
+                    "unverified",
+                    format!("Could not verify SQLx CLI {required}.x ({reason})"),
+                )
+                .with_fix("Run `sqlx --version`, correct the installed CLI, then rerun `scripts/jig doctor`.")
+                .with_data(json!({
+                    "authority": authority_path.display().to_string(),
+                    "required": required.to_string(),
+                    "actual": null,
+                })),
+            );
+        }
+    };
+    let compatible = required.contains(actual);
+    let detail = if compatible {
+        format!("SQLx CLI {actual} matches the required {required}.x line")
+    } else {
+        format!("SQLx CLI {actual} is installed, but this repository requires {required}.x")
+    };
+    let check = check(
+        "sqlx_cli",
+        "SQLx CLI",
+        true,
+        compatible,
+        if compatible {
+            "compatible"
+        } else {
+            "incompatible"
+        },
+        detail,
+    )
+    .with_data(json!({
+        "authority": authority_path.display().to_string(),
+        "required": required.to_string(),
+        "actual": actual.to_string(),
+    }));
+    Some(if compatible {
+        check
+    } else {
+        check.with_fix(&sqlx_cli_version_fix(ctx, environment, required))
+    })
+}
+
+fn root_cargo_manifest(path: &Path) -> std::result::Result<Option<toml::Value>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(format!("Could not inspect {}", path.display())),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!("{} must be a real regular file", path.display()));
+    }
+    if metadata.len() == 0 || metadata.len() > CARGO_MANIFEST_AUTHORITY_MAX_BYTES {
+        return Err(format!(
+            "{} must be a non-empty bounded Cargo manifest",
+            path.display()
+        ));
+    }
+    let contents = fs::read_to_string(path)
+        .map_err(|_| format!("{} must contain valid UTF-8", path.display()))?;
+    toml::from_str::<toml::Value>(&contents)
+        .map(Some)
+        .map_err(|error| format!("Could not parse {}: {error}", path.display()))
+}
+
+fn cargo_rust_version_authority(
+    path: &Path,
+) -> std::result::Result<Option<NumericVersion>, String> {
+    let Some(manifest) = root_cargo_manifest(path)? else {
+        return Ok(None);
+    };
+    let value = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("package"))
+        .and_then(|package| package.get("rust-version"))
+        .or_else(|| {
+            manifest
+                .get("package")
+                .and_then(|package| package.get("rust-version"))
+        });
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let version = value.as_str().ok_or_else(|| {
+        format!(
+            "Rust version authority in {} must be a string",
+            path.display()
+        )
+    })?;
+    parse_numeric_version(version, false, true)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Rust version authority in {} must be numeric, such as 1.94",
+                path.display()
+            )
+        })
+}
+
+fn cargo_sqlx_version_authority(path: &Path) -> std::result::Result<Option<VersionSeries>, String> {
+    let Some(manifest) = root_cargo_manifest(path)? else {
+        return Ok(None);
+    };
+    let value = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(|dependencies| dependencies.get("sqlx"))
+        .or_else(|| {
+            manifest
+                .get("dependencies")
+                .and_then(|dependencies| dependencies.get("sqlx"))
+        });
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let requirement = value
+        .as_str()
+        .or_else(|| value.get("version").and_then(toml::Value::as_str))
+        .ok_or_else(|| {
+            format!(
+                "SQLx dependency authority in {} must declare a version",
+                path.display()
+            )
+        })?;
+    let requirement = requirement
+        .strip_prefix('=')
+        .or_else(|| requirement.strip_prefix('^'))
+        .unwrap_or(requirement);
+    let version = parse_numeric_version(requirement, false, true).ok_or_else(|| {
+        format!(
+            "SQLx dependency authority in {} must use one numeric minor line, such as 0.9",
+            path.display()
+        )
+    })?;
+    Ok(Some(VersionSeries {
+        major: version.major,
+        minor: version.minor,
+    }))
+}
+
+fn sqlx_cli_version_program(root: &Path, command: &str) -> Option<(String, SqlxProbeStyle)> {
+    if command_uses_cargo_sqlx(command) {
+        return Some(("cargo-sqlx".into(), SqlxProbeStyle::CargoSubcommand));
+    }
+    required_command_programs(root, command)
+        .programs
+        .into_iter()
+        .find_map(|program| {
+            sqlx_probe_style(&program.program).map(|style| (program.program, style))
+        })
+}
+
+fn rust_runtime_fix(required: NumericVersion) -> String {
+    format!("Activate Rust {required} or newer with rustup, then run `scripts/jig doctor`.")
+}
+
+fn sqlx_cli_version_fix(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    required: VersionSeries,
+) -> String {
+    let driver = ctx
+        .command_for_key("sqlx_check_command")
+        .ok()
+        .map(|command| {
+            configured_sqlx_driver(ctx.root(), command, environment.database_url.as_deref())
+        })
+        .and_then(|resolution| match resolution {
+            SqlxDriverResolution::Known(requirement) => Some(requirement.driver),
+            SqlxDriverResolution::Absent | SqlxDriverResolution::Indeterminate(_) => None,
+        });
+    match driver {
+        Some(driver) => format!(
+            "Install SQLx CLI {required}.x with {} support (`cargo install sqlx-cli --version ^{required} --force --no-default-features --features {}`), then run `scripts/jig doctor`.",
+            driver.label(),
+            match driver {
+                SqlxDriver::Postgres => "rustls,postgres",
+                SqlxDriver::Sqlite => "sqlite",
+            }
+        ),
+        None => format!(
+            "Install SQLx CLI {required}.x for the configured database driver, then run `scripts/jig doctor`."
+        ),
+    }
 }
 
 fn node_runtime_check(
@@ -1411,7 +1893,7 @@ fn node_runtime_check(
     })
 }
 
-fn node_version_authority(path: &Path) -> std::result::Result<Option<NumericNodeVersion>, String> {
+fn node_version_authority(path: &Path) -> std::result::Result<Option<NumericVersion>, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1453,7 +1935,7 @@ fn node_version_authority(path: &Path) -> std::result::Result<Option<NumericNode
             path.display()
         ));
     }
-    parse_numeric_node_version(token, false)
+    parse_numeric_version(token, false, false)
         .map(Some)
         .ok_or_else(|| {
             format!(
@@ -1468,18 +1950,104 @@ fn probe_node_version(
     root: &Path,
     environment: &DoctorEnvironment,
     cancellation: Option<&dyn Fn() -> bool>,
-) -> std::result::Result<NumericNodeVersion, String> {
+) -> std::result::Result<NumericVersion, String> {
+    let stdout = version_probe_stdout(
+        executable,
+        &["--version"],
+        "node --version",
+        root,
+        environment,
+        None,
+        cancellation,
+    )?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    tokens
+        .next()
+        .and_then(|token| parse_numeric_version(token, true, false))
+        .filter(|_| tokens.next().is_none())
+        .ok_or_else(|| "node --version returned an invalid version".to_string())
+}
+
+fn probe_rust_version(
+    executable: &Path,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<NumericVersion, String> {
+    let stdout = version_probe_stdout(
+        executable,
+        &["--version"],
+        "rustc --version",
+        root,
+        environment,
+        environment.home.as_deref(),
+        cancellation,
+    )?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    if tokens.next() != Some("rustc") {
+        return Err("rustc --version returned an invalid product name".into());
+    }
+    tokens
+        .next()
+        .and_then(|token| parse_numeric_version(token, false, false))
+        .ok_or_else(|| "rustc --version returned an invalid version".to_string())
+}
+
+fn probe_sqlx_cli_version(
+    executable: &Path,
+    style: SqlxProbeStyle,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<NumericVersion, String> {
+    let arguments = match style {
+        SqlxProbeStyle::CargoSubcommand => &["sqlx", "--version"][..],
+        SqlxProbeStyle::Direct => &["--version"][..],
+    };
+    let stdout = version_probe_stdout(
+        executable,
+        arguments,
+        "sqlx --version",
+        root,
+        environment,
+        None,
+        cancellation,
+    )?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    if tokens.next() != Some("sqlx-cli") {
+        return Err("sqlx --version returned an invalid product name".into());
+    }
+    let version = tokens
+        .next()
+        .and_then(|token| parse_numeric_version(token, false, false))
+        .ok_or_else(|| "sqlx --version returned an invalid version".to_string())?;
+    if tokens.next().is_some() {
+        return Err("sqlx --version returned unexpected output".into());
+    }
+    Ok(version)
+}
+
+fn version_probe_stdout(
+    executable: &Path,
+    arguments: &[&str],
+    invocation: &str,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    captured_home: Option<&OsStr>,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<String, String> {
     let temp = tempfile::tempdir()
         .map_err(|_| "could not create an isolated probe directory".to_string())?;
+    let home = captured_home.unwrap_or_else(|| temp.path().as_os_str());
     let mut command = Command::new(executable);
     command
-        .arg("--version")
+        .args(arguments)
         .current_dir(root)
         .env_clear()
         .env("NO_COLOR", "1")
         .env("LC_ALL", "C")
-        .env("HOME", temp.path())
-        .env("USERPROFILE", temp.path())
+        .env("HOME", home)
+        .env("USERPROFILE", home)
         .env("TMPDIR", temp.path())
         .env("TMP", temp.path())
         .env("TEMP", temp.path())
@@ -1498,11 +2066,10 @@ fn probe_node_version(
         command.env(key, value);
     }
 
-    let output =
-        run_owned_process_tree_with_output(&mut command, NODE_VERSION_PROBE_TIMEOUT, || {
-            cancellation.is_some_and(|cancelled| cancelled())
-        })
-        .map_err(|error| node_probe_reason(&error).to_string())?;
+    let output = run_owned_process_tree_with_output(&mut command, VERSION_PROBE_TIMEOUT, || {
+        cancellation.is_some_and(|cancelled| cancelled())
+    })
+    .map_err(|error| version_probe_reason(&error).to_string())?;
     let stdout = output
         .stdout
         .ok_or_else(|| "the version probe output was not captured".to_string())?;
@@ -1516,22 +2083,12 @@ fn probe_node_version(
         return Err("the version probe output exceeded the diagnostic capture limit".into());
     }
     if !output.status.success() {
-        return Err(format!(
-            "node --version exited with status {}",
-            output.status
-        ));
+        return Err(format!("{invocation} exited with status {}", output.status));
     }
-    let stdout = stdout.to_string_lossy();
-    let mut tokens = stdout.split_ascii_whitespace();
-    let version = tokens
-        .next()
-        .and_then(|token| parse_numeric_node_version(token, true))
-        .filter(|_| tokens.next().is_none())
-        .ok_or_else(|| "node --version returned an invalid version".to_string())?;
-    Ok(version)
+    Ok(stdout.to_string_lossy().trim().to_string())
 }
 
-const fn node_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
+const fn version_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     match error {
         OwnedProcessTreeError::Start(_) => "the version probe could not start",
         OwnedProcessTreeError::TimedOut => "the version probe timed out",
@@ -1543,7 +2100,7 @@ const fn node_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     }
 }
 
-fn node_runtime_fix(required: NumericNodeVersion) -> String {
+fn node_runtime_fix(required: NumericVersion) -> String {
     format!(
         "Activate Node {required} or newer with your version manager, then run `scripts/jig doctor`."
     )

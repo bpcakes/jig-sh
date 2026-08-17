@@ -276,7 +276,7 @@ impl InitScaffoldPlan {
             validate_scaffold_relative_path("SQLx metadata dir", &sqlx_metadata_dir)?;
             if sqlx_metadata_dir != ".sqlx" {
                 bail!(
-                    "Rust-react database scaffolds pin SQLx 0.8 and require rust_sqlx_metadata_dir = '.sqlx' because cargo sqlx prepare --check only checks .sqlx. Use .sqlx for jig init; for an existing custom metadata layout, use jig adopt and configure an explicit sqlx_check_command."
+                    "Rust-react database scaffolds pin SQLx 0.9 and require rust_sqlx_metadata_dir = '.sqlx' because cargo sqlx prepare --check checks that committed directory. Use .sqlx for jig init; for an existing custom metadata layout, use jig adopt and configure an explicit sqlx_check_command."
                 );
             }
         }

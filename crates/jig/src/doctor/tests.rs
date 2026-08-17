@@ -4721,9 +4721,25 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "present",
             "present",
         ),
+        rust_runtime: Some(check(
+            "rust_runtime",
+            "Rust runtime",
+            true,
+            true,
+            "compatible",
+            "compatible",
+        )),
         node_runtime: Some(check(
             "node_runtime",
             "Node runtime",
+            true,
+            true,
+            "compatible",
+            "compatible",
+        )),
+        sqlx_cli: Some(check(
+            "sqlx_cli",
+            "SQLx CLI",
             true,
             true,
             "compatible",
@@ -4753,6 +4769,14 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
     assert!(!node_runtime.ok);
     assert_eq!(node_runtime.status, "unverified");
     assert!(node_runtime.detail.contains("could not retire safely"));
+    for runtime in [
+        checks.rust_runtime.as_ref().unwrap(),
+        checks.sqlx_cli.as_ref().unwrap(),
+    ] {
+        assert!(!runtime.ok);
+        assert_eq!(runtime.status, "unverified");
+        assert!(runtime.detail.contains("could not retire safely"));
+    }
     for process_check in [&checks.agent, &checks.proxy] {
         assert!(!process_check.ok);
         assert_eq!(process_check.status, "error");
@@ -5365,6 +5389,123 @@ fn doctor_environment(bin: &Path, database_url: Option<&str>) -> DoctorEnvironme
 
 #[cfg(unix)]
 #[test]
+fn rust_runtime_check_rejects_an_active_version_below_the_cargo_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_doctor_fixture(&root);
+    write_workspace_version_manifest(&root, "1.94", None);
+    write_test_executable(
+        &bin.join("rustc"),
+        "#!/bin/sh\nprintf 'rustc 1.85.1 (fixture 2025-03-18)\\n'\n",
+    );
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = rust_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok, "{check:?}");
+    assert_eq!(check.status, "incompatible", "{check:?}");
+    assert_eq!(check.data["required"], "1.94.0");
+    assert_eq!(check.data["actual"], "1.85.1");
+    assert!(check.fix.as_deref().unwrap().contains("Rust 1.94.0"));
+    let summary = format_summary(&output(None, vec![check]));
+    assert!(summary.contains("Jig doctor: needs attention"));
+    assert!(summary.contains("Rust runtime: needs setup"));
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_runtime_check_accepts_an_active_version_at_or_above_the_cargo_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_doctor_fixture(&root);
+    write_workspace_version_manifest(&root, "1.94", None);
+    write_test_executable(
+        &bin.join("rustc"),
+        "#!/bin/sh\nprintf 'rustc 1.94.1 (fixture 2026-03-25)\\n'\n",
+    );
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = rust_runtime_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(check.ok, "{check:?}");
+    assert_eq!(check.status, "compatible");
+    assert_eq!(check.data["actual"], "1.94.1");
+    assert!(check.fix.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlx_cli_version_check_requires_the_dependency_minor_line() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_sqlx_doctor_fixture_with_command(&root, "sqlx prepare -D sqlite:doctor.db");
+    write_workspace_version_manifest(&root, "1.94", Some("0.9"));
+    write_test_executable(&bin.join("sqlx"), "#!/bin/sh\nprintf 'sqlx-cli 0.8.6\\n'\n");
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = sqlx_cli_version_check(
+        &ctx,
+        &doctor_environment(&bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok);
+    assert_eq!(check.status, "incompatible");
+    assert_eq!(check.data["required"], "0.9");
+    assert_eq!(check.data["actual"], "0.8.6");
+    assert!(check.fix.as_deref().unwrap().contains("--version ^0.9"));
+    assert!(check.fix.as_deref().unwrap().contains("features sqlite"));
+}
+
+#[cfg(unix)]
+#[test]
+fn sqlx_cli_version_check_accepts_matching_patch_versions_and_older_dependency_lines() {
+    for (dependency, cli) in [("0.9", "0.9.3"), ("0.8", "0.8.6")] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        write_sqlx_doctor_fixture_with_command(&root, "sqlx prepare -D sqlite:doctor.db");
+        write_workspace_version_manifest(&root, "1.94", Some(dependency));
+        write_test_executable(
+            &bin.join("sqlx"),
+            &format!("#!/bin/sh\nprintf 'sqlx-cli {cli}\\n'\n"),
+        );
+        let ctx = RepoContext::load_from_root(root).unwrap();
+
+        let check = sqlx_cli_version_check(
+            &ctx,
+            &doctor_environment(&bin, None),
+            DoctorProcessControl::allowed_without_signal_session(),
+        )
+        .unwrap();
+
+        assert!(check.ok, "{dependency} should accept {cli}: {check:?}");
+        assert_eq!(check.status, "compatible");
+        assert_eq!(check.data["actual"], cli);
+        assert!(check.fix.is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn node_runtime_check_rejects_an_active_version_below_the_repo_authority() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("repo");
@@ -5464,6 +5605,20 @@ fn write_frontend_doctor_fixture(root: &Path) {
     );
     fs::write(config_path, config).unwrap();
     fs::create_dir(root.join("web")).unwrap();
+}
+
+#[cfg(unix)]
+fn write_workspace_version_manifest(root: &Path, rust: &str, sqlx: Option<&str>) {
+    let sqlx = sqlx
+        .map(|version| format!("\n[workspace.dependencies]\nsqlx = {{ version = {version:?} }}\n"))
+        .unwrap_or_default();
+    fs::write(
+        root.join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers = []\n\n[workspace.package]\nrust-version = {rust:?}\n{sqlx}"
+        ),
+    )
+    .unwrap();
 }
 
 fn write_sqlx_doctor_fixture_with_command(root: &Path, command: &str) {

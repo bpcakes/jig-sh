@@ -491,7 +491,7 @@ role = "spa"
     })
     .unwrap_err()
     .to_string();
-    assert!(error.contains("pin SQLx 0.8"));
+    assert!(error.contains("pin SQLx 0.9"));
     assert!(error.contains("rust_sqlx_metadata_dir = '.sqlx'"));
     assert!(error.contains("jig adopt"));
     assert!(error.contains("sqlx_check_command"));
@@ -1272,6 +1272,9 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         "BIND_ADDR=127.0.0.1:3000\nRUST_LOG=my_app=info,my_app_api=info,my_app_admin_api=info,tower_http=info\nDATABASE_URL=postgres://postgres:postgres@localhost:5432/my_app_dev\n"
     );
     let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
+    assert!(workspace_cargo.contains("rust-version = \"1.94\""));
+    assert!(workspace_cargo.contains("sqlx = { version = \"0.9\""));
+    assert!(!workspace_cargo.contains("sqlx = { version = \"0.8\""));
     assert!(workspace_cargo.contains("dotenvy = \"0.15\""));
     assert!(workspace_cargo.contains(r#""apps/my-app-admin-api""#));
     assert!(workspace_cargo.contains(r#""crates/my-app-admin-http""#));
@@ -1401,6 +1404,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(!postgres_script.contains("pg_isready"));
     assert!(postgres_script.contains("-- --ignored --nocapture"));
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
+    assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));
     assert!(root_readme.contains("bun run bootstrap"));
     assert!(root_readme.contains("do not start with `bun install --frozen-lockfile`"));
     assert!(root_readme.contains("Commit the generated `bun.lock`"));
@@ -1477,6 +1481,12 @@ fn run_init_rust_react_scaffold_omits_admin_contract_without_admin_frontend() {
     assert!(!destination.join("crates/public-app-admin-http").exists());
     assert!(!destination.join("apps/public-app-admin-api").exists());
     assert!(!destination.join("packages/admin-api-client").exists());
+
+    let workspace_cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
+    assert!(workspace_cargo.contains("rust-version = \"1.94\""));
+    assert!(!workspace_cargo.contains("sqlx ="));
+    let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
+    assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));
 
     let workspace_package = fs::read_to_string(destination.join("package.json")).unwrap();
     assert!(workspace_package.contains(r#""packages/public-api-client""#));
