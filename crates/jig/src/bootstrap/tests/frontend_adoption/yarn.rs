@@ -353,7 +353,7 @@ fn generated_root_yarn_receipt_tracks_nested_app_authority_and_runtime_assets() 
     fs::create_dir_all(repo.join(app_dir)).unwrap();
     fs::write(
         repo.join("package.json"),
-        r#"{"private":true,"packageManager":"yarn@4.17.1","workspaces":["apps/group/*"]}"#,
+        r#"{"private":true,"packageManager":"yarn@4.18.0","workspaces":["apps/group/*"]}"#,
     )
     .unwrap();
     fs::write(repo.join("yarn.lock"), "__metadata:\n  version: 8\n").unwrap();
@@ -792,13 +792,13 @@ fn generated_web_checks_preserve_and_override_inherited_yarn_berry_linker() {
     fs::create_dir_all(repo.join("apps/web")).unwrap();
     fs::write(
         repo.join("package.json"),
-        r#"{"private":true,"packageManager":"yarn@4.17.1","workspaces":["tools/*"]}"#,
+        r#"{"private":true,"packageManager":"yarn@4.18.0","workspaces":["tools/*"]}"#,
     )
     .unwrap();
     fs::write(repo.join(".yarnrc.yml"), "nodeLinker: node-modules\n").unwrap();
     fs::write(
         repo.join("apps/web/package.json"),
-        r#"{"name":"web","private":true,"packageManager":"yarn@4.17.1"}"#,
+        r#"{"name":"web","private":true,"packageManager":"yarn@4.18.0"}"#,
     )
     .unwrap();
     fs::write(
@@ -1120,7 +1120,7 @@ fn generated_yarn_classic_stamps_actual_artifacts_and_proves_referenced_packages
     .unwrap();
     fs::write(repo.join("apps/web/yarn.lock"), "# yarn lockfile v1\n").unwrap();
     let app = repo.join("apps/web");
-    fs::write(app.join(".node-version"), "22.22.2\n").unwrap();
+    fs::write(app.join(".node-version"), "24.19.0\n").unwrap();
     fs::create_dir_all(app.join("packages/workspace")).unwrap();
     fs::write(
         app.join("packages/workspace/package.json"),

@@ -122,7 +122,7 @@ fn generated_web_checks_track_lockfile_install_state(
         r#"{"name":"web","scripts":{"lint":"true"}}"#,
     )
     .unwrap();
-    fs::write(repo.join(".node-version"), "22.22.2\n").unwrap();
+    fs::write(repo.join(".node-version"), "24.19.0\n").unwrap();
     fs::write(repo.join(lockfile), initial_lock).unwrap();
     if package_manager == "yarn" {
         fs::write(
@@ -655,7 +655,7 @@ esac
         }
     }
 
-    fs::write(repo.join(".node-version"), "22.22.3\n").unwrap();
+    fs::write(repo.join(".node-version"), "24.19.1\n").unwrap();
     run_mode("lint", true);
     expected_install_count += 1;
     assert_eq!(

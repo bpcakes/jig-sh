@@ -1,0 +1,173 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "<<[ repo_name ]>> public API",
+    "description": "Public HTTP contract for <<[ repo_name ]>>",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/status": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "getAppStatus",
+        "responses": {
+          "200": {
+            "description": "Application identity and dependency readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "getAppVersion",
+        "responses": {
+          "200": {
+            "description": "Application build identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppVersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "The API process is alive",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "The API process is alive",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "public"
+        ],
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "The API is ready to serve traffic"
+          },
+          "503": {
+            "description": "A required dependency is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable identifier suitable for client branching."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe user-facing description. Internal error details belong in logs."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlates this response with server logs."
+          }
+        }
+      },
+      "AppStatusResponse": {
+        "type": "object",
+        "required": [
+          "version",
+          "ready"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "version": {
+            "$ref": "#/components/schemas/AppVersionResponse"
+          }
+        }
+      },
+      "AppVersionResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,280 @@
+use ::<<[ module_name ]>>::AppState;
+use ::<<[ module_name ]>>_http_common::ApiError;
+use ::<<[ module_name ]>>_http_common::ApiErrorResponse;
+use ::<<[ module_name ]>>_http_common::REQUEST_ID_HEADER;
+use ::<<[ module_name ]>>_http_common::not_found;
+use async_trait::async_trait;
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    http::{HeaderMap, Method, Uri},
+    middleware::{self, Next},
+    response::Response,
+};
+use serde::Serialize;
+use tower_http::{
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+    trace::TraceLayer,
+};
+use utoipa::{OpenApi, ToSchema, openapi::OpenApi as OpenApiDocument};
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "<<[ repo_name ]>> admin API",
+        version = "0.1.0",
+        description = "Privileged HTTP contract for <<[ repo_name ]>>"
+    ),
+    components(schemas(ApiErrorResponse))
+)]
+struct AdminApi;
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminStatusResponse {
+    pub ready: bool,
+}
+
+/// Request metadata available to the application-owned authorization policy.
+#[derive(Clone, Debug)]
+pub struct AdminRequestContext {
+    pub method: Method,
+    pub uri: Uri,
+    pub headers: HeaderMap,
+}
+
+impl From<&Request> for AdminRequestContext {
+    fn from(request: &Request) -> Self {
+        Self {
+            method: request.method().clone(),
+            uri: request.uri().clone(),
+            headers: request.headers().clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdminAuthorizationError {
+    Unauthorized,
+    Forbidden,
+}
+
+/// Application-owned authentication and authorization policy for admin routes.
+///
+/// The authorizer may contain verification keys, a session store, or application
+/// services. Missing or unverifiable credentials must return `Unauthorized`.
+#[async_trait]
+pub trait AdminAuthorizer: Clone + Send + Sync + 'static {
+    async fn authorize(&self, request: &AdminRequestContext)
+    -> Result<(), AdminAuthorizationError>;
+}
+
+/// Safe startup policy: no matched admin route is accessible.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DenyAllAdminAuthorizer;
+
+#[async_trait]
+impl AdminAuthorizer for DenyAllAdminAuthorizer {
+    async fn authorize(
+        &self,
+        _request: &AdminRequestContext,
+    ) -> Result<(), AdminAuthorizationError> {
+        Err(AdminAuthorizationError::Unauthorized)
+    }
+}
+
+/// Privileged routes belong in this independently deployed router. Every route
+/// added here is protected by the authorizer supplied to `router`.
+fn routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(AdminApi::openapi()).routes(routes!(status))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin-api/status",
+    operation_id = "getAdminStatus",
+    responses(
+        (status = OK, description = "Privileged API identity and dependency readiness", body = AdminStatusResponse),
+        (status = UNAUTHORIZED, description = "Authentication is required", body = ApiErrorResponse),
+        (status = FORBIDDEN, description = "The caller lacks permission", body = ApiErrorResponse)
+    ),
+    tag = "admin"
+)]
+async fn status(State(state): State<AppState>) -> Json<AdminStatusResponse> {
+    Json(AdminStatusResponse {
+        ready: state.is_ready(),
+    })
+}
+
+async fn require_admin_authorization<A: AdminAuthorizer>(
+    State(authorizer): State<A>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let context = AdminRequestContext::from(&request);
+    authorizer
+        .authorize(&context)
+        .await
+        .map_err(|error| match error {
+            AdminAuthorizationError::Unauthorized => ApiError::unauthorized(request.headers()),
+            AdminAuthorizationError::Forbidden => ApiError::forbidden(request.headers()),
+        })?;
+    Ok(next.run(request).await)
+}
+
+fn router_from_routes<A: AdminAuthorizer>(
+    state: AppState,
+    authorizer: A,
+    protected_routes: Router<AppState>,
+) -> Router {
+    // `layer` only wraps routes already present. Adding the fallback afterward
+    // keeps unknown paths as a standard 404 without turning them into an auth oracle.
+    protected_routes
+        .layer(middleware::from_fn_with_state(
+            authorizer,
+            require_admin_authorization::<A>,
+        ))
+        .fallback(not_found)
+        .with_state(state)
+        .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
+        .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
+        .layer(TraceLayer::new_for_http())
+}
+
+pub fn router<A: AdminAuthorizer>(state: AppState, authorizer: A) -> Router {
+    router_from_routes(state, authorizer, Router::from(routes()))
+}
+
+pub fn openapi() -> OpenApiDocument {
+    routes().into_openapi()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request as HttpRequest, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    #[derive(Clone, Copy)]
+    struct AllowAllAdminAuthorizer;
+
+    #[async_trait]
+    impl AdminAuthorizer for AllowAllAdminAuthorizer {
+        async fn authorize(
+            &self,
+            _request: &AdminRequestContext,
+        ) -> Result<(), AdminAuthorizationError> {
+            Ok(())
+        }
+    }
+
+    fn protected_test_routes() -> Router<AppState> {
+        Router::new().route(
+            "/admin-api/auth-test",
+            get(|| async { StatusCode::NO_CONTENT }),
+        )
+    }
+
+    async fn request(router: Router, uri: &str) -> axum::response::Response {
+        router
+            .oneshot(HttpRequest::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn deny_all_authorizer_returns_standard_error_with_request_id() {
+        let response = request(
+            router_from_routes(
+                AppState::new(),
+                DenyAllAdminAuthorizer,
+                protected_test_routes(),
+            ),
+            "/admin-api/auth-test",
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let response_request_id = response
+            .headers()
+            .get(&REQUEST_ID_HEADER)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["code"], "unauthorized");
+        assert_eq!(body["request_id"], response_request_id);
+    }
+
+    #[tokio::test]
+    async fn explicit_authorizer_can_admit_a_matched_route() {
+        let response = request(
+            router_from_routes(
+                AppState::new(),
+                AllowAllAdminAuthorizer,
+                protected_test_routes(),
+            ),
+            "/admin-api/auth-test",
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn admin_status_is_protected_and_reflects_readiness_after_authorization() {
+        let denied = request(
+            router(AppState::new(), DenyAllAdminAuthorizer),
+            "/admin-api/status",
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let state = AppState::new();
+        let expected_ready = state.is_ready();
+        let allowed = request(router(state, AllowAllAdminAuthorizer), "/admin-api/status").await;
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(allowed.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["ready"], expected_ready);
+    }
+
+    #[tokio::test]
+    async fn unknown_admin_paths_remain_not_found_without_authorization_challenge() {
+        let response = request(
+            router_from_routes(
+                AppState::new(),
+                DenyAllAdminAuthorizer,
+                protected_test_routes(),
+            ),
+            "/admin-api/unknown",
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn committed_admin_openapi_is_current() {
+        let actual = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&openapi()).expect("OpenAPI document serializes")
+        );
+        let expected = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../openapi/admin.json"
+        ));
+        assert_eq!(
+            actual, expected,
+            "admin OpenAPI document is stale; run the contract:generate package script"
+        );
+    }
+}

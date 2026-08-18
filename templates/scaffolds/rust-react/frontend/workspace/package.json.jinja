@@ -2,8 +2,32 @@
   "name": "<<[ package_name ]>>-workspace",
   "private": true,
   "packageManager": "<<[ package_manager_spec ]>>",
+  "scripts": {
+    "bootstrap": "bash scripts/check-webapps.sh bootstrap",
+    "contract:generate": "node scripts/contracts.mjs generate",
+    "contract:check": "node scripts/contracts.mjs check",
+    "public:artifacts:check": "node scripts/contracts.mjs public-check",
+    "api:generate": "node scripts/contracts.mjs generate",
+    "api:check": "node scripts/contracts.mjs check"[% if db == "postgres" %],
+    "test:postgres": "bash scripts/test-postgres.sh"[% endif %]
+  },
   "engines": {
     "node": ">=<<[ node_version ]>>"
   },
-  "workspaces": [[% for frontend in frontends %]<<[ frontend.dir | tojson ]>>[% if not loop.last %], [% endif %][% endfor %]]
+[% if package_manager == "npm" %]
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  },
+[% endif %]
+  "workspaces": [[% for frontend in frontends %]<<[ frontend.dir | tojson ]>>, [% endfor %]"packages/public-api-client"[% if admin_api_enabled %], "packages/admin-api-client"[% endif %]],
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.99.0",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "js-yaml": "4.3.1"
+  },
+  "resolutions": {
+    "js-yaml": "4.3.1"
+  }
 }

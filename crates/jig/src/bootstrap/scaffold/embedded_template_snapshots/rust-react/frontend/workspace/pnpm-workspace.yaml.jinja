@@ -2,6 +2,14 @@ packages:
 [% for frontend in frontends %]
   - <<[ frontend.dir | tojson ]>>
 [% endfor %]
+  - "packages/public-api-client"
+[% if admin_api_enabled %]
+  - "packages/admin-api-client"
+[% endif %]
+
+# API clients are private workspace packages. Never fall back to fetching a
+# same-named registry package when a local workspace package is available.
+linkWorkspacePackages: true
 
 # pnpm otherwise selects a different virtual-store setting in CI, which can
 # make pre-run validation rewrite installed executable shims. Keep one layout.
@@ -11,3 +19,6 @@ enableGlobalVirtualStore: false
 # this allowlist narrow: each addition authorizes dependency code execution.
 allowBuilds:
   esbuild: true
+
+overrides:
+  js-yaml: 4.3.1

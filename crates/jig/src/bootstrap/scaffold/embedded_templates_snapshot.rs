@@ -192,6 +192,166 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/admin-shadcn/vite.config.ts.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/package.json.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/package.json.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/@tanstack/react-query.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/@tanstack/react-query.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/client.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/client.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/client/client.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/client/client.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/client/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/client/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/client/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/client/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/client/utils.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/client/utils.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/auth.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/auth.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/bodySerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/bodySerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/params.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/params.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/pathSerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/pathSerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/queryKeySerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/queryKeySerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/serverSentEvents.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/serverSentEvents.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/core/utils.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/core/utils.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/sdk.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/sdk.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/generated/zod.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/generated/zod.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-admin/src/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-admin/src/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/package.json.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/package.json.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/client.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/client.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/client/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/client/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/types.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/types.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/api-client-public/src/index.ts.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/api-client-public/src/index.ts.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/frontend/astro/astro.config.mjs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/astro/astro.config.mjs.jinja")),
     },
@@ -308,8 +468,20 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/workspace/.yarnrc.yml.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/workspace/README.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/workspace/README.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/workspace/contracts.mjs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/workspace/contracts.mjs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/frontend/workspace/e2e.yml.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/workspace/e2e.yml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/frontend/workspace/eslint.config.shared.mjs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/frontend/workspace/eslint.config.shared.mjs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/frontend/workspace/package.json.jinja",
@@ -328,12 +500,40 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/Cargo.toml.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/apps/admin-api/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/admin-api/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/apps/admin-api/src/bin/export-openapi.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/admin-api/src/bin/export-openapi.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/apps/admin-api/src/main.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/admin-api/src/main.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/apps/api/Cargo.toml.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/api/Cargo.toml.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/apps/api/src/bin/export-openapi.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/api/src/bin/export-openapi.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/apps/api/src/main.rs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/apps/api/src/main.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/admin-http/AGENTS.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/admin-http/AGENTS.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/admin-http/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/admin-http/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/admin-http/src/lib.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/admin-http/src/lib.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/app/AGENTS.md.jinja",
@@ -368,6 +568,18 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/db/src/lib.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/http-common/AGENTS.md.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http-common/AGENTS.md.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/http-common/Cargo.toml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http-common/Cargo.toml.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/http-common/src/lib.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http-common/src/lib.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/http/AGENTS.md.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http/AGENTS.md.jinja")),
     },
@@ -378,6 +590,10 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/http/src/lib.rs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http/src/lib.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/http/src/public.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/http/src/public.rs.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/test-support/AGENTS.md.jinja",
@@ -410,5 +626,21 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
     EmbeddedScaffoldTemplateFile {
         relative_path: "rust-react/workspace/crates/test-support/tests/http.rs.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/test-support/tests/http.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/crates/test-support/tests/postgres.rs.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/crates/test-support/tests/postgres.rs.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/openapi/admin.json.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/openapi/admin.json.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/openapi/public.json.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/openapi/public.json.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
+        relative_path: "rust-react/workspace/scripts/test-postgres.sh.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/rust-react/workspace/scripts/test-postgres.sh.jinja")),
     },
 ];

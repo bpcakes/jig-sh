@@ -774,7 +774,7 @@ For local runtime development, set `JIG_DEV_BIN` to an already-built `jig` binar
 
 This section applies only when `sqlx_enabled` is `true`.
 
-Managed Rust workflows watch both `rust_migration_dir` and `rust_sqlx_metadata_dir` and expose the metadata directory as an absolute `SQLX_OFFLINE_DIR` for offline compilation. The upstream SQLx CLI still hardcodes `cargo sqlx prepare --check` to `.sqlx`; SQLx 0.8 macros also do not use an ambient `SQLX_OFFLINE_DIR` for offline lookup. Because the Rust + React scaffold pins SQLx 0.8, its database variants require `.sqlx` and reject a custom metadata directory before creating the destination.
+Managed Rust workflows watch both `rust_migration_dir` and `rust_sqlx_metadata_dir` and expose the metadata directory as an absolute `SQLX_OFFLINE_DIR` for offline compilation. The upstream SQLx CLI 0.9 still checks `.sqlx` for `cargo sqlx prepare --check`. Because the Rust + React scaffold pins SQLx 0.9, its database variants require `.sqlx` and reject a custom metadata directory before creating the destination.
 
 Adopted repositories may keep a different committed metadata directory when their SQLx version and build setup support it. Supply a project-owned `sqlx_check_command` that actually checks that directory; Jig preserves explicit command overrides rather than pretending upstream `prepare --check` supports a custom output path.
 

@@ -1,0 +1,109 @@
+use std::{net::SocketAddr, process::ExitCode};
+
+use ::<<[ module_name ]>> as app_crate;
+use ::<<[ module_name ]>>_admin_http as admin_http_crate;
+use anyhow::Context;
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    load_dotenv();
+    init_tracing();
+    install_panic_hook();
+
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = ?error, "admin API server failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn load_dotenv() {
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(dotenvy::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("warning: failed to load .env: {error}"),
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+    if let Some(argument) = std::env::args_os().nth(1) {
+        anyhow::bail!("unexpected admin API argument {argument:?}");
+    }
+    let config = app_crate::AppConfig::from_env().context("Failed to load application config")?;
+    let addr: SocketAddr = config.bind_addr();
+    let state = app_crate::AppState::from_config(config)
+        .await
+        .context("Failed to initialize application state")?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("Failed to bind admin API listener to {addr}"))?;
+    let bound_addr = listener
+        .local_addr()
+        .context("Failed to read admin API listener address after bind")?;
+    tracing::info!(%bound_addr, "admin API listening");
+
+    // Fail closed until the application supplies a real AdminAuthorizer.
+    axum::serve(
+        listener,
+        admin_http_crate::router(state, admin_http_crate::DenyAllAdminAuthorizer),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("Admin API server exited with an error")
+}
+
+fn init_tracing() {
+    #[allow(clippy::useless_concat)]
+    let default_filter = concat!(
+        // Renderer-controlled values vary in length, so keep this rustfmt-stable shape.
+        "<<[ module_name ]>>=info,",
+        "<<[ module_name ]>>_admin_api=info,",
+        "tower_http=info",
+    );
+    tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| default_filter.into()))
+        .init();
+}
+
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(panic = %panic_info, "application panic");
+        default_hook(panic_info);
+    }));
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(error) => {
+                    tracing::error!(error = %error, "failed to listen for SIGTERM");
+                    wait_for_ctrl_c().await;
+                    return;
+                }
+            };
+
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => log_ctrl_c_result(result),
+            _ = terminate.recv() => {}
+        }
+    }
+
+    #[cfg(not(unix))]
+    wait_for_ctrl_c().await;
+}
+
+async fn wait_for_ctrl_c() {
+    log_ctrl_c_result(tokio::signal::ctrl_c().await);
+}
+
+fn log_ctrl_c_result(result: std::io::Result<()>) {
+    if let Err(error) = result {
+        tracing::error!(error = %error, "failed to listen for Ctrl-C");
+    }
+}

@@ -408,7 +408,7 @@ fn generated_node_version_query_rejects_every_present_invalid_authority() {
         "web/.node-version"
     );
 
-    fs::write(repo.join(".node-version"), "22.22.2\r\n").unwrap();
+    fs::write(repo.join(".node-version"), "24.19.0\r\n").unwrap();
     let root_valid = assert_query_status(0, "valid root selector");
     assert_eq!(
         String::from_utf8_lossy(&root_valid.stdout).trim(),
@@ -422,11 +422,11 @@ fn generated_node_version_query_rejects_every_present_invalid_authority() {
     );
     fs::write(repo.join(".node-version"), "").unwrap();
     assert_query_status(2, "empty authority");
-    fs::write(repo.join(".node-version"), "22.22.2\nsecond\n").unwrap();
+    fs::write(repo.join(".node-version"), "24.19.0\nsecond\n").unwrap();
     assert_query_status(2, "multiline authority");
     fs::write(repo.join(".node-version"), [0xff]).unwrap();
     assert_query_status(2, "non-UTF-8 authority");
-    fs::write(repo.join(".node-version"), b"22.22.2\x7f\n").unwrap();
+    fs::write(repo.join(".node-version"), b"24.19.0\x7f\n").unwrap();
     assert_query_status(2, "control character authority");
     fs::write(repo.join(".node-version"), vec![b'2'; 129]).unwrap();
     assert_query_status(2, "oversized authority");

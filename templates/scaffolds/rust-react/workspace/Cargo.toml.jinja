@@ -2,9 +2,16 @@
 resolver = "3"
 members = [
   "apps/<<[ package_name ]>>-api",
+[% if admin_api_enabled %]
+  "apps/<<[ package_name ]>>-admin-api",
+[% endif %]
   "crates/<<[ package_name ]>>-core",
   "crates/<<[ package_name ]>>",
   "crates/<<[ package_name ]>>-http",
+  "crates/<<[ package_name ]>>-http-common",
+[% if admin_api_enabled %]
+  "crates/<<[ package_name ]>>-admin-http",
+[% endif %]
   "crates/<<[ package_name ]>>-test-support",
 [% if db_enabled %]
   "crates/<<[ package_name ]>>-db",
@@ -15,10 +22,11 @@ members = [
 edition = "2024"
 version = "0.1.0"
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1"
+async-trait = "0.1"
 axum = "0.8"
 dotenvy = "0.15"
 serde = { version = "1", features = ["derive"] }
@@ -29,8 +37,10 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = "5.5.0"
+utoipa-axum = "0.2.0"
 [% if db_enabled %]
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "<<[ sqlx_driver ]>>", "migrate", "macros"] }
 [% if sqlx_driver == "sqlite" %]
 fs4 = "0.13.1"
 url = "2"

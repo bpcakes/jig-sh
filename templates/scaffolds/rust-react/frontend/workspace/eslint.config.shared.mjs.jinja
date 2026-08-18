@@ -1,0 +1,151 @@
+const typescriptFiles = ["**/*.{ts,tsx}"];
+const unitTestFiles = [
+  "src/**/*.{test,spec}.{ts,tsx}",
+  "tests/unit/**/*.{ts,tsx}",
+];
+
+function restrictedImports(
+  apiClientPackages,
+  forbiddenApiClientPackages,
+  { paths = [], patterns = [] } = {},
+) {
+  return [
+    "error",
+    {
+      paths: [
+        ...forbiddenApiClientPackages.map((name) => ({
+          name,
+          message: `${name} is not available across this application boundary.`,
+        })),
+        ...paths,
+      ],
+      patterns: [
+        ...apiClientPackages.map((name) => ({
+          group: [`${name}/*`],
+          message: `Import ${name} through its public package entrypoint.`,
+        })),
+        ...patterns,
+      ],
+    },
+  ];
+}
+
+export function createReactAppConfig({
+  apiClientPackages,
+  forbiddenApiClientPackages = [],
+  globals,
+  js,
+  pluginQuery,
+  reactHooks,
+  reactRefresh,
+  testingLibrary,
+  tsconfigRootDir,
+  tseslint,
+  vitest,
+}) {
+  const applicationImports = restrictedImports(
+    apiClientPackages,
+    forbiddenApiClientPackages,
+  );
+
+  return [
+    {
+      name: "jig/lint-hygiene",
+      linterOptions: {
+        reportUnusedDisableDirectives: "error",
+        reportUnusedInlineConfigs: "error",
+      },
+    },
+    ...pluginQuery.configs["flat/recommended"],
+    {
+      name: "jig/react-typescript",
+      files: typescriptFiles,
+      extends: [
+        js.configs.recommended,
+        tseslint.configs.recommendedTypeChecked,
+        reactHooks.configs.flat.recommended,
+        reactRefresh.configs.vite,
+      ],
+      languageOptions: {
+        globals: globals.browser,
+        parserOptions: {
+          projectService: true,
+          tsconfigRootDir,
+        },
+      },
+      rules: {
+        "no-restricted-imports": applicationImports,
+      },
+    },
+    {
+      name: "jig/unit-tests",
+      files: unitTestFiles,
+      extends: [
+        testingLibrary.configs["flat/react"],
+        vitest.configs.recommended,
+      ],
+    },
+    {
+      name: "jig/component-route-boundary",
+      files: ["src/components/**/*.{ts,tsx}"],
+      rules: {
+        "no-restricted-imports": restrictedImports(
+          apiClientPackages,
+          forbiddenApiClientPackages,
+          {
+            patterns: [
+              {
+                group: [
+                  "@/routes/**",
+                  "./routes/**",
+                  "../routes/**",
+                  "../../routes/**",
+                  "../../../routes/**",
+                  "**/routes/**",
+                ],
+                message:
+                  "Components must not depend on route modules; pass data and callbacks through their public API.",
+              },
+            ],
+          },
+        ),
+      },
+    },
+    {
+      name: "jig/domain-framework-boundary",
+      files: ["src/domain/**/*.{ts,tsx}"],
+      rules: {
+        "no-restricted-imports": restrictedImports(
+          apiClientPackages,
+          forbiddenApiClientPackages,
+          {
+            paths: [
+              {
+                name: "react",
+                message: "Domain modules must not depend on React.",
+              },
+              {
+                name: "react-dom",
+                message: "Domain modules must not depend on React DOM.",
+              },
+              {
+                name: "@tanstack/react-router",
+                message: "Domain modules must not depend on the router.",
+              },
+            ],
+            patterns: [
+              {
+                group: [
+                  "react/**",
+                  "react-dom/**",
+                  "@tanstack/react-router/**",
+                ],
+                message: "Domain modules must remain framework-independent.",
+              },
+            ],
+          },
+        ),
+      },
+    },
+  ];
+}
