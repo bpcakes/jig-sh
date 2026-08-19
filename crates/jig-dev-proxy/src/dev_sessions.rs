@@ -136,11 +136,19 @@ impl DevSessionRuntime {
                     match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled) {
                         StopSessionOutcome::Complete(stop) => stop,
                         StopSessionOutcome::Cancelled(progress) => {
-                            replacement_recoveries.extend(progress.into_recoveries());
+                            let (recoveries, warnings) = progress.into_parts();
+                            replacement_recoveries.extend(recoveries);
+                            for warning in warnings {
+                                eprintln!(
+                                    "jig dev --replace stop warning before cancellation: {warning}"
+                                );
+                            }
                             return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                         }
                         StopSessionOutcome::Failed { error, progress } => {
-                            replacement_recoveries.extend(progress.into_recoveries());
+                            let (recoveries, warnings) = progress.into_parts();
+                            replacement_recoveries.extend(recoveries);
+                            let error = attach_replacement_stop_warnings(error, &warnings);
                             return Err(crate::dev_outcome::with_recovery_notices(
                                 error,
                                 replacement_recoveries,
@@ -473,6 +481,38 @@ impl DevSessionRuntime {
                 Ok(true)
             },
         )
+    }
+}
+
+fn attach_replacement_stop_warnings(error: anyhow::Error, warnings: &[String]) -> anyhow::Error {
+    if warnings.is_empty() {
+        error
+    } else {
+        error.context(format!(
+            "Jig dev replacement stop reported warnings before the failure: {}",
+            warnings.join("; ")
+        ))
+    }
+}
+
+#[cfg(test)]
+mod stop_progress_tests {
+    use super::attach_replacement_stop_warnings;
+
+    #[test]
+    fn failed_replacement_stop_keeps_accumulated_warnings_in_the_error_chain() {
+        let warnings = vec![
+            "session 'dev_example': authenticated stop was unavailable".to_owned(),
+            "session 'dev_other': cleanup identity remained uncertain".to_owned(),
+        ];
+
+        let error =
+            attach_replacement_stop_warnings(anyhow::anyhow!("later state read failed"), &warnings);
+        let chain = format!("{error:#}");
+
+        assert!(chain.contains(&warnings[0]), "{chain}");
+        assert!(chain.contains(&warnings[1]), "{chain}");
+        assert!(chain.contains("later state read failed"), "{chain}");
     }
 }
 

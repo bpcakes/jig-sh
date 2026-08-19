@@ -153,12 +153,64 @@ pub(super) enum StopSessionOutcome {
 #[derive(Default)]
 pub(super) struct StopProgress {
     recoveries: Vec<OrphanRecoveryNotice>,
+    warnings: StopWarnings,
 }
 
 impl StopProgress {
-    pub(super) fn into_recoveries(self) -> Vec<OrphanRecoveryNotice> {
-        self.recoveries
+    fn record_control_warning(&mut self, session_id: &str, message: String) {
+        self.warnings.control.push(StopWarning {
+            session_id: session_id.to_owned(),
+            message,
+        });
     }
+
+    fn record_lifecycle_warning(&mut self, warning: StopWarning) {
+        self.warnings.lifecycle.push(warning);
+    }
+
+    fn into_report_parts(
+        self,
+        remaining_ids: &HashSet<&str>,
+    ) -> (Vec<OrphanRecoveryNotice>, Vec<String>) {
+        (
+            self.recoveries,
+            self.warnings.into_messages_for_remaining(remaining_ids),
+        )
+    }
+
+    pub(super) fn into_parts(self) -> (Vec<OrphanRecoveryNotice>, Vec<String>) {
+        (self.recoveries, self.warnings.into_messages())
+    }
+}
+
+#[derive(Default)]
+struct StopWarnings {
+    control: Vec<StopWarning>,
+    lifecycle: Vec<StopWarning>,
+}
+
+impl StopWarnings {
+    fn into_messages(self) -> Vec<String> {
+        self.lifecycle
+            .into_iter()
+            .chain(self.control)
+            .map(|warning| warning.message)
+            .collect()
+    }
+
+    fn into_messages_for_remaining(self, remaining_ids: &HashSet<&str>) -> Vec<String> {
+        self.lifecycle
+            .into_iter()
+            .chain(self.control)
+            .filter(|warning| remaining_ids.contains(warning.session_id.as_str()))
+            .map(|warning| warning.message)
+            .collect()
+    }
+}
+
+struct StopWarning {
+    session_id: String,
+    message: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -295,17 +347,20 @@ fn stop_outcome_json(
     match outcome {
         StopSessionOutcome::Complete(report) => Ok(report.into_json(repo, state_dir)),
         StopSessionOutcome::Cancelled(_) => bail!("uncancelled Jig dev stop was cancelled"),
-        StopSessionOutcome::Failed { error, progress } => Ok(json!({
-            "ok": false,
-            "command": "dev stop",
-            "repo_name": repo.name,
-            "repo_root": repo.root_display,
-            "state_dir": state_dir,
-            "matched_sessions": matched_sessions,
-            "error": crate::dev_outcome::command_failed_error(format!("{error:#}")),
-            "recoveries": progress.recoveries,
-            "warnings": [],
-        })),
+        StopSessionOutcome::Failed { error, progress } => {
+            let (recoveries, warnings) = progress.into_parts();
+            Ok(json!({
+                "ok": false,
+                "command": "dev stop",
+                "repo_name": repo.name,
+                "repo_root": repo.root_display,
+                "state_dir": state_dir,
+                "matched_sessions": matched_sessions,
+                "error": crate::dev_outcome::command_failed_error(format!("{error:#}")),
+                "recoveries": recoveries,
+                "warnings": warnings,
+            }))
+        }
     }
 }
 
@@ -393,7 +448,6 @@ fn stop_session_ids_interruptible_inner(
         .collect::<HashMap<_, _>>();
 
     let mut pending = BTreeSet::new();
-    let mut control_warnings = Vec::new();
     for session in &targets {
         if cancelled() {
             return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
@@ -410,13 +464,13 @@ fn stop_session_ids_interruptible_inner(
                 if error.delivery_uncertain() {
                     pending.insert(session.session_id.clone());
                 }
-                control_warnings.push((
-                    session.session_id.clone(),
+                progress.record_control_warning(
+                    &session.session_id,
                     format!(
                         "session '{}': authenticated supervisor stop was unavailable ({error})",
                         session.session_id
                     ),
-                ));
+                );
             }
         }
     }
@@ -429,7 +483,6 @@ fn stop_session_ids_interruptible_inner(
         return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
     }
 
-    let mut lifecycle_warnings = Vec::new();
     let remaining = match current_target_sessions(store, repo, target_ids, cancelled)? {
         LockOutcome::Acquired(remaining) => remaining,
         LockOutcome::Cancelled => {
@@ -461,7 +514,7 @@ fn stop_session_ids_interruptible_inner(
                     }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::AlreadyAbsent) => {}
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
-                        lifecycle_warnings.push(retention_warning(&session, &reason));
+                        progress.record_lifecycle_warning(retention_warning(&session, &reason));
                         if !mark_orphaned(store, &session, cancelled)? {
                             return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                         }
@@ -469,7 +522,7 @@ fn stop_session_ids_interruptible_inner(
                 }
             }
             (_, OrphanRecoveryAssessment::Retain(reason)) => {
-                lifecycle_warnings.push(retention_warning(&session, &reason));
+                progress.record_lifecycle_warning(retention_warning(&session, &reason));
                 if !mark_orphaned(store, &session, cancelled)? {
                     return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                 }
@@ -500,14 +553,8 @@ fn stop_session_ids_interruptible_inner(
         .iter()
         .filter_map(|session| session["session_id"].as_str())
         .collect::<HashSet<_>>();
-    let blocking_warnings = lifecycle_warnings
-        .into_iter()
-        .chain(control_warnings)
-        .filter(|(session_id, _)| remaining_ids.contains(session_id.as_str()))
-        .map(|(_, warning)| warning)
-        .collect::<Vec<_>>();
-    let ok = blocking_warnings.is_empty() && sessions.is_empty();
-    let warnings = blocking_warnings;
+    let (recoveries, warnings) = std::mem::take(progress).into_report_parts(&remaining_ids);
+    let ok = warnings.is_empty() && sessions.is_empty();
     let stopped_sessions = matched_sessions.saturating_sub(sessions.len());
     Ok(StopSessionOutcome::Complete(StopReport {
         ok,
@@ -515,7 +562,7 @@ fn stop_session_ids_interruptible_inner(
         stopped_sessions,
         stopped_apps,
         sessions,
-        recoveries: std::mem::take(&mut progress.recoveries),
+        recoveries,
         warnings,
     }))
 }
@@ -633,10 +680,7 @@ fn orphan_recovery_assessment_with_observations(
     OrphanRecoveryAssessment::Retirable
 }
 
-fn retention_warning(
-    session: &DevSessionRecord,
-    reason: &OrphanRetentionReason,
-) -> (String, String) {
+fn retention_warning(session: &DevSessionRecord, reason: &OrphanRetentionReason) -> StopWarning {
     let detail = match reason {
         OrphanRetentionReason::SupervisorAlive => format!(
             "supervisor PID {} remained live after the authenticated stop request",
@@ -672,13 +716,13 @@ fn retention_warning(
         "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`",
     )
     .unwrap_or_default();
-    (
-        session.session_id.clone(),
-        format!(
+    StopWarning {
+        session_id: session.session_id.clone(),
+        message: format!(
             "session '{}': {detail}; the registry entry was retained without signaling numeric PIDs{repair}",
             session.session_id
         ),
-    )
+    }
 }
 
 fn forgotten_cleanup_ambiguities(
@@ -1058,7 +1102,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_stop_outcome_reports_completed_recoveries() {
+    fn failed_stop_outcome_reports_completed_progress() {
         let repo = CanonicalRepo {
             name: "ExampleProject".into(),
             root_display: "/tmp/example-project".into(),
@@ -1071,6 +1115,16 @@ mod tests {
                 error: anyhow::anyhow!("later state read failed"),
                 progress: StopProgress {
                     recoveries: vec![recovery],
+                    warnings: StopWarnings {
+                        control: vec![StopWarning {
+                            session_id: "dev_other".into(),
+                            message: "authenticated stop was unavailable".into(),
+                        }],
+                        lifecycle: vec![StopWarning {
+                            session_id: "dev_example".into(),
+                            message: "cleanup identity remained uncertain".into(),
+                        }],
+                    },
                 },
             },
             &repo,
@@ -1085,6 +1139,32 @@ mod tests {
         assert_eq!(output["error"]["message"], "later state read failed");
         assert_eq!(output["recoveries"].as_array().unwrap().len(), 1);
         assert_eq!(output["recoveries"][0]["session_id"], "dev_example");
+        assert_eq!(
+            output["warnings"],
+            json!([
+                "cleanup identity remained uncertain",
+                "authenticated stop was unavailable"
+            ])
+        );
         assert!(output.get("stopped_sessions").is_none());
+    }
+
+    #[test]
+    fn completed_stop_filters_progress_warnings_to_remaining_sessions() {
+        let mut progress = StopProgress::default();
+        progress.record_control_warning("retired", "retired control warning".into());
+        progress.record_control_warning("remaining", "remaining control warning".into());
+        progress.record_lifecycle_warning(StopWarning {
+            session_id: "remaining".into(),
+            message: "remaining lifecycle warning".into(),
+        });
+
+        let (recoveries, warnings) = progress.into_report_parts(&HashSet::from(["remaining"]));
+
+        assert!(recoveries.is_empty());
+        assert_eq!(
+            warnings,
+            vec!["remaining lifecycle warning", "remaining control warning"]
+        );
     }
 }
