@@ -573,6 +573,7 @@ mod tests {
 
     #[test]
     fn codex_reset_uses_epoch_seconds_and_omits_elapsed_resets() {
+        assert_eq!(format_codex_reset_from(10_059, 10_000), Some("<1m".into()));
         assert_eq!(
             format_codex_reset_from(10_000 + 90 * 60, 10_000),
             Some("1h".into())

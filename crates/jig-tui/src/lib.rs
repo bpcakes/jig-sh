@@ -90,7 +90,9 @@ pub fn format_percent(percent: f64) -> String {
 
 /// Formats a positive countdown in the largest whole minute, hour, or day unit.
 pub fn format_countdown(seconds: u64) -> String {
-    if seconds < 3_600 {
+    if seconds < 60 {
+        "<1m".into()
+    } else if seconds < 3_600 {
         format!("{}m", seconds / 60)
     } else if seconds < 86_400 {
         format!("{}h", seconds / 3_600)
@@ -455,7 +457,8 @@ mod tests {
 
     #[test]
     fn countdown_formatting_uses_the_largest_whole_unit() {
-        assert_eq!(format_countdown(59), "0m");
+        assert_eq!(format_countdown(59), "<1m");
+        assert_eq!(format_countdown(60), "1m");
         assert_eq!(format_countdown(90 * 60), "1h");
         assert_eq!(format_countdown(2 * 86_400), "2d");
     }

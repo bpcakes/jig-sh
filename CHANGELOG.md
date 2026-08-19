@@ -17,7 +17,7 @@
 
 ### Fixed
 - Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
-- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; mark sampled remaining quota stale with its projection, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
+- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
 
 ## v0.2.0 - 2026-08-05
 

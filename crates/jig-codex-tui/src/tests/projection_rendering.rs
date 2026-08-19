@@ -57,6 +57,25 @@ fn rendering_marks_projection_as_an_aging_usage_snapshot() {
 }
 
 #[test]
+fn rendering_labels_sub_minute_reset_countdowns_without_zero_minutes() {
+    const NOW: u64 = 2_000_000_000;
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(NOW + 59);
+    app.apply_update_at(update, NOW);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("resets in <1m"), "{rendered}");
+    assert!(!rendered.contains("resets in 0m"), "{rendered}");
+}
+
+#[test]
 fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
     const OBSERVED_AT: u64 = 2_000_000_000;
     let backend = TestBackend::new(168, 30);
