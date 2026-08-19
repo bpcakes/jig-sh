@@ -121,8 +121,13 @@ pub(crate) fn stop(request: DevStopRequest) -> Result<Value> {
     } else {
         AmbiguousOrphanPolicy::Retain
     };
-    let report = stop_session_ids(&store, &repo, &ids, policy)?;
-    Ok(report.into_json(&repo, store.root()))
+    let matched_sessions = ids.len();
+    stop_outcome_json(
+        stop_session_ids_interruptible_with_policy(&store, &repo, &ids, policy, &|| false),
+        &repo,
+        store.root(),
+        matched_sessions,
+    )
 }
 
 #[derive(Default)]
@@ -270,18 +275,26 @@ impl StopReport {
     }
 }
 
-fn stop_session_ids(
-    store: &StateStore,
+fn stop_outcome_json(
+    outcome: StopSessionOutcome,
     repo: &CanonicalRepo,
-    target_ids: &BTreeSet<String>,
-    policy: AmbiguousOrphanPolicy,
-) -> Result<StopReport> {
-    match stop_session_ids_interruptible_with_policy(store, repo, target_ids, policy, &|| false) {
-        StopSessionOutcome::Complete(report) => Ok(report),
+    state_dir: &Path,
+    matched_sessions: usize,
+) -> Result<Value> {
+    match outcome {
+        StopSessionOutcome::Complete(report) => Ok(report.into_json(repo, state_dir)),
         StopSessionOutcome::Cancelled(_) => bail!("uncancelled Jig dev stop was cancelled"),
-        StopSessionOutcome::Failed { error, recoveries } => {
-            Err(crate::dev_outcome::with_recovery_notices(error, recoveries))
-        }
+        StopSessionOutcome::Failed { error, recoveries } => Ok(json!({
+            "ok": false,
+            "command": "dev stop",
+            "repo_name": repo.name,
+            "repo_root": repo.root_display,
+            "state_dir": state_dir,
+            "matched_sessions": matched_sessions,
+            "error": crate::dev_outcome::command_failed_error(format!("{error:#}")),
+            "recoveries": recoveries,
+            "warnings": [],
+        })),
     }
 }
 
@@ -1031,5 +1044,34 @@ mod tests {
             count_stopped_apps(initially_maybe_live_apps, &unretired_after_control_ids),
             2
         );
+    }
+
+    #[test]
+    fn failed_stop_outcome_reports_completed_recoveries() {
+        let repo = CanonicalRepo {
+            name: "ExampleProject".into(),
+            root_display: "/tmp/example-project".into(),
+            root_identity: "/tmp/example-project".into(),
+        };
+        let recovery = OrphanRecoveryNotice::from_session(&cleanup_required_session(), &[]);
+
+        let output = stop_outcome_json(
+            StopSessionOutcome::Failed {
+                error: anyhow::anyhow!("later state read failed"),
+                recoveries: vec![recovery],
+            },
+            &repo,
+            Path::new("/tmp/example-state"),
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(output["ok"], false);
+        assert_eq!(output["matched_sessions"], 2);
+        assert_eq!(output["error"]["kind"], "command_failed");
+        assert_eq!(output["error"]["message"], "later state read failed");
+        assert_eq!(output["recoveries"].as_array().unwrap().len(), 1);
+        assert_eq!(output["recoveries"][0]["session_id"], "dev_example");
+        assert!(output.get("stopped_sessions").is_none());
     }
 }

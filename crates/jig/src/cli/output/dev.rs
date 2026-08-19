@@ -96,29 +96,37 @@ pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let matched = value_u64(value, "matched_sessions").unwrap_or(sessions.len() as u64);
-    let stopped = value_u64(value, "stopped_sessions").unwrap_or_else(|| {
-        sessions
-            .iter()
-            .filter(|session| {
-                matches!(
-                    value_str(session, "outcome"),
-                    Some("stopped" | "already-stopped")
-                )
-            })
-            .count() as u64
+    let error = dev_error_message(value);
+    let matched = value_u64(value, "matched_sessions")
+        .or_else(|| error.is_none().then_some(sessions.len() as u64));
+    let stopped = value_u64(value, "stopped_sessions").or_else(|| {
+        error.is_none().then(|| {
+            sessions
+                .iter()
+                .filter(|session| {
+                    matches!(
+                        value_str(session, "outcome"),
+                        Some("stopped" | "already-stopped")
+                    )
+                })
+                .count() as u64
+        })
     });
     let status = if !ok {
         "incomplete"
-    } else if matched == 0 {
+    } else if matched == Some(0) {
         "nothing running"
     } else {
         "stopped"
     };
     let mut lines = vec![format!("Dev stop: {status}")];
     append_dev_repo_and_state(&mut lines, value);
-    lines.push(format!("  Sessions matched: {matched}"));
-    lines.push(format!("  Sessions stopped: {stopped}"));
+    if let Some(matched) = matched {
+        lines.push(format!("  Sessions matched: {matched}"));
+    }
+    if let Some(stopped) = stopped {
+        lines.push(format!("  Sessions stopped: {stopped}"));
+    }
     if let Some(apps) = value_u64(value, "stopped_apps") {
         lines.push(format!("  Apps stopped: {apps}"));
     }
@@ -129,6 +137,9 @@ pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
         for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
             lines.push(format!("  Warning: {warning}"));
         }
+    }
+    if let Some(error) = error {
+        lines.push(format!("  Error: {error}"));
     }
     append_recovery_messages(&mut lines, value);
     lines.push("  full report: rerun with --json".into());
@@ -370,5 +381,24 @@ mod tests {
         assert!(recovered.contains("Recovery: session 'dev_456'"));
         assert!(recovered.contains("web (target 127.0.0.1:4005, last PID 4242"));
         assert!(!recovered.contains("Warning:"));
+
+        let failed_after_recovery = format_dev_stop_summary(&json!({
+            "ok": false,
+            "matched_sessions": 2,
+            "error": {
+                "kind": "command_failed",
+                "message": "later state read failed"
+            },
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_789': retired a dead orphan"
+            }],
+            "warnings": []
+        }));
+        assert!(failed_after_recovery.contains("Dev stop: incomplete"));
+        assert!(failed_after_recovery.contains("Sessions matched: 2"));
+        assert!(!failed_after_recovery.contains("Sessions stopped:"));
+        assert!(failed_after_recovery.contains("Error: later state read failed"));
+        assert!(failed_after_recovery.contains("Recovery: session 'dev_789'"));
     }
 }

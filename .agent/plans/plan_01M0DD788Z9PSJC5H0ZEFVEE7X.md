@@ -14,7 +14,7 @@ The public `jig_dev_proxy` command facade remains `anyhow::Result<serde_json::Va
 - [x] (2026-08-19) Read the repository and crate guides, the Fowler Rust refactoring skill and catalog, and ran its diff scanner against `origin/master`.
 - [x] (2026-08-19) Built the development `jig` binary and opened structured work with plan `plan_01M0DD788Z9PSJC5H0ZEFVEE7X`.
 - [x] (2026-08-19) Introduced a closed failed variant at the stop-session phase boundary without changing command behavior; all 24 lifecycle tests pass.
-- [ ] Serialize recovery-bearing direct-stop failures at the owning command boundary and add regression coverage.
+- [x] (2026-08-19) Serialized recovery-bearing direct-stop failures at the owning command boundary, made the human report distinguish unavailable counts, and added focused outcome, renderer, and error-chain regressions.
 - [ ] Compose preflight and cleanup-confirmation results with an explicit primary-error policy and add regression coverage.
 - [ ] Run focused checks after every slice, then all configured gates and the full test suite with the development binary.
 

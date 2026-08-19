@@ -59,7 +59,7 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                     "ok": false,
                     "interrupted": false,
                     "stopped": false,
-                    "error": command_failed_error(format!("{source:#}")),
+                    "error": dev_outcome::command_failed_error(format!("{source:#}")),
                     "exit_status": 1,
                     "exit_signal": null,
                     "termination_signal": null,
@@ -78,7 +78,7 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                     "interrupted": false,
                     "stopped": false,
                     "cleanup_unconfirmed": true,
-                    "error": command_failed_error(processes::UNCONFIRMED_DEV_CLEANUP_MESSAGE),
+                    "error": dev_outcome::command_failed_error(processes::UNCONFIRMED_DEV_CLEANUP_MESSAGE),
                     "stop_reason": reason.label(),
                     "exit_status": 1,
                     "exit_signal": null,
@@ -127,11 +127,4 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
         }
         result => result,
     }
-}
-
-fn command_failed_error(message: impl Into<String>) -> Value {
-    json!({
-        "kind": "command_failed",
-        "message": message.into(),
-    })
 }
