@@ -57,12 +57,12 @@ pub(crate) fn windows_bash_compatible_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 #[cfg(windows)]
-pub(crate) fn legacy_compatible_path(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
     windows_legacy_compatible_path(path)
 }
 
 #[cfg(not(windows))]
-pub(crate) fn legacy_compatible_path(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 

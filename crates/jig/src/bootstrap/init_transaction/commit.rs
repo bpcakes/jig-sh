@@ -5,6 +5,10 @@ impl InitMutationTransaction {
         if !self.armed {
             return Ok(());
         }
+        if self.staged_publication.is_some() {
+            self.close_write_staging()
+                .context("Failed to close private write staging before repository publication")?;
+        }
         let staged_boundary = self
             .staged_publication
             .as_ref()
@@ -14,13 +18,8 @@ impl InitMutationTransaction {
                 .staging_root
                 .take()
                 .context("Private init staging root was already consumed")?;
-            let publish_source = crate::shell::legacy_compatible_path(staging_root.path())?;
-            let publish_destination =
-                crate::shell::legacy_compatible_path(&publication.publish_destination)?;
-            debug_assert_eq!(
-                publish_source,
-                crate::shell::legacy_compatible_path(&publication.publish_source)?
-            );
+            let publish_source = staging_root.path().to_path_buf();
+            debug_assert_eq!(publish_source, publication.publish_source);
             if let Some(Err(error)) = staged_boundary {
                 let preserved = staging_root.keep();
                 return Err(anyhow::anyhow!(
@@ -28,7 +27,8 @@ impl InitMutationTransaction {
                     preserved.display()
                 ));
             }
-            let publish_parent = publish_destination
+            let publish_parent = publication
+                .publish_destination
                 .parent()
                 .context("Init publication destination has no parent")?;
             let parent_identity = match path::repository_path_identity(publish_parent) {
@@ -118,8 +118,18 @@ impl InitMutationTransaction {
                     primary,
                 ));
             }
+            #[cfg(windows)]
+            {
+                // Windows refuses to rename an ancestor while verified
+                // descendant handles remain open. The retained root handle
+                // still pins the publication source across the atomic move.
+                self.destination_identity = publication.publish_source_identity.clone();
+                self.directory_identities.clear();
+                self.owned_directories.clear();
+                self.files.clear();
+            }
             if let Err(primary) =
-                path::rename_entry_noreplace(&publish_source, &publish_destination)
+                path::rename_entry_noreplace(&publish_source, &publication.publish_destination)
             {
                 let primary = anyhow::Error::new(primary).context(format!(
                     "Failed to publish initialized repository without replacing concurrent path {}",
