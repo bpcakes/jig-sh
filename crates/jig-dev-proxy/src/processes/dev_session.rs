@@ -194,7 +194,10 @@ pub(super) fn finish_preflight_cleanup(
             termination_reason,
         )
         .context("Failed to persist confirmed development preflight cleanup")?;
-    } else if !matches!(&result, Err(DevPreflightError::CleanupUnconfirmed(_))) {
+    } else if result
+        .as_ref()
+        .is_err_and(|error| error.cleanup_was_confirmed())
+    {
         cleanup.confirm();
     }
     normalize_preflight_result(result, termination_reason())

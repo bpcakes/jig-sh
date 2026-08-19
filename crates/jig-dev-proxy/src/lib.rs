@@ -102,6 +102,10 @@ impl DevPreflightError {
     pub const fn cleanup_unconfirmed(error: anyhow::Error) -> Self {
         Self::CleanupUnconfirmed(error)
     }
+
+    pub(crate) const fn cleanup_was_confirmed(&self) -> bool {
+        !matches!(self, Self::CleanupUnconfirmed(_))
+    }
 }
 
 impl From<anyhow::Error> for DevPreflightError {
