@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
+use crate::dev_outcome;
 use crate::dev_sessions::{DevCleanupLease, DevSessionRuntime};
 use crate::state::{
     DevProcessIdentity, LockOutcome, ProcessRouteOwnership, StateStore, now_ms, process_start_token,
@@ -18,7 +19,7 @@ use super::{
     PROXY_HEALTH_CHECK_INTERVAL, PreparedApp, RunningChild, SpawnChildFailure, SpawnedChild,
     StartupOutputDisposition, TerminationReason, app_display_interruptible, arm_owned_resources,
     child_exit_status, choose_app_port, cleanup_children, command_argv,
-    dev_app_environment_interruptible, dev_error_with_recoveries, ensure_not_interrupted_with,
+    dev_app_environment_interruptible, ensure_not_interrupted_with,
     ensure_process_routes_supported, ensure_proxy_running_interruptible, force_cleanup_requested,
     interruption_error, interruption_error_with_unconfirmed_cleanup, interruption_reason,
     is_interruption, lock_outcome_or_interruption, new_route_cleanup_deadline,
@@ -148,7 +149,7 @@ pub(crate) fn finalize_claimed_dev_session_result(
             attach_replacement_recoveries(value, recoveries)?;
         }
     } else if let Some(recoveries) = recoveries {
-        result = Err(dev_error_with_recoveries(
+        result = Err(dev_outcome::with_recoveries(
             result.expect_err("non-successful development result must contain an error"),
             recoveries,
         ));

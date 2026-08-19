@@ -8,6 +8,7 @@
 
 mod certs;
 mod dev_api;
+mod dev_outcome;
 mod dev_sessions;
 mod file_ops;
 mod host;

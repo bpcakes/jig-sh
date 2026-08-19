@@ -182,12 +182,6 @@ struct Interrupted {
     cleanup: InterruptionCleanup,
 }
 
-#[derive(Debug)]
-struct DevErrorWithRecoveries {
-    source: anyhow::Error,
-    recoveries: Value,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InterruptionCleanup {
     Confirmed,
@@ -202,22 +196,6 @@ impl fmt::Display for Interrupted {
 
 impl StdError for Interrupted {}
 
-impl fmt::Display for DevErrorWithRecoveries {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if formatter.alternate() {
-            write!(formatter, "{:#}", self.source)
-        } else {
-            write!(formatter, "{}", self.source)
-        }
-    }
-}
-
-impl StdError for DevErrorWithRecoveries {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
-
 pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
     interruption_error_with_state(reason, InterruptionCleanup::Confirmed)
 }
@@ -228,7 +206,7 @@ pub(crate) fn interruption_error_with_unconfirmed_cleanup(
 ) -> anyhow::Error {
     let error = interruption_error_with_state(reason, InterruptionCleanup::Unconfirmed);
     match recoveries {
-        Some(recoveries) => dev_error_with_recoveries(error, recoveries),
+        Some(recoveries) => crate::dev_outcome::with_recoveries(error, recoveries),
         None => error,
     }
 }
@@ -240,20 +218,8 @@ fn interruption_error_with_state(
     Interrupted { reason, cleanup }.into()
 }
 
-pub(crate) fn dev_error_with_recoveries(source: anyhow::Error, recoveries: Value) -> anyhow::Error {
-    DevErrorWithRecoveries { source, recoveries }.into()
-}
-
-pub(crate) fn dev_error_parts(error: &anyhow::Error) -> (&anyhow::Error, Option<&Value>) {
-    error
-        .downcast_ref::<DevErrorWithRecoveries>()
-        .map_or((error, None), |context| {
-            (&context.source, Some(&context.recoveries))
-        })
-}
-
 fn dev_error_source(error: &anyhow::Error) -> &anyhow::Error {
-    dev_error_parts(error).0
+    crate::dev_outcome::source(error)
 }
 
 pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {

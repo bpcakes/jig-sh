@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::state::StateStore;
 use crate::{
     AppRunSpec, CommandSpec, DevStatusRequest, DevStopRequest, Route, RouteMode, dev_api,
-    dev_sessions, dev_status, dev_stop, processes, state,
+    dev_outcome, dev_sessions, dev_status, dev_stop, processes, state,
 };
 
 #[test]
@@ -45,7 +45,7 @@ fn interrupted_dev_result_preserves_replacement_recoveries() {
         "kind": "dead-orphan-retired",
         "message": "session 'dev_example': retired a dead orphan"
     }]);
-    let output = dev_api::normalize_dev_result(Err(processes::dev_error_with_recoveries(
+    let output = dev_api::normalize_dev_result(Err(dev_outcome::with_recoveries(
         processes::interruption_error(reason),
         recoveries.clone(),
     )))

@@ -2,7 +2,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::types::{DevRequest, DevStatusRequest, DevStopRequest};
-use crate::{dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request};
+use crate::{
+    dev_outcome, dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request,
+};
 
 /// Resolves and runs a development request.
 ///
@@ -47,7 +49,7 @@ pub fn dev_resolved(request: crate::ResolvedDevRequest) -> Result<Value> {
 pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
     match result {
         Err(error) => {
-            let (source, recoveries) = processes::dev_error_parts(&error);
+            let (source, recoveries) = dev_outcome::parts(&error);
             let Some(reason) = processes::interruption_reason(source) else {
                 let Some(recoveries) = recoveries else {
                     return Err(error);
