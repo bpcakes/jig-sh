@@ -219,6 +219,25 @@ mod tests {
     }
 
     #[test]
+    fn dev_status_summary_distinguishes_a_recoverable_orphan_from_running() {
+        let summary = format_dev_status_summary(&json!({
+            "ok": true,
+            "repo_name": "demo",
+            "running": false,
+            "sessions": [{
+                "session_id": "dev_recoverable",
+                "status": "recoverable",
+                "recoverable": true,
+                "supervisor_pid": 4242,
+                "apps": [{"name": "web"}]
+            }]
+        }));
+
+        assert!(summary.contains("Dev status: stopped"));
+        assert!(summary.contains("dev_recoverable: recoverable"));
+    }
+
+    #[test]
     fn dev_stop_summary_distinguishes_idempotent_and_incomplete_results() {
         let nothing_running = format_dev_stop_summary(&json!({
             "ok": true,

@@ -12,7 +12,7 @@ pub(crate) enum RouteMode {
     Alias,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Route {
     pub(crate) hostname: RouteHostname,
     pub(crate) target_host: TargetHost,

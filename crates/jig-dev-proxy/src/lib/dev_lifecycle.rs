@@ -410,6 +410,7 @@ fn dev_stop_retires_a_stale_registered_session_and_is_idempotent() {
         pid: u32::MAX,
         start_token: Some("retired-supervisor".into()),
     };
+    stale.apps[0].spawn_state_tracked = false;
     store
         .mutate_dev_sessions(|sessions, _| {
             sessions.push(stale);
@@ -435,7 +436,10 @@ fn dev_stop_retires_a_stale_registered_session_and_is_idempotent() {
 }
 
 #[test]
-fn unconfirmed_cleanup_stays_visible_and_stop_fails_closed() {
+fn dead_unconfirmed_cleanup_retires_the_orphan_and_only_its_owned_routes() {
+    if !state::process_start_tokens_supported() {
+        return;
+    }
     let temp = tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
     let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
@@ -443,12 +447,11 @@ fn unconfirmed_cleanup_stays_visible_and_stop_fails_closed() {
         store.clone(),
         "demo",
         temp.path(),
-        &[lifecycle_spec(
-            temp.path(),
-            "web",
-            "web.demo.localhost",
-            false,
-        )],
+        &[
+            lifecycle_spec(temp.path(), "web", "web.demo.localhost", true),
+            lifecycle_spec(temp.path(), "admin", "admin.demo.localhost", true),
+            lifecycle_spec(temp.path(), "docs", "docs.demo.localhost", true),
+        ],
         false,
     )
     .unwrap();
@@ -468,9 +471,74 @@ fn unconfirmed_cleanup_stays_visible_and_stop_fails_closed() {
                 pid: u32::MAX,
                 start_token: Some("retired-supervisor".into()),
             };
+            sessions[0].apps[0].target_port = Some(4005);
+            sessions[0].apps[0].spawn_state_tracked = false;
+            sessions[0].apps[0].process = Some(state::DevProcessIdentity {
+                pid: u32::MAX - 1,
+                start_token: Some("retired-app".into()),
+            });
+            sessions[0].apps[1].target_port = Some(4006);
+            sessions[0].apps[1].spawn_state_tracked = false;
+            sessions[0].apps[1].process = Some(state::DevProcessIdentity {
+                pid: u32::MAX - 2,
+                start_token: Some("different-owner".into()),
+            });
+            sessions[0].apps[2].target_port = Some(4007);
+            sessions[0].apps[2].spawn_state_tracked = false;
+            sessions[0].apps[2].process = Some(state::DevProcessIdentity {
+                pid: u32::MAX - 3,
+                start_token: Some("alias-owner".into()),
+            });
             Ok(())
         })
         .unwrap();
+    let current_pid = std::process::id();
+    let current_start_token =
+        state::process_start_token(current_pid).expect("current process has a start token");
+    let outcome = store
+        .mutate_dev_state_interruptible(&|| false, |_, routes| {
+            routes.extend([
+                Route {
+                    hostname: "unrelated.demo.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4999,
+                    owner_pid: None,
+                    owner_start_token: None,
+                    mode: RouteMode::Alias,
+                    created_at_ms: state::now_ms(),
+                },
+                Route {
+                    hostname: "docs.demo.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4007,
+                    owner_pid: Some(u32::MAX - 3),
+                    owner_start_token: Some("alias-owner".into()),
+                    mode: RouteMode::Alias,
+                    created_at_ms: state::now_ms(),
+                },
+                Route {
+                    hostname: "admin.demo.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4006,
+                    owner_pid: Some(current_pid),
+                    owner_start_token: Some(current_start_token.clone()),
+                    mode: RouteMode::Process,
+                    created_at_ms: state::now_ms(),
+                },
+                Route {
+                    hostname: "web.demo.localhost".into(),
+                    target_host: "127.0.0.1".into(),
+                    target_port: 4005,
+                    owner_pid: Some(u32::MAX - 1),
+                    owner_start_token: Some("retired-app".into()),
+                    mode: RouteMode::Process,
+                    created_at_ms: state::now_ms(),
+                },
+            ]);
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(outcome, state::LockOutcome::Acquired(())));
 
     let status = dev_status(DevStatusRequest::new(
         "demo",
@@ -478,9 +546,141 @@ fn unconfirmed_cleanup_stays_visible_and_stop_fails_closed() {
         Some(state_dir.clone()),
     ))
     .unwrap();
-    assert_eq!(status["running"], true);
-    assert_eq!(status["sessions"][0]["status"], "orphaned");
+    assert_eq!(status["running"], false);
+    assert_eq!(status["sessions"][0]["status"], "recoverable");
     assert_eq!(status["sessions"][0]["cleanup_required"], true);
+    assert_eq!(status["sessions"][0]["recoverable"], true);
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["matched_sessions"], 1);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert_eq!(stopped["stopped_apps"], 0);
+    assert_eq!(stopped["sessions"], json!([]));
+    assert!(
+        stopped["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("retired a dead orphan")
+                    && warning.contains("without signaling persisted PIDs")
+            }))
+    );
+    let snapshot = store.snapshot_dev_state().unwrap();
+    assert!(snapshot.sessions.is_empty());
+    let remaining_hosts = snapshot
+        .routes
+        .iter()
+        .map(|route| route.hostname.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        remaining_hosts,
+        std::collections::BTreeSet::from([
+            "admin.demo.localhost",
+            "docs.demo.localhost",
+            "unrelated.demo.localhost",
+        ])
+    );
+}
+
+#[test]
+fn replace_recovers_a_dead_orphan_before_claiming_the_same_app() {
+    if !state::process_start_tokens_supported() {
+        return;
+    }
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", true);
+    let orphan = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let _unconfirmed_cleanup = orphan.arm_cleanup();
+    let orphan_id = store.snapshot_dev_state().unwrap().sessions[0]
+        .session_id
+        .clone();
+    drop(orphan);
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            sessions[0].apps[0].target_port = Some(4005);
+            sessions[0].apps[0].process = Some(state::DevProcessIdentity {
+                pid: u32::MAX - 1,
+                start_token: Some("retired-app".into()),
+            });
+            Ok(())
+        })
+        .unwrap();
+    store
+        .add_route(Route {
+            hostname: "web.demo.localhost".into(),
+            target_host: "127.0.0.1".into(),
+            target_port: 4005,
+            owner_pid: Some(u32::MAX - 1),
+            owner_start_token: Some("retired-app".into()),
+            mode: RouteMode::Process,
+            created_at_ms: state::now_ms(),
+        })
+        .unwrap();
+
+    let replacement =
+        dev_sessions::DevSessionRuntime::start(store.clone(), "demo", temp.path(), &[spec], true)
+            .unwrap();
+
+    let snapshot = store.snapshot_dev_state().unwrap();
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert_ne!(snapshot.sessions[0].session_id, orphan_id);
+    assert!(snapshot.routes.is_empty());
+    drop(replacement);
+}
+
+#[test]
+fn unconfirmed_cleanup_with_a_live_registered_app_stays_visible_and_fails_closed() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    let _unconfirmed_cleanup = runtime.arm_cleanup();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            sessions[0].apps[0].process = Some(state::DevProcessIdentity {
+                pid: std::process::id(),
+                start_token: state::process_start_token(std::process::id()),
+            });
+            Ok(())
+        })
+        .unwrap();
 
     let stopped = dev_stop(DevStopRequest::new(
         "demo",
@@ -499,10 +699,128 @@ fn unconfirmed_cleanup_stays_visible_and_stop_fails_closed() {
             .unwrap()
             .iter()
             .any(|warning| {
-                warning
-                    .as_str()
-                    .is_some_and(|warning| warning.contains("without signaling numeric PIDs"))
+                warning.as_str().is_some_and(|warning| {
+                    warning.contains("registered app 'web'")
+                        && (warning.contains("is still live")
+                            || warning.contains("could not be classified safely"))
+                        && warning.contains("without signaling numeric PIDs")
+                })
             })
+    );
+}
+
+#[test]
+fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identity() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    runtime.prepare_app_spawn("web", 4005).unwrap();
+    let _unconfirmed_cleanup = runtime.arm_cleanup();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            Ok(())
+        })
+        .unwrap();
+
+    let status = dev_status(DevStatusRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir.clone()),
+    ))
+    .unwrap();
+    assert_eq!(status["running"], true);
+    assert_eq!(status["sessions"][0]["status"], "orphaned");
+    assert_eq!(status["sessions"][0]["recoverable"], false);
+    assert_eq!(status["sessions"][0]["apps"][0]["spawn_pending"], true);
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], false);
+    assert_eq!(stopped["stopped_sessions"], 0);
+    assert_eq!(stopped["sessions"].as_array().unwrap().len(), 1);
+    assert!(
+        stopped["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("may have spawned")
+                    && warning.contains("process identity was durably recorded")
+            }))
+    );
+}
+
+#[test]
+fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    let _unconfirmed_cleanup = runtime.arm_cleanup();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            sessions[0].apps[0].spawn_state_tracked = false;
+            Ok(())
+        })
+        .unwrap();
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], false);
+    assert_eq!(stopped["stopped_sessions"], 0);
+    assert!(
+        stopped["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("predates durable spawn-state tracking")
+            }))
     );
 }
 

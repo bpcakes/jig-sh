@@ -9,7 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
 use self::management::stop_session_ids_interruptible;
-use self::process_identity::{capture_process_identity, process_identity_observed_alive};
+use self::process_identity::{capture_process_identity, process_identity_may_be_alive};
 use crate::session_control::SessionControlServer;
 use crate::state::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
@@ -100,6 +100,8 @@ impl DevSessionRuntime {
                     hostname: spec.proxy.then(|| spec.hostname.clone()),
                     target_host: spec.target_host.clone(),
                     target_port: spec.explicit_port,
+                    spawn_state_tracked: true,
+                    spawn_pending: false,
                     process: None,
                 })
                 .collect(),
@@ -132,6 +134,9 @@ impl DevSessionRuntime {
                         "Could not replace the existing Jig dev session safely: {}",
                         stop.warnings.join("; ")
                     );
+                }
+                for warning in &stop.warnings {
+                    eprintln!("jig dev --replace warning: {warning}");
                 }
                 match claim_session_interruptible(&store, &record, cancelled)? {
                     LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
@@ -199,6 +204,63 @@ impl DevSessionRuntime {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn prepare_app_spawn(&self, app_name: &str, target_port: u16) -> Result<()> {
+        self.store.mutate_dev_sessions(|sessions, _| {
+            self.prepare_app_spawn_in(sessions, app_name, target_port)
+        })
+    }
+
+    pub(crate) fn prepare_app_spawn_interruptible(
+        &self,
+        app_name: &str,
+        target_port: u16,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        self.store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                self.prepare_app_spawn_in(sessions, app_name, target_port)
+            })
+    }
+
+    fn prepare_app_spawn_in(
+        &self,
+        sessions: &mut [DevSessionRecord],
+        app_name: &str,
+        target_port: u16,
+    ) -> Result<()> {
+        let session = exact_session_mut(
+            sessions,
+            &self.session_id,
+            &self.repo_root_identity,
+            &self.supervisor,
+        )?;
+        let app = session
+            .apps
+            .iter_mut()
+            .find(|app| app.name == app_name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Jig dev session '{}' did not contain configured app '{}'",
+                    self.session_id,
+                    app_name
+                )
+            })?;
+        if app.process.is_some() {
+            bail!(
+                "Jig dev session '{}' app '{}' already has a registered process",
+                self.session_id,
+                app_name
+            );
+        }
+        app.target_port = Some(target_port);
+        app.spawn_state_tracked = true;
+        app.spawn_pending = true;
+        session.cleanup_required = true;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        Ok(())
+    }
+
     pub(crate) fn record_app_process_cleanup_cancelable(
         &self,
         app_name: &str,
@@ -250,6 +312,8 @@ impl DevSessionRuntime {
                 )
             })?;
         app.target_port = Some(target_port);
+        app.spawn_state_tracked = true;
+        app.spawn_pending = false;
         app.process = Some(process);
         session.cleanup_required = true;
         session.updated_at_ms = next_timestamp(session.updated_at_ms);
@@ -393,7 +457,7 @@ impl ClaimConflicts {
             )
         } else {
             anyhow!(
-                "A live Jig dev session from this repository already claims {}. Run `jig dev stop` to stop all repository sessions, or retry this launch with `jig dev --replace`.",
+                "A registered Jig dev session from this repository already claims {}. Run `jig dev stop` to stop all repository sessions, or retry this launch with `jig dev --replace`.",
                 hosts.join(", ")
             )
         }
@@ -523,22 +587,23 @@ fn overlapping_hostname(left: &DevSessionRecord, right: &DevSessionRecord) -> Op
 }
 
 fn session_owns_route(session: &DevSessionRecord, route: &Route) -> bool {
-    session.apps.iter().any(|app| {
-        app.hostname.as_deref() == Some(route.hostname.as_str())
-            && app.process.as_ref().is_some_and(|identity| {
-                route.owner_pid == Some(identity.pid)
-                    && route.owner_start_token == identity.start_token
-            })
-    })
+    route.mode == RouteMode::Process
+        && session.apps.iter().any(|app| {
+            app.hostname.as_deref() == Some(route.hostname.as_str())
+                && app.process.as_ref().is_some_and(|identity| {
+                    route.owner_pid == Some(identity.pid)
+                        && route.owner_start_token == identity.start_token
+                })
+        })
 }
 
 fn session_observed_alive(session: &DevSessionRecord) -> bool {
-    process_identity_observed_alive(&session.supervisor)
+    process_identity_may_be_alive(&session.supervisor)
         || session
             .apps
             .iter()
             .filter_map(|app| app.process.as_ref())
-            .any(process_identity_observed_alive)
+            .any(process_identity_may_be_alive)
 }
 
 fn route_is_live(route: &Route) -> bool {

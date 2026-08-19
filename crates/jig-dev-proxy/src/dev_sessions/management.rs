@@ -6,8 +6,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
-use super::process_identity::{process_identity_matches, process_identity_observed_alive};
-use super::{CanonicalRepo, next_timestamp};
+use super::process_identity::{
+    ProcessIdentityObservation, observe_process_identity, process_identity_may_be_alive,
+};
+use super::{CanonicalRepo, next_timestamp, session_owns_route};
 use crate::session_control::{ping, request_stop};
 use crate::state::{DevSessionPhase, DevSessionRecord, LockOutcome, StateStore};
 use crate::types::{DevStatusRequest, DevStopRequest, Route};
@@ -15,6 +17,29 @@ use crate::types::{DevStatusRequest, DevStopRequest, Route};
 const CONTROL_RETIRE_BASE_TIMEOUT: Duration = Duration::from_secs(35);
 const CONTROL_RETIRE_PER_APP_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OrphanRetentionReason {
+    SupervisorAlive,
+    SupervisorUncertain,
+    AppAlive(String),
+    AppUncertain(String),
+    AppSpawnPending(String),
+    AppSpawnUntracked(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OrphanRecoveryAssessment {
+    Retirable,
+    Retain(OrphanRetentionReason),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RetireDeadOrphanOutcome {
+    Retired,
+    AlreadyAbsent,
+    Retained(OrphanRetentionReason),
+}
 
 pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
     let repo = CanonicalRepo::resolve(&request.repo_name, &request.root)?;
@@ -32,7 +57,9 @@ pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
         .filter(|session| session.repo_root_identity == repo.root_identity)
         .map(|session| session_status(session, routes))
         .collect::<Vec<_>>();
-    let running = sessions.iter().any(|session| session["status"] != "stale");
+    let running = sessions
+        .iter()
+        .any(|session| !matches!(session["status"].as_str(), Some("stale" | "recoverable")));
     Ok(json!({
         "ok": true,
         "command": "dev status",
@@ -135,7 +162,7 @@ pub(super) fn stop_session_ids_interruptible(
                     .apps
                     .iter()
                     .filter_map(|app| app.process.as_ref())
-                    .filter(|identity| process_identity_observed_alive(identity))
+                    .filter(|identity| process_identity_may_be_alive(identity))
                     .count(),
             )
         })
@@ -179,6 +206,7 @@ pub(super) fn stop_session_ids_interruptible(
     }
 
     let mut lifecycle_warnings = Vec::new();
+    let mut recovery_warnings = Vec::new();
     let remaining = match current_target_sessions(store, repo, target_ids, cancelled)? {
         LockOutcome::Acquired(remaining) => remaining,
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
@@ -187,38 +215,39 @@ pub(super) fn stop_session_ids_interruptible(
         if cancelled() {
             return Ok(LockOutcome::Cancelled);
         }
-        if process_identity_observed_alive(&session.supervisor) {
-            let detail = if process_identity_matches(&session.supervisor) {
-                "remained live after the authenticated stop request"
-            } else {
-                "is live but its start identity cannot be verified safely"
-            };
-            lifecycle_warnings.push((
-                session.session_id.clone(),
-                format!(
-                    "session '{}': supervisor PID {} {detail}",
-                    session.session_id, session.supervisor.pid,
-                ),
-            ));
-            if !mark_orphaned(store, &session, cancelled)? {
-                return Ok(LockOutcome::Cancelled);
+        match (
+            session.cleanup_required,
+            orphan_recovery_assessment(&session),
+        ) {
+            (true, OrphanRecoveryAssessment::Retirable) => {
+                match retire_dead_orphan(store, &session, cancelled)? {
+                    LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired) => {
+                        recovery_warnings.push(format!(
+                            "session '{}': retired a dead orphan and its exact-owned stale routes without signaling persisted PIDs; unrecorded descendants could not be ruled out",
+                            session.session_id
+                        ));
+                    }
+                    LockOutcome::Acquired(RetireDeadOrphanOutcome::AlreadyAbsent) => {}
+                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
+                        lifecycle_warnings.push(retention_warning(&session, &reason));
+                        if !mark_orphaned(store, &session, cancelled)? {
+                            return Ok(LockOutcome::Cancelled);
+                        }
+                    }
+                }
             }
-            continue;
-        }
-
-        if session.cleanup_required {
-            lifecycle_warnings.push((
-                session.session_id.clone(),
-                format!(
-                    "session '{}': its supervisor is unavailable and prior process-tree or route cleanup was not confirmed; the registry entry was retained without signaling numeric PIDs",
-                    session.session_id
-                ),
-            ));
-            if !mark_orphaned(store, &session, cancelled)? {
-                return Ok(LockOutcome::Cancelled);
+            (_, OrphanRecoveryAssessment::Retain(reason)) => {
+                lifecycle_warnings.push(retention_warning(&session, &reason));
+                if !mark_orphaned(store, &session, cancelled)? {
+                    return Ok(LockOutcome::Cancelled);
+                }
             }
-        } else if !remove_exact_session(store, &session, cancelled)? {
-            return Ok(LockOutcome::Cancelled);
+            (false, OrphanRecoveryAssessment::Retirable) => {
+                if !remove_exact_session(store, &session, cancelled)? {
+                    return Ok(LockOutcome::Cancelled);
+                }
+            }
         }
     }
     let snapshot = match store.snapshot_dev_state_interruptible(cancelled)? {
@@ -238,11 +267,16 @@ pub(super) fn stop_session_ids_interruptible(
         .iter()
         .filter_map(|session| session["session_id"].as_str())
         .collect::<HashSet<_>>();
-    let warnings = lifecycle_warnings
+    let blocking_warnings = lifecycle_warnings
         .into_iter()
         .chain(control_warnings)
         .filter(|(session_id, _)| remaining_ids.contains(session_id.as_str()))
         .map(|(_, warning)| warning)
+        .collect::<Vec<_>>();
+    let ok = blocking_warnings.is_empty() && sessions.is_empty();
+    let warnings = blocking_warnings
+        .into_iter()
+        .chain(recovery_warnings)
         .collect::<Vec<_>>();
     let stopped_sessions = matched_sessions.saturating_sub(sessions.len());
     let stopped_apps = initially_live_apps
@@ -251,13 +285,116 @@ pub(super) fn stop_session_ids_interruptible(
         .map(|(_, app_count)| app_count)
         .sum();
     Ok(LockOutcome::Acquired(StopReport {
-        ok: warnings.is_empty() && sessions.is_empty(),
+        ok,
         matched_sessions,
         stopped_sessions,
         stopped_apps,
         sessions,
         warnings,
     }))
+}
+
+fn retire_dead_orphan(
+    store: &StateStore,
+    session: &DevSessionRecord,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<RetireDeadOrphanOutcome>> {
+    store.mutate_dev_state_interruptible(cancelled, |sessions, routes| {
+        let Some(index) = sessions.iter().position(|current| {
+            current.session_id == session.session_id
+                && current.repo_root_identity == session.repo_root_identity
+                && current.supervisor == session.supervisor
+        }) else {
+            return Ok(RetireDeadOrphanOutcome::AlreadyAbsent);
+        };
+        let current = &sessions[index];
+        if let OrphanRecoveryAssessment::Retain(reason) = orphan_recovery_assessment(current) {
+            return Ok(RetireDeadOrphanOutcome::Retained(reason));
+        }
+
+        routes.retain(|route| !session_owns_route(current, route));
+        sessions.remove(index);
+        Ok(RetireDeadOrphanOutcome::Retired)
+    })
+}
+
+fn orphan_recovery_assessment(session: &DevSessionRecord) -> OrphanRecoveryAssessment {
+    match observe_process_identity(&session.supervisor) {
+        ProcessIdentityObservation::Alive => {
+            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorAlive);
+        }
+        ProcessIdentityObservation::Uncertain => {
+            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorUncertain);
+        }
+        ProcessIdentityObservation::Absent => {}
+    }
+    if !session.cleanup_required {
+        return OrphanRecoveryAssessment::Retirable;
+    }
+    for app in &session.apps {
+        if app.spawn_pending {
+            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnPending(
+                app.name.clone(),
+            ));
+        }
+        if app.process.is_none() && !app.spawn_state_tracked {
+            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnUntracked(
+                app.name.clone(),
+            ));
+        }
+        let Some(process) = app.process.as_ref() else {
+            continue;
+        };
+        match observe_process_identity(process) {
+            ProcessIdentityObservation::Alive => {
+                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppAlive(
+                    app.name.clone(),
+                ));
+            }
+            ProcessIdentityObservation::Uncertain => {
+                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppUncertain(
+                    app.name.clone(),
+                ));
+            }
+            ProcessIdentityObservation::Absent => {}
+        }
+    }
+    OrphanRecoveryAssessment::Retirable
+}
+
+fn retention_warning(
+    session: &DevSessionRecord,
+    reason: &OrphanRetentionReason,
+) -> (String, String) {
+    let detail = match reason {
+        OrphanRetentionReason::SupervisorAlive => format!(
+            "supervisor PID {} remained live after the authenticated stop request",
+            session.supervisor.pid
+        ),
+        OrphanRetentionReason::SupervisorUncertain => format!(
+            "supervisor PID {} could not be classified safely",
+            session.supervisor.pid
+        ),
+        OrphanRetentionReason::AppAlive(app) => {
+            format!("registered app '{app}' is still live")
+        }
+        OrphanRetentionReason::AppUncertain(app) => {
+            format!("registered app '{app}' could not be classified safely")
+        }
+        OrphanRetentionReason::AppSpawnPending(app) => {
+            format!("app '{app}' may have spawned before its process identity was durably recorded")
+        }
+        OrphanRetentionReason::AppSpawnUntracked(app) => format!(
+            "legacy app '{app}' has no process identity and predates durable spawn-state tracking"
+        ),
+    };
+    (
+        session.session_id.clone(),
+        format!(
+            "session '{}': {detail}; the registry entry was retained without signaling numeric PIDs",
+            session.session_id
+        ),
+    )
 }
 
 fn control_retire_timeout(targets: &[DevSessionRecord]) -> Duration {
@@ -361,25 +498,20 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
         &session.control.token,
     )
     .unwrap_or(false);
-    let supervisor_verified = process_identity_matches(&session.supervisor);
-    let supervisor_alive = process_identity_observed_alive(&session.supervisor);
+    let supervisor_observation = observe_process_identity(&session.supervisor);
+    let supervisor_verified = supervisor_observation == ProcessIdentityObservation::Alive;
+    let supervisor_alive = supervisor_observation == ProcessIdentityObservation::Alive;
     let apps = session
         .apps
         .iter()
         .map(|app| {
-            let process_alive = app
-                .process
-                .as_ref()
-                .is_some_and(process_identity_observed_alive);
+            let process_observation = app.process.as_ref().map(observe_process_identity);
+            let process_alive = process_observation == Some(ProcessIdentityObservation::Alive);
             let process_identity_verified =
-                app.process.as_ref().is_some_and(process_identity_matches);
+                process_observation == Some(ProcessIdentityObservation::Alive);
             let route_present = app.hostname.as_deref().is_some_and(|hostname| {
                 routes.iter().any(|route| {
-                    route.hostname.as_str() == hostname
-                        && app.process.as_ref().is_some_and(|identity| {
-                            route.owner_pid == Some(identity.pid)
-                                && route.owner_start_token == identity.start_token
-                        })
+                    route.hostname.as_str() == hostname && session_owns_route(session, route)
                 })
             });
             json!({
@@ -387,25 +519,31 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
                 "hostname": app.hostname,
                 "target_host": app.target_host,
                 "target_port": app.target_port,
+                "spawn_state_tracked": app.spawn_state_tracked,
+                "spawn_pending": app.spawn_pending,
                 "pid": app.process.as_ref().map(|process| process.pid),
                 "alive": process_alive,
                 "identity_verified": process_identity_verified,
+                "identity_observation": process_observation.map(process_observation_label),
                 "route_present": route_present,
             })
         })
         .collect::<Vec<_>>();
-    let any_app_alive = apps.iter().any(|app| app["alive"].as_bool() == Some(true));
-    let supervisor_active = control_alive || supervisor_alive;
-    let status = if session.phase == DevSessionPhase::Orphaned {
-        "orphaned"
-    } else if supervisor_active {
+    let recovery_assessment = orphan_recovery_assessment(session);
+    let recoverable =
+        session.cleanup_required && recovery_assessment == OrphanRecoveryAssessment::Retirable;
+    let supervisor_active =
+        control_alive || supervisor_observation == ProcessIdentityObservation::Alive;
+    let status = if session.phase != DevSessionPhase::Orphaned && supervisor_active {
         match session.phase {
             DevSessionPhase::Starting => "starting",
             DevSessionPhase::Stopping => "stopping",
             DevSessionPhase::Running => "running",
             DevSessionPhase::Orphaned => unreachable!("orphaned phase handled above"),
         }
-    } else if any_app_alive || session.cleanup_required {
+    } else if recoverable {
+        "recoverable"
+    } else if matches!(recovery_assessment, OrphanRecoveryAssessment::Retain(_)) {
         "orphaned"
     } else {
         "stale"
@@ -417,12 +555,22 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
         "started_at_ms": session.started_at_ms,
         "updated_at_ms": session.updated_at_ms,
         "cleanup_required": session.cleanup_required,
+        "recoverable": recoverable,
         "supervisor_pid": session.supervisor.pid,
         "supervisor_alive": supervisor_alive,
         "supervisor_identity_verified": supervisor_verified,
+        "supervisor_observation": process_observation_label(supervisor_observation),
         "control_alive": control_alive,
         "apps": apps,
     })
+}
+
+const fn process_observation_label(observation: ProcessIdentityObservation) -> &'static str {
+    match observation {
+        ProcessIdentityObservation::Alive => "alive",
+        ProcessIdentityObservation::Absent => "absent",
+        ProcessIdentityObservation::Uncertain => "uncertain",
+    }
 }
 
 fn empty_status(repo: &CanonicalRepo, state_dir: PathBuf) -> Value {

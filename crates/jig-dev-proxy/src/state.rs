@@ -25,7 +25,7 @@ use process_identity::route_is_alive;
 #[cfg(test)]
 use process_identity::windows_tasklist_csv_pid;
 pub(crate) use process_identity::{
-    pid_is_alive, process_start_token, process_start_tokens_supported,
+    PidObservation, observe_pid, pid_is_alive, process_start_token, process_start_tokens_supported,
 };
 pub(crate) use signature::{FileSignature, file_signature};
 

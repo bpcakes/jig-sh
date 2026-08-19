@@ -58,6 +58,10 @@ pub(crate) struct DevSessionApp {
     pub(crate) target_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) target_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) spawn_state_tracked: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) spawn_pending: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) process: Option<DevProcessIdentity>,
 }
@@ -238,6 +242,34 @@ fn validate_apps(session: &DevSessionRecord) -> Result<()> {
                 app.name
             );
         }
+        if app.spawn_pending && !session.cleanup_required {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without requiring cleanup",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && !app.spawn_state_tracked {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without tracked spawn state",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && app.target_port.is_none() {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without a target port",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && app.process.is_some() {
+            bail!(
+                "Jig development session '{}' app '{}' records both a pending spawn and a process identity",
+                session.session_id,
+                app.name
+            );
+        }
         if let Some(process) = app.process.as_ref() {
             if !session.cleanup_required {
                 bail!(
@@ -252,6 +284,10 @@ fn validate_apps(session: &DevSessionRecord) -> Result<()> {
         }
     }
     Ok(())
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn validate_process_identity(label: &str, identity: &DevProcessIdentity) -> Result<()> {

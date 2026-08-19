@@ -37,6 +37,8 @@ fn session(session_id: &str) -> DevSessionRecord {
                 hostname: Some("web.demo.localhost".into()),
                 target_host: "127.0.0.1".into(),
                 target_port: None,
+                spawn_state_tracked: true,
+                spawn_pending: false,
                 process: None,
             },
             DevSessionApp {
@@ -44,6 +46,8 @@ fn session(session_id: &str) -> DevSessionRecord {
                 hostname: None,
                 target_host: "::1".into(),
                 target_port: Some(4100),
+                spawn_state_tracked: true,
+                spawn_pending: false,
                 process: Some(DevProcessIdentity {
                     pid: std::process::id(),
                     start_token: None,
@@ -337,6 +341,46 @@ fn record_validation_rejects_invalid_identity_control_and_app_data() {
             .unwrap_err()
             .to_string()
             .contains("without requiring cleanup")
+    );
+
+    let mut pending_without_cleanup = session("pending_without_cleanup");
+    pending_without_cleanup.cleanup_required = false;
+    pending_without_cleanup.apps[0].target_port = Some(4005);
+    pending_without_cleanup.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_cleanup])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without requiring cleanup")
+    );
+
+    let mut pending_without_port = session("pending_without_port");
+    pending_without_port.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_port])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without a target port")
+    );
+
+    let mut pending_without_tracking = session("pending_without_tracking");
+    pending_without_tracking.apps[0].target_port = Some(4005);
+    pending_without_tracking.apps[0].spawn_state_tracked = false;
+    pending_without_tracking.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_tracking])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without tracked spawn state")
+    );
+
+    let mut pending_with_process = session("pending_with_process");
+    pending_with_process.apps[1].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_with_process])
+            .unwrap_err()
+            .to_string()
+            .contains("both a pending spawn and a process identity")
     );
 
     let mut invalid_time = session("invalid_time");

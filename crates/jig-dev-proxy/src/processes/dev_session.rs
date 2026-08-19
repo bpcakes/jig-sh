@@ -243,7 +243,7 @@ fn run_apps_with_session_and_interrupt_probe(
             argv,
         } = prepared;
         let cleanup_scope_result = session
-            .prepare_cleanup_scope_interruptible(&cancelled)
+            .prepare_app_spawn_interruptible(&spec.name, port, &cancelled)
             .and_then(|outcome| lock_outcome_or_interruption(outcome, &interrupt_requested));
         if let Err(error) = cleanup_scope_result {
             let interrupted = is_interruption(&error);
