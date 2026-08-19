@@ -163,15 +163,16 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let quota_stale = assessment.quota_is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
-                Cell::from(stale_snapshot_label(row.usage(), stale))
-                    .style(stale_usage_style(stale)),
-                Cell::from(stale_snapshot_label(projection.label(), stale))
-                    .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
+                    .style(stale_usage_style(quota_stale)),
+                Cell::from(stale_snapshot_label(projection.label(), projection_stale))
+                    .style(stale_projection_style(projection, projection_stale)),
             ])
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
@@ -226,14 +227,18 @@ fn draw_projection_list(
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let quota_stale = assessment.quota_is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!("{}\n{}", row.display_name(), row.account())),
-                Cell::from(stale_snapshot_label(row.usage(), stale))
-                    .style(stale_usage_style(stale)),
-                Cell::from(stale_snapshot_label(projection.list_outcome_label(), stale))
-                    .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
+                    .style(stale_usage_style(quota_stale)),
+                Cell::from(stale_snapshot_label(
+                    projection.list_outcome_label(),
+                    projection_stale,
+                ))
+                .style(stale_projection_style(projection, projection_stale)),
             ])
             .height(2)
             .style(match row.inspection() {
@@ -290,16 +295,16 @@ fn draw_compact_list(
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!(
                     "{} · {}\n{}",
                     row.display_name(),
                     row.account(),
-                    stale_snapshot_label(projection.label(), stale)
+                    stale_snapshot_label(projection.label(), projection_stale)
                 ))
-                .style(stale_projection_style(projection, stale)),
+                .style(stale_projection_style(projection, projection_stale)),
             ])
             .height(2)
             .style(match row.inspection() {
@@ -428,9 +433,9 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                     lines.push(Line::from(Span::styled(
                         stale_snapshot_label(
                             format!("    At current pace: {}", projection.outcome_label()),
-                            assessment.is_stale(),
+                            assessment.projection_is_stale(),
                         ),
-                        stale_projection_style(projection, assessment.is_stale()),
+                        stale_projection_style(projection, assessment.projection_is_stale()),
                     )));
                 }
             }

@@ -446,7 +446,7 @@ fn projection_expires_when_its_usage_window_resets() {
     assert!(
         app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 60)
-            .is_stale()
+            .projection_is_stale()
     );
 }
 
@@ -469,12 +469,12 @@ fn unprojectable_sibling_reset_does_not_expire_the_visible_projection() {
     assert!(
         !app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 60)
-            .is_stale()
+            .projection_is_stale()
     );
     assert!(
         app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 15 * 60)
-            .is_stale()
+            .projection_is_stale()
     );
 }
 

@@ -419,10 +419,12 @@ impl HomeRow {
             Inspection::Loading => UsageSnapshotAssessment::at(
                 Projection::Loading,
                 UsageSnapshotFreshness::NotSampled,
+                UsageSnapshotFreshness::NotSampled,
                 false,
             ),
             Inspection::Unavailable => UsageSnapshotAssessment::at(
                 Projection::InspectionUnavailable,
+                UsageSnapshotFreshness::NotSampled,
                 UsageSnapshotFreshness::NotSampled,
                 false,
             ),
@@ -539,6 +541,7 @@ impl Details {
         UsageSnapshotAssessment::at(
             self.projection(),
             freshness,
+            freshness,
             primary_bucket.is_some_and(|bucket| bucket.id == "codex"),
         )
     }
@@ -598,12 +601,13 @@ impl Details {
         UsageSnapshotAssessment::at(
             bucket.window_projection_at(index, self.observed_at),
             freshness,
+            freshness,
             false,
         )
     }
 
     pub(crate) fn usage_sample_age_label_at(&self, now: u64) -> Option<String> {
-        if !self.usage_snapshot_assessment_at(now).has_sample() {
+        if !self.usage_snapshot_assessment_at(now).has_quota_sample() {
             return None;
         }
         let age = now.saturating_sub(self.observed_at);
