@@ -7,14 +7,15 @@ This work fixes a lifecycle reporting defect without broadening the public comma
 - [x] Diagnose the failure path and review the applicable crate invariants.
 - [x] Run the Fowler heuristic scanner and validate its relevant signal manually.
 - [x] Establish the narrow code baseline (`cargo fmt --all -- --check`; 570 dev-proxy tests).
-- [ ] Introduce a private `StopProgress` carrier while preserving existing output behavior.
-- [ ] Preserve accumulated warnings in failed stop output and add regression coverage.
-- [ ] Run all configured repository gates and close the work plan.
+- [x] Introduce a private `StopProgress` carrier while preserving existing output behavior.
+- [x] Preserve accumulated warnings in failed stop output and add regression coverage.
+- [x] Run all configured repository gates; plan closure remains as the final bookkeeping action.
 
 ## Surprises & Discoveries
 
 - The defect is not an isolated JSON typo. `stop_session_ids_interruptible_with_policy` already promotes recoveries into `StopSessionOutcome::Failed`, while `control_warnings` and `lifecycle_warnings` remain local to the inner function. The type boundary therefore makes it easy to preserve one category of partial progress and silently lose another.
 - The refactoring scanner flags the raw `&mut Vec<OrphanRecoveryNotice>` parameter and the long stop function. The raw vector finding is relevant because it exposes the incomplete partial-progress concept; the file and function size findings alone are not sufficient reason for a wider rewrite.
+- The first workspace test run had one transient failure in an unrelated generated-template recopy test after 2,035 passes. The exact test passed in isolation, and the complete two-part workspace suite then passed on rerun.
 
 ## Decision Log
 
@@ -25,7 +26,9 @@ This work fixes a lifecycle reporting defect without broadening the public comma
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+`StopProgress` now owns recovery notices and phase-ordered warning candidates. Complete outcomes preserve the prior filtering and ordering semantics, while failed outcomes retain all evidence accumulated before the failure. Replacement failure and cancellation paths consume the whole progress value instead of silently discarding warnings. Regression tests cover failed JSON composition, successful warning filtering, and replacement error-chain preservation.
+
+Verification passed: 572 `jig-dev-proxy` tests, crate Clippy with warnings denied, the configured two-part workspace test suite, contract checks, workspace formatting, and workspace Clippy. No persistent state schema, public Rust API, locking, signaling, or route mutation behavior changed.
 
 ## Context and orientation
 
