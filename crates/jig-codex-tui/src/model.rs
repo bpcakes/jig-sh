@@ -891,7 +891,8 @@ impl RateLimitWindow {
         match self.duration_minutes {
             Some(300) => Some(WindowRole::FiveHour),
             Some(10_080) => Some(WindowRole::Weekly),
-            _ => None,
+            Some(minutes) => Some(WindowRole::DurationMinutes(minutes)),
+            None => None,
         }
     }
 

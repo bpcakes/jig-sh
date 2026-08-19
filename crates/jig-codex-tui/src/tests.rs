@@ -146,6 +146,23 @@ fn unrecognized_codex_window_durations_remain_distinguishable() {
 }
 
 #[test]
+fn unrecognized_codex_duration_remains_identifiable_in_projection() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 25.0, 120, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining {
+            role: WindowRole::DurationMinutes(120),
+            percent,
+            partial: false,
+        } if (percent - 50.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(app.rows[0].projection().label(), "2h: ~50% left at reset");
+}
+
+#[test]
 fn projection_compares_usage_with_elapsed_window_time() {
     const NOW: u64 = 2_000_000_000;
     let mut app = app(homes());

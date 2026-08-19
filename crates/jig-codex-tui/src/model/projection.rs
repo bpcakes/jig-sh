@@ -15,6 +15,7 @@ pub(super) enum WindowProjection {
 pub(crate) enum WindowRole {
     FiveHour,
     Weekly,
+    DurationMinutes(u64),
     Window,
 }
 
@@ -23,6 +24,9 @@ impl fmt::Display for WindowRole {
         formatter.write_str(match self {
             Self::FiveHour => "5h",
             Self::Weekly => "weekly",
+            Self::DurationMinutes(minutes) => {
+                return formatter.write_str(&super::format_duration(Some(*minutes)));
+            }
             Self::Window => "window",
         })
     }
