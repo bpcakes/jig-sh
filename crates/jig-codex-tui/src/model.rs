@@ -606,12 +606,8 @@ impl Details {
         let age = now.saturating_sub(self.observed_at);
         if age < 60 {
             "just now".into()
-        } else if age < 3_600 {
-            format!("{}m ago", age / 60)
-        } else if age < 86_400 {
-            format!("{}h ago", age / 3_600)
         } else {
-            format!("{}d ago", age / 86_400)
+            format!("{} ago", format_countdown(age))
         }
     }
 }

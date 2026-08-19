@@ -47,7 +47,7 @@ pub(crate) struct Recommendation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct UsageSnapshotAssessment {
     projection: Projection,
-    stale: bool,
+    freshness: UsageSnapshotFreshness,
     recommendation: Option<Recommendation>,
 }
 
@@ -74,14 +74,13 @@ impl UsageSnapshotAssessment {
         freshness: UsageSnapshotFreshness,
         recommendation_eligible: bool,
     ) -> Self {
-        let stale = freshness == UsageSnapshotFreshness::Stale;
         let recommendation = (freshness == UsageSnapshotFreshness::Fresh
             && recommendation_eligible)
             .then(|| projection.recommendation())
             .flatten();
         Self {
             projection,
-            stale,
+            freshness,
             recommendation,
         }
     }
@@ -91,7 +90,7 @@ impl UsageSnapshotAssessment {
     }
 
     pub(crate) fn is_stale(self) -> bool {
-        self.stale
+        self.freshness == UsageSnapshotFreshness::Stale
     }
 
     pub(crate) fn recommendation(self) -> Option<Recommendation> {
