@@ -129,14 +129,14 @@ impl DevSessionRuntime {
                         LockOutcome::Acquired(stop) => stop,
                         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
                     };
+                for recovery in &stop.recoveries {
+                    eprintln!("jig dev --replace recovery: {}", recovery.message);
+                }
                 if !stop.ok {
                     bail!(
                         "Could not replace the existing Jig dev session safely: {}",
                         stop.warnings.join("; ")
                     );
-                }
-                for warning in &stop.warnings {
-                    eprintln!("jig dev --replace warning: {warning}");
                 }
                 match claim_session_interruptible(&store, &record, cancelled)? {
                     LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),

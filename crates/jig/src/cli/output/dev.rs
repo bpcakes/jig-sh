@@ -122,6 +122,13 @@ pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
             lines.push(format!("  Warning: {warning}"));
         }
     }
+    if let Some(recoveries) = value["recoveries"].as_array() {
+        for recovery in recoveries {
+            if let Some(message) = value_str(recovery, "message") {
+                lines.push(format!("  Recovery: {message}"));
+            }
+        }
+    }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }
@@ -247,6 +254,7 @@ mod tests {
             "stopped_sessions": 0,
             "stopped_apps": 0,
             "sessions": [],
+            "recoveries": [],
             "warnings": []
         }));
         assert!(nothing_running.contains("Dev stop: nothing running"));
@@ -268,5 +276,22 @@ mod tests {
         assert!(incomplete.contains("Sessions matched: 1"));
         assert!(incomplete.contains("Sessions stopped: 0"));
         assert!(incomplete.contains("exact process identity could not be confirmed stopped"));
+
+        let recovered = format_dev_stop_summary(&json!({
+            "ok": true,
+            "matched_sessions": 1,
+            "stopped_sessions": 1,
+            "stopped_apps": 0,
+            "sessions": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_456': retired a dead orphan; retired app diagnostics: web (target 127.0.0.1:4005, last PID 4242, spawn registered)"
+            }],
+            "warnings": []
+        }));
+        assert!(recovered.contains("Dev stop: stopped"));
+        assert!(recovered.contains("Recovery: session 'dev_456'"));
+        assert!(recovered.contains("web (target 127.0.0.1:4005, last PID 4242"));
+        assert!(!recovered.contains("Warning:"));
     }
 }

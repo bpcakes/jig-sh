@@ -104,6 +104,7 @@ fn dev_lifecycle_commands_are_non_mutating_and_structured_without_state() {
             "stopped_sessions": 0,
             "stopped_apps": 0,
             "sessions": [],
+            "recoveries": [],
             "warnings": [],
         })
     );
@@ -429,6 +430,7 @@ fn dev_stop_retires_a_stale_registered_session_and_is_idempotent() {
     assert_eq!(stopped["stopped_apps"], 0);
     assert_eq!(stopped["sessions"], json!([]));
     assert_eq!(stopped["warnings"], json!([]));
+    assert_eq!(stopped["recoveries"], json!([]));
     assert_eq!(repeated["ok"], true);
     assert_eq!(repeated["matched_sessions"], 0);
     assert_eq!(repeated["stopped_sessions"], 0);
@@ -562,15 +564,19 @@ fn dead_unconfirmed_cleanup_retires_the_orphan_and_only_its_owned_routes() {
     assert_eq!(stopped["stopped_sessions"], 1);
     assert_eq!(stopped["stopped_apps"], 0);
     assert_eq!(stopped["sessions"], json!([]));
+    assert_eq!(stopped["warnings"], json!([]));
+    let recovery = &stopped["recoveries"][0];
+    assert_eq!(recovery["kind"], "dead-orphan-retired");
+    assert_eq!(recovery["forgot_ambiguous_spawn"], false);
+    assert_eq!(recovery["apps"][0]["name"], "web");
+    assert_eq!(recovery["apps"][0]["target_port"], 4005);
+    assert_eq!(recovery["apps"][0]["pid"], u32::MAX - 1);
+    assert_eq!(recovery["apps"][0]["spawn_state"], "registered");
     assert!(
-        stopped["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning.as_str().is_some_and(|warning| {
-                warning.contains("retired a dead orphan")
-                    && warning.contains("without signaling persisted PIDs")
-            }))
+        recovery["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("web (target 127.0.0.1:4005")
+                && message.contains(&format!("last PID {}", u32::MAX - 1)))
     );
     let snapshot = store.snapshot_dev_state().unwrap();
     assert!(snapshot.sessions.is_empty());
@@ -587,6 +593,76 @@ fn dead_unconfirmed_cleanup_retires_the_orphan_and_only_its_owned_routes() {
             "unrelated.demo.localhost",
         ])
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn exited_child_pid_is_observed_absent_and_retires_a_dead_orphan() {
+    if !state::process_start_tokens_supported() {
+        return;
+    }
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    let exited_pid = child.id();
+    assert!(child.wait().unwrap().success());
+    assert!(i32::try_from(exited_pid).is_ok());
+    assert_eq!(
+        state::observe_pid(exited_pid),
+        state::PidObservation::Absent
+    );
+
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    let _unconfirmed_cleanup = runtime.arm_cleanup();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            let exited_identity = state::DevProcessIdentity {
+                pid: exited_pid,
+                start_token: Some("exited-child".into()),
+            };
+            sessions[0].supervisor = exited_identity.clone();
+            sessions[0].apps[0].process = Some(exited_identity);
+            Ok(())
+        })
+        .unwrap();
+
+    let status = dev_status(DevStatusRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir.clone()),
+    ))
+    .unwrap();
+    assert_eq!(status["running"], false);
+    assert_eq!(status["sessions"][0]["status"], "recoverable");
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert_eq!(stopped["recoveries"][0]["kind"], "dead-orphan-retired");
+    assert!(store.snapshot_dev_state().unwrap().sessions.is_empty());
 }
 
 #[test]
@@ -779,17 +855,19 @@ fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identit
     assert_eq!(forgotten["ok"], true);
     assert_eq!(forgotten["stopped_sessions"], 1);
     assert!(forgotten["sessions"].as_array().unwrap().is_empty());
-    assert!(
-        forgotten["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning.as_str().is_some_and(|warning| {
-                warning.contains("explicitly forgot")
-                    && warning.contains("ambiguous spawn history")
-                    && warning.contains("may still be running")
-            }))
-    );
+    assert_eq!(forgotten["warnings"], json!([]));
+    let recovery = &forgotten["recoveries"][0];
+    assert_eq!(recovery["kind"], "ambiguous-orphan-forgotten");
+    assert_eq!(recovery["forgot_ambiguous_spawn"], true);
+    assert_eq!(recovery["apps"][0]["name"], "web");
+    assert_eq!(recovery["apps"][0]["target_port"], 4005);
+    assert_eq!(recovery["apps"][0]["pid"], json!(null));
+    assert_eq!(recovery["apps"][0]["spawn_state"], "pending");
+    assert!(recovery["message"].as_str().is_some_and(
+        |message| message.contains("explicitly forgot")
+            && message.contains("ambiguous spawn history")
+            && message.contains("may still be running")
+    ));
 }
 
 #[test]
@@ -986,15 +1064,93 @@ fn legacy_missing_process_identity_requires_explicit_forget_after_spawn_tracking
     assert_eq!(forgotten["ok"], true);
     assert_eq!(forgotten["stopped_sessions"], 1);
     assert!(forgotten["sessions"].as_array().unwrap().is_empty());
+    assert_eq!(forgotten["warnings"], json!([]));
     assert!(
-        forgotten["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|warning| warning.as_str().is_some_and(|warning| {
-                warning.contains("explicitly forgot") && warning.contains("ambiguous spawn history")
-            }))
+        forgotten["recoveries"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("explicitly forgot")
+                && message.contains("ambiguous spawn history"))
     );
+}
+
+#[test]
+fn partial_stop_separates_successful_recoveries_from_blocking_warnings() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let recoverable = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    let _recoverable_cleanup = recoverable.arm_cleanup();
+    drop(recoverable);
+
+    let blocked = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "admin",
+            "admin.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    let _blocked_cleanup = blocked.arm_cleanup();
+    drop(blocked);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            for session in sessions {
+                session.supervisor = state::DevProcessIdentity {
+                    pid: u32::MAX,
+                    start_token: Some("retired-supervisor".into()),
+                };
+                if let Some(app) = session.apps.iter_mut().find(|app| app.name == "admin") {
+                    app.process = Some(state::DevProcessIdentity {
+                        pid: std::process::id(),
+                        start_token: state::process_start_token(std::process::id()),
+                    });
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+
+    assert_eq!(stopped["ok"], false);
+    assert_eq!(stopped["matched_sessions"], 2);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert_eq!(stopped["recoveries"].as_array().unwrap().len(), 1);
+    assert_eq!(stopped["recoveries"][0]["apps"][0]["name"], "web");
+    let warnings = stopped["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|warning| {
+        warning
+            .as_str()
+            .is_some_and(|warning| warning.contains("registered app 'admin'"))
+    }));
+    assert!(warnings.iter().all(|warning| {
+        warning
+            .as_str()
+            .is_some_and(|warning| !warning.contains("retired a dead orphan"))
+    }));
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::process_identity::{
@@ -12,7 +13,8 @@ use super::process_identity::{
 use super::{CanonicalRepo, next_timestamp, session_owns_route};
 use crate::session_control::{ping, request_stop};
 use crate::state::{
-    DevSessionAppSpawnEvidence, DevSessionPhase, DevSessionRecord, LockOutcome, StateStore,
+    DevSessionApp, DevSessionAppSpawnEvidence, DevSessionPhase, DevSessionRecord, LockOutcome,
+    StateStore,
 };
 use crate::types::{DevStatusRequest, DevStopRequest, Route};
 
@@ -38,7 +40,7 @@ enum OrphanRecoveryAssessment {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RetireDeadOrphanOutcome {
-    Retired { forgot_ambiguous_spawn: bool },
+    Retired(OrphanRecoveryNotice),
     AlreadyAbsent,
     Retained(OrphanRetentionReason),
 }
@@ -107,7 +109,104 @@ pub(super) struct StopReport {
     stopped_sessions: usize,
     stopped_apps: usize,
     sessions: Vec<Value>,
+    pub(super) recoveries: Vec<OrphanRecoveryNotice>,
     pub(super) warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(super) struct OrphanRecoveryNotice {
+    session_id: String,
+    kind: &'static str,
+    forgot_ambiguous_spawn: bool,
+    apps: Vec<OrphanRecoveryApp>,
+    pub(super) message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct OrphanRecoveryApp {
+    name: String,
+    hostname: Option<String>,
+    target_host: String,
+    target_port: Option<u16>,
+    pid: Option<u32>,
+    spawn_state: &'static str,
+}
+
+impl OrphanRecoveryApp {
+    fn from_app(app: &DevSessionApp) -> Self {
+        let spawn_state = match app.spawn_evidence() {
+            DevSessionAppSpawnEvidence::Untracked => "untracked",
+            DevSessionAppSpawnEvidence::NotStarted => "not-started",
+            DevSessionAppSpawnEvidence::Pending => "pending",
+            DevSessionAppSpawnEvidence::Registered(_) => "registered",
+        };
+        Self {
+            name: app.name.clone(),
+            hostname: app.hostname.clone(),
+            target_host: app.target_host.clone(),
+            target_port: app.target_port,
+            pid: app.process.as_ref().map(|process| process.pid),
+            spawn_state,
+        }
+    }
+
+    fn diagnostic(&self) -> String {
+        let target = self.target_port.map_or_else(
+            || format!("{}:<unknown-port>", self.target_host),
+            |port| format!("{}:{port}", self.target_host),
+        );
+        let pid = self
+            .pid
+            .map_or_else(|| "unknown PID".to_owned(), |pid| format!("last PID {pid}"));
+        format!(
+            "{} (target {target}, {pid}, spawn {})",
+            self.name, self.spawn_state
+        )
+    }
+}
+
+impl OrphanRecoveryNotice {
+    fn from_session(session: &DevSessionRecord, forgot_ambiguous_spawn: bool) -> Self {
+        let apps = session
+            .apps
+            .iter()
+            .map(OrphanRecoveryApp::from_app)
+            .collect::<Vec<_>>();
+        let app_diagnostics = apps
+            .iter()
+            .map(OrphanRecoveryApp::diagnostic)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let diagnostic_suffix = if app_diagnostics.is_empty() {
+            String::new()
+        } else {
+            format!("; retired app diagnostics: {app_diagnostics}")
+        };
+        let (kind, message) = if forgot_ambiguous_spawn {
+            (
+                "ambiguous-orphan-forgotten",
+                format!(
+                    "session '{}': explicitly forgot a dead-supervisor orphan with ambiguous spawn history and retired its exact-owned stale routes without signaling persisted PIDs; an unrecorded process may still be running{diagnostic_suffix}",
+                    session.session_id
+                ),
+            )
+        } else {
+            (
+                "dead-orphan-retired",
+                format!(
+                    "session '{}': retired a dead orphan and its exact-owned stale routes without signaling persisted PIDs; unrecorded descendants could not be ruled out{diagnostic_suffix}",
+                    session.session_id
+                ),
+            )
+        };
+        Self {
+            session_id: session.session_id.clone(),
+            kind,
+            forgot_ambiguous_spawn,
+            apps,
+            message,
+        }
+    }
 }
 
 impl StopReport {
@@ -122,6 +221,7 @@ impl StopReport {
             "stopped_sessions": self.stopped_sessions,
             "stopped_apps": self.stopped_apps,
             "sessions": self.sessions,
+            "recoveries": self.recoveries,
             "warnings": self.warnings,
         })
     }
@@ -236,7 +336,7 @@ fn stop_session_ids_interruptible_with_policy(
     }
 
     let mut lifecycle_warnings = Vec::new();
-    let mut recovery_warnings = Vec::new();
+    let mut recoveries = Vec::new();
     let remaining = match current_target_sessions(store, repo, target_ids, cancelled)? {
         LockOutcome::Acquired(remaining) => remaining,
         LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
@@ -252,21 +352,8 @@ fn stop_session_ids_interruptible_with_policy(
             (true, OrphanRecoveryAssessment::Retirable) => {
                 match retire_orphan(store, &session, policy, cancelled)? {
                     LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
-                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired {
-                        forgot_ambiguous_spawn,
-                    }) => {
-                        let warning = if forgot_ambiguous_spawn {
-                            format!(
-                                "session '{}': explicitly forgot a dead-supervisor orphan with ambiguous spawn history and retired its exact-owned stale routes without signaling persisted PIDs; an unrecorded process may still be running",
-                                session.session_id
-                            )
-                        } else {
-                            format!(
-                                "session '{}': retired a dead orphan and its exact-owned stale routes without signaling persisted PIDs; unrecorded descendants could not be ruled out",
-                                session.session_id
-                            )
-                        };
-                        recovery_warnings.push(warning);
+                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired(recovery)) => {
+                        recoveries.push(recovery);
                     }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::AlreadyAbsent) => {}
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
@@ -314,10 +401,7 @@ fn stop_session_ids_interruptible_with_policy(
         .map(|(_, warning)| warning)
         .collect::<Vec<_>>();
     let ok = blocking_warnings.is_empty() && sessions.is_empty();
-    let warnings = blocking_warnings
-        .into_iter()
-        .chain(recovery_warnings)
-        .collect::<Vec<_>>();
+    let warnings = blocking_warnings;
     let stopped_sessions = matched_sessions.saturating_sub(sessions.len());
     let stopped_apps = initially_live_apps
         .into_iter()
@@ -330,6 +414,7 @@ fn stop_session_ids_interruptible_with_policy(
         stopped_sessions,
         stopped_apps,
         sessions,
+        recoveries,
         warnings,
     }))
 }
@@ -349,25 +434,24 @@ fn retire_orphan(
             return Ok(RetireDeadOrphanOutcome::AlreadyAbsent);
         };
         let current = &sessions[index];
-        let strict_assessment = orphan_recovery_assessment(current, AmbiguousOrphanPolicy::Retain);
+        let forgot_ambiguous_spawn = policy == AmbiguousOrphanPolicy::Forget
+            && current.cleanup_required
+            && current.apps.iter().any(|app| {
+                matches!(
+                    app.spawn_evidence(),
+                    DevSessionAppSpawnEvidence::Pending | DevSessionAppSpawnEvidence::Untracked
+                )
+            });
         if let OrphanRecoveryAssessment::Retain(reason) =
             orphan_recovery_assessment(current, policy)
         {
             return Ok(RetireDeadOrphanOutcome::Retained(reason));
         }
-        let forgot_ambiguous_spawn = matches!(
-            strict_assessment,
-            OrphanRecoveryAssessment::Retain(
-                OrphanRetentionReason::AppSpawnPending(_)
-                    | OrphanRetentionReason::AppSpawnUntracked(_)
-            )
-        );
 
+        let recovery = OrphanRecoveryNotice::from_session(current, forgot_ambiguous_spawn);
         routes.retain(|route| !session_owns_route(current, route));
         sessions.remove(index);
-        Ok(RetireDeadOrphanOutcome::Retired {
-            forgot_ambiguous_spawn,
-        })
+        Ok(RetireDeadOrphanOutcome::Retired(recovery))
     })
 }
 
@@ -651,6 +735,7 @@ fn empty_stop(repo: &CanonicalRepo, state_dir: PathBuf) -> Value {
         "stopped_sessions": 0,
         "stopped_apps": 0,
         "sessions": [],
+        "recoveries": [],
         "warnings": [],
     })
 }
