@@ -14,7 +14,7 @@ The root cause is structural. Backend identity is currently carried through `bac
 - [x] (2026-08-19T16:10:11Z) Started structured work `plan_01M0DCJNZJ7JNMVG3STSNNQ0CE` and wrote this ExecPlan.
 - [x] (2026-08-19T16:16:14Z) Commit slice 1: enforce Huma OpenAPI and Hey API client drift checks from Go-owned source changes.
 - [x] (2026-08-19T16:25:02Z) Commit slice 2: make optional `.env` loading, database creation, Goose migration, local setup, integration tests, and browser E2E share one Go bootstrap lifecycle.
-- [ ] Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
+- [x] (2026-08-19T16:27:11Z) Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
 - [ ] Commit slice 4: make migration immutability consume a backend-neutral configured migration directory and enable it for PostgreSQL Go repositories.
 - [ ] Commit slice 5: reject invalid Go module segments, preserve wizard numeric compatibility, make format failure propagation reliable, and keep reserved output paths backend-aware.
 - [ ] Run the complete repository test suite through the development Jig binary, record evidence, close structured work, and commit the final plan/state update.

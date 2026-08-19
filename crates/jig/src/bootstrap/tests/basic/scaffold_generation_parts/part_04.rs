@@ -198,7 +198,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         path: destination.clone(),
         scaffold: ScaffoldOpts {
             preset: Some(ScaffoldPreset::GoReact),
-            db: Some(ScaffoldDb::None),
+            db: Some(ScaffoldDb::Postgres),
             frontends: vec![ScaffoldFrontend {
                 name: "web".into(),
                 kind: ScaffoldFrontendKind::Spa,
@@ -231,6 +231,29 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     ] {
         assert_eq!(workflow.matches(path).count(), 2, "missing {path}");
     }
+
+    for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
+        let workflow = fs::read_to_string(
+            destination
+                .join(".github/workflows")
+                .join(workflow_name),
+        )
+        .unwrap();
+        assert!(
+            workflow.contains("actions-rust-lang/setup-rust-toolchain@v1"),
+            "{workflow_name} must install Rust before invoking scripts/jig"
+        );
+        assert!(workflow.contains("cache-dependency-path: go.mod"));
+        assert_eq!(
+            workflow
+                .matches(r#"- "internal/database/queries/**""#)
+                .count(),
+            2
+        );
+    }
+
+    let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    assert!(browser_e2e.contains("cache-dependency-path: go.mod"));
 }
 
 #[test]

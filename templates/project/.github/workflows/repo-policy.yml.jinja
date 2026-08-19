@@ -8,6 +8,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "sqlc.yaml"
+      - "internal/database/queries/**"
       - "internal/database/migrations/**"
 [% else %]
 [% for root in rust_crate_roots %]
@@ -31,6 +32,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "sqlc.yaml"
+      - "internal/database/queries/**"
       - "internal/database/migrations/**"
 [% else %]
 [% for root in rust_crate_roots %]
@@ -68,11 +70,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+      - name: Install Rust toolchain for Jig
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
       - name: Install Go toolchain
         uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
           cache: true
+          cache-dependency-path: go.mod
       - name: Validate contract
         run: scripts/jig check contract
       - name: Check formatting

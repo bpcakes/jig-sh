@@ -88,6 +88,7 @@ jobs:
         with:
           go-version-file: .go-version
           cache: true
+          cache-dependency-path: go.mod
 [% else %]
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -7,6 +7,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "sqlc.yaml"
+      - "internal/database/queries/**"
       - "internal/database/migrations/**"
       - ".jig.toml"
       - ".agent/jig-contract.json"
@@ -19,6 +20,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "sqlc.yaml"
+      - "internal/database/queries/**"
       - "internal/database/migrations/**"
       - ".jig.toml"
       - ".agent/jig-contract.json"
@@ -40,10 +42,15 @@ jobs:
     runs-on: <<[ ci_github_runner | tojson ]>>
     steps:
       - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
           cache: true
+          cache-dependency-path: go.mod
       - run: scripts/jig check fmt
       - run: scripts/jig check lint
       - run: scripts/jig check test-locked
