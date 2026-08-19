@@ -233,8 +233,9 @@ fn requested_stop_with_unconfirmed_cleanup_is_a_structured_failure() {
     assert_eq!(output["stopped"], false);
     assert_eq!(output["cleanup_unconfirmed"], true);
     assert_eq!(output["stop_reason"], reason.label());
+    assert_eq!(output["error"]["kind"], "command_failed");
     assert_eq!(
-        output["error"],
+        output["error"]["message"],
         super::super::UNCONFIRMED_DEV_CLEANUP_MESSAGE
     );
 }

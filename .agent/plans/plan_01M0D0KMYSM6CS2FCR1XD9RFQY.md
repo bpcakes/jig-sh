@@ -16,7 +16,7 @@ The root cause is structural rather than a pair of unrelated omissions. Recovery
 - [x] (2026-08-19) Ran the configured workspace baseline: 2,025 of 2,026 selected tests passed; the sole bootstrap failure passed immediately when rerun in isolation and is tracked below.
 - [x] (2026-08-19) Moved recovery-bearing error context to the command/outcome boundary without behavior change; all 562 `jig-dev-proxy` tests pass.
 - [x] (2026-08-19) Preserved typed recovery evidence through partial stop, cancellation, second-claim conflict, and second-claim error exits; added failure and cancellation regressions, and passed all 564 proxy tests plus strict Clippy.
-- [ ] Emit one stable structured error object for every dev failure and keep human output compatible.
+- [x] (2026-08-19) Emitted the standard structured error object for recovery-bearing and cleanup-unconfirmed dev failures, kept the human renderer backward-compatible, documented the contract, and passed focused tests, all 564 proxy tests, and strict Clippy for both affected crates.
 - [ ] Run all configured gates with `JIG_DEV_BIN=target/debug/jig`, inspect receipts and diff, and finish structured work.
 
 ## Surprises & Discoveries

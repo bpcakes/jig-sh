@@ -744,7 +744,8 @@ fn replace_recovers_a_dead_orphan_before_claiming_the_same_app() {
     .unwrap();
     assert_eq!(failed["ok"], false);
     assert_eq!(failed["interrupted"], false);
-    assert_eq!(failed["error"], "replacement launch failed");
+    assert_eq!(failed["error"]["kind"], "command_failed");
+    assert_eq!(failed["error"]["message"], "replacement launch failed");
     assert_eq!(failed["recoveries"], recoveries);
 
     let stopped = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
@@ -1352,7 +1353,13 @@ fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
     assert_eq!(failed["interrupted"], false);
     assert_eq!(failed["recoveries"].as_array().unwrap().len(), 1);
     assert_eq!(failed["recoveries"][0]["apps"][0]["name"], "web");
-    assert!(failed["error"].as_str().unwrap().contains("admin"));
+    assert_eq!(failed["error"]["kind"], "command_failed");
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("admin")
+    );
 
     let snapshot = store.snapshot_dev_state().unwrap();
     assert_eq!(snapshot.sessions.len(), 1);

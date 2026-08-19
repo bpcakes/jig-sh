@@ -33,12 +33,16 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
     }
     if value_bool(value, "cleanup_unconfirmed").unwrap_or(false) {
         lines.push("  Cleanup: unconfirmed; session retained for inspection".into());
-    } else if let Some(error) = value_str(value, "error") {
+    } else if let Some(error) = dev_error_message(value) {
         lines.push(format!("  Error: {error}"));
     }
     append_recovery_messages(&mut lines, value);
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn dev_error_message(value: &serde_json::Value) -> Option<&str> {
+    value_str(value, "error").or_else(|| value_str(&value["error"], "message"))
 }
 
 pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
@@ -239,7 +243,10 @@ mod tests {
     fn dev_summary_reports_failure_after_replacement_recovery() {
         let summary = format_dev_summary(&json!({
             "ok": false,
-            "error": "replacement launch failed",
+            "error": {
+                "kind": "command_failed",
+                "message": "replacement launch failed"
+            },
             "first_exit": null,
             "proxy_failed": false,
             "routes": [],
