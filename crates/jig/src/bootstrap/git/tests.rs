@@ -6,6 +6,8 @@ use std::process::Command;
 
 use tempfile::tempdir;
 
+#[cfg(windows)]
+use super::git_template_environment_path;
 use super::{
     GIT_BIN_ENV, init_git_repo, init_git_repo_with_validation, validate_staged_git_repository,
 };
@@ -17,6 +19,15 @@ const HELPER_EXPECT_EXISTING_GIT_ACCEPTED: &str =
     "JIG_GIT_INIT_AMBIENT_HELPER_EXPECT_EXISTING_GIT_ACCEPTED";
 const HELPER_EXPECT_FAILURE: &str = "JIG_GIT_INIT_AMBIENT_HELPER_EXPECT_FAILURE";
 const HELPER_TEST: &str = "bootstrap::git::tests::git_init_ambient_environment_helper";
+
+#[cfg(windows)]
+#[test]
+fn git_template_environment_path_removes_verbatim_prefix() {
+    assert_eq!(
+        git_template_environment_path(Path::new(r"\\?\C:\repo\.jig-git-template")).unwrap(),
+        PathBuf::from(r"C:\repo\.jig-git-template")
+    );
+}
 
 #[test]
 fn git_init_ambient_environment_helper() {

@@ -901,6 +901,7 @@ mod tests {
 
     #[test]
     fn changed_paths_preserve_spaces_and_rename_paths() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -924,6 +925,7 @@ mod tests {
 
     #[test]
     fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -998,6 +1000,7 @@ mod tests {
 
     #[test]
     fn worktree_fingerprint_changes_when_untracked_file_content_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -1019,6 +1022,7 @@ mod tests {
 
     #[test]
     fn worktree_fingerprint_changes_when_large_untracked_file_content_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -1060,6 +1064,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn worktree_fingerprint_changes_when_untracked_symlink_target_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
