@@ -579,6 +579,10 @@ fn dev_help_describes_launch_and_session_management() {
 
     let stop_help = rendered_help(&["dev", "stop"]);
     assert_help_contains(&stop_help, "--state-dir");
+    assert_help_contains(&stop_help, "--forget-ambiguous-orphans");
+    assert_help_contains(&stop_help, "unconfirmed preflight cleanup");
+    assert_help_contains(&stop_help, "unprovable spawn history");
+    assert_help_contains(&stop_help, "never signals stored PIDs");
     assert_help_omits(&stop_help, "--replace");
     assert_help_omits(&stop_help, "--app");
 }

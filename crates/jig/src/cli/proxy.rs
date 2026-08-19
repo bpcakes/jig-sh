@@ -205,7 +205,7 @@ pub(crate) struct DevStopOpts {
     pub(crate) state_dir: Option<PathBuf>,
     #[arg(
         long,
-        help = "Forget dead-supervisor orphan records whose spawn history cannot be proven; never signals stored PIDs"
+        help = "Forget dead-supervisor orphan records with unconfirmed preflight cleanup or unprovable spawn history; never signals stored PIDs"
     )]
     pub(crate) forget_ambiguous_orphans: bool,
 }
