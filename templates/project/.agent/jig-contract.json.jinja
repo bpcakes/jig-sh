@@ -3,10 +3,14 @@
   "tool_namespace": "jig",
   "required_commands": [
     "bootstrap_command",
-    "rust_fmt_check_command",
+[% if backend_language == "rust" %]    "rust_fmt_check_command",
     "rust_clippy_command",
     "rust_test_command",
-    "rust_test_locked_command"[% if frontend_harness_enabled %],
+    "rust_test_locked_command"[% else %]    "go_fmt_check_command",
+    "go_lint_command",
+    "go_test_command",
+    "go_test_locked_command"[% if go_database == "postgres" %],
+    "sqlc_check_command"[% endif %][% endif %][% if frontend_harness_enabled %],
     "typescript_lint_command",
     "typescript_typecheck_command",
     "typescript_build_command",
@@ -25,25 +29,34 @@
       "name": "jig.fmt_check",
       "kind": "command",
       "description": "Run the configured format check command.",
-      "command": "rust_fmt_check_command"
+      "command": "[% if backend_language == "go" %]go_fmt_check_command[% else %]rust_fmt_check_command[% endif %]"
     },
+[% if backend_language == "go" %]
+    {
+      "name": "jig.lint",
+      "kind": "command",
+      "description": "Run the configured Go lint command.",
+      "command": "go_lint_command"
+    },
+[% else %]
     {
       "name": "jig.clippy",
       "kind": "command",
       "description": "Run the configured clippy command.",
       "command": "rust_clippy_command"
     },
+[% endif %]
     {
       "name": "jig.test",
       "kind": "command",
       "description": "Run the configured default test command.",
-      "command": "rust_test_command"
+      "command": "[% if backend_language == "go" %]go_test_command[% else %]rust_test_command[% endif %]"
     },
     {
       "name": "jig.test_locked",
       "kind": "command",
       "description": "Run the configured locked test command.",
-      "command": "rust_test_locked_command"
+      "command": "[% if backend_language == "go" %]go_test_locked_command[% else %]rust_test_locked_command[% endif %]"
     },
 [% if frontend_harness_enabled %]
     {
@@ -95,6 +108,14 @@
       "name": "jig.migration_add",
       "kind": "native",
       "description": "Add timestamped SQL migration stubs."
+    },
+[% endif %]
+[% if backend_language == "go" and go_database == "postgres" %]
+    {
+      "name": "jig.sqlc_check",
+      "kind": "command",
+      "description": "Run the configured sqlc drift check.",
+      "command": "sqlc_check_command"
     },
 [% endif %]
     {

@@ -51,7 +51,7 @@ For greenfield repositories, `jig init` gives developers an immediate typed cont
 jig init /path/to/new-repo --preset harness-only --repo-name new-repo --sqlx-enabled false --no-input --no-vault
 ```
 
-For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react` or `harness-only`; the app path then asks for `none`, `postgres`, or `sqlite` and accepts a comma-separated multi-selection of `web`, `landing`, and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible Rust/minimal shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
+For the guided path, run `jig init /path/to/new-repo` from a terminal. Choose `rust-react`, `go-react`, or `harness-only`; the app path then asks for its supported database and frontend selection. Go asks for a module import path and supports `none`/`postgres` plus `web`/`landing`; Rust additionally supports SQLite and `admin`. Jig resolves the answers file first, prompts only for missing choices, treats a stored minimal footprint as harness-only, validates incompatible shapes, and completes project-shape validation before asking for the initial vault passphrase or creating the destination.
 
 When the repo should start with an app, use a preset. The Rust + React preset creates the Jig harness, Rust workspace, API binary, core crate, main backend crate, HTTP boundary crate for Axum handlers and middleware, test-support crate, optional SQLx DB crate, crate-level ownership guides, and requested frontend apps in one pass:
 
@@ -62,6 +62,18 @@ jig init /path/to/new-repo \
   --db postgres \
   --frontends web,landing,admin
 ```
+
+The Go + React preset creates a Go 1.26 module with chi/Huma HTTP boundaries, an offline Huma OpenAPI exporter, and the same generated React/client workspace. PostgreSQL adds pgxpool, embedded Goose migrations, sqlc queries, and checked-in generated code:
+
+```sh
+jig init /path/to/new-repo \
+  --preset go-react \
+  --go-module github.com/acme/new-repo \
+  --db postgres \
+  --frontends web
+```
+
+Generated Go checks are `scripts/jig check fmt`, `lint`, `test`, `test-locked`, and PostgreSQL-only `sqlc`. The public TypeScript client is regenerated transactionally from Huma OpenAPI with Hey API. SQLite and the separate privileged admin boundary remain intentionally unsupported by `go-react` and fail before files are published.
 
 Generated React Node-side typings stay in the same major and at or below the minor version of the generated minimum Node runtime.
 

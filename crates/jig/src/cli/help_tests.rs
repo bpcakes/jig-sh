@@ -492,8 +492,9 @@ fn init_help_explains_defaults_strict_input_and_harness_only() {
     );
     assert_help_contains(
         &init_help,
-        "The rust-react preset also requires an explicit --db choice",
+        "Application presets require an explicit --db choice",
     );
+    assert_help_contains(&init_help, "go-react also requires --go-module");
     assert_help_contains(
         &init_help,
         "Non-terminal execution without --defaults follows this strict behavior",

@@ -75,6 +75,12 @@ struct RepoConfig {
     #[serde(default)]
     harness_footprint: HarnessFootprintConfig,
     #[allow(dead_code)]
+    #[serde(default = "default_backend_language")]
+    backend_language: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    go_database: String,
+    #[allow(dead_code)]
     #[serde(default)]
     sqlx_enabled: bool,
     #[allow(dead_code)]
@@ -410,6 +416,10 @@ impl RepoContext {
         &self.config.default_branch
     }
 
+    pub(crate) fn backend_language(&self) -> &str {
+        &self.config.backend_language
+    }
+
     pub(crate) fn legacy_jig_version(&self) -> Option<&str> {
         self.config.jig_version.as_deref()
     }
@@ -628,6 +638,10 @@ fn default_dev_app_kind() -> String {
 
 fn default_web_package_manager() -> String {
     "bun".into()
+}
+
+fn default_backend_language() -> String {
+    "rust".into()
 }
 
 fn configured_frontend_app_metadata<'a>(

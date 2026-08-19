@@ -14,6 +14,7 @@ pub mod tool {
     pub const CONTRACT_CHECK: &str = "jig.contract_check";
     pub const DECISIONS_ADD: &str = "jig.decisions_add";
     pub const FMT_CHECK: &str = "jig.fmt_check";
+    pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
     pub const PLANS_APPEND: &str = "jig.plans_append";
     pub const PLANS_CLOSE: &str = "jig.plans_close";
@@ -23,6 +24,7 @@ pub mod tool {
     pub const SESSION_END: &str = "jig.session_end";
     pub const SESSION_START: &str = "jig.session_start";
     pub const SQLX_CHECK: &str = "jig.sqlx_check";
+    pub const SQLC_CHECK: &str = "jig.sqlc_check";
     pub const TEST: &str = "jig.test";
     pub const TEST_LOCKED: &str = "jig.test_locked";
     pub const TYPESCRIPT_BUILD: &str = "jig.typescript_build";
@@ -129,7 +131,6 @@ pub trait FeatureContext {
     fn sqlx_enabled(&self) -> bool;
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
-
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()
             .iter()

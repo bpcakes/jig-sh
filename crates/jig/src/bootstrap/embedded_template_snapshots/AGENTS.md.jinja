@@ -18,13 +18,22 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 
 - Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
 - Preserve compatibility or stage rollouts for persisted database state, queued job types, public API contracts, bookmarked routes, webhook boundaries, or source-of-truth moves that can straddle deploys.
-[% if sqlx_enabled %]
+[% if sqlx_enabled or (backend_language == "go" and go_database == "postgres") %]
 - Never overwrite an existing database migration; add a new forward-only migration instead.
 [% endif %]
 
 ## Backend Defaults
 
+[% if backend_language == "go" %]
+- Treat `cmd/` as process entrypoints and `internal/` as private application packages.
+- Keep the Huma API constructor free of database connections, listeners, and other process lifecycle work so `cmd/openapi` remains offline.
+[% if go_database == "postgres" %]
+- Embedded Goose migrations live under `internal/database/migrations/`; sqlc queries and committed generated code live under `internal/database/queries/` and `internal/database/sqlc/`.
+- Use pgxpool for application traffic and keep Goose's `database/sql` adapter short-lived.
+[% endif %]
+[% else %]
 - Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
+[% endif %]
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
 [% if sqlx_enabled %]
 - SQL migrations live under `<<[ rust_migration_dir ]>>`.
@@ -65,7 +74,11 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig dev`
 - `scripts/jig check test`
 - `scripts/jig check fmt`
+[% if backend_language == "go" %]
+- `scripts/jig check lint`
+[% else %]
 - `scripts/jig check clippy`
+[% endif %]
 - `scripts/jig work status`
 - `scripts/jig work evidence`
 [% if frontend_apps | length > 0 %]
@@ -79,6 +92,9 @@ No web apps are configured in `.jig.toml`.
 [% if schema_dump_enabled %]
 - `scripts/jig check schema`
 - `scripts/jig sqlx schema dump`
+[% endif %]
+[% if backend_language == "go" and go_database == "postgres" %]
+- `scripts/jig check sqlc`
 [% endif %]
 - `scripts/jig sqlx migration add NAME`
 [% endif %]

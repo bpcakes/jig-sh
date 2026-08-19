@@ -43,6 +43,7 @@ impl From<CheckCommand> for command::CheckCommand {
     fn from(command: CheckCommand) -> Self {
         match command {
             CheckCommand::Fmt(opts) => Self::Fmt(opts.into()),
+            CheckCommand::Lint(opts) => Self::Lint(opts.into()),
             CheckCommand::Clippy(opts) => Self::Clippy(opts.into()),
             CheckCommand::Test(opts) => Self::Test(opts.into()),
             CheckCommand::TestLocked(opts) => Self::TestLocked(opts.into()),
@@ -51,6 +52,7 @@ impl From<CheckCommand> for command::CheckCommand {
             CheckCommand::TypeScriptBuild(opts) => Self::TypeScriptBuild(opts.into()),
             CheckCommand::TypeScriptCoverage(opts) => Self::TypeScriptCoverage(opts.into()),
             CheckCommand::Sqlx(opts) => Self::Sqlx(opts.into()),
+            CheckCommand::Sqlc(opts) => Self::Sqlc(opts.into()),
             CheckCommand::Schema(opts) => Self::Schema(opts.into()),
             CheckCommand::Contract(opts) => Self::Contract(opts.into()),
             CheckCommand::AgentMap(opts) => Self::AgentMap(opts.into()),

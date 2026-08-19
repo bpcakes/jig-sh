@@ -1,0 +1,51 @@
+name: Go Tests
+
+on:
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "sqlc.yaml"
+      - "internal/database/migrations/**"
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - ".github/workflows/go-tests.yml"
+  push:
+    branches:
+      - <<[ default_branch | tojson ]>>
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "sqlc.yaml"
+      - "internal/database/migrations/**"
+      - ".jig.toml"
+      - ".agent/jig-contract.json"
+      - ".github/workflows/go-tests.yml"
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: scripts/jig check fmt
+      - run: scripts/jig check lint
+      - run: scripts/jig check test-locked
+[% if go_database == "postgres" %]      - run: scripts/jig check sqlc
+[% endif %]

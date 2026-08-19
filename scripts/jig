@@ -2,7 +2,7 @@
 set -eu
 # jig-generated-runtime-launcher:v1
 # jig-runtime-repository-scope:v1
-# jig-check-subcommands:fmt,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test
+# jig-check-subcommands:fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test
 # jig-capability-only-subcommands:adopt,codex,doctor,init,presets,update
 # jig-repository-scope-subcommands:agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work
 # jig-global-flags:--json
@@ -146,7 +146,7 @@ jig_capability_only_requested() {
             return 0
             ;;
           # jig-strict-check-subcommands-begin
-          fmt | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
+          fmt | lint | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | sqlc | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
             # jig-strict-check-subcommands-end
             return 1
             ;;

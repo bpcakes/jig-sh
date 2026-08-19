@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::answers::{HarnessFootprint, RenderAnswers};
+use super::answers::{BackendLanguage, HarnessFootprint, RenderAnswers};
 use super::path::{
     validate_no_reserved_git_metadata_components, validate_repository_relative_ancestors,
 };
@@ -244,6 +244,10 @@ pub(super) fn should_omit_unmanaged_rendered_path(
 ) -> bool {
     if relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
+        || (answers.backend_language() == BackendLanguage::Go
+            && relative == Path::new(".github/workflows/rust-tests.yml"))
+        || (answers.backend_language() == BackendLanguage::Rust
+            && relative == Path::new(".github/workflows/go-tests.yml"))
     {
         return true;
     }

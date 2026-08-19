@@ -64,6 +64,11 @@ schema_dump_command = "scripts/dump-schema.sh"
 sqlx_check_command = "cargo sqlx prepare --check"
 
 [commands]
+go_fmt_check_command = "gofmt -w ."
+go_lint_command = "go vet ./..."
+go_test_command = "go test ./..."
+go_test_locked_command = "go test -mod=readonly ./..."
+sqlc_check_command = "go tool sqlc diff"
 typescript_build_command = "scripts/check-webapps.sh build"
 typescript_coverage_command = "scripts/check-webapps.sh coverage"
 typescript_lint_command = "scripts/check-webapps.sh lint"

@@ -27,7 +27,9 @@ const sharedPlugins = [
 const contracts = [
   {
     name: "public",
+[% if backend_language == "rust" %]
     cargoPackage: "<<[ package_name ]>>-api",
+[% endif %]
     document: "openapi/public.json",
     generated: "packages/public-api-client/src/generated",
   },
@@ -69,6 +71,9 @@ async function withStagedContracts(mode) {
     for (const contract of contracts) {
       const document = join(stageRoot, "openapi", `${contract.name}.json`);
       const generated = join(stageRoot, "generated", contract.name);
+[% if backend_language == "go" %]
+      await run("go", ["run", "./cmd/openapi", "--output", document]);
+[% else %]
       await run("cargo", [
         "run",
         "--quiet",
@@ -80,6 +85,7 @@ async function withStagedContracts(mode) {
         "--output",
         document,
       ]);
+[% endif %]
       await createClient({
         input: document,
         output: generated,
@@ -177,8 +183,12 @@ function recoveryError(publishError, restoreErrors) {
 
 async function assertPublicBoundary(explicitArtifacts) {
   const manifests = [
+[% if backend_language == "go" %]
+    "go.mod",
+[% else %]
     "apps/<<[ package_name ]>>-api/Cargo.toml",
     "crates/<<[ package_name ]>>-http/Cargo.toml",
+[% endif %]
 [% for dir in public_frontend_dirs %]
     <<[ (dir ~ "/package.json") | tojson ]>>,
 [% endfor %]
@@ -186,6 +196,7 @@ async function assertPublicBoundary(explicitArtifacts) {
   for (const manifest of manifests) {
     await assertContainsNoMarker(resolve(manifest), `public manifest ${manifest}`);
   }
+[% if backend_language == "rust" %]
   const { stdout: dependencyTree } = await execFileAsync(
     "cargo",
     ["tree", "--quiet", "-p", "<<[ package_name ]>>-api", "--edges", "normal", "--prefix", "none"],
@@ -196,13 +207,16 @@ async function assertPublicBoundary(explicitArtifacts) {
       throw new Error(`Public API dependency tree contains privileged package ${marker}`);
     }
   }
+[% endif %]
 
   const conventionalArtifacts = [
     ...publicFrontendDirs.map((directory) => join(directory, "dist")),
+[% if backend_language == "rust" %]
     "target/debug/<<[ package_name ]>>-api",
     "target/debug/<<[ package_name ]>>-api.exe",
     "target/release/<<[ package_name ]>>-api",
     "target/release/<<[ package_name ]>>-api.exe",
+[% endif %]
     "docs/public",
     "public-docs",
   ];

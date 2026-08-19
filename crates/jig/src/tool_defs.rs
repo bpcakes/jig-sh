@@ -51,11 +51,13 @@ pub(crate) mod cli_command {
     pub(crate) const CHECK_CLIPPY: &str = "clippy";
     pub(crate) const CHECK_CONTRACT: &str = "contract";
     pub(crate) const CHECK_FMT: &str = "fmt";
+    pub(crate) const CHECK_LINT: &str = "lint";
     pub(crate) const CHECK_MIGRATION_IMMUTABILITY: &str = "migration-immutability";
     pub(crate) const CHECK_NO_MOD_RS: &str = "no-mod-rs";
     pub(crate) const CHECK_RUST_FILE_LOC: &str = "rust-file-loc";
     pub(crate) const CHECK_SCHEMA: &str = "schema";
     pub(crate) const CHECK_SQLX: &str = "sqlx";
+    pub(crate) const CHECK_SQLC: &str = "sqlc";
     pub(crate) const CHECK_SQLX_UNCHECKED_NON_TEST: &str = "sqlx-unchecked-non-test";
     pub(crate) const CHECK_TEST: &str = "test";
     pub(crate) const CHECK_TEST_LOCKED: &str = "test-locked";

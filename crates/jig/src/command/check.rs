@@ -7,6 +7,7 @@ use super::ToolRequest;
 #[derive(Debug)]
 pub(crate) enum CheckCommand {
     Fmt(ToolRequest),
+    Lint(ToolRequest),
     Clippy(ToolRequest),
     Test(ToolRequest),
     TestLocked(ToolRequest),
@@ -15,6 +16,7 @@ pub(crate) enum CheckCommand {
     TypeScriptBuild(ToolRequest),
     TypeScriptCoverage(ToolRequest),
     Sqlx(ToolRequest),
+    Sqlc(ToolRequest),
     Schema(ToolRequest),
     Contract(ToolRequest),
     AgentMap(AgentMapRequest),

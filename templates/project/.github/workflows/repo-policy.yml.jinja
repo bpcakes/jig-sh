@@ -3,9 +3,17 @@ name: Repo Policy
 on:
   pull_request:
     paths:
+[% if backend_language == "go" %]
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "sqlc.yaml"
+      - "internal/database/migrations/**"
+[% else %]
 [% for root in rust_crate_roots %]
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
+[% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
@@ -18,9 +26,17 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
+[% if backend_language == "go" %]
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "sqlc.yaml"
+      - "internal/database/migrations/**"
+[% else %]
 [% for root in rust_crate_roots %]
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
+[% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
@@ -42,6 +58,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+[% if backend_language == "go" %]
+  go-policy:
+    name: Validate Go policy and contract
+    runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache: true
+      - name: Validate contract
+        run: scripts/jig check contract
+      - name: Check formatting
+        run: scripts/jig check fmt
+      - name: Run Go vet
+        run: scripts/jig check lint
+[% if go_database == "postgres" %]
+      - name: Check sqlc drift
+        run: scripts/jig check sqlc
+[% endif %]
+[% else %]
   no-mod-rs:
     name: Check for disallowed mod.rs files
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -162,4 +204,5 @@ jobs:
       - name: Check migration immutability
         run: |
           scripts/jig check migration-immutability --changed-against "${{ steps.base_ref.outputs.ref }}"
+[% endif %]
 [% endif %]

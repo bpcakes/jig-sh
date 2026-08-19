@@ -498,20 +498,53 @@ impl ScaffoldOpts {
 
     pub(crate) fn validate_init_invariants(&self, answers: &AnswerOpts) -> Result<()> {
         if answers.harness_footprint == Some(HarnessFootprint::Minimal)
-            && (self.preset == Some(ScaffoldPreset::RustReact)
+            && (matches!(
+                self.preset,
+                Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
+            )
                 || self.db.is_some()
-                || self.has_frontends())
+                || self.has_frontends()
+                || answers.go_module.is_some())
         {
+            let scaffold = if self.preset == Some(ScaffoldPreset::GoReact) {
+                "Go React"
+            } else {
+                "Rust React"
+            };
             bail!(
-                "Init cannot combine harness_footprint = \"minimal\" with a Rust React scaffold; remove --preset rust-react and its database/frontend options, or use harness_footprint = \"full\""
+                "Init cannot combine harness_footprint = \"minimal\" with a {scaffold} scaffold; remove the preset and its backend/frontend options, or use harness_footprint = \"full\""
             );
         }
         if self.preset == Some(ScaffoldPreset::HarnessOnly)
-            && (self.db.is_some() || self.has_frontends())
+            && (self.db.is_some() || self.has_frontends() || answers.go_module.is_some())
         {
             bail!(
-                "--preset harness-only cannot be combined with --db, --frontend, or --frontends; remove the scaffold flags or use --preset rust-react"
+                "--preset harness-only cannot be combined with --db, --go-module, --frontend, or --frontends; remove the scaffold flags or use an application preset"
             );
+        }
+        if self.preset != Some(ScaffoldPreset::GoReact) && answers.go_module.is_some() {
+            bail!("--go-module requires --preset go-react");
+        }
+        if self.preset == Some(ScaffoldPreset::GoReact) {
+            if self.db == Some(ScaffoldDb::Sqlite) {
+                bail!(
+                    "--preset go-react does not support --db sqlite; use --db none or --db postgres"
+                );
+            }
+            if self
+                .frontends
+                .iter()
+                .chain(self.frontend_list.iter())
+                .any(|frontend| frontend.kind == ScaffoldFrontendKind::Admin)
+                || answers
+                    .frontend_apps
+                    .iter()
+                    .any(|frontend| frontend.role == "admin")
+            {
+                bail!(
+                    "--preset go-react does not yet support the admin frontend because it requires a separate privileged API and client boundary; use web and/or landing"
+                );
+            }
         }
         if self.preset == Some(ScaffoldPreset::RustReact) {
             let reserved_backends = [
@@ -547,6 +580,10 @@ impl ScaffoldOpts {
         if self.preset == Some(ScaffoldPreset::HarnessOnly)
             && should_default_init_sqlx_disabled(answers)
         {
+            answers.sqlx_enabled = Some(false);
+        }
+        if self.preset == Some(ScaffoldPreset::GoReact) {
+            answers.backend_language = Some(crate::bootstrap::answers::BackendLanguage::Go);
             answers.sqlx_enabled = Some(false);
         }
     }

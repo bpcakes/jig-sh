@@ -14,7 +14,7 @@ use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
 use super::write::{ScaffoldFile, scaffold_file};
-use super::{FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind};
+use super::{FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldPreset};
 
 include!("frontend_parts/part_01.rs");
 include!("frontend_parts/part_02.rs");

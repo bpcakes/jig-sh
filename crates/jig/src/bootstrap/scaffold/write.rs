@@ -113,6 +113,7 @@ impl ScaffoldReport {
         json!({
             "preset": match plan.preset {
                 ScaffoldPreset::RustReact => "rust-react",
+                ScaffoldPreset::GoReact => "go-react",
                 ScaffoldPreset::HarnessOnly => unreachable!("harness-only has no scaffold report"),
             },
             "repo_name": &plan.repo_name,

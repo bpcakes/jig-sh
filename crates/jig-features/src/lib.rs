@@ -3,6 +3,7 @@ use jig_contract::{FeatureContext, FeatureDescriptor, NativeToolDescriptor, Nati
 // Feature order is not contractual; set-like public results sort and dedup.
 const FEATURES: &[FeatureDescriptor] = &[
     jig_core::FEATURE,
+    jig_go::FEATURE,
     jig_rust::FEATURE,
     jig_sqlx::FEATURE,
     jig_typescript::FEATURE,

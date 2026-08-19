@@ -320,6 +320,49 @@ fn rust_runtime_check_accepts_an_active_version_at_or_above_the_cargo_authority(
 
 #[cfg(unix)]
 #[test]
+fn go_runtime_check_uses_the_go_version_authority() {
+    for (actual, compatible) in [("1.25.4", false), ("1.26.1", true)] {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        write_doctor_fixture(&root);
+        let config_path = root.join(".jig.toml");
+        let config = format!(
+            "backend_language = \"go\"\ngo_database = \"none\"\n{}",
+            fs::read_to_string(&config_path).unwrap()
+        );
+        fs::write(config_path, config).unwrap();
+        fs::write(root.join(".go-version"), "1.26.0\n").unwrap();
+        write_test_executable(
+            &bin.join("go"),
+            &format!("#!/bin/sh\nprintf 'go version go{actual} linux/amd64\\n'\n"),
+        );
+        let ctx = RepoContext::load_from_root(root).unwrap();
+
+        let check = go_runtime_check(
+            &ctx,
+            &doctor_environment(&bin, None),
+            DoctorProcessControl::allowed_without_signal_session(),
+        )
+        .unwrap();
+
+        assert_eq!(check.ok, compatible, "{check:?}");
+        assert_eq!(check.data["required"], "1.26.0");
+        assert_eq!(check.data["actual"], actual);
+        assert_eq!(
+            check.status,
+            if compatible {
+                "compatible"
+            } else {
+                "incompatible"
+            }
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn sqlx_cli_version_check_requires_the_dependency_minor_line() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("repo");

@@ -43,6 +43,65 @@ fn bare_init_defaults_to_rust_react_with_no_database_and_web() {
 }
 
 #[test]
+fn go_react_defaults_derive_module_and_web_shape() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "My Demo",
+        "--preset",
+        "go-react",
+        "--defaults",
+        "--no-vault",
+    ]);
+
+    prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    assert_eq!(opts.scaffold.db, Some(ScaffoldDb::None));
+    assert_eq!(opts.scaffold.frontends.len(), 1);
+    assert_eq!(
+        opts.answers.go_module.as_deref(),
+        Some("example.com/my-demo")
+    );
+    assert_eq!(
+        opts.answers.backend_language,
+        Some(crate::bootstrap::BackendLanguage::Go)
+    );
+    assert_eq!(opts.answers.sqlx_enabled, Some(false));
+}
+
+#[test]
+fn go_react_strict_mode_requires_module() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "go-react",
+        "--db",
+        "none",
+        "--frontends",
+        "web",
+        "--no-input",
+        "--no-vault",
+    ]);
+
+    let error = prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("--preset go-react requires --go-module"));
+}
+
+#[test]
 fn selected_package_manager_must_be_available_before_init_writes() {
     let mut opts = init_opts(&[
         "jig",
@@ -424,7 +483,7 @@ fn no_input_requires_an_explicit_complete_project_shape() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("--no-input was supplied"));
-    assert!(error.contains("--preset rust-react"));
+    assert!(error.contains("application preset"));
 
     let mut missing_db = init_opts(&[
         "jig",

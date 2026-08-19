@@ -82,6 +82,9 @@ pub(crate) fn run() -> Result<Value> {
             if let Some(rust_runtime) = context_checks.rust_runtime {
                 checks.push(rust_runtime);
             }
+            if let Some(go_runtime) = context_checks.go_runtime {
+                checks.push(go_runtime);
+            }
             if let Some(node_runtime) = context_checks.node_runtime {
                 checks.push(node_runtime);
             }
@@ -545,6 +548,7 @@ fn inherited_shell_environment_issue(
 struct DoctorContextChecks {
     required_tools: DoctorCheck,
     rust_runtime: Option<DoctorCheck>,
+    go_runtime: Option<DoctorCheck>,
     node_runtime: Option<DoctorCheck>,
     sqlx_cli: Option<DoctorCheck>,
     agent: DoctorCheck,
@@ -606,6 +610,7 @@ fn doctor_context_checks_with_process_control(
         process_control,
     );
     let rust_runtime = rust_runtime_check(ctx, environment, process_control);
+    let go_runtime = go_runtime_check(ctx, environment, process_control);
     let node_runtime = node_runtime_check(ctx, environment, process_control);
     let sqlx_cli = sqlx_cli_version_check(ctx, environment, process_control);
     let agent = agent_check(ctx, process_control);
@@ -613,6 +618,7 @@ fn doctor_context_checks_with_process_control(
     DoctorContextChecks {
         required_tools,
         rust_runtime,
+        go_runtime,
         node_runtime,
         sqlx_cli,
         agent,
@@ -629,6 +635,7 @@ fn doctor_process_session_required(ctx: &RepoContext) -> bool {
             .any(|command| command == "sqlx_check_command");
     sqlx_probe_required
         || rust_runtime_probe_required(ctx)
+        || go_runtime_probe_required(ctx)
         || node_runtime_probe_required(ctx)
         || !ctx.codex_marketplaces().is_empty()
         || proxy_configured(ctx)
@@ -637,6 +644,11 @@ fn doctor_process_session_required(ctx: &RepoContext) -> bool {
 #[cfg(unix)]
 fn rust_runtime_probe_required(ctx: &RepoContext) -> bool {
     fs::symlink_metadata(ctx.root().join("Cargo.toml")).is_ok()
+}
+
+#[cfg(unix)]
+fn go_runtime_probe_required(ctx: &RepoContext) -> bool {
+    ctx.backend_language() == "go" && fs::symlink_metadata(ctx.root().join(".go-version")).is_ok()
 }
 
 #[cfg(unix)]

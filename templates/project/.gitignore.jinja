@@ -12,12 +12,16 @@
 !.env.example
 !.env.*.example
 
-# Rust
+[% if backend_language == "rust" %]# Rust
 target/
 
 # Default local SQLite database and transient sidecars
 /<<[ repo_name | replace("-", "_") ]>>.db
 /<<[ repo_name | replace("-", "_") ]>>.db-*
+[% else %]# Go
+*.test
+coverage.out
+[% endif %]
 
 # JavaScript and TypeScript
 node_modules/

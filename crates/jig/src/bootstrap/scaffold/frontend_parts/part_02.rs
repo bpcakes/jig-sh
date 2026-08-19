@@ -3,6 +3,18 @@ fn frontend_workspace_template_files(
     package_manager: &str,
     frontends: &[FrontendScaffold],
 ) -> Vec<ScaffoldTemplateFile> {
+    frontend_workspace_template_files_for_backend(
+        ScaffoldPreset::RustReact,
+        package_manager,
+        frontends,
+    )
+}
+
+fn frontend_workspace_template_files_for_backend(
+    preset: ScaffoldPreset,
+    package_manager: &str,
+    frontends: &[FrontendScaffold],
+) -> Vec<ScaffoldTemplateFile> {
     if frontends.is_empty() {
         return Vec::new();
     }
@@ -25,7 +37,15 @@ fn frontend_workspace_template_files(
         .chain((package_manager == "pnpm").then_some(PNPM_WORKSPACE_TEMPLATE))
         .chain((package_manager == "yarn").then_some(YARN_WORKSPACE_TEMPLATE))
         .chain(has_spa.then_some(E2E_WORKFLOW_TEMPLATE))
-        .chain(PUBLIC_API_CLIENT_TEMPLATES.iter().copied())
+        .chain(
+            if preset == ScaffoldPreset::GoReact {
+                GO_PUBLIC_API_CLIENT_TEMPLATES
+            } else {
+                PUBLIC_API_CLIENT_TEMPLATES
+            }
+            .iter()
+            .copied(),
+        )
         .chain(
             has_admin
                 .then_some(ADMIN_API_CLIENT_TEMPLATES)

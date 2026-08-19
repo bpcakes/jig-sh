@@ -1,0 +1,37 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestStatus(t *testing.T) {
+	service := New(Dependencies{})
+	request := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	response := httptest.NewRecorder()
+
+	service.Handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
+	}
+	if response.Header().Get("X-Request-ID") == "" {
+		t.Fatal("X-Request-ID header is empty")
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["ready"] != true {
+		t.Fatalf("ready = %v, want true", body["ready"])
+	}
+}
+
+func TestOpenAPIIsAvailableWithoutStartingServer(t *testing.T) {
+	service := New(Dependencies{})
+	if service.API.OpenAPI().Info.Title != "<<[ repo_name ]>> API" {
+		t.Fatalf("unexpected OpenAPI title %q", service.API.OpenAPI().Info.Title)
+	}
+}

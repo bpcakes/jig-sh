@@ -27,6 +27,7 @@ fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorC
     }
     for (runtime, label) in [
         (checks.rust_runtime.as_mut(), "Rust runtime"),
+        (checks.go_runtime.as_mut(), "Go runtime"),
         (checks.sqlx_cli.as_mut(), "SQLx CLI"),
     ] {
         if let Some(runtime) = runtime {
@@ -709,5 +710,122 @@ fn rust_runtime_check(
         check
     } else {
         check.with_fix(&rust_runtime_fix(required))
+    })
+}
+
+fn go_runtime_check(
+    ctx: &RepoContext,
+    environment: &DoctorEnvironment,
+    process_control: DoctorProcessControl<'_>,
+) -> Option<DoctorCheck> {
+    if ctx.backend_language() != "go" {
+        return None;
+    }
+    let authority_path = ctx.root().join(".go-version");
+    let required_text = match fs::read_to_string(&authority_path) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(
+                check(
+                    "go_runtime",
+                    "Go runtime",
+                    true,
+                    false,
+                    "invalid authority",
+                    format!("Failed to read {}: {error}", authority_path.display()),
+                )
+                .with_fix("Restore .go-version with a numeric Go version such as 1.26.0."),
+            );
+        }
+    };
+    let Some(required) = parse_numeric_version(required_text.trim(), false, true) else {
+        return Some(
+            check(
+                "go_runtime",
+                "Go runtime",
+                true,
+                false,
+                "invalid authority",
+                format!(
+                    "Go version authority in {} must be numeric, such as 1.26.0",
+                    authority_path.display()
+                ),
+            )
+            .with_fix("Correct .go-version, then rerun scripts/jig doctor."),
+        );
+    };
+    let Some(resolution) = resolve_program(
+        ctx.root(),
+        "go",
+        environment.search_path.as_deref(),
+        environment.path_extensions.as_deref(),
+    ) else {
+        return Some(
+            check(
+                "go_runtime",
+                "Go runtime",
+                true,
+                false,
+                "missing",
+                format!("Go {required} or newer is required, but go was not found on PATH"),
+            )
+            .with_fix("Install Go 1.26 or newer, then rerun scripts/jig doctor."),
+        );
+    };
+    if let Some(reason) = process_control.unavailable_reason {
+        return Some(check(
+            "go_runtime",
+            "Go runtime",
+            true,
+            false,
+            "unverified",
+            format!("Could not verify Go {required} or newer ({reason})"),
+        ));
+    }
+    let actual = match probe_go_version(
+        &resolution.path,
+        ctx.root(),
+        environment,
+        process_control.cancellation,
+    ) {
+        Ok(actual) => actual,
+        Err(reason) => {
+            return Some(
+                check(
+                    "go_runtime",
+                    "Go runtime",
+                    true,
+                    false,
+                    "unverified",
+                    format!("Could not verify Go {required} or newer ({reason})"),
+                )
+                .with_fix(
+                    "Run go version, correct the active toolchain, then rerun scripts/jig doctor.",
+                ),
+            );
+        }
+    };
+    let compatible = actual >= required;
+    let result = check(
+        "go_runtime",
+        "Go runtime",
+        true,
+        compatible,
+        if compatible {
+            "compatible"
+        } else {
+            "incompatible"
+        },
+        format!("Go {actual} is active; this repository requires {required} or newer"),
+    )
+    .with_data(json!({
+        "authority": authority_path.display().to_string(),
+        "required": required.to_string(),
+        "actual": actual.to_string(),
+    }));
+    Some(if compatible {
+        result
+    } else {
+        result.with_fix("Activate Go 1.26 or newer, then rerun scripts/jig doctor.")
     })
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("renders application status from the live Rust API", async ({ page }) => {
+test("renders application status from the live [% if backend_language == "go" %]Go[% else %]Rust[% endif %] API", async ({ page }) => {
   const statusResponsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === "GET" && response.url().endsWith("/api/status"),
@@ -23,6 +23,6 @@ test("renders application status from the live Rust API", async ({ page }) => {
   await expect(applicationCard.locator('[data-slot="card-title"]')).toHaveText(
     "<<[ repo_name ]>>",
   );
-  const serviceStatusCard = page.getByRole("group", { name: "Rust API", exact: true });
+  const serviceStatusCard = page.getByRole("group", { name: "[% if backend_language == "go" %]Go[% else %]Rust[% endif %] API", exact: true });
   await expect(serviceStatusCard.getByText("Ready", { exact: true })).toBeVisible();
 });

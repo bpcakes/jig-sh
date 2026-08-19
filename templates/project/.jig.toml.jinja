@@ -7,6 +7,10 @@ default_branch = "<<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\
 ci_github_runner = "<<[ ci_github_runner | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 template_source_url = "<<[ template_source_url | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 harness_footprint = "<<[ harness_footprint | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if backend_language == "go" %]
+backend_language = "go"
+go_database = "<<[ go_database | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
 sqlx_enabled = [% if sqlx_enabled %]true[% else %]false[% endif %]
 rust_crate_roots = [[% for root in rust_crate_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
 [% if sqlx_enabled %]
@@ -20,8 +24,8 @@ schema_dump_command = "<<[ schema_dump_command | replace("\\", "\\\\") | replace
 [% if sqlx_enabled %]
 sqlx_check_command = "<<[ sqlx_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
-# Command values are project-owned. Generated Cargo defaults skip cleanly when
-# no manifests are found; with nested manifests they run each one in turn.
+# Command values are project-owned.[% if backend_language == "rust" %] Generated Cargo defaults skip cleanly when
+# no manifests are found; with nested manifests they run each one in turn.[% endif %]
 # Review them against this repo's workspace layout and replace them when custom
 # orchestration is needed.
 bootstrap_command = "<<[ bootstrap_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
@@ -29,10 +33,12 @@ bootstrap_command = "<<[ bootstrap_command | replace("\\", "\\\\") | replace("\"
 # Deprecated and ignored by generated commands; preserved only so you can migrate it into [dev] / [[dev.apps]].
 dev_command = "<<[ legacy_dev_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
+[% if backend_language == "rust" %]
 rust_fmt_check_command = "<<[ rust_fmt_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_clippy_command = "<<[ rust_clippy_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_test_command = "<<[ rust_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_test_locked_command = "<<[ rust_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
 web_package_manager = "<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if frontend_apps | length == 0 %]
 frontend_apps = []
@@ -52,15 +58,26 @@ scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
 
-[% if frontend_harness_enabled %]
+[% if frontend_harness_enabled or backend_language == "go" %]
 # Extra command keys must use *_command names so contract required_commands
 # stay distinct from tool names and gate ids. Entries here override same-named
 # legacy top-level command fields.
 [commands]
+[% if backend_language == "go" %]
+go_fmt_check_command = "<<[ go_fmt_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+go_lint_command = "<<[ go_lint_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+go_test_command = "<<[ go_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+go_test_locked_command = "<<[ go_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% if go_database == "postgres" %]
+sqlc_check_command = "go tool sqlc vet && go tool sqlc diff"
+[% endif %]
+[% endif %]
+[% if frontend_harness_enabled %]
 typescript_lint_command = "<<[ typescript_lint_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_typecheck_command = "<<[ typescript_typecheck_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_build_command = "<<[ typescript_build_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 typescript_coverage_command = "<<[ typescript_coverage_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
 
 [% endif %]
 [dev]
@@ -152,6 +169,13 @@ tool = "jig.typescript_coverage"
 id = "sqlx"
 kind = "check"
 tool = "jig.sqlx_check"
+
+[% endif %]
+[% if backend_language == "go" and go_database == "postgres" %]
+[[work.gates]]
+id = "sqlc"
+kind = "check"
+tool = "jig.sqlc_check"
 
 [% endif %]
 [% if sqlx_enabled and schema_dump_enabled %]

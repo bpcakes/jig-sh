@@ -17,6 +17,9 @@ pub(crate) enum CheckCommand {
     /// Run the configured Rust format check.
     #[command(name = tool_defs::cli_command::CHECK_FMT)]
     Fmt(ToolOpts),
+    /// Run the configured language lint check.
+    #[command(name = tool_defs::cli_command::CHECK_LINT)]
+    Lint(ToolOpts),
     /// Run the configured Rust clippy check.
     #[command(name = tool_defs::cli_command::CHECK_CLIPPY)]
     Clippy(ToolOpts),
@@ -41,6 +44,9 @@ pub(crate) enum CheckCommand {
     /// Verify committed SQLx metadata when SQLx is enabled.
     #[command(name = tool_defs::cli_command::CHECK_SQLX)]
     Sqlx(ToolOpts),
+    /// Verify sqlc queries and checked-in generated output.
+    #[command(name = tool_defs::cli_command::CHECK_SQLC)]
+    Sqlc(ToolOpts),
     /// Verify generated schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::CHECK_SCHEMA)]
     Schema(ToolOpts),

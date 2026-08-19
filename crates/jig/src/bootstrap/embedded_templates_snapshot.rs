@@ -32,6 +32,10 @@ pub(super) static EMBEDDED_TEMPLATE_FILES: &[EmbeddedTemplateFile] = &[
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.github/workflows/agent-map-check.yml.jinja")),
     },
     EmbeddedTemplateFile {
+        relative_path: ".github/workflows/go-tests.yml.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.github/workflows/go-tests.yml.jinja")),
+    },
+    EmbeddedTemplateFile {
         relative_path: ".github/workflows/repo-policy.yml.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/embedded_template_snapshots/.github/workflows/repo-policy.yml.jinja")),
     },

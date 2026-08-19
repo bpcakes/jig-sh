@@ -69,6 +69,8 @@ use template_source::{
 
 mod adopt_infer;
 mod answers;
+#[cfg(test)]
+pub(crate) use answers::BackendLanguage;
 mod crate_classification;
 mod embedded_templates;
 mod file_copy;

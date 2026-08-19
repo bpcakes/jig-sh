@@ -1,0 +1,45 @@
+package database_test
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"<<[ go_module ]>>/internal/database"
+	dbsqlc "<<[ go_module ]>>/internal/database/sqlc"
+)
+
+func TestOpenAppliesMigrationsAndSupportsGeneratedQueries(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := database.Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer pool.Close()
+
+	const key = "integration-test"
+	const want = "ready"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO app_metadata (key, value)
+		VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, key, want); err != nil {
+		t.Fatalf("write migrated table: %v", err)
+	}
+
+	got, err := dbsqlc.New(pool).GetMetadata(ctx, key)
+	if err != nil {
+		t.Fatalf("run generated query: %v", err)
+	}
+	if got != want {
+		t.Fatalf("metadata value = %q, want %q", got, want)
+	}
+}

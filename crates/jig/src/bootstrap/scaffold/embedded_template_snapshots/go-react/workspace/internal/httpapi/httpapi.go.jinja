@@ -1,0 +1,110 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+type Dependencies struct {
+	Ready func(context.Context) error
+}
+
+type Service struct {
+	Handler http.Handler
+	API     huma.API
+}
+
+type StatusOutput struct {
+	Body AppStatusResponse
+}
+
+type AppStatusResponse struct {
+	Ready   bool               `json:"ready"`
+	Version AppVersionResponse `json:"version"`
+}
+
+type AppVersionResponse struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+type VersionOutput struct {
+	Body AppVersionResponse
+}
+
+func New(deps Dependencies) Service {
+	router := chi.NewMux()
+	router.Use(middleware.RequestID)
+	router.Use(requestIDHeader)
+	config := huma.DefaultConfig("<<[ repo_name ]>> API", "1.0.0")
+	config.OpenAPIPath = ""
+	config.DocsPath = ""
+	config.SchemasPath = ""
+	api := humachi.New(router, config)
+
+	huma.Register(api, huma.Operation{
+		Method:      http.MethodGet,
+		Path:        "/api/status",
+		OperationID: "getAppStatus",
+		Summary:     "Get application status",
+		Tags:        []string{"public"},
+	}, func(ctx context.Context, _ *struct{}) (*StatusOutput, error) {
+		ready := true
+		if deps.Ready != nil && deps.Ready(ctx) != nil {
+			ready = false
+		}
+		output := &StatusOutput{Body: AppStatusResponse{
+			Ready: ready,
+			Version: AppVersionResponse{
+				Name:    "<<[ repo_name ]>>",
+				Version: "0.1.0",
+			},
+		}}
+		return output, nil
+	})
+	huma.Register(api, huma.Operation{
+		Method:      http.MethodGet,
+		Path:        "/api/version",
+		OperationID: "getAppVersion",
+		Summary:     "Get application version",
+		Tags:        []string{"public"},
+	}, func(_ context.Context, _ *struct{}) (*VersionOutput, error) {
+		return &VersionOutput{Body: AppVersionResponse{
+			Name:    "<<[ repo_name ]>>",
+			Version: "0.1.0",
+		}}, nil
+	})
+	router.Get("/health/live", jsonStatus(http.StatusOK, "ok"))
+	router.Get("/health/ready", func(response http.ResponseWriter, request *http.Request) {
+		if deps.Ready != nil {
+			if err := deps.Ready(request.Context()); err != nil {
+				jsonStatus(http.StatusServiceUnavailable, "unavailable")(response, request)
+				return
+			}
+		}
+		jsonStatus(http.StatusOK, "ok")(response, request)
+	})
+
+	return Service{Handler: router, API: api}
+}
+
+func requestIDHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("X-Request-ID", middleware.GetReqID(request.Context()))
+		next.ServeHTTP(response, request)
+	})
+}
+
+func jsonStatus(code int, status string) http.HandlerFunc {
+	return func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(code)
+		_ = json.NewEncoder(response).Encode(map[string]string{"status": status})
+	}
+}

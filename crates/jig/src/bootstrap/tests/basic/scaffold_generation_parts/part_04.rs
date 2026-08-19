@@ -89,3 +89,105 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
         }
     }
 }
+
+#[test]
+fn go_react_postgres_renders_go_contract_and_database_boundaries() {
+    let planning_root = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![ScaffoldFrontend {
+                name: "web".into(),
+                kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
+            }],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            go_module: Some("github.com/acme/demo".into()),
+            ..AnswerOpts::default()
+        },
+        planning_root.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let rendered = plan.render_files().unwrap();
+    let paths = rendered
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(paths.contains("go.mod"));
+    assert!(paths.contains("cmd/api/main.go"));
+    assert!(paths.contains("cmd/openapi/main.go"));
+    assert!(paths.contains("sqlc.yaml"));
+    assert!(paths.contains("internal/database/migrations/00001_app_metadata.sql"));
+    assert!(paths.contains("internal/database/database_test.go"));
+    assert!(paths.contains("scripts/test-postgres.sh"));
+    assert!(paths.contains("internal/database/sqlc/db.go"));
+    assert!(!paths.contains("Cargo.toml"));
+
+    let go_mod = rendered
+        .iter()
+        .find(|file| file.relative == "go.mod")
+        .unwrap();
+    assert!(go_mod.contents.contains("module github.com/acme/demo"));
+    assert!(go_mod.contents.contains("go 1.26.0"));
+    assert!(go_mod.contents.contains("tool ("));
+    let contracts = rendered
+        .iter()
+        .find(|file| file.relative == "scripts/contracts.mjs")
+        .unwrap();
+    assert!(contracts.contents.contains(r#"run("go", ["run", "./cmd/openapi""#));
+    assert!(!contracts.contents.contains(r#"run("cargo""#));
+}
+
+#[test]
+fn go_react_rejects_missing_module_sqlite_and_admin() {
+    let planning_root = tempdir().unwrap();
+    let missing_module = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts::default(),
+        planning_root.path(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(missing_module.contains("--go-module"));
+
+    let sqlite = ScaffoldOpts {
+        preset: Some(ScaffoldPreset::GoReact),
+        db: Some(ScaffoldDb::Sqlite),
+        ..ScaffoldOpts::default()
+    }
+    .validate_init_invariants(&AnswerOpts {
+        go_module: Some("example.com/demo".into()),
+        ..AnswerOpts::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(sqlite.contains("does not support --db sqlite"));
+
+    let admin = ScaffoldOpts {
+        preset: Some(ScaffoldPreset::GoReact),
+        db: Some(ScaffoldDb::None),
+        frontends: vec![ScaffoldFrontend {
+            name: "admin".into(),
+            kind: ScaffoldFrontendKind::Admin,
+            custom_default_name: false,
+        }],
+        frontend_list: Vec::new(),
+    }
+    .validate_init_invariants(&AnswerOpts {
+        go_module: Some("example.com/demo".into()),
+        ..AnswerOpts::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(admin.contains("separate privileged API and client boundary"));
+}

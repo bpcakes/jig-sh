@@ -474,6 +474,36 @@ fn parses_init_scaffold_preset_frontends_and_db() {
 }
 
 #[test]
+fn parses_go_react_preset_and_module() {
+    let cli = Cli::try_parse_from([
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "go-react",
+        "--go-module",
+        "github.com/acme/demo",
+        "--db",
+        "postgres",
+        "--frontends",
+        "web,landing",
+    ])
+    .unwrap();
+
+    match cli.command {
+        CommandKind::Init(bootstrap::InitOpts {
+            scaffold, answers, ..
+        }) => {
+            assert_eq!(scaffold.preset, Some(bootstrap::ScaffoldPreset::GoReact));
+            assert_eq!(scaffold.db, Some(bootstrap::ScaffoldDb::Postgres));
+            assert_eq!(answers.go_module.as_deref(), Some("github.com/acme/demo"));
+            assert_eq!(scaffold.frontend_list.len(), 2);
+        }
+        other => panic!("expected init command, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_explicit_harness_only_init_preset() {
     let cli = Cli::try_parse_from([
         "jig",

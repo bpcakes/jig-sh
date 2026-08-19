@@ -26,7 +26,10 @@ fn preflight_init_package_manager_with(
     opts: &InitOpts,
     available: impl FnOnce(&str) -> bool,
 ) -> Result<()> {
-    if opts.scaffold.preset != Some(ScaffoldPreset::RustReact) {
+    if !matches!(
+        opts.scaffold.preset,
+        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
+    ) {
         return Ok(());
     }
     let package_manager = opts.answers.web_package_manager.as_deref().unwrap_or("bun");
@@ -111,13 +114,39 @@ fn apply_project_shape_defaults(opts: &mut InitOpts) -> Result<()> {
     if opts.scaffold.preset.is_none() {
         opts.scaffold.preset = Some(ScaffoldPreset::RustReact);
     }
-    if opts.scaffold.preset == Some(ScaffoldPreset::RustReact) {
+    if matches!(
+        opts.scaffold.preset,
+        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
+    ) {
         opts.scaffold.db.get_or_insert(ScaffoldDb::None);
         if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
             opts.scaffold
                 .frontends
                 .push(parse_scaffold_frontend("web").map_err(|error| anyhow::anyhow!(error))?);
         }
+    }
+    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+        let repo_name = opts
+            .answers
+            .repo_name
+            .as_deref()
+            .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
+            .unwrap_or("app");
+        let stem = repo_name
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let stem = stem.trim_matches('-');
+        opts.answers.go_module = Some(format!(
+            "example.com/{}",
+            if stem.is_empty() { "app" } else { stem }
+        ));
     }
     Ok(())
 }
@@ -130,20 +159,25 @@ fn validate_project_shape_resolved(opts: &InitOpts, non_terminal: bool) -> Resul
     };
     let Some(preset) = opts.scaffold.preset else {
         bail!(
-            "Init cannot prompt because {mode}; pass --preset rust-react with explicit database and frontend choices, pass --preset harness-only, or use --defaults"
+            "Init cannot prompt because {mode}; pass an application preset with explicit database and frontend choices, pass --preset harness-only, or use --defaults"
         );
     };
-    if preset == ScaffoldPreset::RustReact {
+    if matches!(preset, ScaffoldPreset::RustReact | ScaffoldPreset::GoReact) {
         if opts.scaffold.db.is_none() {
             bail!(
-                "Init cannot prompt because {mode}; --preset rust-react requires an explicit --db choice, or use --defaults"
+                "Init cannot prompt because {mode}; the selected application preset requires an explicit --db choice, or use --defaults"
             );
         }
         if !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty() {
             bail!(
-                "Init cannot prompt because {mode}; --preset rust-react requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
+                "Init cannot prompt because {mode}; the selected application preset requires --frontend/--frontends or frontend_apps in --answers-file, or use --defaults"
             );
         }
+    }
+    if preset == ScaffoldPreset::GoReact && opts.answers.go_module.is_none() {
+        bail!(
+            "Init cannot prompt because {mode}; --preset go-react requires --go-module <module>, or use --defaults"
+        );
     }
     Ok(())
 }
@@ -163,13 +197,19 @@ fn guide_project_shape<R: BufRead, W: Write>(
             ScaffoldChoice::RustReact => {
                 opts.scaffold.preset = Some(ScaffoldPreset::RustReact);
             }
+            ScaffoldChoice::GoReact => {
+                opts.scaffold.preset = Some(ScaffoldPreset::GoReact);
+            }
             ScaffoldChoice::HarnessOnly => {
                 opts.scaffold.preset = Some(ScaffoldPreset::HarnessOnly);
             }
         }
     }
 
-    if opts.scaffold.preset != Some(ScaffoldPreset::RustReact) {
+    if !matches!(
+        opts.scaffold.preset,
+        Some(ScaffoldPreset::RustReact | ScaffoldPreset::GoReact)
+    ) {
         return Ok(());
     }
     let needs_frontends = !opts.scaffold.has_frontends() && opts.answers.frontend_apps.is_empty();
@@ -177,10 +217,23 @@ fn guide_project_shape<R: BufRead, W: Write>(
         print_project_shape_header(output, &metadata)?;
     }
     if opts.scaffold.db.is_none() {
-        opts.scaffold.db = Some(prompt_database(input, output)?);
+        opts.scaffold.db = Some(prompt_database(
+            input,
+            output,
+            opts.scaffold.preset == Some(ScaffoldPreset::GoReact),
+        )?);
     }
     if needs_frontends {
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
+    }
+    if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
+        opts.answers.go_module = Some(prompt_line(
+            input,
+            output,
+            "Go module (for example github.com/acme/my-app): ",
+            "example.com/app",
+            "Go module",
+        )?);
     }
     Ok(())
 }
@@ -193,6 +246,10 @@ fn print_project_shape_header<W: Write>(
     writeln!(output, "  rust-react — {}", metadata.preset_summary)?;
     writeln!(
         output,
+        "  go-react — Go 1.26, chi, Huma, pgx/sqlc/Goose, and React."
+    )?;
+    writeln!(
+        output,
         "  harness-only — Jig harness without starter application code."
     )?;
     Ok(())
@@ -201,6 +258,7 @@ fn print_project_shape_header<W: Write>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScaffoldChoice {
     RustReact,
+    GoReact,
     HarnessOnly,
 }
 
@@ -212,7 +270,7 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
         let answer = prompt_line(
             input,
             output,
-            "Scaffold an app? [rust-react/harness-only] (rust-react): ",
+            "Scaffold an app? [rust-react/go-react/harness-only] (rust-react): ",
             "rust-react",
             "project scaffold",
         )?;
@@ -220,27 +278,37 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
             "1" | "rust-react" | "app" | "yes" | "y" => {
                 return Ok(ScaffoldChoice::RustReact);
             }
-            "2" | "harness" | "harness-only" | "no" | "n" => {
+            "2" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
+            "3" | "harness" | "harness-only" | "no" | "n" => {
                 return Ok(ScaffoldChoice::HarnessOnly);
             }
-            _ => writeln!(output, "  Enter rust-react or harness-only.")?,
+            _ => writeln!(output, "  Enter rust-react, go-react, or harness-only.")?,
         }
     }
 }
 
-fn prompt_database<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<ScaffoldDb> {
+fn prompt_database<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    go_backend: bool,
+) -> Result<ScaffoldDb> {
     loop {
         let answer = prompt_line(
             input,
             output,
-            "Database? [none/postgres/sqlite] (none): ",
+            if go_backend {
+                "Database? [none/postgres] (none): "
+            } else {
+                "Database? [none/postgres/sqlite] (none): "
+            },
             "none",
             "database choice",
         )?;
         match answer.as_str() {
             "1" | "none" | "no" => return Ok(ScaffoldDb::None),
             "2" | "postgres" | "postgresql" => return Ok(ScaffoldDb::Postgres),
-            "3" | "sqlite" => return Ok(ScaffoldDb::Sqlite),
+            "3" | "sqlite" if !go_backend => return Ok(ScaffoldDb::Sqlite),
+            _ if go_backend => writeln!(output, "  Enter none or postgres.")?,
             _ => writeln!(output, "  Enter none, postgres, or sqlite.")?,
         }
     }

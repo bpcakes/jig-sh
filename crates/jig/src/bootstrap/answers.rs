@@ -29,6 +29,23 @@ pub enum HarnessFootprint {
     Minimal,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum BackendLanguage {
+    #[default]
+    Rust,
+    Go,
+}
+
+impl BackendLanguage {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Go => "go",
+        }
+    }
+}
+
 impl HarnessFootprint {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -50,6 +67,9 @@ pub(super) struct RenderAnswers {
     template_source_url: String,
     #[serde(serialize_with = "serialize_harness_footprint")]
     harness_footprint: HarnessFootprint,
+    #[serde(serialize_with = "serialize_backend_language")]
+    backend_language: BackendLanguage,
+    go_database: String,
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
@@ -66,6 +86,10 @@ pub(super) struct RenderAnswers {
     rust_clippy_command: String,
     rust_test_command: String,
     rust_test_locked_command: String,
+    go_fmt_check_command: String,
+    go_lint_command: String,
+    go_test_command: String,
+    go_test_locked_command: String,
     web_package_manager: String,
     web_package_manager_spec: String,
     web_package_manager_version: String,
@@ -282,6 +306,10 @@ impl RenderAnswers {
         self.harness_footprint
     }
 
+    pub(super) const fn backend_language(&self) -> BackendLanguage {
+        self.backend_language
+    }
+
     pub(super) fn is_minimal_footprint(&self) -> bool {
         self.harness_footprint == HarnessFootprint::Minimal
     }
@@ -318,12 +346,15 @@ impl RenderAnswers {
 #[derive(Clone, Debug, Default, Deserialize)]
 struct RawAnswers {
     repo_name: Option<String>,
+    go_module: Option<String>,
     default_branch: Option<String>,
     ci_github_runner: Option<String>,
     jig_version: Option<String>,
     template_source_url: Option<String>,
     #[serde(default)]
     harness_footprint: Option<HarnessFootprint>,
+    backend_language: Option<BackendLanguage>,
+    go_database: Option<String>,
     sqlx_enabled: Option<bool>,
     rust_crate_roots: Option<Vec<String>>,
     rust_migration_dir: Option<String>,
@@ -440,6 +471,7 @@ impl RawAnswers {
 
     fn merge_opts(&mut self, opts: &AnswerOpts) {
         merge_option(&mut self.repo_name, opts.repo_name.clone());
+        merge_option(&mut self.go_module, opts.go_module.clone());
         merge_option(&mut self.default_branch, opts.default_branch.clone());
         merge_option(&mut self.ci_github_runner, opts.ci_github_runner.clone());
         merge_option(&mut self.jig_version, opts.jig_version.clone());
@@ -448,6 +480,8 @@ impl RawAnswers {
             opts.template_source_url.clone(),
         );
         merge_option(&mut self.harness_footprint, opts.harness_footprint);
+        merge_option(&mut self.backend_language, opts.backend_language);
+        merge_option(&mut self.go_database, opts.go_database.clone());
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
             self.rust_crate_roots = Some(opts.rust_crate_roots.clone());
@@ -535,11 +569,14 @@ impl RawAnswers {
         AnswerOpts {
             answers_file,
             repo_name: self.repo_name.filter(|value| !value.is_empty()),
+            go_module: self.go_module.filter(|value| !value.is_empty()),
             default_branch: self.default_branch,
             ci_github_runner: self.ci_github_runner,
             jig_version: self.jig_version,
             template_source_url: self.template_source_url,
             harness_footprint: self.harness_footprint,
+            backend_language: self.backend_language,
+            go_database: self.go_database,
             sqlx_enabled: self.sqlx_enabled,
             rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
             rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),
@@ -615,6 +652,13 @@ impl RawAnswers {
 
     fn resolve(mut self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
         self.normalize_app_dirs()?;
+        let backend_language = self.backend_language.unwrap_or_default();
+        let go_database = self.go_database.unwrap_or_else(|| "none".into());
+        if backend_language == BackendLanguage::Go
+            && !matches!(go_database.as_str(), "none" | "postgres")
+        {
+            bail!("Invalid go_database '{go_database}'. Expected 'none' or 'postgres'");
+        }
         let repo_name = self
             .repo_name
             .filter(|value| !value.is_empty())
@@ -683,10 +727,15 @@ impl RawAnswers {
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
             template_source_url: self.template_source_url.unwrap_or_default(),
             harness_footprint: self.harness_footprint.unwrap_or_default(),
+            backend_language,
+            go_database,
             sqlx_enabled,
-            rust_crate_roots: self
-                .rust_crate_roots
-                .unwrap_or_else(|| vec!["crates".into()]),
+            rust_crate_roots: if backend_language == BackendLanguage::Go {
+                Vec::new()
+            } else {
+                self.rust_crate_roots
+                    .unwrap_or_else(|| vec!["crates".into()])
+            },
             rust_migration_dir,
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
@@ -714,6 +763,10 @@ impl RawAnswers {
             rust_test_locked_command: self.rust_test_locked_command.unwrap_or_else(|| {
                 optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
+            go_fmt_check_command: "files=$(find . -type f -name '*.go' -not -path './.git/*' -exec gofmt -l {} +); test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into(),
+            go_lint_command: "go vet ./...".into(),
+            go_test_command: "go test ./...".into(),
+            go_test_locked_command: "go mod verify && go test -mod=readonly ./...".into(),
             web_package_manager,
             web_package_manager_spec,
             web_package_manager_version,
@@ -891,6 +944,13 @@ fn serialize_harness_footprint<S>(
     value: &HarnessFootprint,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(value.as_str())
+}
+
+fn serialize_backend_language<S>(value: &BackendLanguage, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

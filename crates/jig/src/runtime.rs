@@ -223,6 +223,9 @@ fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
         CheckCommand::Fmt(opts) => {
             tool_execution::execute_manifest_tool_request(ctx, tool::FMT_CHECK, json!({}), opts)
         }
+        CheckCommand::Lint(opts) => {
+            tool_execution::execute_manifest_tool_request(ctx, tool::LINT, json!({}), opts)
+        }
         CheckCommand::Clippy(opts) => {
             tool_execution::execute_manifest_tool_request(ctx, tool::CLIPPY, json!({}), opts)
         }
@@ -258,6 +261,9 @@ fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
         ),
         CheckCommand::Sqlx(opts) => {
             tool_execution::execute_manifest_tool_request(ctx, tool::SQLX_CHECK, json!({}), opts)
+        }
+        CheckCommand::Sqlc(opts) => {
+            tool_execution::execute_manifest_tool_request(ctx, tool::SQLC_CHECK, json!({}), opts)
         }
         CheckCommand::Schema(opts) => {
             tool_execution::execute_manifest_tool_request(ctx, tool::SCHEMA_CHECK, json!({}), opts)

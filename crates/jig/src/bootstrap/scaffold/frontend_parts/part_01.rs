@@ -120,6 +120,28 @@ const PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "packages/public-api-client/src/generated/@tanstack/react-query.gen.ts",
     },
 ];
+const GO_PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/package.json.jinja", output: "packages/public-api-client/package.json" },
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/index.ts.jinja", output: "packages/public-api-client/src/index.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client.gen.ts.jinja", output: "packages/public-api-client/src/generated/client.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/client.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/index.ts.jinja", output: "packages/public-api-client/src/generated/client/index.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/types.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/utils.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/auth.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/bodySerializer.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/params.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/pathSerializer.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/queryKeySerializer.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/serverSentEvents.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/types.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/utils.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/types.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/index.ts.jinja", output: "packages/public-api-client/src/generated/index.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja", output: "packages/public-api-client/src/generated/sdk.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja", output: "packages/public-api-client/src/generated/zod.gen.ts" },
+    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja", output: "packages/public-api-client/src/generated/@tanstack/react-query.gen.ts" },
+];
 const ADMIN_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/frontend/api-client-admin/package.json.jinja",
@@ -423,15 +445,23 @@ impl FrontendScaffold {
             .collect()
     }
 
-    pub(super) fn render_files(
+    pub(super) fn render_files_for_backend(
         &self,
         package_manager: &str,
         repo_name: &str,
         repo_dns_label: &str,
         module_name: &str,
         db: ScaffoldDb,
+        preset: super::ScaffoldPreset,
     ) -> Result<Vec<ScaffoldFile>> {
-        self.render_template_files(package_manager, repo_name, repo_dns_label, module_name, db)
+        self.render_template_files(
+            package_manager,
+            repo_name,
+            repo_dns_label,
+            module_name,
+            db,
+            preset,
+        )
     }
 
     fn render_template_files(
@@ -441,6 +471,7 @@ impl FrontendScaffold {
         repo_dns_label: &str,
         module_name: &str,
         db: ScaffoldDb,
+        preset: super::ScaffoldPreset,
     ) -> Result<Vec<ScaffoldFile>> {
         let template_files = self.template_files();
         ensure_scaffold_template_paths(&template_files)?;
@@ -463,6 +494,7 @@ impl FrontendScaffold {
                 ScaffoldDb::Postgres => "postgres",
                 ScaffoldDb::Sqlite => "sqlite",
             },
+            "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
             "title": title,
             "subtitle": if self.kind == ScaffoldFrontendKind::Admin {
                 "Operational workspace"
@@ -571,7 +603,28 @@ fn scaffold_package_exec(package_manager: &str) -> &'static str {
     }
 }
 
+#[cfg(test)]
 pub(super) fn render_frontend_workspace_files(
+    package_manager: &str,
+    package_name: &str,
+    database: FrontendDatabaseContext<'_>,
+    default_branch: &str,
+    ci_github_runner: &str,
+    frontends: &[FrontendScaffold],
+) -> Result<Vec<ScaffoldFile>> {
+    render_frontend_workspace_files_for_backend(
+        super::ScaffoldPreset::RustReact,
+        package_manager,
+        package_name,
+        database,
+        default_branch,
+        ci_github_runner,
+        frontends,
+    )
+}
+
+pub(super) fn render_frontend_workspace_files_for_backend(
+    preset: super::ScaffoldPreset,
     package_manager: &str,
     package_name: &str,
     database: FrontendDatabaseContext<'_>,
@@ -584,7 +637,8 @@ pub(super) fn render_frontend_workspace_files(
         migration_dir,
         sqlx_metadata_dir,
     } = database;
-    let template_files = frontend_workspace_template_files(package_manager, frontends);
+    let template_files =
+        frontend_workspace_template_files_for_backend(preset, package_manager, frontends);
     ensure_scaffold_template_paths(&template_files)?;
     if template_files.is_empty() {
         return Ok(Vec::new());
@@ -595,6 +649,7 @@ pub(super) fn render_frontend_workspace_files(
         .any(|frontend| frontend.kind == ScaffoldFrontendKind::Admin);
     let context = json!({
         "package_name": package_name,
+        "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
         "package_manager": package_manager,
         "package_manager_spec": generated_package_manager_spec(package_manager),
         "package_manager_version": generated_package_manager_version(package_manager),
@@ -619,7 +674,8 @@ pub(super) fn render_frontend_workspace_files(
             .filter(|frontend| frontend.kind == ScaffoldFrontendKind::Spa)
             .map(|frontend| frontend.dir.as_str())
             .collect::<Vec<_>>(),
-        "e2e_workflow_paths": e2e_workflow_paths(
+        "e2e_workflow_paths": e2e_workflow_paths_for_backend(
+            preset,
             db,
             migration_dir,
             sqlx_metadata_dir,
@@ -648,7 +704,24 @@ pub(super) fn render_frontend_workspace_files(
         .collect()
 }
 
+#[cfg(test)]
 fn e2e_workflow_paths(
+    db: ScaffoldDb,
+    migration_dir: &str,
+    sqlx_metadata_dir: &str,
+    frontends: &[FrontendScaffold],
+) -> Vec<String> {
+    e2e_workflow_paths_for_backend(
+        super::ScaffoldPreset::RustReact,
+        db,
+        migration_dir,
+        sqlx_metadata_dir,
+        frontends,
+    )
+}
+
+fn e2e_workflow_paths_for_backend(
+    preset: super::ScaffoldPreset,
     db: ScaffoldDb,
     migration_dir: &str,
     sqlx_metadata_dir: &str,
@@ -659,21 +732,26 @@ fn e2e_workflow_paths(
         .filter(|frontend| frontend.kind == ScaffoldFrontendKind::Spa)
         .map(|frontend| format!("{}/**", frontend.dir))
         .collect::<Vec<_>>();
-    paths.extend(["apps/**", "crates/**"].map(str::to_owned));
+    if preset == super::ScaffoldPreset::GoReact {
+        paths.extend(["cmd/**", "internal/**"].map(str::to_owned));
+    } else {
+        paths.extend(["apps/**", "crates/**"].map(str::to_owned));
+    }
     if db != ScaffoldDb::None {
         paths.push(format!("{migration_dir}/**"));
     }
-    paths.extend(
-        [
+    paths.extend(if preset == super::ScaffoldPreset::GoReact {
+        vec!["go.mod", "go.sum", ".go-version"]
+    } else {
+        vec![
             "Cargo.toml",
             "Cargo.lock",
             "rust-toolchain",
             "rust-toolchain.toml",
             ".cargo/**",
         ]
-        .map(str::to_owned),
-    );
-    if db != ScaffoldDb::None {
+    }.into_iter().map(str::to_owned));
+    if db != ScaffoldDb::None && preset != super::ScaffoldPreset::GoReact {
         paths.push(format!("{sqlx_metadata_dir}/**"));
     }
     paths.extend(

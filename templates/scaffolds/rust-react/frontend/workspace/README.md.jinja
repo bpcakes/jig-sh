@@ -1,10 +1,10 @@
 # <<[ package_name ]>>
 
-Generated Rust, Axum, React, and OpenAPI workspace.
+Generated [% if backend_language == "go" %]Go 1.26, chi, Huma, React, and OpenAPI[% else %]Rust, Axum, React, and OpenAPI[% endif %] workspace.
 
 ## Quickstart
 
-Prerequisites: Rust 1.94 or newer, Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] PostgreSQL setup and integration tests also require Docker.[% endif %]
+Prerequisites: [% if backend_language == "go" %]Go 1.26 or newer[% else %]Rust 1.94 or newer[% endif %], Node <<[ node_version ]>> or newer, and <<[ package_manager ]>> (`<<[ package_manager_spec ]>>`).[% if db == "postgres" %] PostgreSQL setup and integration tests also require Docker.[% endif %]
 
 ```sh
 scripts/jig doctor
@@ -32,7 +32,7 @@ If a web check reports missing or stale dependencies, run `scripts/check-webapps
 
 ## Contracts
 
-The public[% if admin_api_enabled %] and admin[% endif %] OpenAPI contract[% if admin_api_enabled %]s have separate Rust exporters and generated TypeScript packages[% else %] has a Rust exporter and generated TypeScript package[% endif %]. Regenerate [% if admin_api_enabled %]them[% else %]it[% endif %] atomically and verify committed output with:
+The public[% if admin_api_enabled %] and admin[% endif %] OpenAPI contract[% if admin_api_enabled %]s have separate [% if backend_language == "go" %]Huma exporters[% else %]Rust exporters[% endif %] and generated TypeScript packages[% else %] has a [% if backend_language == "go" %]Huma exporter[% else %]Rust exporter[% endif %] and generated TypeScript package[% endif %]. Regenerate [% if admin_api_enabled %]them[% else %]it[% endif %] atomically and verify committed output with:
 
 ```sh
 <<[ web_run_command ]>> contract:generate
@@ -79,7 +79,11 @@ Do not add credentials, secrets, or sensitive examples to `openapi/admin.json`, 
 ```sh
 scripts/jig check test
 scripts/jig check fmt
+[% if backend_language == "go" %]scripts/jig check lint
+[% if db == "postgres" %]scripts/jig check sqlc
+[% endif %][% else %]
 scripts/jig check clippy
+[% endif %]
 scripts/jig check contract
 ```
 

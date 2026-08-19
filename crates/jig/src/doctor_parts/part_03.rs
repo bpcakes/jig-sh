@@ -516,6 +516,32 @@ fn probe_rust_version(
         .ok_or_else(|| "rustc --version returned an invalid version".to_string())
 }
 
+fn probe_go_version(
+    executable: &Path,
+    root: &Path,
+    environment: &DoctorEnvironment,
+    cancellation: Option<&dyn Fn() -> bool>,
+) -> std::result::Result<NumericVersion, String> {
+    let stdout = version_probe_stdout(
+        executable,
+        &["version"],
+        "go version",
+        root,
+        environment,
+        environment.home.as_deref(),
+        cancellation,
+    )?;
+    let mut tokens = stdout.split_ascii_whitespace();
+    if tokens.next() != Some("go") || tokens.next() != Some("version") {
+        return Err("go version returned an invalid product name".into());
+    }
+    tokens
+        .next()
+        .and_then(|token| token.strip_prefix("go"))
+        .and_then(|token| parse_numeric_version(token, false, false))
+        .ok_or_else(|| "go version returned an invalid version".to_string())
+}
+
 fn probe_sqlx_cli_version(
     executable: &Path,
     style: SqlxProbeStyle,

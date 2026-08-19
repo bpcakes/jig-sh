@@ -371,6 +371,7 @@ fn signal_retirement_failure_invalidates_every_configured_process_check() {
             "compatible",
             "compatible",
         )),
+        go_runtime: None,
         node_runtime: Some(check(
             "node_runtime",
             "Node runtime",

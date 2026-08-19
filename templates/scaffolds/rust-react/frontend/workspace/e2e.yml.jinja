@@ -54,7 +54,7 @@ jobs:
       APP_DIR: ${{ matrix.app.dir }}
       E2E_SERVER_TIMEOUT_MS: "300000"
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.agent/tmp/ms-playwright
-[% if db != "none" %]
+[% if db != "none" and backend_language == "rust" %]
       SQLX_OFFLINE: "true"
       SQLX_OFFLINE_DIR: ${{ github.workspace }}/<<[ sqlx_metadata_dir ]>>
 [% endif %]
@@ -82,6 +82,13 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: <<[ node_version | tojson ]>>
+[% if backend_language == "go" %]
+      - name: Install Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache: true
+[% else %]
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -89,6 +96,7 @@ jobs:
           rustflags: ""
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+[% endif %]
       - name: Resolve Node version file
         id: node-version
         shell: bash

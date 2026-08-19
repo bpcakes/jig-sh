@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+container_name="<<[ package_name ]>>-postgres-test-$$"
+database_name="<<[ postgres_test_database_name ]>>"
+container_started=0
+
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+  if [ "$container_started" -eq 1 ]; then
+    docker rm --force "$container_name" >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+
+command -v docker >/dev/null 2>&1 || {
+  echo "Docker is required. Install or start Docker, then rerun 'bash scripts/test-postgres.sh'." >&2
+  exit 1
+}
+docker info >/dev/null 2>&1 || {
+  echo "The Docker daemon is unavailable. Start it, then rerun 'bash scripts/test-postgres.sh'." >&2
+  exit 1
+}
+
+docker run \
+  --detach \
+  --rm \
+  --name "$container_name" \
+  --publish 127.0.0.1::5432 \
+  --env POSTGRES_USER=postgres \
+  --env POSTGRES_PASSWORD=postgres \
+  --env "POSTGRES_DB=$database_name" \
+  postgres:18 >/dev/null
+container_started=1
+
+ready=0
+for _ in $(seq 1 60); do
+  if docker exec "$container_name" \
+    psql \
+    --no-psqlrc \
+    --set ON_ERROR_STOP=1 \
+    --username postgres \
+    --dbname "$database_name" \
+    --tuples-only \
+    --command 'SELECT 1' >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo "PostgreSQL database '$database_name' did not become queryable within 60 seconds." >&2
+  docker logs "$container_name" >&2 || true
+  exit 1
+fi
+
+published_address="$(docker port "$container_name" 5432/tcp)"
+host_port="${published_address##*:}"
+case "$host_port" in
+  ''|*[!0-9]*)
+    echo "Could not resolve the disposable PostgreSQL host port from '$published_address'." >&2
+    exit 1
+    ;;
+esac
+
+export TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${host_port}/${database_name}?sslmode=disable"
+go test -count=1 -run TestOpenAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database

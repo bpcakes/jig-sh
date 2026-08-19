@@ -1,0 +1,33 @@
+package config
+
+import (
+	"fmt"
+	"os"
+)
+
+type Config struct {
+	Address     string
+	DatabaseURL string
+}
+
+func Load() (Config, error) {
+	host := envOrDefault("HOST", "127.0.0.1")
+	port := envOrDefault("PORT", "3000")
+[% if db_enabled %]	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return Config{}, fmt.Errorf("DATABASE_URL is required")
+	}
+[% else %]	databaseURL := os.Getenv("DATABASE_URL")
+[% endif %]
+	return Config{
+		Address:     fmt.Sprintf("%s:%s", host, port),
+		DatabaseURL: databaseURL,
+	}, nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}

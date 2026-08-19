@@ -77,6 +77,27 @@ pub(super) fn normalize_rust_react_package_name(value: &str) -> Result<String> {
     Ok(package)
 }
 
+pub(super) fn validate_go_module(value: &str) -> Result<()> {
+    let domain = value.split('/').next().unwrap_or_default();
+    if value.is_empty() || value.trim() != value || !value.contains('/') || !domain.contains('.') {
+        bail!(
+            "Invalid --go-module '{value}'. Use a module path with a domain and repository segment, for example github.com/acme/my-app"
+        );
+    }
+    if value.starts_with('/')
+        || value.ends_with('/')
+        || value.split('/').any(str::is_empty)
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | '~' | '+'))
+    {
+        bail!(
+            "Invalid --go-module '{value}'. Use ASCII module path segments without spaces or empty components"
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn rust_react_repo_dns_label(package_name: &str) -> String {
     if package_name.len() <= DNS_LABEL_LIMIT {
         return package_name.to_string();
