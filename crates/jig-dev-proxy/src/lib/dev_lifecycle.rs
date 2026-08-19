@@ -840,6 +840,76 @@ fn confirmed_failed_spawn_does_not_poison_later_orphan_recovery() {
 }
 
 #[test]
+fn uncertain_live_identities_remain_alive_without_claiming_verification() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[lifecycle_spec(
+            temp.path(),
+            "web",
+            "web.demo.localhost",
+            false,
+        )],
+        false,
+    )
+    .unwrap();
+    runtime.prepare_app_spawn("web", 4005).unwrap();
+    assert!(matches!(
+        runtime
+            .record_app_process_interruptible(
+                "web",
+                4005,
+                state::DevProcessIdentity {
+                    pid: std::process::id(),
+                    start_token: None,
+                },
+                &|| false,
+            )
+            .unwrap(),
+        state::LockOutcome::Acquired(())
+    ));
+    let original_supervisor = store.snapshot_dev_state().unwrap().sessions[0]
+        .supervisor
+        .clone();
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor.start_token = None;
+            sessions[0].control.port = 9;
+            Ok(())
+        })
+        .unwrap();
+
+    let status = dev_status(DevStatusRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    let session = &status["sessions"][0];
+    assert_eq!(status["running"], true);
+    assert_eq!(session["status"], "starting");
+    assert_eq!(session["control_alive"], false);
+    assert_eq!(session["supervisor_alive"], true);
+    assert_eq!(session["supervisor_identity_verified"], false);
+    assert_eq!(session["supervisor_observation"], "uncertain");
+    assert_eq!(session["apps"][0]["alive"], true);
+    assert_eq!(session["apps"][0]["identity_verified"], false);
+    assert_eq!(session["apps"][0]["identity_observation"], "uncertain");
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = original_supervisor;
+            Ok(())
+        })
+        .unwrap();
+    drop(runtime);
+}
+
+#[test]
 fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade() {
     let temp = tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");

@@ -502,16 +502,17 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
     )
     .unwrap_or(false);
     let supervisor_observation = observe_process_identity(&session.supervisor);
-    let supervisor_verified = supervisor_observation == ProcessIdentityObservation::Alive;
-    let supervisor_alive = supervisor_observation == ProcessIdentityObservation::Alive;
+    let supervisor_verified = supervisor_observation.is_verified_alive();
+    let supervisor_alive = supervisor_observation.may_be_alive();
     let apps = session
         .apps
         .iter()
         .map(|app| {
             let process_observation = app.process.as_ref().map(observe_process_identity);
-            let process_alive = process_observation == Some(ProcessIdentityObservation::Alive);
+            let process_alive =
+                process_observation.is_some_and(|observation| observation.may_be_alive());
             let process_identity_verified =
-                process_observation == Some(ProcessIdentityObservation::Alive);
+                process_observation.is_some_and(|observation| observation.is_verified_alive());
             let route_present = app.hostname.as_deref().is_some_and(|hostname| {
                 routes.iter().any(|route| {
                     route.hostname.as_str() == hostname && session_owns_route(session, route)
@@ -527,7 +528,7 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
                 "pid": app.process.as_ref().map(|process| process.pid),
                 "alive": process_alive,
                 "identity_verified": process_identity_verified,
-                "identity_observation": process_observation.map(process_observation_label),
+                "identity_observation": process_observation.map(ProcessIdentityObservation::label),
                 "route_present": route_present,
             })
         })
@@ -535,8 +536,7 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
     let recovery_assessment = orphan_recovery_assessment(session);
     let recoverable =
         session.cleanup_required && recovery_assessment == OrphanRecoveryAssessment::Retirable;
-    let supervisor_active =
-        control_alive || supervisor_observation == ProcessIdentityObservation::Alive;
+    let supervisor_active = control_alive || supervisor_observation.may_be_alive();
     let status = if session.phase != DevSessionPhase::Orphaned && supervisor_active {
         match session.phase {
             DevSessionPhase::Starting => "starting",
@@ -562,18 +562,10 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
         "supervisor_pid": session.supervisor.pid,
         "supervisor_alive": supervisor_alive,
         "supervisor_identity_verified": supervisor_verified,
-        "supervisor_observation": process_observation_label(supervisor_observation),
+        "supervisor_observation": supervisor_observation.label(),
         "control_alive": control_alive,
         "apps": apps,
     })
-}
-
-const fn process_observation_label(observation: ProcessIdentityObservation) -> &'static str {
-    match observation {
-        ProcessIdentityObservation::Alive => "alive",
-        ProcessIdentityObservation::Absent => "absent",
-        ProcessIdentityObservation::Uncertain => "uncertain",
-    }
 }
 
 fn empty_status(repo: &CanonicalRepo, state_dir: PathBuf) -> Value {

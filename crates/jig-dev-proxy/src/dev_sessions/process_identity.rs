@@ -7,8 +7,26 @@ pub(super) enum ProcessIdentityObservation {
     Uncertain,
 }
 
+impl ProcessIdentityObservation {
+    pub(super) const fn is_verified_alive(self) -> bool {
+        matches!(self, Self::Alive)
+    }
+
+    pub(super) const fn may_be_alive(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Alive => "alive",
+            Self::Absent => "absent",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
+
 pub(super) fn process_identity_may_be_alive(identity: &DevProcessIdentity) -> bool {
-    observe_process_identity(identity) != ProcessIdentityObservation::Absent
+    observe_process_identity(identity).may_be_alive()
 }
 
 pub(super) fn observe_process_identity(
