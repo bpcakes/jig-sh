@@ -61,6 +61,37 @@ fn preflight_failure_survives_even_when_termination_is_pending() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn confirmed_preflight_cleanup_clears_the_durable_obligation() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = AppRunSpec::new(
+        "web",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
+        "web.demo.localhost",
+    )
+    .with_proxy(false);
+    let session = DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let mut cleanup = session.begin_preflight_cleanup().unwrap();
+
+    finish_preflight_cleanup(&session, &mut cleanup, Ok(()), &|| None).unwrap();
+
+    assert!(session.cleanup_is_confirmed());
+    let sessions = store.snapshot_dev_state().unwrap().sessions;
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].cleanup_required);
+    assert!(!sessions[0].preflight_cleanup_pending);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
@@ -79,15 +110,16 @@ fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
         false,
     )
     .unwrap();
-    session.prepare_cleanup_scope().unwrap();
-    let mut cleanup = session.arm_cleanup();
+    let mut cleanup = session.begin_preflight_cleanup().unwrap();
+    assert!(store.snapshot_dev_state().unwrap().sessions[0].preflight_cleanup_pending);
 
     let error = finish_preflight_cleanup(
+        &session,
         &mut cleanup,
         Err(DevPreflightError::cleanup_unconfirmed(anyhow::anyhow!(
             "preflight cleanup was not confirmed"
         ))),
-        None,
+        &|| None,
     )
     .unwrap_err();
 
@@ -98,5 +130,6 @@ fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].cleanup_required);
+    assert!(sessions[0].preflight_cleanup_pending);
     assert_eq!(sessions[0].phase, crate::state::DevSessionPhase::Orphaned);
 }

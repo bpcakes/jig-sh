@@ -785,6 +785,84 @@ fn unconfirmed_cleanup_with_a_live_registered_app_stays_visible_and_fails_closed
 }
 
 #[test]
+fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let _unconfirmed_preflight = runtime.begin_preflight_cleanup().unwrap();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            Ok(())
+        })
+        .unwrap();
+
+    let status = dev_status(DevStatusRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir.clone()),
+    ))
+    .unwrap();
+    assert_eq!(status["sessions"][0]["status"], "orphaned");
+    assert_eq!(status["sessions"][0]["recoverable"], false);
+    assert_eq!(status["sessions"][0]["preflight_cleanup_pending"], true);
+    assert_eq!(status["sessions"][0]["apps"][0]["spawn_pending"], false);
+
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], false);
+    assert_eq!(stopped["stopped_sessions"], 0);
+    assert!(
+        stopped["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| {
+                warning.as_str().is_some_and(|warning| {
+                    warning.contains("development preflight cleanup was not confirmed")
+                })
+            })
+    );
+
+    let replacement = match dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[spec],
+        true,
+    ) {
+        Ok(_) => panic!("replacement unexpectedly retired unconfirmed preflight cleanup"),
+        Err(error) => error,
+    };
+    assert!(
+        replacement
+            .to_string()
+            .contains("Could not replace the existing Jig dev session safely")
+    );
+    let persisted = store.snapshot_dev_state().unwrap();
+    assert_eq!(persisted.sessions.len(), 1);
+    assert!(persisted.sessions[0].preflight_cleanup_pending);
+}
+
+#[test]
 fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identity() {
     let temp = tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");

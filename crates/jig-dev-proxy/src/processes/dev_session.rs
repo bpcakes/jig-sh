@@ -77,14 +77,18 @@ pub(crate) fn run_apps_with_preflight(
         })
     };
     let interrupted = || requested_reason().is_some();
-    lock_outcome_or_interruption(
-        session.prepare_cleanup_scope_interruptible(&interrupted)?,
+    let mut preflight_cleanup = lock_outcome_or_interruption(
+        session.begin_preflight_cleanup_interruptible(&interrupted)?,
         &requested_reason,
     )
     .context("Failed to persist cleanup intent before development preflight")?;
-    let mut preflight_cleanup = session.arm_cleanup();
     let preflight_result = preflight(&specs, &interrupted);
-    finish_preflight_cleanup(&mut preflight_cleanup, preflight_result, requested_reason())?;
+    finish_preflight_cleanup(
+        &session,
+        &mut preflight_cleanup,
+        preflight_result,
+        &requested_reason,
+    )?;
     ensure_not_interrupted_with(requested_reason)?;
     let result = run_apps_with_session_and_interrupt_probe(
         specs,
@@ -127,14 +131,22 @@ pub(super) fn normalize_preflight_result(
 }
 
 pub(super) fn finish_preflight_cleanup(
+    session: &DevSessionRuntime,
     cleanup: &mut DevCleanupLease,
     result: DevPreflightResult,
-    termination_reason: Option<TerminationReason>,
+    termination_reason: &impl Fn() -> Option<TerminationReason>,
 ) -> Result<()> {
-    if !matches!(&result, Err(DevPreflightError::CleanupUnconfirmed(_))) {
+    if result.is_ok() {
+        let cancelled = || termination_reason().is_some();
+        lock_outcome_or_interruption(
+            session.confirm_preflight_cleanup_interruptible(cleanup, &cancelled)?,
+            termination_reason,
+        )
+        .context("Failed to persist confirmed development preflight cleanup")?;
+    } else if !matches!(&result, Err(DevPreflightError::CleanupUnconfirmed(_))) {
         cleanup.confirm();
     }
-    normalize_preflight_result(result, termination_reason)
+    normalize_preflight_result(result, termination_reason())
 }
 
 fn run_apps_with_session_and_interrupt_probe(

@@ -26,6 +26,7 @@ const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 enum OrphanRetentionReason {
     SupervisorAlive,
     SupervisorUncertain,
+    PreflightCleanupPending,
     AppAlive(String),
     AppUncertain(String),
     AppSpawnPending(String),
@@ -471,6 +472,9 @@ fn orphan_recovery_assessment(
     if !session.cleanup_required {
         return OrphanRecoveryAssessment::Retirable;
     }
+    if session.preflight_cleanup_pending {
+        return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::PreflightCleanupPending);
+    }
     for app in &session.apps {
         let process = match app.spawn_evidence() {
             DevSessionAppSpawnEvidence::Untracked => {
@@ -522,6 +526,9 @@ fn retention_warning(
             "supervisor PID {} could not be classified safely",
             session.supervisor.pid
         ),
+        OrphanRetentionReason::PreflightCleanupPending => {
+            "development preflight cleanup was not confirmed".to_owned()
+        }
         OrphanRetentionReason::AppAlive(app) => {
             format!("registered app '{app}' is still live")
         }
@@ -702,6 +709,7 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
         "started_at_ms": session.started_at_ms,
         "updated_at_ms": session.updated_at_ms,
         "cleanup_required": session.cleanup_required,
+        "preflight_cleanup_pending": session.preflight_cleanup_pending,
         "recoverable": recoverable,
         "supervisor_pid": session.supervisor.pid,
         "supervisor_alive": supervisor_alive,

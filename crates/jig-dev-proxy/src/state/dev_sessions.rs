@@ -131,6 +131,8 @@ pub(crate) struct DevSessionRecord {
     pub(crate) updated_at_ms: u64,
     #[serde(default)]
     pub(crate) cleanup_required: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) preflight_cleanup_pending: bool,
     pub(crate) supervisor: DevProcessIdentity,
     pub(crate) control: DevSessionControl,
     pub(crate) apps: Vec<DevSessionApp>,
@@ -228,6 +230,12 @@ pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {
         if session.updated_at_ms < session.started_at_ms {
             bail!(
                 "Jig development session '{}' was updated before it started",
+                session.session_id
+            );
+        }
+        if session.preflight_cleanup_pending && !session.cleanup_required {
+            bail!(
+                "Jig development session '{}' has pending preflight cleanup without requiring cleanup",
                 session.session_id
             );
         }

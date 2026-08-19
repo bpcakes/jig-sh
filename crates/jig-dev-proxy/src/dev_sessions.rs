@@ -88,6 +88,7 @@ impl DevSessionRuntime {
             started_at_ms: timestamp,
             updated_at_ms: timestamp,
             cleanup_required: false,
+            preflight_cleanup_pending: false,
             supervisor: supervisor.clone(),
             control: DevSessionControl {
                 port: control.port(),
@@ -175,33 +176,83 @@ impl DevSessionRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn prepare_cleanup_scope(&self) -> Result<()> {
-        self.store
-            .mutate_dev_sessions(|sessions, _| self.prepare_cleanup_scope_in(sessions))
+    pub(crate) fn begin_preflight_cleanup(&self) -> Result<DevCleanupLease> {
+        match self.begin_preflight_cleanup_interruptible(&|| false)? {
+            LockOutcome::Acquired(cleanup) => Ok(cleanup),
+            LockOutcome::Cancelled => bail!("uncancelled preflight cleanup setup was cancelled"),
+        }
     }
 
-    pub(crate) fn prepare_cleanup_scope_interruptible(
+    pub(crate) fn begin_preflight_cleanup_interruptible(
         &self,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<()>> {
-        self.store
+    ) -> Result<LockOutcome<DevCleanupLease>> {
+        let mut cleanup = self.arm_cleanup();
+        let outcome = self
+            .store
             .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
-                self.prepare_cleanup_scope_in(sessions)
-            })
+                self.begin_preflight_cleanup_in(sessions)
+            });
+        match outcome {
+            Ok(LockOutcome::Acquired(())) => Ok(LockOutcome::Acquired(cleanup)),
+            Ok(LockOutcome::Cancelled) => {
+                cleanup.confirm();
+                Ok(LockOutcome::Cancelled)
+            }
+            Err(error) => {
+                cleanup.confirm();
+                Err(error)
+            }
+        }
     }
 
-    fn prepare_cleanup_scope_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
+    fn begin_preflight_cleanup_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
         let session = exact_session_mut(
             sessions,
             &self.session_id,
             &self.repo_root_identity,
             &self.supervisor,
         )?;
-        if !session.cleanup_required {
-            session.cleanup_required = true;
-            session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        if session.preflight_cleanup_pending {
+            bail!(
+                "Jig dev session '{}' already has pending preflight cleanup",
+                self.session_id
+            );
         }
+        session.cleanup_required = true;
+        session.preflight_cleanup_pending = true;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
+    }
+
+    pub(crate) fn confirm_preflight_cleanup_interruptible(
+        &self,
+        cleanup: &mut DevCleanupLease,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        let outcome = self
+            .store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                let session = exact_session_mut(
+                    sessions,
+                    &self.session_id,
+                    &self.repo_root_identity,
+                    &self.supervisor,
+                )?;
+                if !session.preflight_cleanup_pending {
+                    bail!(
+                        "Jig dev session '{}' has no pending preflight cleanup to confirm",
+                        self.session_id
+                    );
+                }
+                session.preflight_cleanup_pending = false;
+                session.updated_at_ms = next_timestamp(session.updated_at_ms);
+                Ok(())
+            })?;
+        if matches!(outcome, LockOutcome::Acquired(())) {
+            cleanup.confirm();
+        }
+        Ok(outcome)
     }
 
     #[cfg(test)]

@@ -23,6 +23,7 @@ fn session(session_id: &str) -> DevSessionRecord {
         started_at_ms: timestamp,
         updated_at_ms: timestamp,
         cleanup_required: true,
+        preflight_cleanup_pending: false,
         supervisor: DevProcessIdentity {
             pid: std::process::id(),
             start_token: Some("test-supervisor".into()),
@@ -162,6 +163,30 @@ fn mutation_writes_versioned_private_state_and_round_trips() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn records_without_preflight_cleanup_state_remain_compatible() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let mut document = serde_json::to_value(DevSessionsDocument {
+        version: VERSION,
+        sessions: &[session("dev_legacy_preflight")],
+    })
+    .unwrap();
+    document["sessions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("preflight_cleanup_pending");
+    write_private_fixture(
+        &store.dev_sessions_path(),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    );
+
+    let persisted = store.snapshot_dev_state().unwrap();
+
+    assert_eq!(persisted.sessions.len(), 1);
+    assert!(!persisted.sessions[0].preflight_cleanup_pending);
 }
 
 #[test]
@@ -352,6 +377,16 @@ fn record_validation_rejects_invalid_identity_control_and_app_data() {
             .unwrap_err()
             .to_string()
             .contains("pending spawn without requiring cleanup")
+    );
+
+    let mut preflight_without_cleanup = session("preflight_without_cleanup");
+    preflight_without_cleanup.cleanup_required = false;
+    preflight_without_cleanup.preflight_cleanup_pending = true;
+    assert!(
+        validate_records(&[preflight_without_cleanup])
+            .unwrap_err()
+            .to_string()
+            .contains("pending preflight cleanup without requiring cleanup")
     );
 
     let mut pending_without_port = session("pending_without_port");
