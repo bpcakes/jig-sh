@@ -257,7 +257,7 @@ fn resume_suspended_windows_process(pid: u32) -> Result<()> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildObservation {
     Running,
-    #[cfg_attr(all(windows, not(test)), allow(dead_code))]
+    #[cfg_attr(windows, allow(dead_code))]
     ExitedUnreaped(ExitStatus),
     ExitedReaped(ExitStatus),
 }

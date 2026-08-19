@@ -152,11 +152,11 @@ validate_mutable_source_reminder_requires_matching_cache_lock() {
   [[ ! -s "$stderr_file" ]]
 }
 
-validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_links() {
+validate_git_local_source_stamp_ignores_diff_helpers_and_rejects_symbolic_links() {
   local source_repo="$TMP_DIR/local-stamp-source"
   local empty_diff="$TMP_DIR/empty-external-diff"
   local diff_marker="$TMP_DIR/external-diff-ran"
-  local function_source stamp_before stamp_with_link stamp_after
+  local function_source stamp_before stamp_after
   local binary_stamp_one binary_stamp_two
 
   mkdir -p "$source_repo/crates/example/src"
@@ -183,11 +183,13 @@ validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_link
   })"
 
   ln -s missing-target "$source_repo/crates/example/src/.#lib.rs"
-  stamp_with_link="$({
-    STAMP_FUNCTIONS="$function_source" SOURCE_ROOT="$source_repo" \
-      /bin/bash -c 'eval "$STAMP_FUNCTIONS"; local_source_stamp "$SOURCE_ROOT"'
-  })"
-  [[ -n "$stamp_with_link" && "$stamp_with_link" != "$stamp_before" ]]
+  if STAMP_FUNCTIONS="$function_source" SOURCE_ROOT="$source_repo" \
+    /bin/bash -c 'set -o pipefail; eval "$STAMP_FUNCTIONS"; local_source_stamp "$SOURCE_ROOT"' \
+    >/dev/null 2>&1; then
+    echo "Local source stamp accepted an untracked symbolic link." >&2
+    exit 1
+  fi
+  rm "$source_repo/crates/example/src/.#lib.rs"
 
   printf '%s\n' '#!/bin/sh' ': >"$JIG_DIFF_MARKER"' 'exit 0' >"$empty_diff"
   chmod +x "$empty_diff"
@@ -198,7 +200,7 @@ validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_link
       SOURCE_ROOT="$source_repo" \
       /bin/bash -c 'eval "$STAMP_FUNCTIONS"; local_source_stamp "$SOURCE_ROOT"'
   })"
-  [[ -n "$stamp_after" && "$stamp_after" != "$stamp_with_link" ]]
+  [[ -n "$stamp_after" && "$stamp_after" != "$stamp_before" ]]
   [[ ! -e "$diff_marker" ]]
 
   printf '\003\004' >"$source_repo/crates/example/src/asset.bin"
@@ -1895,7 +1897,7 @@ PY
 validate_source_normalization_fixtures() {
   validate_gnu_stat_fallback_rejects_successful_malformed_bsd_output
   validate_mutable_source_reminder_requires_matching_cache_lock
-  validate_git_local_source_stamp_ignores_diff_helpers_and_tolerates_dangling_links
+  validate_git_local_source_stamp_ignores_diff_helpers_and_rejects_symbolic_links
   validate_git_local_source_stamp_fails_closed_when_untracked_hashing_fails
   validate_unpushed_commit_stays_local
   validate_explicit_template_source_url_rewrites_src_path

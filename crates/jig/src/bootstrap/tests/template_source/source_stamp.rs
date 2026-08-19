@@ -50,6 +50,7 @@ fn native_binary_header_policy_accepts_pe_and_rejects_malformed_mz_files() {
 fn local_source_stamp_fails_closed_when_git_diff_fails() {
     use std::os::unix::fs::PermissionsExt;
 
+    let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("source");
     fs::create_dir_all(repo.join("crates/jig/src")).unwrap();
@@ -103,6 +104,7 @@ exec "$JIG_TEST_REAL_GIT" "$@"
 fn local_source_stamp_rejects_a_tracked_file_replaced_by_a_worktree_symlink() {
     use std::os::unix::fs::symlink;
 
+    let _guard = lock_env();
     let temp = tempdir().unwrap();
     let repo = temp.path().join("source");
     let source_file = repo.join("crates/jig/src/main.rs");

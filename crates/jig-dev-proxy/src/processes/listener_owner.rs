@@ -13,7 +13,9 @@ use std::process::{Child, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use anyhow::Context;
+use anyhow::{Result, bail};
 
 use crate::ports::{is_port_free, is_tcp_listening};
 use crate::state::{process_start_token, process_start_tokens_supported};
