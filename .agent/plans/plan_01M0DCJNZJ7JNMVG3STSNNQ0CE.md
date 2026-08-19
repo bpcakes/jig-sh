@@ -13,7 +13,7 @@ The root cause is structural. Backend identity is currently carried through `bac
 - [x] (2026-08-19T16:10:11Z) Reviewed the merged Claude/Codex findings and grouped them by lifecycle boundary.
 - [x] (2026-08-19T16:10:11Z) Started structured work `plan_01M0DCJNZJ7JNMVG3STSNNQ0CE` and wrote this ExecPlan.
 - [x] (2026-08-19T16:16:14Z) Commit slice 1: enforce Huma OpenAPI and Hey API client drift checks from Go-owned source changes.
-- [ ] Commit slice 2: make optional `.env` loading, database creation, Goose migration, local setup, integration tests, and browser E2E share one Go bootstrap lifecycle.
+- [x] (2026-08-19T16:25:02Z) Commit slice 2: make optional `.env` loading, database creation, Goose migration, local setup, integration tests, and browser E2E share one Go bootstrap lifecycle.
 - [ ] Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
 - [ ] Commit slice 4: make migration immutability consume a backend-neutral configured migration directory and enable it for PostgreSQL Go repositories.
 - [ ] Commit slice 5: reject invalid Go module segments, preserve wizard numeric compatibility, make format failure propagation reliable, and keep reserved output paths backend-aware.
@@ -31,6 +31,8 @@ The root cause is structural. Backend identity is currently carried through `bac
   Evidence: receipt `receipt_01M0DCVEWRB132A9SZ1V641A0K` records exit status 100 and the before/after worktree fingerprints. The final work check must run only after all edits settle.
 - Observation: the first OpenAPI regression test used one too many parent components when locating the generated repository root.
   Evidence: generated `go test ./...` failed while looking above the temporary app; changing the path from three parents to two made the generated test pass.
+- Observation: placing a PostgreSQL-only command parser behind an inline template conditional made the database-free and PostgreSQL variants disagree about required trailing whitespace.
+  Evidence: `gofmt -l` rejected one variant for an absent final newline and the other for a missing separator. Moving the parser to a PostgreSQL-only Go file made both variants format without post-generation rewriting.
 
 ## Decision Log
 
@@ -48,6 +50,9 @@ The root cause is structural. Backend identity is currently carried through `bac
   Date/Author: 2026-08-19 / Codex
 - Decision: Preserve the existing Jig launcher architecture and explicitly install Rust in Jig-invoking Go workflows.
   Rationale: Replacing source-based Jig installation with release binaries is a separate distribution project. Explicit prerequisites are the smallest truthful fix here.
+  Date/Author: 2026-08-19 / Codex
+- Decision: Represent the PostgreSQL-only API command parser as its own generated file.
+  Rationale: File-level capability selection avoids whitespace-sensitive source fragments and keeps database-free source independent of PostgreSQL command policy.
   Date/Author: 2026-08-19 / Codex
 
 ## Outcomes & Retrospective

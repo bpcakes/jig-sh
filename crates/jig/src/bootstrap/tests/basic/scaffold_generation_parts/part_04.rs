@@ -121,6 +121,8 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .collect::<std::collections::HashSet<_>>();
     assert!(paths.contains("go.mod"));
     assert!(paths.contains("cmd/api/main.go"));
+    assert!(paths.contains("cmd/api/main_test.go"));
+    assert!(paths.contains("cmd/api/database_command.go"));
     assert!(paths.contains("cmd/openapi/main.go"));
     assert!(paths.contains("sqlc.yaml"));
     assert!(paths.contains("internal/database/migrations/00001_app_metadata.sql"));
@@ -135,7 +137,42 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(go_mod.contents.contains("module github.com/acme/demo"));
     assert!(go_mod.contents.contains("go 1.26.0"));
+    assert!(go_mod.contents.contains("github.com/joho/godotenv"));
     assert!(go_mod.contents.contains("tool ("));
+    let api_main = rendered
+        .iter()
+        .find(|file| file.relative == "cmd/api/main.go")
+        .unwrap();
+    assert!(api_main.contents.contains("godotenv.Load()"));
+    let database_command = rendered
+        .iter()
+        .find(|file| file.relative == "cmd/api/database_command.go")
+        .unwrap();
+    assert!(
+        database_command
+            .contents
+            .contains("--bootstrap-database")
+    );
+    let database = rendered
+        .iter()
+        .find(|file| file.relative == "internal/database/database.go")
+        .unwrap();
+    assert!(database.contents.contains("func Bootstrap("));
+    assert!(database.contents.contains("CREATE DATABASE"));
+    let database_test = rendered
+        .iter()
+        .find(|file| file.relative == "internal/database/database_test.go")
+        .unwrap();
+    assert!(database_test.contents.contains("database.Bootstrap(ctx, databaseURL)"));
+    let playwright = rendered
+        .iter()
+        .find(|file| file.relative == "web/playwright.config.ts")
+        .unwrap();
+    assert!(
+        playwright
+            .contents
+            .contains("go run ./cmd/api --bootstrap-database")
+    );
     let contracts = rendered
         .iter()
         .find(|file| file.relative == "scripts/contracts.mjs")

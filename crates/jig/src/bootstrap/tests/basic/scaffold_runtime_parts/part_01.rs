@@ -514,6 +514,37 @@ fn scaffold_bootstraps_frontend_before_validating_and_migrating_database() {
 }
 
 #[test]
+fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            go_module: Some("github.com/acme/demo".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut answers = AnswerOpts::default();
+
+    plan.apply_answer_defaults(&mut answers);
+
+    assert_eq!(
+        answers.bootstrap_command.as_deref(),
+        Some(
+            "go mod tidy && go tool sqlc generate && go run ./cmd/api --bootstrap-database && scripts/check-webapps.sh bootstrap && node scripts/contracts.mjs generate"
+        )
+    );
+}
+
+#[test]
 fn scaffold_frontend_dev_scripts_only_launch_the_dev_server() {
     for package_manager in ["bun", "npm", "pnpm", "yarn"] {
         let temp = tempdir().unwrap();

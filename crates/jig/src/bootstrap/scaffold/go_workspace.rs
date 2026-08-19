@@ -28,6 +28,10 @@ const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "cmd/api/main.go",
     },
     ScaffoldTemplateFile {
+        template: "go-react/workspace/cmd/api/main_test.go.jinja",
+        output: "cmd/api/main_test.go",
+    },
+    ScaffoldTemplateFile {
         template: "go-react/workspace/cmd/openapi/main.go.jinja",
         output: "cmd/openapi/main.go",
     },
@@ -50,6 +54,10 @@ const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
 ];
 
 const GO_POSTGRES_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile {
+        template: "go-react/workspace/cmd/api/database_command.go.jinja",
+        output: "cmd/api/database_command.go",
+    },
     ScaffoldTemplateFile {
         template: "go-react/workspace/sqlc.yaml.jinja",
         output: "sqlc.yaml",
@@ -115,6 +123,7 @@ impl InitScaffoldPlan {
         let mut commands = vec!["go mod tidy".to_string()];
         if self.db == ScaffoldDb::Postgres {
             commands.push("go tool sqlc generate".into());
+            commands.push("go run ./cmd/api --bootstrap-database".into());
         }
         if !self.frontends.is_empty() {
             commands.push("scripts/check-webapps.sh bootstrap".into());

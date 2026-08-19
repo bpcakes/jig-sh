@@ -31,7 +31,7 @@ docker run \
   --publish 127.0.0.1::5432 \
   --env POSTGRES_USER=postgres \
   --env POSTGRES_PASSWORD=postgres \
-  --env "POSTGRES_DB=$database_name" \
+  --env POSTGRES_DB=postgres \
   postgres:18 >/dev/null
 container_started=1
 
@@ -42,7 +42,7 @@ for _ in $(seq 1 60); do
     --no-psqlrc \
     --set ON_ERROR_STOP=1 \
     --username postgres \
-    --dbname "$database_name" \
+    --dbname postgres \
     --tuples-only \
     --command 'SELECT 1' >/dev/null 2>&1; then
     ready=1
@@ -66,4 +66,4 @@ case "$host_port" in
 esac
 
 export TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${host_port}/${database_name}?sslmode=disable"
-go test -count=1 -run TestOpenAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database
+go test -count=1 -run TestBootstrapCreatesDatabaseAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database

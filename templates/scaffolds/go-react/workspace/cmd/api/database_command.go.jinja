@@ -1,0 +1,21 @@
+package main
+
+import "fmt"
+
+type command int
+
+const (
+	commandServe command = iota
+	commandBootstrapDatabase
+)
+
+func parseCommand(arguments []string) (command, error) {
+	switch {
+	case len(arguments) == 0:
+		return commandServe, nil
+	case len(arguments) == 1 && arguments[0] == "--bootstrap-database":
+		return commandBootstrapDatabase, nil
+	default:
+		return commandServe, fmt.Errorf("usage: api [--bootstrap-database]")
+	}
+}

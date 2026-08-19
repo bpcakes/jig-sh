@@ -1,0 +1,40 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadDotEnvLoadsRepositoryLocalConfiguration(t *testing.T) {
+	const key = "JIG_TEST_DOTENV_LOAD"
+	previousValue, wasSet := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(key, previousValue)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(workingDirectory) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Clean(".env"), []byte(key+"=loaded\n"), 0o600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	loadDotEnv()
+
+	if got := os.Getenv(key); got != "loaded" {
+		t.Fatalf("%s = %q, want %q", key, got, "loaded")
+	}
+}

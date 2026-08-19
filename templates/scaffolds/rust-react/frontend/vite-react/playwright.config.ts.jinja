@@ -47,7 +47,10 @@ const databaseUrl =
   configuredDatabaseUrl ??
   "postgres://postgres:postgres@127.0.0.1:5432/<<[ e2e_database_name ]>>";
 [% if backend_language == "go" %]
-const backendCommand = "go run ./cmd/api";
+const backendCommand = [
+  "go run ./cmd/api --bootstrap-database",
+  "go run ./cmd/api",
+].join(" && ");
 [% else %]
 const backendCommand = [
   "cargo run --locked -p <<[ repo_name ]>>-api -- --bootstrap-database",
