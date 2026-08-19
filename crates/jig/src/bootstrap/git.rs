@@ -215,7 +215,7 @@ pub(super) fn init_git_repo_with_validation(
                 return close_staging_directory(staged, &staged_destination, Err(error));
             }
         };
-    let metadata_stage_path = metadata_stage.path().to_path_buf();
+    let metadata_stage_path = crate::shell::git_env_path(metadata_stage.path())?;
 
     let transfer = (|| {
         staged.require_identity("before transferring initialized Git metadata")?;
