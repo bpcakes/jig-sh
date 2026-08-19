@@ -69,6 +69,17 @@ pub(crate) fn run_apps_with_preflight(
         )?,
         &termination_requested,
     )?;
+    run_claimed_dev_session(specs, settings, current_exe, store, &session, preflight)
+}
+
+fn run_claimed_dev_session(
+    specs: Vec<AppRunSpec>,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    store: StateStore,
+    session: &DevSessionRuntime,
+    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
+) -> Result<Value> {
     let requested_reason = || {
         termination_requested().or_else(|| {
             session
