@@ -233,31 +233,31 @@ impl DevSessionRuntime {
         Ok(())
     }
 
-    pub(crate) fn confirm_preflight_cleanup_interruptible(
+    pub(crate) fn confirm_preflight_cleanup_cancelable(
         &self,
         cleanup: &mut DevCleanupLease,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<()>> {
-        let outcome = self
-            .store
-            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
-                let session = exact_session_mut(
-                    sessions,
-                    &self.session_id,
-                    &self.repo_root_identity,
-                    &self.supervisor,
-                )?;
-                if !session.preflight_cleanup_pending {
-                    bail!(
-                        "Jig dev session '{}' has no pending preflight cleanup to confirm",
-                        self.session_id
-                    );
-                }
-                session.preflight_cleanup_pending = false;
-                session.updated_at_ms = next_timestamp(session.updated_at_ms);
-                Ok(())
-            })?;
-        if matches!(outcome, LockOutcome::Acquired(())) {
+    ) -> Result<Option<()>> {
+        let outcome =
+            self.store
+                .mutate_dev_sessions_cleanup_cancelable(cancelled, |sessions, _| {
+                    let session = exact_session_mut(
+                        sessions,
+                        &self.session_id,
+                        &self.repo_root_identity,
+                        &self.supervisor,
+                    )?;
+                    if !session.preflight_cleanup_pending {
+                        bail!(
+                            "Jig dev session '{}' has no pending preflight cleanup to confirm",
+                            self.session_id
+                        );
+                    }
+                    session.preflight_cleanup_pending = false;
+                    session.updated_at_ms = next_timestamp(session.updated_at_ms);
+                    Ok(())
+                })?;
+        if outcome.is_some() {
             cleanup.confirm();
         }
         Ok(outcome)

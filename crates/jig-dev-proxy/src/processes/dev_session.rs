@@ -163,7 +163,9 @@ pub(super) fn finish_preflight_cleanup(
     if result.is_ok() {
         let cancelled = || termination_reason().is_some();
         lock_outcome_or_interruption(
-            session.confirm_preflight_cleanup_interruptible(cleanup, &cancelled)?,
+            session
+                .confirm_preflight_cleanup_cancelable(cleanup, &cancelled)?
+                .map_or(LockOutcome::Cancelled, LockOutcome::Acquired),
             termination_reason,
         )
         .context("Failed to persist confirmed development preflight cleanup")?;
