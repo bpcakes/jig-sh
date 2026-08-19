@@ -161,7 +161,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let assessment = row.projection_assessment_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
             let stale = assessment.is_stale();
             Row::new([
@@ -223,7 +223,7 @@ fn draw_projection_list(
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let assessment = row.projection_assessment_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
             let stale = assessment.is_stale();
             Row::new([
@@ -289,7 +289,7 @@ fn draw_compact_list(
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let assessment = row.projection_assessment_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
             let stale = assessment.is_stale();
             Row::new([
@@ -371,7 +371,7 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
         key_value("Current", if row.is_current() { "yes" } else { "no" }),
     ];
     if app.selected.is_some() && app.selected == best {
-        if let Some(recommendation) = row.projection_assessment_at(now).recommendation() {
+        if let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation() {
             lines.push(key_value("Recommendation", recommendation.label));
         }
     }
@@ -421,7 +421,8 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                         window.usage_detail(),
                         window.reset_label_at(now)
                     )));
-                    let assessment = details.window_projection_assessment_at(bucket, index, now);
+                    let assessment =
+                        details.window_usage_snapshot_assessment_at(bucket, index, now);
                     let projection = assessment.projection();
                     lines.push(Line::from(Span::styled(
                         stale_projection_label(

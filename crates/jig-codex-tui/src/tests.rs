@@ -428,7 +428,7 @@ fn projection_expires_when_its_usage_window_resets() {
     assert_eq!(app.best_projection_index_at(OBSERVED_AT + 60), None);
     assert!(
         app.rows[0]
-            .projection_assessment_at(OBSERVED_AT + 60)
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
             .is_stale()
     );
 }
@@ -451,12 +451,12 @@ fn unprojectable_sibling_reset_does_not_expire_the_visible_projection() {
     ));
     assert!(
         !app.rows[0]
-            .projection_assessment_at(OBSERVED_AT + 60)
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
             .is_stale()
     );
     assert!(
         app.rows[0]
-            .projection_assessment_at(OBSERVED_AT + 15 * 60)
+            .usage_snapshot_assessment_at(OBSERVED_AT + 15 * 60)
             .is_stale()
     );
 }

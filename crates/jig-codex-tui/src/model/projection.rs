@@ -45,13 +45,13 @@ pub(crate) struct Recommendation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ProjectionAssessment {
+pub(crate) struct UsageSnapshotAssessment {
     projection: Projection,
     stale: bool,
     recommendation: Option<Recommendation>,
 }
 
-impl ProjectionAssessment {
+impl UsageSnapshotAssessment {
     pub(super) fn at(
         projection: Projection,
         now: u64,

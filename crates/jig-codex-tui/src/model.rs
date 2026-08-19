@@ -15,7 +15,7 @@ use crate::{Home, HomeUpdate};
 mod projection;
 
 use projection::WindowProjection;
-pub(crate) use projection::{Projection, ProjectionAssessment};
+pub(crate) use projection::{Projection, UsageSnapshotAssessment};
 
 const UNKNOWN: &str = "-";
 const MIN_PROJECTION_ELAPSED_FRACTION: f64 = 0.1;
@@ -97,7 +97,8 @@ impl App {
         let mut best: Option<(usize, f64)> = None;
         for index in self.visible_indices() {
             let row = &self.rows[index];
-            let Some(recommendation) = row.projection_assessment_at(now).recommendation() else {
+            let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+            else {
                 continue;
             };
             if best.is_none_or(|(_, best_score)| recommendation.score > best_score) {
@@ -410,14 +411,14 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn projection_assessment_at(&self, now: u64) -> ProjectionAssessment {
+    pub(crate) fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
         match &self.inspection {
-            Inspection::Ready(details) => details.projection_assessment_at(now),
+            Inspection::Ready(details) => details.usage_snapshot_assessment_at(now),
             Inspection::Loading => {
-                ProjectionAssessment::at(Projection::Loading, now, u64::MAX, false)
+                UsageSnapshotAssessment::at(Projection::Loading, now, u64::MAX, false)
             }
             Inspection::Unavailable => {
-                ProjectionAssessment::at(Projection::InspectionUnavailable, now, u64::MAX, false)
+                UsageSnapshotAssessment::at(Projection::InspectionUnavailable, now, u64::MAX, false)
             }
         }
     }
@@ -511,7 +512,7 @@ impl Details {
         bucket.projection_at(self.observed_at)
     }
 
-    fn projection_assessment_at(&self, now: u64) -> ProjectionAssessment {
+    fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
         let primary_bucket = self.primary_bucket();
         let expires_at = primary_bucket.map_or_else(
             || {
@@ -520,7 +521,7 @@ impl Details {
             },
             |bucket| bucket.projection_expires_at(self.observed_at),
         );
-        ProjectionAssessment::at(
+        UsageSnapshotAssessment::at(
             self.projection(),
             now,
             expires_at,
@@ -551,12 +552,12 @@ impl Details {
         None
     }
 
-    pub(crate) fn window_projection_assessment_at(
+    pub(crate) fn window_usage_snapshot_assessment_at(
         &self,
         bucket: &RateLimitBucket,
         index: usize,
         now: u64,
-    ) -> ProjectionAssessment {
+    ) -> UsageSnapshotAssessment {
         let expires_at = bucket
             .windows
             .get(index)
@@ -573,7 +574,7 @@ impl Details {
                     )
                 },
             );
-        ProjectionAssessment::at(
+        UsageSnapshotAssessment::at(
             bucket.window_projection_at(index, self.observed_at),
             now,
             expires_at,
