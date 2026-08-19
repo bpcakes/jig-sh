@@ -12,7 +12,8 @@ use crate::state::StateStore;
 use crate::types::{AppRunSpec, CommandSpec};
 
 use super::super::{
-    TerminationReason, interruption_reason, is_interruption, normalize_preflight_result,
+    TerminationReason, finish_preflight_result, interruption_reason, is_interruption,
+    normalize_preflight_result,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::super::{finalize_claimed_dev_session_result, finish_preflight_cleanup};
@@ -282,4 +283,49 @@ fn unconfirmed_preflight_cleanup_retains_the_registered_session() {
     assert!(sessions[0].cleanup_required);
     assert!(sessions[0].preflight_cleanup_pending);
     assert_eq!(sessions[0].phase, crate::state::DevSessionPhase::Orphaned);
+}
+
+#[derive(Debug)]
+struct PrimaryPreflightFailure;
+
+impl std::fmt::Display for PrimaryPreflightFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("primary preflight failure")
+    }
+}
+
+impl std::error::Error for PrimaryPreflightFailure {}
+
+#[test]
+fn preflight_failure_wins_over_cleanup_confirmation_failure() {
+    let error = finish_preflight_result(
+        Err(PrimaryPreflightFailure.into()),
+        Err(anyhow::anyhow!("cleanup confirmation failed")),
+    )
+    .unwrap_err();
+
+    assert!(error.is::<PrimaryPreflightFailure>());
+    assert_eq!(error.to_string(), "primary preflight failure");
+}
+
+#[test]
+fn preflight_failure_wins_over_cleanup_confirmation_interruption() {
+    let reason = TerminationReason::requested_stop();
+    let error = finish_preflight_result(
+        Err(PrimaryPreflightFailure.into()),
+        Err(super::super::interruption_error(reason)),
+    )
+    .unwrap_err();
+
+    assert!(error.is::<PrimaryPreflightFailure>());
+    assert_eq!(interruption_reason(&error), None);
+}
+
+#[test]
+fn cleanup_confirmation_failure_remains_fatal_after_successful_preflight() {
+    let reason = TerminationReason::requested_stop();
+    let error =
+        finish_preflight_result(Ok(()), Err(super::super::interruption_error(reason))).unwrap_err();
+
+    assert_eq!(interruption_reason(&error), Some(reason));
 }

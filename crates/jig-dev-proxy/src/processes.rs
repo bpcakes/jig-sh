@@ -39,6 +39,8 @@ pub(crate) use self::dev_session::finalize_claimed_dev_session_result;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 use self::dev_session::finish_preflight_cleanup;
 #[cfg(test)]
+use self::dev_session::finish_preflight_result;
+#[cfg(test)]
 use self::dev_session::normalize_preflight_result;
 #[cfg(all(test, not(windows)))]
 use self::dev_session::run_apps_with_interrupt_probe;

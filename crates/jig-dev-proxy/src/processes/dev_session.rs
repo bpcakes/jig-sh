@@ -208,17 +208,41 @@ pub(super) fn finish_preflight_cleanup(
     let cleanup_was_confirmed = result
         .as_ref()
         .map_or_else(DevPreflightError::cleanup_was_confirmed, |()| true);
-    if cleanup_was_confirmed {
-        let cancelled = || termination_reason().is_some();
-        lock_outcome_or_interruption(
-            session
-                .confirm_preflight_cleanup_cancelable(cleanup, &cancelled)?
-                .map_or(LockOutcome::Cancelled, LockOutcome::Acquired),
-            termination_reason,
-        )
-        .context("Failed to persist confirmed development preflight cleanup")?;
+    let primary = normalize_preflight_result(result, termination_reason());
+    let confirmation = if cleanup_was_confirmed {
+        persist_preflight_cleanup_confirmation(session, cleanup, termination_reason)
+    } else {
+        Ok(())
+    };
+    finish_preflight_result(primary, confirmation)
+}
+
+fn persist_preflight_cleanup_confirmation(
+    session: &DevSessionRuntime,
+    cleanup: &mut DevCleanupLease,
+    termination_reason: &impl Fn() -> Option<TerminationReason>,
+) -> Result<()> {
+    let cancelled = || termination_reason().is_some();
+    lock_outcome_or_interruption(
+        session
+            .confirm_preflight_cleanup_cancelable(cleanup, &cancelled)?
+            .map_or(LockOutcome::Cancelled, LockOutcome::Acquired),
+        termination_reason,
+    )
+    .context("Failed to persist confirmed development preflight cleanup")
+}
+
+pub(super) fn finish_preflight_result(primary: Result<()>, confirmation: Result<()>) -> Result<()> {
+    match (primary, confirmation) {
+        (Err(primary), Err(confirmation)) => {
+            eprintln!(
+                "jig dev preflight failed; cleanup confirmation also failed: {confirmation:#}"
+            );
+            Err(primary)
+        }
+        (Err(primary), Ok(())) => Err(primary),
+        (Ok(()), confirmation) => confirmation,
     }
-    normalize_preflight_result(result, termination_reason())
 }
 
 fn run_apps_with_session_and_interrupt_probe(
