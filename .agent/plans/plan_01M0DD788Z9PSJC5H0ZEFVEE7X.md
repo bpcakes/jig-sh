@@ -16,7 +16,7 @@ The public `jig_dev_proxy` command facade remains `anyhow::Result<serde_json::Va
 - [x] (2026-08-19) Introduced a closed failed variant at the stop-session phase boundary without changing command behavior; all 24 lifecycle tests pass.
 - [x] (2026-08-19) Serialized recovery-bearing direct-stop failures at the owning command boundary, made the human report distinguish unavailable counts, and added focused outcome, renderer, and error-chain regressions.
 - [x] (2026-08-19) Composed preflight and cleanup-confirmation results with an explicit primary-error policy; focused tests prove ordinary and interruption-shaped secondary failures cannot replace the preflight error.
-- [ ] Run focused checks after every slice, then all configured gates and the full test suite with the development binary.
+- [x] (2026-08-19) Ran focused checks after every slice, all 570 proxy tests, the configured locked full workspace suite, contract gate, workspace format check, and workspace strict Clippy with the rebuilt development binary; all passed.
 
 ## Surprises & Discoveries
 
@@ -45,7 +45,11 @@ The public `jig_dev_proxy` command facade remains `anyhow::Result<serde_json::Va
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The repair confirms the review's structural diagnosis. The stop phase now has a closed `Failed { error, recoveries }` outcome, so both direct stop and replacement must account for completed recovery side effects in exhaustive matches. Direct stop owns its failure serialization and returns one structured report containing the standard command error plus recoveries; it does not claim stopped-session or stopped-app counts after a failure makes those counts unknowable. The recovery-bearing `anyhow` adapter remains only for the foreground-dev boundary and now formats its source chain once.
+
+Preflight completion is split into primary-result normalization, cleanup-confirmation persistence, and an explicit merge. A preflight error wins unchanged over a secondary confirmation failure, preserving its message and typed classification; the secondary failure is diagnosed and the durable pending-cleanup session state remains available for later inspection. When preflight succeeds, confirmation failure remains fatal.
+
+The work shipped as one planning commit and three independently verified code commits: `4e79376` for the typed stop outcome, `3294cea` for recovery-bearing direct-stop reporting, and `5525a45` for preflight precedence. Final receipt-backed gates are fresh and passed, including the configured two-part locked workspace test command, contract validation, formatting, and workspace-wide strict Clippy.
 
 ## Context and Orientation
 
