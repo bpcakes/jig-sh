@@ -446,12 +446,12 @@ fn projection_expires_when_its_usage_window_resets() {
     assert!(
         app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 60)
-            .is_stale()
+            .projection_is_stale()
     );
 }
 
 #[test]
-fn unprojectable_sibling_reset_does_not_expire_the_visible_projection() {
+fn unprojectable_sibling_reset_expires_quota_but_not_the_visible_projection() {
     const OBSERVED_AT: u64 = 2_000_000_000;
     let mut app = app(homes());
     let mut update = projected_update(0, 25.0, 10_080, 0.5, OBSERVED_AT);
@@ -467,15 +467,35 @@ fn unprojectable_sibling_reset_does_not_expire_the_visible_projection() {
         Projection::Remaining { partial: true, .. }
     ));
     assert!(
+        app.rows[0]
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
+            .quota_is_stale()
+    );
+    assert!(
         !app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 60)
-            .is_stale()
+            .projection_is_stale()
     );
     assert!(
         app.rows[0]
             .usage_snapshot_assessment_at(OBSERVED_AT + 15 * 60)
-            .is_stale()
+            .projection_is_stale()
     );
+}
+
+#[test]
+fn known_reset_expires_quota_without_projection_metadata() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(null);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(OBSERVED_AT + 60);
+    app.apply_update_at(update, OBSERVED_AT);
+
+    let assessment = app.rows[0].usage_snapshot_assessment_at(OBSERVED_AT + 60);
+    assert!(matches!(assessment.projection(), Projection::Unavailable));
+    assert!(assessment.quota_is_stale());
+    assert!(assessment.projection_is_stale());
 }
 
 #[test]

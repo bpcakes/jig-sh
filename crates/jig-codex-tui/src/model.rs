@@ -419,10 +419,12 @@ impl HomeRow {
             Inspection::Loading => UsageSnapshotAssessment::at(
                 Projection::Loading,
                 UsageSnapshotFreshness::NotSampled,
+                UsageSnapshotFreshness::NotSampled,
                 false,
             ),
             Inspection::Unavailable => UsageSnapshotAssessment::at(
                 Projection::InspectionUnavailable,
+                UsageSnapshotFreshness::NotSampled,
                 UsageSnapshotFreshness::NotSampled,
                 false,
             ),
@@ -520,25 +522,34 @@ impl Details {
 
     fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
         let primary_bucket = self.primary_bucket();
-        let expires_at = primary_bucket.map_or_else(
+        let quota_expires_at = primary_bucket.map_or_else(
             || {
                 self.observed_at
                     .saturating_add(STALE_PROJECTION_AFTER_SECONDS)
             },
-            |bucket| bucket.projection_expires_at(self.observed_at),
+            |bucket| bucket.quota_expires_at(self.observed_at),
         );
+        let projection_expires_at = primary_bucket
+            .and_then(|bucket| bucket.projection_expires_at(self.observed_at))
+            .unwrap_or(quota_expires_at);
         let has_presented_usage_sample = self.inspection_error.is_none()
             && self.usage_error.is_none()
             && self.status != "not logged in"
             && primary_bucket.is_some_and(RateLimitBucket::has_usage_sample);
-        let freshness = if has_presented_usage_sample {
-            UsageSnapshotFreshness::sampled_at(now, expires_at)
+        let quota_freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, quota_expires_at)
+        } else {
+            UsageSnapshotFreshness::NotSampled
+        };
+        let projection_freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, projection_expires_at)
         } else {
             UsageSnapshotFreshness::NotSampled
         };
         UsageSnapshotAssessment::at(
             self.projection(),
-            freshness,
+            quota_freshness,
+            projection_freshness,
             primary_bucket.is_some_and(|bucket| bucket.id == "codex"),
         )
     }
@@ -598,12 +609,13 @@ impl Details {
         UsageSnapshotAssessment::at(
             bucket.window_projection_at(index, self.observed_at),
             freshness,
+            freshness,
             false,
         )
     }
 
     pub(crate) fn usage_sample_age_label_at(&self, now: u64) -> Option<String> {
-        if !self.usage_snapshot_assessment_at(now).has_sample() {
+        if !self.usage_snapshot_assessment_at(now).has_quota_sample() {
             return None;
         }
         let age = now.saturating_sub(self.observed_at);
@@ -754,7 +766,17 @@ impl RateLimitBucket {
             .unwrap_or(WindowRole::Window)
     }
 
-    fn projection_expires_at(&self, observed_at: u64) -> u64 {
+    fn quota_expires_at(&self, observed_at: u64) -> u64 {
+        let expiry_cap = observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS);
+        self.windows
+            .iter()
+            .filter(|window| window.has_usage_sample())
+            .filter_map(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
+            .fold(expiry_cap, u64::min)
+    }
+
+    fn projection_expires_at(&self, observed_at: u64) -> Option<u64> {
+        let expiry_cap = observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS);
         self.windows
             .iter()
             .filter(|window| {
@@ -763,11 +785,15 @@ impl RateLimitBucket {
                     WindowProjection::Unavailable
                 )
             })
-            .filter_map(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
-            .fold(
-                observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS),
-                u64::min,
-            )
+            .fold(None, |expires_at, window| {
+                let window_expires_at = window
+                    .resets_at
+                    .and_then(|reset| u64::try_from(reset).ok())
+                    .map_or(expiry_cap, |reset| reset.min(expiry_cap));
+                Some(expires_at.map_or(window_expires_at, |current: u64| {
+                    current.min(window_expires_at)
+                }))
+            })
     }
 
     fn has_usage_sample(&self) -> bool {

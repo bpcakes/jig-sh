@@ -15,6 +15,11 @@ const WARN: Color = Color::Yellow;
 const BAD: Color = Color::Red;
 const MIN_WIDTH: u16 = 46;
 const MIN_HEIGHT: u16 = 12;
+const STACKED_LIST_PERCENT: u32 = 58;
+const STACKED_ROW_HEIGHT: u16 = 2;
+const TABLE_CHROME_HEIGHT: u16 = 3;
+const MIN_STACKED_LIST_HEIGHT: u16 = TABLE_CHROME_HEIGHT + STACKED_ROW_HEIGHT;
+const MIN_STACKED_DETAILS_HEIGHT: u16 = 2;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     draw_at(frame, app, unix_timestamp_now());
@@ -58,9 +63,10 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         draw_list(frame, content[0], app, now, best);
         draw_details(frame, content[1], app, now, best);
     } else {
+        let list_height = stacked_list_height(outer[1].height);
         let content = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .constraints([Constraint::Length(list_height), Constraint::Min(0)])
             .split(outer[1]);
         draw_list(frame, content[0], app, now, best);
         draw_details(frame, content[1], app, now, best);
@@ -163,15 +169,16 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let quota_stale = assessment.quota_is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
-                Cell::from(stale_snapshot_label(row.usage(), stale))
-                    .style(stale_usage_style(stale)),
-                Cell::from(stale_snapshot_label(projection.label(), stale))
-                    .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
+                    .style(stale_usage_style(quota_stale)),
+                Cell::from(stale_snapshot_label(projection.label(), projection_stale))
+                    .style(stale_projection_style(projection, projection_stale)),
             ])
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
@@ -226,16 +233,20 @@ fn draw_projection_list(
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let quota_stale = assessment.quota_is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!("{}\n{}", row.display_name(), row.account())),
-                Cell::from(stale_snapshot_label(row.usage(), stale))
-                    .style(stale_usage_style(stale)),
-                Cell::from(stale_snapshot_label(projection.list_outcome_label(), stale))
-                    .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), quota_stale))
+                    .style(stale_usage_style(quota_stale)),
+                Cell::from(stale_snapshot_label(
+                    projection.list_outcome_label(),
+                    projection_stale,
+                ))
+                .style(stale_projection_style(projection, projection_stale)),
             ])
-            .height(2)
+            .height(STACKED_ROW_HEIGHT)
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
@@ -290,18 +301,18 @@ fn draw_compact_list(
             let row = &app.rows[*index];
             let assessment = row.usage_snapshot_assessment_at(now);
             let projection = assessment.projection();
-            let stale = assessment.is_stale();
+            let projection_stale = assessment.projection_is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!(
                     "{} · {}\n{}",
                     row.display_name(),
                     row.account(),
-                    stale_snapshot_label(projection.label(), stale)
+                    stale_snapshot_label(projection.label(), projection_stale)
                 ))
-                .style(stale_projection_style(projection, stale)),
+                .style(stale_projection_style(projection, projection_stale)),
             ])
-            .height(2)
+            .height(STACKED_ROW_HEIGHT)
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
@@ -417,20 +428,28 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                 }
                 for (index, window) in bucket.windows.iter().enumerate() {
                     let role = bucket.window_role(index);
-                    lines.push(Line::from(format!(
-                        "  {role}: {} · {}",
-                        window.usage_detail(),
-                        window.reset_label_at(now)
-                    )));
                     let assessment =
                         details.window_usage_snapshot_assessment_at(bucket, index, now);
                     let projection = assessment.projection();
                     lines.push(Line::from(Span::styled(
-                        stale_snapshot_label(
-                            format!("    At current pace: {}", projection.outcome_label()),
-                            assessment.is_stale(),
+                        indented_snapshot_label(
+                            "  ",
+                            format!(
+                                "{role}: {} · {}",
+                                window.usage_detail(),
+                                window.reset_label_at(now)
+                            ),
+                            assessment.quota_is_stale(),
                         ),
-                        stale_projection_style(projection, assessment.is_stale()),
+                        stale_usage_style(assessment.quota_is_stale()),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        indented_snapshot_label(
+                            "    ",
+                            format!("At current pace: {}", projection.outcome_label()),
+                            assessment.projection_is_stale(),
+                        ),
+                        stale_projection_style(projection, assessment.projection_is_stale()),
                     )));
                 }
             }
@@ -495,6 +514,14 @@ fn detail_title(app: &App) -> &'static str {
     } else {
         "Selected home"
     }
+}
+
+fn stacked_list_height(content_height: u16) -> u16 {
+    let proportional = (u32::from(content_height) * STACKED_LIST_PERCENT + 50) / 100;
+    let proportional = u16::try_from(proportional).unwrap_or(u16::MAX);
+    proportional
+        .max(MIN_STACKED_LIST_HEIGHT)
+        .min(content_height.saturating_sub(MIN_STACKED_DETAILS_HEIGHT))
 }
 
 fn panel(title: &str) -> Block<'_> {
@@ -568,6 +595,14 @@ fn stale_snapshot_label(label: String, stale: bool) -> String {
         format!("stale · {label}")
     } else {
         label
+    }
+}
+
+fn indented_snapshot_label(indent: &str, label: String, stale: bool) -> String {
+    if stale {
+        format!("{indent}stale · {label}")
+    } else {
+        format!("{indent}{label}")
     }
 }
 

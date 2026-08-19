@@ -70,7 +70,8 @@ pub(crate) struct Recommendation {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct UsageSnapshotAssessment {
     projection: Projection,
-    freshness: UsageSnapshotFreshness,
+    quota_freshness: UsageSnapshotFreshness,
+    projection_freshness: UsageSnapshotFreshness,
     recommendation: Option<Recommendation>,
 }
 
@@ -94,16 +95,18 @@ impl UsageSnapshotFreshness {
 impl UsageSnapshotAssessment {
     pub(super) fn at(
         projection: Projection,
-        freshness: UsageSnapshotFreshness,
+        quota_freshness: UsageSnapshotFreshness,
+        projection_freshness: UsageSnapshotFreshness,
         recommendation_eligible: bool,
     ) -> Self {
-        let recommendation = (freshness == UsageSnapshotFreshness::Fresh
+        let recommendation = (projection_freshness == UsageSnapshotFreshness::Fresh
             && recommendation_eligible)
             .then(|| projection.recommendation())
             .flatten();
         Self {
             projection,
-            freshness,
+            quota_freshness,
+            projection_freshness,
             recommendation,
         }
     }
@@ -112,12 +115,16 @@ impl UsageSnapshotAssessment {
         self.projection
     }
 
-    pub(crate) fn is_stale(self) -> bool {
-        self.freshness == UsageSnapshotFreshness::Stale
+    pub(crate) fn quota_is_stale(self) -> bool {
+        self.quota_freshness == UsageSnapshotFreshness::Stale
     }
 
-    pub(crate) fn has_sample(self) -> bool {
-        self.freshness != UsageSnapshotFreshness::NotSampled
+    pub(crate) fn projection_is_stale(self) -> bool {
+        self.projection_freshness == UsageSnapshotFreshness::Stale
+    }
+
+    pub(crate) fn has_quota_sample(self) -> bool {
+        self.quota_freshness != UsageSnapshotFreshness::NotSampled
     }
 
     pub(crate) fn recommendation(self) -> Option<Recommendation> {
