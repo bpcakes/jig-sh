@@ -135,12 +135,12 @@ impl DevSessionRuntime {
                 let stop =
                     match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled) {
                         StopSessionOutcome::Complete(stop) => stop,
-                        StopSessionOutcome::Cancelled(recoveries) => {
-                            replacement_recoveries.extend(recoveries);
+                        StopSessionOutcome::Cancelled(progress) => {
+                            replacement_recoveries.extend(progress.into_recoveries());
                             return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                         }
-                        StopSessionOutcome::Failed { error, recoveries } => {
-                            replacement_recoveries.extend(recoveries);
+                        StopSessionOutcome::Failed { error, progress } => {
+                            replacement_recoveries.extend(progress.into_recoveries());
                             return Err(crate::dev_outcome::with_recovery_notices(
                                 error,
                                 replacement_recoveries,

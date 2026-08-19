@@ -143,11 +143,22 @@ pub(super) struct StopReport {
 
 pub(super) enum StopSessionOutcome {
     Complete(StopReport),
-    Cancelled(Vec<OrphanRecoveryNotice>),
+    Cancelled(StopProgress),
     Failed {
         error: anyhow::Error,
-        recoveries: Vec<OrphanRecoveryNotice>,
+        progress: StopProgress,
     },
+}
+
+#[derive(Default)]
+pub(super) struct StopProgress {
+    recoveries: Vec<OrphanRecoveryNotice>,
+}
+
+impl StopProgress {
+    pub(super) fn into_recoveries(self) -> Vec<OrphanRecoveryNotice> {
+        self.recoveries
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -284,7 +295,7 @@ fn stop_outcome_json(
     match outcome {
         StopSessionOutcome::Complete(report) => Ok(report.into_json(repo, state_dir)),
         StopSessionOutcome::Cancelled(_) => bail!("uncancelled Jig dev stop was cancelled"),
-        StopSessionOutcome::Failed { error, recoveries } => Ok(json!({
+        StopSessionOutcome::Failed { error, progress } => Ok(json!({
             "ok": false,
             "command": "dev stop",
             "repo_name": repo.name,
@@ -292,7 +303,7 @@ fn stop_outcome_json(
             "state_dir": state_dir,
             "matched_sessions": matched_sessions,
             "error": crate::dev_outcome::command_failed_error(format!("{error:#}")),
-            "recoveries": recoveries,
+            "recoveries": progress.recoveries,
             "warnings": [],
         })),
     }
@@ -320,17 +331,17 @@ fn stop_session_ids_interruptible_with_policy(
     policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
 ) -> StopSessionOutcome {
-    let mut recoveries = Vec::new();
+    let mut progress = StopProgress::default();
     match stop_session_ids_interruptible_inner(
         store,
         repo,
         target_ids,
         policy,
         cancelled,
-        &mut recoveries,
+        &mut progress,
     ) {
         Ok(outcome) => outcome,
-        Err(error) => StopSessionOutcome::Failed { error, recoveries },
+        Err(error) => StopSessionOutcome::Failed { error, progress },
     }
 }
 
@@ -340,7 +351,7 @@ fn stop_session_ids_interruptible_inner(
     target_ids: &BTreeSet<String>,
     policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
-    recoveries: &mut Vec<OrphanRecoveryNotice>,
+    progress: &mut StopProgress,
 ) -> Result<StopSessionOutcome> {
     if target_ids.is_empty() {
         return Ok(StopSessionOutcome::Complete(StopReport {
@@ -362,7 +373,7 @@ fn stop_session_ids_interruptible_inner(
     })? {
         LockOutcome::Acquired(targets) => targets,
         LockOutcome::Cancelled => {
-            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
         }
     };
     let matched_sessions = targets.len();
@@ -385,7 +396,7 @@ fn stop_session_ids_interruptible_inner(
     let mut control_warnings = Vec::new();
     for session in &targets {
         if cancelled() {
-            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
         }
         match request_stop(
             session.control.port,
@@ -415,14 +426,14 @@ fn stop_session_ids_interruptible_inner(
         control_retire_timeout(&targets),
         cancelled,
     )? {
-        return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+        return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
     }
 
     let mut lifecycle_warnings = Vec::new();
     let remaining = match current_target_sessions(store, repo, target_ids, cancelled)? {
         LockOutcome::Acquired(remaining) => remaining,
         LockOutcome::Cancelled => {
-            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
         }
     };
     // Only retirement before this boundary acknowledges the authenticated stop path. The
@@ -434,7 +445,7 @@ fn stop_session_ids_interruptible_inner(
     let stopped_apps = count_stopped_apps(initially_maybe_live_apps, &unretired_after_control_ids);
     for session in remaining {
         if cancelled() {
-            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
         }
         match (
             session.cleanup_required,
@@ -443,16 +454,16 @@ fn stop_session_ids_interruptible_inner(
             (true, OrphanRecoveryAssessment::Retirable) => {
                 match retire_orphan(store, &session, policy, cancelled)? {
                     LockOutcome::Cancelled => {
-                        return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+                        return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                     }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired(recovery)) => {
-                        recoveries.push(recovery);
+                        progress.recoveries.push(recovery);
                     }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::AlreadyAbsent) => {}
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
                         lifecycle_warnings.push(retention_warning(&session, &reason));
                         if !mark_orphaned(store, &session, cancelled)? {
-                            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+                            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                         }
                     }
                 }
@@ -460,12 +471,12 @@ fn stop_session_ids_interruptible_inner(
             (_, OrphanRecoveryAssessment::Retain(reason)) => {
                 lifecycle_warnings.push(retention_warning(&session, &reason));
                 if !mark_orphaned(store, &session, cancelled)? {
-                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                 }
             }
             (false, OrphanRecoveryAssessment::Retirable) => {
                 if !remove_exact_session(store, &session, cancelled)? {
-                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
                 }
             }
         }
@@ -473,7 +484,7 @@ fn stop_session_ids_interruptible_inner(
     let snapshot = match store.snapshot_dev_state_interruptible(cancelled)? {
         LockOutcome::Acquired(snapshot) => snapshot,
         LockOutcome::Cancelled => {
-            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(progress)));
         }
     };
     let sessions = snapshot
@@ -504,7 +515,7 @@ fn stop_session_ids_interruptible_inner(
         stopped_sessions,
         stopped_apps,
         sessions,
-        recoveries: std::mem::take(recoveries),
+        recoveries: std::mem::take(&mut progress.recoveries),
         warnings,
     }))
 }
@@ -1058,7 +1069,9 @@ mod tests {
         let output = stop_outcome_json(
             StopSessionOutcome::Failed {
                 error: anyhow::anyhow!("later state read failed"),
-                recoveries: vec![recovery],
+                progress: StopProgress {
+                    recoveries: vec![recovery],
+                },
             },
             &repo,
             Path::new("/tmp/example-state"),
