@@ -81,15 +81,19 @@ fn sqlx_driver_probe_invokes_shim_safely_and_times_out() {
         &noisy,
         "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 5000 ]; do printf '0123456789abcdef0123456789abcdef' >&2; i=$((i + 1)); done\nexit 0\n",
     );
-    assert!(matches!(
-        probe_sqlx_driver_with_timeout(
-            &noisy,
-            SqlxProbeStyle::CargoSubcommand,
-            SqlxDriver::Sqlite,
-            Duration::from_secs(2)
+    let noisy_probe = probe_sqlx_driver_with_timeout(
+        &noisy,
+        SqlxProbeStyle::CargoSubcommand,
+        SqlxDriver::Sqlite,
+        Duration::from_secs(2),
+    );
+    assert!(
+        matches!(
+            &noisy_probe,
+            SqlxDriverProbe::Indeterminate(reason) if reason.contains("capture limit")
         ),
-        SqlxDriverProbe::Indeterminate(reason) if reason.contains("capture limit")
-    ));
+        "unexpected noisy probe result: {noisy_probe:?}"
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -120,15 +124,19 @@ fn sqlx_driver_probe_reaps_descendants_on_completion_and_timeout() {
         &hanging,
         &owned_test_descendant_script(&timeout_marker, "while :; do :; done"),
     );
-    assert!(matches!(
-        probe_sqlx_driver_with_timeout(
-            &hanging,
-            SqlxProbeStyle::Direct,
-            SqlxDriver::Sqlite,
-            Duration::from_millis(300),
+    let timeout_probe = probe_sqlx_driver_with_timeout(
+        &hanging,
+        SqlxProbeStyle::Direct,
+        SqlxDriver::Sqlite,
+        Duration::from_millis(300),
+    );
+    assert!(
+        matches!(
+            &timeout_probe,
+            SqlxDriverProbe::Indeterminate(reason) if reason == "the driver probe timed out"
         ),
-        SqlxDriverProbe::Indeterminate(reason) if reason == "the driver probe timed out"
-    ));
+        "unexpected timeout probe result: {timeout_probe:?}"
+    );
     let timeout_descendant = read_test_process_identity(&timeout_marker);
 
     for descendant in [completed_descendant, timeout_descendant] {

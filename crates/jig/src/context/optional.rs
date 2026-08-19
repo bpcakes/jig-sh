@@ -12,6 +12,9 @@ impl RepoContext {
     /// Load an explicitly configured or discovered repository without
     /// tolerating invalid context.
     pub(crate) fn load_optional_strict() -> Result<Option<Self>> {
+        if let Some(ctx) = Self::prevalidated_launcher_context() {
+            return Ok(Some(ctx));
+        }
         let root = match repo_root_from_env()? {
             Some(root) => Some(root),
             None => find_optional_repo_root()?,
@@ -30,6 +33,9 @@ impl RepoContext {
     }
 
     fn load_optional_with_warnings(warnings: bool) -> Result<Option<Self>> {
+        if let Some(ctx) = Self::prevalidated_launcher_context() {
+            return Ok(Some(ctx));
+        }
         // Contextless commands keep working when a shell inherited a stale
         // JIG_REPO_ROOT. Required commands use load(), where the override stays
         // strict. Inventory uses the same fallback path without stderr noise.

@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
@@ -16,8 +18,13 @@ use toml::Table;
 use toml::Value as TomlValue;
 use ulid::Ulid;
 
+use crate::context::RepoContext;
+#[cfg(test)]
+use crate::context::{RuntimeCacheProfile, runtime_cache_base, runtime_profile_cache_name};
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::progress::CliProgress;
+#[cfg(test)]
+use crate::runtime_cache_lock::{RuntimeCacheLockPolicy, RuntimeCacheLocks};
 use answers::{AnswerInput, RenderAnswers};
 #[cfg(test)]
 use file_copy::create_symlink;
@@ -49,15 +56,16 @@ use initial_template::{prepare_initial_template_source, resolve_initial_template
 use path::{absolute_path_from, bootstrap_invocation_cwd, validate_repository_relative_ancestors};
 #[cfg(test)]
 use preview_seed::seed_preview_workspace;
-use renderer::{RenderStageRequest, stage_render};
+use renderer::{RenderStageRequest, stage_render, stage_selected_render};
 #[cfg(test)]
 use sync::rendered_conflicts;
-use sync::{ApplyRenderOptions, apply_staged_render};
-#[cfg(test)]
-use template_source::EMBEDDED_TEMPLATE_SOURCE;
+use sync::{ApplyRenderConflictPolicy, ApplyRenderOptions, apply_staged_render};
 #[cfg(test)]
 use template_source::PrivateAnswerOverrides;
-use template_source::{prepare_update_template_source, read_stored_template_state};
+use template_source::{
+    EMBEDDED_TEMPLATE_SOURCE, prepare_template_source_from_base, prepare_update_template_source,
+    read_stored_template_state,
+};
 
 mod adopt_infer;
 mod answers;
@@ -70,6 +78,7 @@ mod init;
 mod init_transaction;
 mod initial_copy;
 mod initial_template;
+mod launcher_repair_cache;
 mod managed_paths;
 mod opts;
 pub(crate) mod path;
@@ -81,13 +90,42 @@ mod scaffold;
 mod staged_render;
 mod sync;
 mod template_source;
+mod update;
+
+pub(crate) use launcher_repair_cache::LAUNCHER_REPAIR_SEED_STAMP_HEADER;
+use launcher_repair_cache::{
+    FullRefreshRuntimePolicy, finish_full_refresh, seed_launcher_repair_runtime,
+};
+#[cfg(test)]
+use launcher_repair_cache::{
+    LAUNCHER_REPAIR_ENVIRONMENT_KEYS, LAUNCHER_REPAIR_RETIREMENT_RETRY_GUIDANCE,
+    PublishedLauncherRepairCache, STALE_LAUNCHER_REPAIR_STAGING_AGE,
+    TEST_FAIL_LAUNCHER_REPAIR_SEED_ENV, launcher_repair_retirement_warning,
+    preserve_launcher_repair_staging, publish_launcher_repair_caches,
+    publish_launcher_repair_caches_with_lock_policy, reap_stale_launcher_repair_staging,
+    retire_launcher_repair_seeded_caches, rollback_published_repair_caches,
+    sanitize_launcher_repair_environment,
+};
+#[cfg(all(test, unix))]
+use launcher_repair_cache::{is_root_owned_nonwritable_path, root_owned_nonwritable_component};
 
 pub use answers::HarnessFootprint;
 pub(crate) use init::run_init;
 pub use opts::AnswerOpts;
 pub use presets::scaffold_presets_report;
+pub use update::run_update;
+pub(crate) use update::{
+    launcher_only_repair_answers_are_valid, launcher_only_repair_scripts_are_recognizable,
+};
+#[cfg(test)]
+use update::{
+    legacy_launcher_only_paths, recognizable_contract_installer, recognizable_contract_launcher,
+    recognizable_generated_installer, recognizable_generated_launcher,
+};
 
 const ANSWERS_FILE: &str = ".jig.toml";
+pub(crate) const MANAGED_PATHS_MANIFEST_PATH: &str = managed_paths::MANIFEST_PATH;
+const LAUNCHER_ONLY_MANAGED_PATHS: [&str; 2] = ["scripts/install-jig.sh", "scripts/jig"];
 const ADOPT_RECEIPT_PATH: &str = ".agent/.cache/adopt/adopt-last.json";
 const LEGACY_ADOPT_RECEIPT_PATH: &str = ".agent/state/adopt-last.json";
 const ADOPT_RECEIPT_PATHS: [&str; 2] = [ADOPT_RECEIPT_PATH, LEGACY_ADOPT_RECEIPT_PATH];

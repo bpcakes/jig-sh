@@ -31,6 +31,7 @@ else:
 answers_get() {
   python3 - "$1" "$2" <<'PY'
 import ast
+import os
 import pathlib
 import re
 import sys
@@ -38,10 +39,13 @@ import sys
 text = pathlib.Path(sys.argv[1]).read_text()
 key = sys.argv[2]
 
-try:
-    import tomllib
-except ModuleNotFoundError:
+if os.environ.get("JIG_FIXTURE_FORCE_NO_TOMLLIB") == "1":
     tomllib = None
+else:
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        tomllib = None
 
 if tomllib is not None:
     value = tomllib.loads(text).get(key, "")
@@ -54,10 +58,10 @@ def strip_inline_comment(value):
     quote = None
     escaped = False
     for index, char in enumerate(value):
-        if escaped:
+        if quote == '"' and escaped:
             escaped = False
             continue
-        if char == "\\":
+        if quote == '"' and char == "\\":
             escaped = True
             continue
         if quote is not None:
@@ -80,7 +84,13 @@ for line in text.splitlines():
         break
     match = pattern.match(line)
     if match:
-        value = ast.literal_eval(strip_inline_comment(match.group(1)))
+        raw_value = strip_inline_comment(match.group(1))
+        if raw_value.startswith("'"):
+            if len(raw_value) < 2 or not raw_value.endswith("'") or "'" in raw_value[1:-1]:
+                raise ValueError("invalid TOML literal string")
+            value = raw_value[1:-1]
+        else:
+            value = ast.literal_eval(raw_value)
         break
 else:
     value = ""
@@ -162,19 +172,34 @@ run_jig() {
 
 create_template_snapshot_repo() {
   local snapshot_dir="$1"
+  local snapshot_archive
+  local canonical_root canonical_snapshot
 
   mkdir -p "$snapshot_dir"
+  canonical_root="$(cd "$ROOT_DIR" && pwd -P)"
+  canonical_snapshot="$(cd "$snapshot_dir" && pwd -P)"
+  case "$canonical_snapshot/" in
+    "$canonical_root/"*)
+      echo "Template snapshot destination must be outside the source repository: $canonical_snapshot" >&2
+      return 1
+      ;;
+  esac
+  snapshot_archive="$canonical_snapshot/.jig-template-snapshot.tar"
   (
     cd "$ROOT_DIR"
-    tar cf - \
+    tar cf "$snapshot_archive" \
       --exclude='.git' \
       --exclude='target' \
+      --exclude='node_modules' \
+      --exclude='*/node_modules' \
       --exclude='.agent/.cache' \
       .
-  ) | (
-    cd "$snapshot_dir"
-    tar xf -
   )
+  (
+    cd "$snapshot_dir"
+    tar xf "$snapshot_archive"
+  )
+  rm -f "$snapshot_archive"
 
   (
     cd "$snapshot_dir"

@@ -53,6 +53,8 @@ mod progress;
 mod prompt_registry;
 mod root_commands;
 mod runtime;
+mod runtime_artifacts;
+mod runtime_cache_lock;
 mod serde_helpers;
 mod shell;
 mod state;

@@ -5,6 +5,10 @@ impl InitMutationTransaction {
         if !self.armed {
             return Ok(());
         }
+        if self.staged_publication.is_some() {
+            self.close_write_staging()
+                .context("Failed to close private write staging before repository publication")?;
+        }
         let staged_boundary = self
             .staged_publication
             .as_ref()
@@ -113,6 +117,16 @@ impl InitMutationTransaction {
                     &publication.publish_source_identity,
                     primary,
                 ));
+            }
+            #[cfg(windows)]
+            {
+                // Windows refuses to rename an ancestor while verified
+                // descendant handles remain open. The retained root handle
+                // still pins the publication source across the atomic move.
+                self.destination_identity = publication.publish_source_identity.clone();
+                self.directory_identities.clear();
+                self.owned_directories.clear();
+                self.files.clear();
             }
             if let Err(primary) =
                 path::rename_entry_noreplace(&publish_source, &publication.publish_destination)

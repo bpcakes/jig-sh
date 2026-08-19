@@ -21,11 +21,27 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};
-use crate::context::{RepoContext, find_repo_root_from_or_env};
+#[cfg(test)]
+use crate::context::{
+    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
+use crate::context::{
+    JIG_REPO_ROOT_ENV, RepoContext, find_repo_root_from, find_repo_root_from_or_env,
+};
 #[cfg(test)]
 use crate::tool_defs::tool;
 
+mod runtime;
+
+#[cfg(test)]
+use runtime::launcher_repair_staging_check_at;
+use runtime::{
+    contract_migration_check, launcher_repair_cache_check, launcher_repair_seed_stamp_is_present,
+    launcher_repair_staging_check, legacy_version_cache_check, runtime_check,
+};
+
 const COMMAND: &str = "doctor";
+const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CARGO_MANIFEST_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);

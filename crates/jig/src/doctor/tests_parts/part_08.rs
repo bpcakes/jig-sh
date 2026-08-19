@@ -37,33 +37,6 @@ fn required_tools_redacts_every_command_body_and_generic_credential_token() {
 }
 
 #[test]
-fn runtime_check_accepts_launcher_without_readable_pin_when_config_matches() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("scripts")).unwrap();
-    fs::write(temp.path().join("scripts/jig"), "#!/usr/bin/env bash\n").unwrap();
-
-    let output = runtime_check(temp.path(), Some(env!("CARGO_PKG_VERSION")));
-
-    assert!(output.ok);
-    assert_eq!(output.status, "unverified launcher");
-    assert!(output.fix.is_none());
-}
-
-#[test]
-fn runtime_check_reports_unreadable_launcher() {
-    let temp = tempdir().unwrap();
-    fs::create_dir_all(temp.path().join("scripts/jig")).unwrap();
-
-    let output = runtime_check(temp.path(), Some(env!("CARGO_PKG_VERSION")));
-
-    assert!(!output.ok);
-    assert_eq!(output.status, "mismatch");
-    assert!(output.detail.contains("unreadable"));
-    assert!(output.data["launcher_error"].as_str().is_some());
-    assert!(output.fix.as_deref().unwrap().contains("jig update"));
-}
-
-#[test]
 fn agent_next_step_prefers_command_shaped_steps() {
     let steps = vec![
         json!("Codex CLI is not available on PATH."),
@@ -170,10 +143,7 @@ fn doctor_reports_all_checks_when_config_is_invalid() {
     fs::create_dir_all(temp.path().join("scripts")).unwrap();
     fs::write(
         temp.path().join("scripts/jig"),
-        format!(
-            "#!/usr/bin/env bash\nJIG_VERSION=\"{}\"\n",
-            env!("CARGO_PKG_VERSION")
-        ),
+        "#!/bin/sh\n# Runtime selection uses __runtime-compatible.\n",
     )
     .unwrap();
     let _cwd = CurrentDirGuard::set(temp.path());

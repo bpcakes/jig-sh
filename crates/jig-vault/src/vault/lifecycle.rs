@@ -9,6 +9,7 @@ use crate::backup::{
     BackupRestoreRequest, BackupRestoreResult, BackupSnapshot, inspect_embedded_vault,
     max_backup_audit_bytes,
 };
+use crate::crypto::KdfParams;
 use crate::error::{
     ClassifiedVaultError, classified, classified_kind, classify_source, vault_error_from_anyhow,
 };
@@ -108,9 +109,27 @@ impl VaultStore {
         current: &SecretString,
         new: &SecretString,
     ) -> Result<()> {
+        self.change_passphrase_with_kdf(current, new, KdfParams::production())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn change_passphrase_for_test(
+        &self,
+        current: &SecretString,
+        new: &SecretString,
+    ) -> Result<()> {
+        self.change_passphrase_with_kdf(current, new, self.initialization_kdf().clone())
+    }
+
+    fn change_passphrase_with_kdf(
+        &self,
+        current: &SecretString,
+        new: &SecretString,
+        kdf: KdfParams,
+    ) -> Result<()> {
         validate_new_vault_passphrase_inner(new)
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::InvalidInput, error))?;
-        self.with_lock(|| self.change_passphrase_unlocked(current, new))
+        self.with_lock(|| self.change_passphrase_unlocked(current, new, kdf))
             .map_err(|error| vault_error_from_anyhow(VaultErrorKind::Internal, error))
     }
 
@@ -118,6 +137,7 @@ impl VaultStore {
         &self,
         current: &SecretString,
         new: &SecretString,
+        kdf: KdfParams,
     ) -> AnyResult<()> {
         let vault = self.open_unlocked(current)?;
         vault.verify_audit_unlocked(self).map_err(|error| {
@@ -140,7 +160,7 @@ impl VaultStore {
         // Complete every fallible cryptographic and serialization step before
         // appending intent so invalid input and RNG/serialization failures do
         // not advance the audit chain.
-        let envelope = RekeyedVaultEnvelope::seal(&vault.file, new, &vault.dek, &vault.state)?;
+        let envelope = RekeyedVaultEnvelope::seal(&vault.file, new, &vault.dek, &vault.state, kdf)?;
         let file_text = envelope.serialize_pretty()?;
         self.validate_vault_text_len(&file_text).map_err(|error| {
             classify_source(

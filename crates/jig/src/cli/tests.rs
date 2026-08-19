@@ -1,6 +1,7 @@
 use super::*;
 
 mod info;
+mod launcher_only;
 
 #[test]
 fn parses_canonical_and_legacy_sqlx_commands() {
@@ -392,14 +393,6 @@ fn init_accepts_json_after_subcommand() {
 }
 
 #[test]
-fn update_accepts_json_after_subcommand() {
-    let update = Cli::try_parse_from(["jig", "update", "--json"]).unwrap();
-
-    assert!(update.json);
-    assert!(matches!(update.command, CommandKind::Update(_)));
-}
-
-#[test]
 fn init_and_adopt_parse_no_vault() {
     let init = Cli::try_parse_from(["jig", "init", "/tmp/demo", "--no-vault"]).unwrap();
     match init.command {
@@ -542,37 +535,6 @@ fn rejects_working_tree_template_mode() {
 
     assert!(error.contains("invalid value 'working-tree'"));
     assert!(error.contains("committed"));
-}
-
-#[test]
-fn parses_update_recopy_flag() {
-    let cli = Cli::try_parse_from([
-        "jig",
-        "update",
-        "--recopy",
-        "--force",
-        "--template",
-        "/tmp/template",
-        "--template-mode",
-        "committed",
-    ])
-    .unwrap();
-
-    match cli.command {
-        CommandKind::Update(bootstrap::UpdateOpts {
-            recopy,
-            force,
-            template,
-            template_mode,
-            ..
-        }) => {
-            assert!(recopy);
-            assert!(force);
-            assert_eq!(template.as_deref(), Some("/tmp/template"));
-            assert_eq!(template_mode, Some(bootstrap::TemplateMode::Committed));
-        }
-        other => panic!("expected update command, got {other:?}"),
-    }
 }
 
 #[test]

@@ -466,6 +466,7 @@ fn update_rejects_new_control_bearing_managed_template_paths_before_repository_m
         template: Some(template_path),
         template_mode: None,
         recopy: false,
+        launcher_only: false,
         force: true,
         vcs_ref: None,
         defaults: true,

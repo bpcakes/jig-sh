@@ -1,3 +1,4 @@
+// agentic-loc-exception: JSON CLI integration coverage shares process-level fixture setup.
 mod support;
 
 use std::fs;
@@ -9,9 +10,7 @@ use std::io::Read;
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;
@@ -50,6 +49,51 @@ fn json_mode_wraps_usage_and_pre_output_command_errors() {
     assert_eq!(command["ok"], false);
     assert_eq!(command["error"]["kind"], "command_failed");
     assert_eq!(command["exit_status"], 1);
+}
+
+#[test]
+fn launcher_handoff_root_is_authoritative_over_cwd_and_environment() {
+    let ambient = tempdir().unwrap();
+    let authoritative = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(authoritative.join(".agent/jig-contract.json")).unwrap(),
+    )
+    .unwrap();
+    let contract_version = manifest["contract_version"].as_u64().unwrap().to_string();
+    let answers: toml::Value =
+        toml::from_str(&std::fs::read_to_string(authoritative.join(".jig.toml")).unwrap()).unwrap();
+    let repo_name = answers["repo_name"].as_str().unwrap();
+
+    let output = jig()
+        .current_dir(ambient.path())
+        .env("JIG_REPO_ROOT", ambient.path())
+        .arg("--__launcher-contract-version")
+        .arg(contract_version)
+        .args(["--__launcher-profile", "runtime"])
+        .arg("--__launcher-repo-root")
+        .arg(&authoritative)
+        .args(["info", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ignored JIG_REPO_ROOT")
+            && stderr.contains("generated launcher root")
+            && stderr.contains("is authoritative"),
+        "expected authoritative-root warning, got:\n{stderr}"
+    );
+    let output: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output["repo"]["name"], repo_name);
 }
 
 #[test]
@@ -331,7 +375,7 @@ fn info_commands_remediation_is_anchored_to_the_discovered_repository() {
     let next_step = command_by_name(&output, "sqlx")["next_step"]
         .as_str()
         .unwrap();
-    assert!(next_step.contains(&full.path().join("scripts/jig").display().to_string()));
+    assert!(next_step.contains(&full_root.join("scripts/jig").display().to_string()));
     assert!(next_step.contains(&format!("adopt {}", full_root.display())));
     assert!(!next_step.contains("adopt ."));
 
@@ -380,6 +424,7 @@ fn info_commands_sqlx_remediation_preserves_minimal_custom_template_identity() {
         .status()
         .unwrap();
     assert!(clone.success());
+    let canonical_template = template.canonicalize().unwrap();
     let commit = Command::new("git")
         .current_dir(&template)
         .args(["rev-parse", "HEAD"])
@@ -459,8 +504,10 @@ marketplaces = []
     let preview: Value = serde_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(preview["render_mode"], "preview");
     assert_eq!(preview["harness_footprint"], "minimal");
-    let canonical_template = template.canonicalize().unwrap().display().to_string();
-    assert_eq!(preview["template"], canonical_template);
+    assert_eq!(
+        preview["template"],
+        canonical_template.display().to_string()
+    );
 
     let apply = Command::new("/bin/sh")
         .current_dir(repo.path())
@@ -478,11 +525,14 @@ marketplaces = []
     let apply: Value = serde_json::from_slice(&apply.stdout).unwrap();
     assert_eq!(apply["render_mode"], "copy");
     assert_eq!(apply["harness_footprint"], "minimal");
-    assert_eq!(apply["template"], canonical_template);
+    assert_eq!(apply["template"], canonical_template.display().to_string());
     let config = fs::read_to_string(repo.path().join(".jig.toml")).unwrap();
     assert!(config.contains("harness_footprint = \"minimal\""));
     assert!(config.contains(&format!("_src_path = {portable_source:?}")));
-    assert!(config.contains(&format!("_template_local_path = {:?}", canonical_template)));
+    assert!(config.contains(&format!(
+        "_template_local_path = {:?}",
+        canonical_template.display().to_string()
+    )));
 }
 
 #[test]

@@ -81,7 +81,7 @@ fn initial_notes(
         ]
     } else {
         vec![
-            "The first scripts/jig command may install or compile the pinned Jig runtime into this repo's local cache.".into(),
+            "The first scripts/jig command may install or compile a compatible Jig runtime into this repo's contract/profile cache.".into(),
             "Review generated .jig.toml, AGENTS.md, agent-map.md, and check commands before relying on the harness.".into(),
             "Re-run scripts/jig doctor after setup changes to confirm readiness.".into(),
             "Full gates remain available through scripts/jig work gates or scripts/jig check <gate>.".into(),
@@ -620,6 +620,20 @@ fn validate_update_destination(path: &Path) -> Result<()> {
             "Update destination does not contain {}: {}",
             ANSWERS_FILE,
             path.display()
+        );
+    }
+    Ok(())
+}
+
+fn reject_newer_declared_contract(path: &Path) -> Result<()> {
+    let Ok(contract_version) = RepoContext::declared_contract_version_from_root(path) else {
+        // Missing or damaged manifests remain repairable through adopt/update.
+        return Ok(());
+    };
+    if contract_version > crate::context::CURRENT_CONTRACT_VERSION {
+        bail!(
+            "Refusing to rewrite repository contract {contract_version} with this older Jig runtime, which supports contracts through {}. Install a newer compatible Jig runtime and retry; --force does not permit contract downgrades.",
+            crate::context::CURRENT_CONTRACT_VERSION
         );
     }
     Ok(())

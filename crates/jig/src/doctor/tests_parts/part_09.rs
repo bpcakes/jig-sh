@@ -3,6 +3,7 @@ fn write_doctor_fixture(root: &Path) {
     fs::create_dir_all(root.join("scripts")).unwrap();
     TestRepoBuilder::new(root)
         .jig_version(env!("CARGO_PKG_VERSION"))
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
         .config(
             r#"
 bootstrap_command = "printf bootstrap"
@@ -25,15 +26,12 @@ marketplaces = []
         }))
         .write();
     fs::write(root.join(".mcp.json"), "{}").unwrap();
-    fs::write(root.join("scripts/install-jig.sh"), "#!/usr/bin/env bash\n").unwrap();
     fs::write(
-        root.join("scripts/jig"),
-        format!(
-            "#!/usr/bin/env bash\nJIG_VERSION=\"{}\"\n",
-            env!("CARGO_PKG_VERSION")
-        ),
+        root.join("scripts/install-jig.sh"),
+        CURRENT_GENERATED_INSTALLER,
     )
     .unwrap();
+    fs::write(root.join("scripts/jig"), current_generated_launcher()).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

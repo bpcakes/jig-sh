@@ -22,7 +22,14 @@ fn reference(value: &str) -> VaultReference {
 }
 
 fn initialized_vault() -> (tempfile::TempDir, PathBuf, Vault) {
-    let temp = tempfile::tempdir().unwrap();
+    // macOS exposes its temporary directory through /var, which is a symlink
+    // to /private/var. Vault output correctly rejects symlinked ancestors, so
+    // build fixtures beneath the canonical temporary root.
+    let temp_root = std::env::temp_dir().canonicalize().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-reveal-")
+        .tempdir_in(temp_root)
+        .unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

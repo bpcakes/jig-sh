@@ -172,11 +172,13 @@ pub struct AdoptOpts {
 Update modes:
   jig update advances to the resolved template source.
   jig update --recopy re-renders from the stored .jig.toml commit.
+  jig update --launcher-only repairs only scripts/jig and scripts/install-jig.sh.
   Add --force only when changed template-managed files should be replaced.
 
 Examples:
   jig update
   jig update --recopy
+  jig update /path/to/repo --launcher-only --force
   jig update --template /path/to/jig-sh --template-mode committed --force")]
 pub struct UpdateOpts {
     #[arg(default_value = ".", help = "Adopted repository directory to update")]
@@ -190,6 +192,20 @@ pub struct UpdateOpts {
         help = "Re-render from the stored .jig.toml commit instead of advancing"
     )]
     pub recopy: bool,
+    #[arg(
+        long,
+        requires = "force",
+        conflicts_with_all = [
+            "template",
+            "template_mode",
+            "recopy",
+            "vcs_ref",
+            "defaults",
+            "no_input"
+        ],
+        help = "Repair only the managed launcher and installer from this binary's embedded templates"
+    )]
+    pub launcher_only: bool,
     #[arg(long, help = "Overwrite changed template-managed files")]
     pub force: bool,
     #[arg(long, help = "Git revision to render from the template source")]
@@ -513,6 +529,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     progress.header_for_path("render harness into existing repo", &destination);
     progress.step("validate destination", "existing repository directory");
     progress.log_blocked_on_err(validate_adopt_destination(&destination))?;
+    progress.log_blocked_on_err(reject_newer_declared_contract(&destination))?;
     let prior_managed_paths =
         progress.log_blocked_on_err(managed_paths::load_manifest(&destination))?;
     progress.step(
@@ -581,6 +598,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
     for item in &review.items {
         progress.info("review", item);
     }
+    let mut runtime_warnings = Vec::new();
     if opts.write {
         confirm_adopt_write(&opts)?;
     } else {
@@ -625,7 +643,14 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
                 format!("adopt write completed but undo receipt could not be recorded: {error:#}"),
             );
         }
-        progress.done("adopt complete");
+        let footprint = if copy_result.minimal_footprint {
+            HarnessFootprint::Minimal
+        } else {
+            HarnessFootprint::Full
+        };
+        let runtime_policy = FullRefreshRuntimePolicy::for_render(footprint, template.source());
+        runtime_warnings =
+            finish_full_refresh(&destination, runtime_policy, progress, "adopt complete");
     } else {
         progress.done("adopt preview complete");
     }
@@ -644,6 +669,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         "answers_file": ANSWERS_FILE,
         "git_initialized": false,
         "write": opts.write,
+        "warnings": runtime_warnings,
         "detection_report": inference.report(),
         "adoption_profile": inference.adoption_profile_report(
             &copy_result.render_preview.generated_gates,
@@ -666,76 +692,6 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
             None,
             copy_result.minimal_footprint,
         ),
-    }))
-}
-
-pub fn run_update(opts: UpdateOpts) -> Result<Value> {
-    let invocation_cwd = bootstrap_invocation_cwd()?;
-    let destination = absolute_path_from(&opts.path, &invocation_cwd)?;
-    let progress = CliProgress::new("update");
-    let mode = if opts.recopy { "recopy" } else { "update" };
-    progress.header_for_path(format!("refresh harness ({mode})"), &destination);
-    progress.step("validate destination", "adopted repository directory");
-    progress.log_blocked_on_err(validate_update_destination(&destination))?;
-    let prior_managed_paths = progress
-        .log_blocked_on_err(managed_paths::load_manifest(&destination))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Cannot update this repository because {} is missing. Run `jig adopt . --write` with the current harness footprint to establish exact managed-path ownership, then retry `jig update`.",
-                managed_paths::MANIFEST_PATH
-            )
-        })?;
-    let answers_path = destination.join(ANSWERS_FILE);
-    progress.step("read answers", answers_path.display());
-    let stored = progress.log_blocked_on_err(read_stored_template_state(&answers_path))?;
-    progress.step("resolve template", "stored source metadata");
-    let update_template = progress.log_blocked_on_err(prepare_update_template_source(
-        &opts,
-        &stored,
-        &invocation_cwd,
-    ))?;
-    let Some(update_template) = update_template else {
-        progress.blocked("stored template source metadata is missing");
-        bail!(
-            "Missing template source metadata in {ANSWERS_FILE}. Re-adopt the repo before running jig update."
-        );
-    };
-    let answers = progress.log_blocked_on_err(RenderAnswers::from_answers_file(&answers_path))?;
-    let reconcile_runtime_config =
-        crate::context::RepoContext::validate_config_file(&destination).is_ok();
-    let staged = stage_render(RenderStageRequest {
-        template: &update_template,
-        answers: &answers,
-        seed_repo_path: Some(&destination),
-        prior_managed_paths: Some(&prior_managed_paths),
-        reconcile_runtime_config,
-        progress,
-    })?;
-    let render_report = apply_staged_render(
-        &staged,
-        &destination,
-        ApplyRenderOptions {
-            force: opts.force,
-            dry_run: false,
-            allow_answers_overwrite: true,
-            allow_contract_overwrite: false,
-            allow_manifest_overwrite: true,
-            backup_root: None,
-            conflict_message: "Update would overwrite or remove template-managed paths. No files were changed. Re-run with --force to accept the rendered output:",
-            progress,
-            init_transaction: None,
-        },
-    )?;
-    progress.done("update complete");
-
-    Ok(json!({
-        "ok": true,
-        "command": "update",
-        "render_mode": mode,
-        "destination": destination.display().to_string(),
-        "answers_file": ANSWERS_FILE,
-        "git_initialized": false,
-        "render_report": render_report,
     }))
 }
 

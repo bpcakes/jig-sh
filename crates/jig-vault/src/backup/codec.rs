@@ -84,10 +84,15 @@ pub(super) struct BackupEnvelope {
 
 #[cfg(any(target_os = "linux", test))]
 pub(super) struct ParsedBackupArchive {
+    #[cfg(target_os = "linux")]
     header: BackupHeader,
+    #[cfg(target_os = "linux")]
     salt: [u8; SALT_LEN],
+    #[cfg(target_os = "linux")]
     nonce: [u8; NONCE_LEN],
+    #[cfg(target_os = "linux")]
     ciphertext: Zeroizing<Vec<u8>>,
+    #[cfg(target_os = "linux")]
     pub(super) serialized_len: usize,
 }
 
@@ -114,15 +119,16 @@ impl fmt::Debug for BackupHeader {
 #[cfg(any(target_os = "linux", test))]
 impl fmt::Debug for ParsedBackupArchive {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ParsedBackupArchive")
+        let mut debug = formatter.debug_struct("ParsedBackupArchive");
+        #[cfg(target_os = "linux")]
+        debug
             .field("header", &self.header)
             .field("salt_len", &self.salt.len())
             .field("nonce_len", &self.nonce.len())
             .field("serialized_len", &self.serialized_len)
             .field("ciphertext_len", &self.ciphertext.len())
-            .field("ciphertext", &"[REDACTED]")
-            .finish_non_exhaustive()
+            .field("ciphertext", &"[REDACTED]");
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -192,13 +198,17 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
             error.into(),
         )
     })?;
-    let (salt, nonce) = validate_backup_header(&envelope.header).map_err(|error| {
+    let validated_header = validate_backup_header(&envelope.header).map_err(|error| {
         classify_source(
             VaultErrorKind::Serialization,
             "backup public header is invalid",
             error,
         )
     })?;
+    #[cfg(target_os = "linux")]
+    let (salt, nonce) = validated_header;
+    #[cfg(not(target_os = "linux"))]
+    let _ = validated_header;
     let max_encoded = padded_base64_len(MAX_BACKUP_CIPHERTEXT_BYTES)?;
     if envelope.ciphertext_b64.len() > max_encoded {
         return Err(classified(
@@ -220,10 +230,15 @@ pub(super) fn parse_archive_bytes(bytes: Zeroizing<Vec<u8>>) -> AnyResult<Parsed
         ));
     }
     Ok(ParsedBackupArchive {
+        #[cfg(target_os = "linux")]
         header: envelope.header,
+        #[cfg(target_os = "linux")]
         salt,
+        #[cfg(target_os = "linux")]
         nonce,
+        #[cfg(target_os = "linux")]
         ciphertext,
+        #[cfg(target_os = "linux")]
         serialized_len: bytes.len(),
     })
 }

@@ -1,0 +1,1 @@
+Make legacy launcher repair runnable, preserve doctor/check diagnostics on broken manifests, harden runtime source caches and PATH fallback, improve Python/recovery errors, and verify with focused fixtures plus full gates.

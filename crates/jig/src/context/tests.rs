@@ -3,22 +3,7 @@ use crate::test_env::{CurrentDirGuard, EnvVarGuard, lock_env};
 use serde_json::json;
 use tempfile::tempdir;
 
-#[test]
-fn runtime_commands_still_require_adopted_repo_context() {
-    let temp = tempdir().unwrap();
-    let error = find_repo_root_from(temp.path()).unwrap_err().to_string();
-    assert!(error.contains("Could not find repo root containing .jig.toml"));
-}
-
-#[test]
-fn load_optional_returns_none_outside_adopted_repo() {
-    let _env = lock_env();
-    let temp = tempdir().unwrap();
-    let _cwd = CurrentDirGuard::set(temp.path());
-
-    let result = RepoContext::load_optional();
-    assert!(result.unwrap().is_none());
-}
+mod runtime;
 
 #[test]
 fn load_optional_ignores_stale_jig_repo_root() {

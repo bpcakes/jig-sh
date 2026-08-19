@@ -10,7 +10,7 @@ pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) ->
         "<header><div><h1>{} <span class=\"muted\">flight recorder</span></h1><div class=\"muted\">branch {} · jig {} · contract v{} · generated {}</div></div>",
         escape(&snapshot.repo.name),
         escape(&snapshot.repo.default_branch),
-        escape(&snapshot.harness.jig_version),
+        escape(snapshot.harness.display_runtime_version()),
         snapshot.harness.contract_version,
         format_ms(Some(snapshot.generated_at_ms))
     );

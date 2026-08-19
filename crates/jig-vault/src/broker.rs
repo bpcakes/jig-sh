@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn brokered_run_process_failure_records_failure_audit_event() {
         let temp = tempfile::tempdir().unwrap();
-        let store = VaultStore::resolve(Some(temp.path().join("vault"))).unwrap();
+        let store = VaultStore::resolve_for_test(Some(temp.path().join("vault"))).unwrap();
         let passphrase = SecretString::from("correct horse battery staple".to_string());
         store.init(&passphrase).unwrap();
 

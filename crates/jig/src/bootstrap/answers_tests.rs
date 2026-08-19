@@ -32,6 +32,7 @@ timeout_seconds = 45
 
     let rendered = RenderAnswers::from_answers_file(&path).unwrap();
     let value = serde_json::to_value(rendered).unwrap();
+    assert_eq!(value["jig_version"], "0.2.0-beta.1");
     assert_eq!(
         value["status"]["providers"][0]["argv"],
         serde_json::json!(["ruby", "scripts/status.rb", "--jig-v1"])

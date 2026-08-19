@@ -196,6 +196,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
+        | CommandKind::RuntimeCompatible(_)
         | CommandKind::Presets
         | CommandKind::Adopt(_)
         | CommandKind::Update(_)

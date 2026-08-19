@@ -13,7 +13,7 @@ use super::answers::{AnswerInput, AnswerResolution, HarnessFootprint, RenderAnsw
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
 use super::sync::ApplyRenderReport;
-use super::sync::{ApplyRenderOptions, apply_staged_render};
+use super::sync::{ApplyRenderConflictPolicy, ApplyRenderOptions, apply_staged_render};
 use super::template_source::PreparedTemplateSource;
 #[cfg(test)]
 use super::template_source::PrivateAnswerOverrides;
@@ -103,6 +103,7 @@ pub(super) fn render_and_copy_bootstrap_template(
         seed_repo_path: request.seed_repo_path,
         prior_managed_paths: request.prior_managed_paths,
         reconcile_runtime_config: request.reconcile_runtime_config,
+        contract_version: None,
         progress: request.progress,
     })?;
     let render_preview = AdoptionRenderPreview::from_staged_render(
@@ -130,13 +131,18 @@ pub(super) fn render_and_copy_bootstrap_template(
         &staged,
         request.destination,
         ApplyRenderOptions {
-            force: request.force,
+            conflict_policy: if request.force {
+                ApplyRenderConflictPolicy::Accept
+            } else {
+                ApplyRenderConflictPolicy::Reject(
+                    "Adopt would overwrite template-managed paths. No files were changed. Re-run with --force or clear these paths first:",
+                )
+            },
             dry_run: request.dry_run,
             allow_answers_overwrite: request.allow_answers_overwrite,
             allow_contract_overwrite: request.allow_contract_overwrite,
             allow_manifest_overwrite: request.prior_managed_paths.is_some(),
             backup_root: request.backup_root.as_deref(),
-            conflict_message: "Adopt would overwrite template-managed paths. No files were changed. Re-run with --force or clear these paths first:",
             progress: request.progress,
             init_transaction: request.init_transaction,
         },
@@ -290,7 +296,6 @@ pub(super) fn seed_answers_toml(
         "ci_github_runner",
         opts.ci_github_runner.as_deref(),
     );
-    insert_string(&mut mapping, "jig_version", opts.jig_version.as_deref());
     insert_string(
         &mut mapping,
         "template_source_url",

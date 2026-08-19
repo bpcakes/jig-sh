@@ -22,7 +22,7 @@ use super::process_windows::{
     observe_brokered_leader, spawn_brokered_process, terminate_brokered_process_tree,
 };
 use super::{
-    BROKERED_OUTPUT_DRAIN_TIMEOUT, BROKERED_PROCESS_CLEANUP_TIMEOUT,
+    ACTIVE_OUTPUT_POLL_INTERVAL, BROKERED_OUTPUT_DRAIN_TIMEOUT, BROKERED_PROCESS_CLEANUP_TIMEOUT,
     BROKERED_PROCESS_POLL_INTERVAL, checked_deadline,
 };
 
@@ -224,13 +224,14 @@ pub(super) fn wait_for_capped_output(
         if deadline.checked_duration_since(Instant::now()).is_none() {
             break Some(brokered_run_timeout_error(command_name, timeout));
         }
-        if let Err(error) = preserve_poll_result_before_timeout(
+        let made_output_progress = match preserve_poll_result_before_timeout(
             drains.poll(),
             deadline.checked_duration_since(Instant::now()),
             || brokered_run_timeout_error(command_name, timeout),
         ) {
-            break Some(error);
-        }
+            Ok(made_progress) => made_progress,
+            Err(error) => break Some(error),
+        };
         let observation = process
             .observe_leader()
             .map_err(anyhow::Error::from)
@@ -248,7 +249,11 @@ pub(super) fn wait_for_capped_output(
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break Some(brokered_run_timeout_error(command_name, timeout));
         };
-        thread::sleep(remaining.min(BROKERED_PROCESS_POLL_INTERVAL));
+        if made_output_progress {
+            thread::sleep(remaining.min(ACTIVE_OUTPUT_POLL_INTERVAL));
+        } else {
+            thread::sleep(remaining.min(BROKERED_PROCESS_POLL_INTERVAL));
+        }
     };
 
     // End the entire owned tree on every path before the sole Unix wait. A
@@ -278,12 +283,12 @@ pub(super) fn wait_for_capped_output(
 }
 
 pub(super) fn preserve_poll_result_before_timeout(
-    result: AnyResult<()>,
+    result: AnyResult<bool>,
     remaining: Option<Duration>,
     timeout_error: impl FnOnce() -> anyhow::Error,
-) -> AnyResult<()> {
-    result?;
-    remaining.map(|_| ()).ok_or_else(timeout_error)
+) -> AnyResult<bool> {
+    let made_progress = result?;
+    remaining.map(|_| made_progress).ok_or_else(timeout_error)
 }
 
 pub(super) fn preserve_leader_poll_result_before_timeout(

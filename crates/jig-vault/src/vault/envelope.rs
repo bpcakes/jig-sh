@@ -217,13 +217,12 @@ impl NewVaultEnvelope {
     }
 
     #[cfg(test)]
-    pub(super) fn seal_v1(passphrase: &SecretString, created_at_ms: i128) -> AnyResult<Self> {
-        Self::seal_for_version(
-            passphrase,
-            created_at_ms,
-            V1_FORMAT_VERSION,
-            KdfParams::default(),
-        )
+    pub(super) fn seal_v1(
+        passphrase: &SecretString,
+        created_at_ms: i128,
+        kdf: KdfParams,
+    ) -> AnyResult<Self> {
+        Self::seal_for_version(passphrase, created_at_ms, V1_FORMAT_VERSION, kdf)
     }
 
     fn seal_for_version(
@@ -391,6 +390,7 @@ impl RekeyedVaultEnvelope {
         new_passphrase: &SecretString,
         dek: &[u8; KEY_LEN],
         state: &VaultState,
+        kdf: KdfParams,
     ) -> AnyResult<Self> {
         if previous.header.version != FORMAT_VERSION {
             anyhow::bail!(
@@ -404,7 +404,7 @@ impl RekeyedVaultEnvelope {
         // A passphrase change is the deliberate point where an older valid
         // envelope adopts the current KDF policy. Identity and creation time
         // stay stable; cost parameters do not remain pinned to legacy values.
-        header.kdf = KdfParams::default();
+        header.kdf = kdf;
         header.salt_b64 = B64.encode(salt);
         validate_header(&header).map_err(|error| {
             classify_source(

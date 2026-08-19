@@ -15,6 +15,12 @@ on:
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - "scripts/check-launcher-template.sh"
+      - "scripts/validate-fixtures.sh"
+      - "scripts/fixtures/**"
+      - "templates/project/**"
+      - "examples/**"
+      - "tests/fixtures/**"
       - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   push:
@@ -33,6 +39,12 @@ on:
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
+      - "scripts/check-launcher-template.sh"
+      - "scripts/validate-fixtures.sh"
+      - "scripts/fixtures/**"
+      - "templates/project/**"
+      - "examples/**"
+      - "tests/fixtures/**"
       - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   merge_group:
@@ -48,6 +60,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  launcher-contract:
+    name: Check generated launcher contract parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Check launcher, installer, and contract parity
+        run: bash scripts/check-launcher-template.sh
+
+  rendered-fixtures:
+    name: Validate rendered repository fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          shared-key: rust-${{ runner.os }}-${{ github.job }}
+      - name: Validate behavioral fixtures
+        run: bash scripts/validate-fixtures.sh
+
   fmt:
     name: scripts/jig check fmt
     runs-on: ubuntu-latest
@@ -255,6 +296,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Check launcher parity with macOS Bash 3.2
+        # This job uniquely exercises the installer's empty-array handoff on Apple's stock Bash.
+        run: /bin/bash scripts/check-launcher-template.sh
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1
         with:
@@ -330,3 +374,5 @@ jobs:
         # Dev-proxy tests exercise process-global signal hooks and fixed OS trust/process boundaries.
         env:
           RUST_TEST_THREADS: "1"
+      - name: Run dev proxy clippy
+        run: cargo clippy -p jig-dev-proxy --all-targets --locked -- -D warnings

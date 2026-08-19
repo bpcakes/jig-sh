@@ -75,7 +75,7 @@ A shorter product phrasing is:
 
 `templates/project/` is the source for generated repository assets. It renders `.jig.toml`, `AGENTS.md`, `.agent/jig-contract.json`, scripts, workflows, and agent support files.
 
-`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, `jig_version`, crate roots, SQLx settings, web app settings, status-provider argv, and template source metadata.
+`.jig.toml` is both public configuration and the renderer answer file. It records repo settings such as `repo_name`, `default_branch`, crate roots, SQLx settings, web app settings, status-provider argv, and template source metadata. `.agent/jig-contract.json` carries the contract epoch that compatible runtimes validate before executing the harness; generated repositories do not pin a Jig product release.
 
 The template source metadata is a trust boundary. In generated or adopted repos, `scripts/install-jig.sh` may install from the exact `_commit` recorded in `.jig.toml` when that value is a hex git revision, so changing `_src_path` or `_commit` is equivalent to changing the source used to install the repo-local Jig runtime.
 

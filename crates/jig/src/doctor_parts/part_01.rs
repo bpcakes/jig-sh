@@ -1,5 +1,8 @@
 pub(crate) fn run() -> Result<Value> {
     let cwd = env::current_dir().context("Failed to resolve current directory")?;
+    // Doctor is capability-only so it can diagnose an invalid generated
+    // launcher contract. Its explicit JIG_REPO_ROOT target therefore remains
+    // authoritative instead of inheriting repository-scoped launcher state.
     let root_result = find_repo_root_from_or_env(&cwd);
     let mut checks = Vec::new();
 
@@ -17,6 +20,9 @@ pub(crate) fn run() -> Result<Value> {
             return Ok(output(None, checks));
         }
     };
+    if let Some(notice) = doctor_root_override_notice(&cwd, &root) {
+        eprintln!("{notice}");
+    }
 
     checks.push(
         check(
@@ -32,16 +38,41 @@ pub(crate) fn run() -> Result<Value> {
 
     let config_probe = RepoContext::validate_config_file(&root);
     let ctx_result = RepoContext::load_from_root(root.clone());
+    let manifest_contract_version = RepoContext::declared_contract_version_from_root(&root).ok();
     let (config_ok, repo_name, config_jig_version) = match &config_probe {
         Ok(probe) => (
             true,
             Some(probe.repo_name.clone()),
-            Some(probe.jig_version.clone()),
+            probe.jig_version.clone(),
         ),
         Err(_) => (false, None, None),
     };
+    let config_valid_for_launcher_repair =
+        config_ok && crate::bootstrap::launcher_only_repair_answers_are_valid(&root);
     checks.push(config_check(&root, &config_probe));
-    checks.push(runtime_check(&root, config_jig_version.as_deref()));
+    checks.push(runtime_check(
+        &root,
+        manifest_contract_version,
+        config_jig_version.as_deref(),
+        config_valid_for_launcher_repair,
+    ));
+    if let Some(staging_check) = launcher_repair_staging_check(&root) {
+        checks.push(staging_check);
+    }
+    if let Some(legacy_cache_check) = legacy_version_cache_check(&root) {
+        checks.push(legacy_cache_check);
+    }
+    if let Some(contract_version) = manifest_contract_version
+        .filter(|version| launcher_repair_seed_stamp_is_present(&root, *version))
+    {
+        checks.push(launcher_repair_cache_check(&root, contract_version));
+    }
+    if let Some(contract_version) = manifest_contract_version.filter(|version| {
+        crate::context::is_supported_contract_version(*version)
+            && *version < crate::context::CURRENT_CONTRACT_VERSION
+    }) {
+        checks.push(contract_migration_check(&root, contract_version));
+    }
 
     match &ctx_result {
         Ok(ctx) => {
@@ -124,9 +155,27 @@ pub(crate) fn run() -> Result<Value> {
             "root": root.display().to_string(),
             "name": repo_name,
             "jig_version": config_jig_version,
+            "runtime_version": env!("CARGO_PKG_VERSION"),
+            "contract_version": manifest_contract_version,
         })),
         checks,
     ))
+}
+
+fn doctor_root_override_notice(cwd: &Path, selected_root: &Path) -> Option<String> {
+    if !RepoContext::repo_root_override_is_set() {
+        return None;
+    }
+    let local_root = find_repo_root_from(cwd).ok()?;
+    let local_root = fs::canonicalize(local_root).ok()?;
+    (local_root != selected_root).then(|| {
+        format!(
+            "jig doctor is using {JIG_REPO_ROOT_ENV}={} instead of the repository containing its invocation directory {}; unset {JIG_REPO_ROOT_ENV} to diagnose {}",
+            selected_root.display(),
+            local_root.display(),
+            local_root.display(),
+        )
+    })
 }
 
 pub(crate) fn program_available_on_path(program: &str) -> bool {
@@ -187,10 +236,13 @@ fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -
             true,
             true,
             "valid",
-            format!(
-                "repo_name={}, jig_version={}",
-                probe.repo_name, probe.jig_version
-            ),
+            match &probe.jig_version {
+                Some(version) => format!(
+                    "repo_name={}, legacy jig_version={version}",
+                    probe.repo_name
+                ),
+                None => format!("repo_name={}", probe.repo_name),
+            },
         )
         .with_data(json!({
             "path": root.join(".jig.toml").display().to_string(),
@@ -208,121 +260,6 @@ fn config_check(root: &Path, result: &Result<crate::context::RepoConfigProbe>) -
         .with_fix("Fix `.jig.toml`, then run `scripts/jig doctor`.")
         .with_data(json!({ "path": root.join(".jig.toml").display().to_string() })),
     }
-}
-
-fn runtime_check(root: &Path, config_jig_version: Option<&str>) -> DoctorCheck {
-    let current_version = env!("CARGO_PKG_VERSION");
-    let script_path = root.join("scripts/jig");
-    let launcher = launcher_version(&script_path);
-    let script_version = launcher.version;
-    let script_ok = script_path.exists();
-    let launcher_ok = launcher.read_error.is_none()
-        && script_version
-            .as_deref()
-            .is_none_or(|version| version == current_version);
-    let config_ok = config_jig_version.is_none_or(|version| version == current_version);
-    let version_ok = launcher_ok && config_ok;
-    let ok = script_ok && version_ok;
-    let detail = match (
-        &script_version,
-        launcher.read_error.as_deref(),
-        config_jig_version,
-    ) {
-        (_, Some(error), Some(config_version)) => {
-            format!(
-                "running {current_version}, scripts/jig is unreadable ({error}), .jig.toml pins {config_version}"
-            )
-        }
-        (_, Some(error), None) => {
-            format!("running {current_version}, but scripts/jig is unreadable ({error})")
-        }
-        (Some(script_version), None, Some(config_version)) => {
-            format!(
-                "running {current_version}, launcher pins {script_version}, .jig.toml pins {config_version}"
-            )
-        }
-        (Some(script_version), None, None) => {
-            format!("running {current_version}, launcher pins {script_version}")
-        }
-        (None, None, Some(config_version)) if script_ok => format!(
-            "running {current_version}, scripts/jig has no readable JIG_VERSION pin, .jig.toml pins {config_version}"
-        ),
-        (None, None, None) if script_ok => {
-            format!("running {current_version}, but scripts/jig has no readable JIG_VERSION pin")
-        }
-        (None, None, _) => format!("running {current_version}, but scripts/jig is missing"),
-    };
-    let status = if ok && script_version.is_none() {
-        "unverified launcher"
-    } else if ok {
-        "installed"
-    } else {
-        "mismatch"
-    };
-    let fix = if !script_ok || !version_ok {
-        Some("Run `scripts/jig update`, then rerun `scripts/jig doctor`.")
-    } else {
-        None
-    };
-
-    check("runtime", "Pinned runtime", true, ok, status, detail)
-        .with_optional_fix(fix)
-        .with_data(json!({
-                "current_version": current_version,
-                "launcher_path": script_path.display().to_string(),
-                "launcher_version": script_version,
-                "launcher_error": launcher.read_error,
-                "config_jig_version": config_jig_version,
-        }))
-}
-
-struct LauncherVersion {
-    version: Option<String>,
-    read_error: Option<String>,
-}
-
-fn launcher_version(path: &Path) -> LauncherVersion {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return LauncherVersion {
-                version: None,
-                read_error: None,
-            };
-        }
-        Err(error) => {
-            return LauncherVersion {
-                version: None,
-                read_error: Some(error.to_string()),
-            };
-        }
-    };
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(value) = line.strip_prefix("JIG_VERSION=") else {
-            continue;
-        };
-        return LauncherVersion {
-            version: Some(unquote_shell_value(value.trim()).to_string()),
-            read_error: None,
-        };
-    }
-    LauncherVersion {
-        version: None,
-        read_error: None,
-    }
-}
-
-fn unquote_shell_value(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            value
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        })
-        .unwrap_or(value)
 }
 
 fn contract_check(ctx: &RepoContext) -> DoctorCheck {

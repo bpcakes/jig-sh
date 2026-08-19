@@ -95,9 +95,7 @@ pub struct BackupRestoreResult {
 struct RestoreTarget {
     home: PathBuf,
     parent: PathBuf,
-    #[cfg(unix)]
     parent_device: u64,
-    #[cfg(unix)]
     parent_inode: u64,
 }
 

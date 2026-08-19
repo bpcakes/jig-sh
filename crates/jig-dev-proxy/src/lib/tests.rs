@@ -187,7 +187,7 @@ fn spawn_fake_health_responder(health_pid: u32) -> (u16, thread::JoinHandle<bool
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_millis(500);
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {

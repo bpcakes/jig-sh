@@ -1,0 +1,3 @@
+Refactor cache lifecycle and platform policy seams, fix the five reviewed defects, add regression coverage, and run configured gates.
+
+Introduced explicit runtime seed purposes and full-refresh cache policy; embedded refreshes now publish durable current-epoch caches before sweeping repair seeds. Centralized platform executable trust, added Windows Git Bash recovery and PE validation, rejected un-fingerprintable local-source symlinks, and aligned lock timeout guidance. Focused Unix integration/unit tests and default/no-default clippy are green.

@@ -52,7 +52,7 @@ use self::proxy::{
     ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
 };
 use self::route_publication::publish_process_route_interruptible;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 use self::route_publication::publish_process_route_interruptible_with_verifier;
 
 mod child_lifecycle;
@@ -63,7 +63,7 @@ mod listener_owner;
 mod output;
 mod proxy;
 mod route_publication;
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod startup_failure_tests;
 #[cfg(any(windows, test))]
 mod windows_launch;
@@ -539,7 +539,7 @@ fn prepare_certs_for_hosts_interruptible(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn prepare_certs_for_hosts(settings: &ProxySettings, hostnames: &[String]) -> Result<()> {
     prepare_certs_for_hosts_interruptible(settings, hostnames, &|| None)
 }

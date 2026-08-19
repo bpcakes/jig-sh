@@ -1,0 +1,1 @@
+Strengthen staged launcher/installer conformance, make installer lock cleanup recoverable, converge repair-seed lifecycle, harden launcher environment propagation, remove duplicate source validation, and verify all gates.

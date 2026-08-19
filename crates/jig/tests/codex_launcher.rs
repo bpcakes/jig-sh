@@ -28,6 +28,12 @@ fn repository_launcher_preserves_the_invocation_directory_for_codex() {
     let repo = temp.path().join("repo");
     let caller = temp.path().join("caller");
     fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::create_dir_all(repo.join(".agent")).unwrap();
+    fs::write(
+        repo.join(".agent/jig-contract.json"),
+        r#"{"contract_version":4}"#,
+    )
+    .unwrap();
     fs::create_dir(&caller).unwrap();
     let launcher = write_executable(
         repo.join("scripts/jig"),

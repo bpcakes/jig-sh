@@ -47,8 +47,24 @@ pub struct RepoView {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HarnessView {
-    pub jig_version: String,
+    /// Deprecated v2/v3 generated product pin; absent for contract v4 repos.
+    #[serde(default)]
+    pub jig_version: Option<String>,
+    #[serde(default)]
+    pub runtime_version: String,
     pub contract_version: u64,
+}
+
+impl HarnessView {
+    /// Returns the executing runtime version, falling back to the legacy
+    /// generated product pin when deserializing a pre-v4 snapshot.
+    pub fn display_runtime_version(&self) -> &str {
+        if self.runtime_version.is_empty() {
+            self.jig_version.as_deref().unwrap_or("-")
+        } else {
+            &self.runtime_version
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CountsView {
@@ -261,4 +277,27 @@ pub struct ReceiptView {
     pub changed_paths: Vec<String>,
     pub stdout_preview: String,
     pub stderr_preview: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::HarnessView;
+
+    #[test]
+    fn legacy_snapshot_uses_product_version_as_runtime_display_fallback() {
+        let legacy: HarnessView = serde_json::from_value(serde_json::json!({
+            "jig_version": "0.1.0",
+            "contract_version": 3
+        }))
+        .unwrap();
+        assert_eq!(legacy.display_runtime_version(), "0.1.0");
+
+        let current: HarnessView = serde_json::from_value(serde_json::json!({
+            "jig_version": "legacy-pin",
+            "runtime_version": "0.2.0",
+            "contract_version": 4
+        }))
+        .unwrap();
+        assert_eq!(current.display_runtime_version(), "0.2.0");
+    }
 }

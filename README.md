@@ -23,13 +23,15 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 **Supported hosts:** Linux and macOS. Native Windows and Git Bash are unsupported; see [Platform Support](docs/platform-support.md) for the WSL boundary and feature-specific limits.
 
-**Prerequisites:** Rust 1.85+, Bash, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
+**Prerequisites:** Rust 1.85+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
 
 ```sh
 cargo install jig-sh
 ```
 
-You only need a global install to run `jig init` or `jig adopt` on a repo for the first time. Generated repos install and pin their own `jig` version automatically through `scripts/install-jig.sh`, so every contributor and CI run uses the same binary.
+You only need a global install to run `jig init` or `jig adopt` on a repo for the first time. Generated repos install their own runtime through `scripts/install-jig.sh`, then reuse it only while its recorded template source revision still matches and it supports the repository's contract epoch and requested build profile. A same-contract `jig update` therefore refreshes the cached runtime when `_commit` advances without pinning the repository to a product release.
+
+Set `JIG_INSTALL_REFRESH=1` for one normal `scripts/jig` invocation, or call `scripts/install-jig.sh --refresh --profile runtime`, to deliberately replace a compatible cached runtime whose source follows an explicitly approved unpinned or embedded-source fallback.
 
 ## Quick start
 

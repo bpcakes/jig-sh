@@ -1,7 +1,5 @@
 #[cfg(target_os = "linux")]
-use std::fmt;
-#[cfg(target_os = "linux")]
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
 use anyhow::{Context, Result as AnyResult, bail};
 use base64::Engine;

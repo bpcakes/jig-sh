@@ -167,11 +167,11 @@ pub(super) struct StoredTemplateState {
 }
 
 impl StoredTemplateState {
-    fn has_source_path(&self) -> bool {
+    pub(super) fn has_source_path(&self) -> bool {
         !self.identity.source.is_empty()
     }
 
-    fn source_path(&self) -> &str {
+    pub(super) fn source_path(&self) -> &str {
         self.identity.source()
     }
 

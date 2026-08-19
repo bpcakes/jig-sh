@@ -1,3 +1,4 @@
+// agentic-loc-exception: legacy answer normalization remains centralized during contract-v4 rollout.
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -42,7 +43,10 @@ pub(super) struct RenderAnswers {
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
-    jig_version: String,
+    /// Compatibility input for templates pinned before contract v4. Current
+    /// templates intentionally do not persist a Jig product-version pin.
+    #[serde(rename = "jig_version")]
+    legacy_template_jig_version: String,
     template_source_url: String,
     #[serde(serialize_with = "serialize_harness_footprint")]
     harness_footprint: HarnessFootprint,
@@ -674,7 +678,7 @@ impl RawAnswers {
             ci_github_runner: self
                 .ci_github_runner
                 .unwrap_or_else(|| "ubuntu-latest".into()),
-            jig_version: self
+            legacy_template_jig_version: self
                 .jig_version
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
             template_source_url: self.template_source_url.unwrap_or_default(),
