@@ -168,8 +168,9 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
-                Cell::from(row.usage()),
-                Cell::from(stale_projection_label(projection.label(), stale))
+                Cell::from(stale_snapshot_label(row.usage(), stale))
+                    .style(stale_usage_style(stale)),
+                Cell::from(stale_snapshot_label(projection.label(), stale))
                     .style(stale_projection_style(projection, stale)),
             ])
             .style(match row.inspection() {
@@ -229,12 +230,10 @@ fn draw_projection_list(
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!("{}\n{}", row.display_name(), row.account())),
-                Cell::from(row.usage()),
-                Cell::from(stale_projection_label(
-                    projection.list_outcome_label(),
-                    stale,
-                ))
-                .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), stale))
+                    .style(stale_usage_style(stale)),
+                Cell::from(stale_snapshot_label(projection.list_outcome_label(), stale))
+                    .style(stale_projection_style(projection, stale)),
             ])
             .height(2)
             .style(match row.inspection() {
@@ -298,7 +297,7 @@ fn draw_compact_list(
                     "{} · {}\n{}",
                     row.display_name(),
                     row.account(),
-                    stale_projection_label(projection.label(), stale)
+                    stale_snapshot_label(projection.label(), stale)
                 ))
                 .style(stale_projection_style(projection, stale)),
             ])
@@ -425,7 +424,7 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                         details.window_usage_snapshot_assessment_at(bucket, index, now);
                     let projection = assessment.projection();
                     lines.push(Line::from(Span::styled(
-                        stale_projection_label(
+                        stale_snapshot_label(
                             format!("    At current pace: {}", projection.outcome_label()),
                             assessment.is_stale(),
                         ),
@@ -562,11 +561,19 @@ fn projection_style(projection: Projection) -> Style {
     }
 }
 
-fn stale_projection_label(label: String, stale: bool) -> String {
+fn stale_snapshot_label(label: String, stale: bool) -> String {
     if stale {
         format!("{label} · stale")
     } else {
         label
+    }
+}
+
+fn stale_usage_style(stale: bool) -> Style {
+    if stale {
+        Style::default().fg(MUTED)
+    } else {
+        Style::default()
     }
 }
 

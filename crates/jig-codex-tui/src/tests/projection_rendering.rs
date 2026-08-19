@@ -76,6 +76,7 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("stale"), "{rendered}");
+    assert!(rendered.contains("weekly 75% left · stale"), "{rendered}");
     assert!(
         rendered.contains("At current pace: ~50% left at reset · stale"),
         "{rendered}"
@@ -83,6 +84,49 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
     assert!(!rendered.contains("+*"), "{rendered}");
     assert!(
         rendered.contains("no rankable Codex projection"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn stale_remaining_is_labeled_even_when_projection_metadata_is_unavailable() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let backend = TestBackend::new(168, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    app.apply_update_at(ready_update(0), OBSERVED_AT);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("weekly 75% left · stale"), "{rendered}");
+    assert!(
+        rendered.contains("projection unavailable · stale"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn usage_errors_are_not_mislabeled_as_stale_snapshots() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let backend = TestBackend::new(168, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    let mut failed = ready_update(0);
+    failed.details["usage_error"] = json!("usage unavailable");
+    app.apply_update_at(failed, OBSERVED_AT);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("usage error"), "{rendered}");
+    assert!(!rendered.contains("usage error · stale"), "{rendered}");
+    assert!(
+        !rendered.contains("error: usage unavailable · stale"),
         "{rendered}"
     );
 }

@@ -51,15 +51,32 @@ pub(crate) struct UsageSnapshotAssessment {
     recommendation: Option<Recommendation>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum UsageSnapshotFreshness {
+    NotSampled,
+    Fresh,
+    Stale,
+}
+
+impl UsageSnapshotFreshness {
+    pub(super) fn sampled_at(now: u64, expires_at: u64) -> Self {
+        if now >= expires_at {
+            Self::Stale
+        } else {
+            Self::Fresh
+        }
+    }
+}
+
 impl UsageSnapshotAssessment {
     pub(super) fn at(
         projection: Projection,
-        now: u64,
-        expires_at: u64,
+        freshness: UsageSnapshotFreshness,
         recommendation_eligible: bool,
     ) -> Self {
-        let stale = projection.is_usage_projection() && now >= expires_at;
-        let recommendation = (!stale && recommendation_eligible)
+        let stale = freshness == UsageSnapshotFreshness::Stale;
+        let recommendation = (freshness == UsageSnapshotFreshness::Fresh
+            && recommendation_eligible)
             .then(|| projection.recommendation())
             .flatten();
         Self {
@@ -83,16 +100,6 @@ impl UsageSnapshotAssessment {
 }
 
 impl Projection {
-    pub(super) fn is_usage_projection(self) -> bool {
-        matches!(
-            self,
-            Self::Collecting { .. }
-                | Self::Remaining { .. }
-                | Self::ExhaustsEarly { .. }
-                | Self::Exhausted { .. }
-        )
-    }
-
     pub(super) fn from_window(
         role: &'static str,
         projection: WindowProjection,

@@ -14,8 +14,8 @@ use crate::{Home, HomeUpdate};
 
 mod projection;
 
-use projection::WindowProjection;
 pub(crate) use projection::{Projection, UsageSnapshotAssessment};
+use projection::{UsageSnapshotFreshness, WindowProjection};
 
 const UNKNOWN: &str = "-";
 const MIN_PROJECTION_ELAPSED_FRACTION: f64 = 0.1;
@@ -414,12 +414,16 @@ impl HomeRow {
     pub(crate) fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
         match &self.inspection {
             Inspection::Ready(details) => details.usage_snapshot_assessment_at(now),
-            Inspection::Loading => {
-                UsageSnapshotAssessment::at(Projection::Loading, now, u64::MAX, false)
-            }
-            Inspection::Unavailable => {
-                UsageSnapshotAssessment::at(Projection::InspectionUnavailable, now, u64::MAX, false)
-            }
+            Inspection::Loading => UsageSnapshotAssessment::at(
+                Projection::Loading,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
+            Inspection::Unavailable => UsageSnapshotAssessment::at(
+                Projection::InspectionUnavailable,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
         }
     }
 }
@@ -521,10 +525,18 @@ impl Details {
             },
             |bucket| bucket.projection_expires_at(self.observed_at),
         );
+        let has_presented_usage_sample = self.inspection_error.is_none()
+            && self.usage_error.is_none()
+            && self.status != "not logged in"
+            && primary_bucket.is_some_and(RateLimitBucket::has_usage_sample);
+        let freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, expires_at)
+        } else {
+            UsageSnapshotFreshness::NotSampled
+        };
         UsageSnapshotAssessment::at(
             self.projection(),
-            now,
-            expires_at,
+            freshness,
             primary_bucket.is_some_and(|bucket| bucket.id == "codex"),
         )
     }
@@ -574,10 +586,16 @@ impl Details {
                     )
                 },
             );
+        let freshness = bucket
+            .windows
+            .get(index)
+            .filter(|window| window.has_usage_sample())
+            .map_or(UsageSnapshotFreshness::NotSampled, |_| {
+                UsageSnapshotFreshness::sampled_at(now, expires_at)
+            });
         UsageSnapshotAssessment::at(
             bucket.window_projection_at(index, self.observed_at),
-            now,
-            expires_at,
+            freshness,
             false,
         )
     }
@@ -751,6 +769,10 @@ impl RateLimitBucket {
             )
     }
 
+    fn has_usage_sample(&self) -> bool {
+        self.windows.iter().any(RateLimitWindow::has_usage_sample)
+    }
+
     pub(crate) fn window_projection_at(&self, index: usize, now: u64) -> Projection {
         let role = self.window_role(index);
         match self
@@ -881,6 +903,10 @@ impl RateLimitWindow {
     fn valid_used_percent(&self) -> Option<f64> {
         self.used_percent
             .filter(|used| used.is_finite() && *used >= 0.0)
+    }
+
+    fn has_usage_sample(&self) -> bool {
+        self.valid_used_percent().is_some()
     }
 }
 
