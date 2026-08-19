@@ -422,17 +422,25 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                 }
                 for (index, window) in bucket.windows.iter().enumerate() {
                     let role = bucket.window_role(index);
-                    lines.push(Line::from(format!(
-                        "  {role}: {} · {}",
-                        window.usage_detail(),
-                        window.reset_label_at(now)
-                    )));
                     let assessment =
                         details.window_usage_snapshot_assessment_at(bucket, index, now);
                     let projection = assessment.projection();
                     lines.push(Line::from(Span::styled(
-                        stale_snapshot_label(
-                            format!("    At current pace: {}", projection.outcome_label()),
+                        indented_snapshot_label(
+                            "  ",
+                            format!(
+                                "{role}: {} · {}",
+                                window.usage_detail(),
+                                window.reset_label_at(now)
+                            ),
+                            assessment.quota_is_stale(),
+                        ),
+                        stale_usage_style(assessment.quota_is_stale()),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        indented_snapshot_label(
+                            "    ",
+                            format!("At current pace: {}", projection.outcome_label()),
                             assessment.projection_is_stale(),
                         ),
                         stale_projection_style(projection, assessment.projection_is_stale()),
@@ -573,6 +581,14 @@ fn stale_snapshot_label(label: String, stale: bool) -> String {
         format!("stale · {label}")
     } else {
         label
+    }
+}
+
+fn indented_snapshot_label(indent: &str, label: String, stale: bool) -> String {
+    if stale {
+        format!("{indent}stale · {label}")
+    } else {
+        format!("{indent}{label}")
     }
 }
 
