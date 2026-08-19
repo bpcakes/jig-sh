@@ -727,13 +727,39 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
     )
     .unwrap_or(false);
     let supervisor_observation = observe_process_identity(&session.supervisor);
+    let app_observations = session
+        .apps
+        .iter()
+        .map(|app| app.process.as_ref().map(observe_process_identity))
+        .collect::<Vec<_>>();
+    session_status_from_observations(
+        session,
+        routes,
+        control_alive,
+        supervisor_observation,
+        &app_observations,
+    )
+}
+
+fn session_status_from_observations(
+    session: &DevSessionRecord,
+    routes: &[Route],
+    control_alive: bool,
+    supervisor_observation: ProcessIdentityObservation,
+    app_observations: &[Option<ProcessIdentityObservation>],
+) -> Value {
+    assert_eq!(
+        session.apps.len(),
+        app_observations.len(),
+        "every development app must have one status observation"
+    );
     let supervisor_verified = supervisor_observation.is_verified_alive();
     let supervisor_alive = supervisor_observation.may_be_alive();
     let apps = session
         .apps
         .iter()
-        .map(|app| {
-            let process_observation = app.process.as_ref().map(observe_process_identity);
+        .zip(app_observations.iter().copied())
+        .map(|(app, process_observation)| {
             let process_alive =
                 process_observation.is_some_and(|observation| observation.may_be_alive());
             let process_identity_verified =
@@ -758,10 +784,16 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let recovery_assessment = orphan_recovery_assessment(session, AmbiguousOrphanPolicy::Retain);
-    let recoverable =
-        session.cleanup_required && recovery_assessment == OrphanRecoveryAssessment::Retirable;
+    let recovery_assessment = orphan_recovery_assessment_with_observations(
+        session,
+        AmbiguousOrphanPolicy::Retain,
+        supervisor_observation,
+        |index, _| app_observations[index],
+    );
     let supervisor_active = control_alive || supervisor_observation.may_be_alive();
+    let recoverable = !supervisor_active
+        && session.cleanup_required
+        && recovery_assessment == OrphanRecoveryAssessment::Retirable;
     let status = if session.phase != DevSessionPhase::Orphaned && supervisor_active {
         match session.phase {
             DevSessionPhase::Starting => "starting",
@@ -832,4 +864,106 @@ fn configured_state_dir(explicit: Option<PathBuf>) -> Result<PathBuf> {
     Ok(dirs::home_dir()
         .context("Could not resolve home directory for Jig proxy state")?
         .join(".jig/proxy"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{DevProcessIdentity, DevSessionControl};
+
+    fn cleanup_required_session() -> DevSessionRecord {
+        DevSessionRecord {
+            session_id: "dev_example".into(),
+            repo_name: "ExampleProject".into(),
+            repo_root_display: "/tmp/example-project".into(),
+            repo_root_identity: "/tmp/example-project".into(),
+            phase: DevSessionPhase::Running,
+            started_at_ms: 1,
+            updated_at_ms: 1,
+            cleanup_required: true,
+            preflight_cleanup_pending: false,
+            supervisor: DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("example-supervisor".into()),
+            },
+            control: DevSessionControl {
+                port: 1,
+                token: "example-control-token".into(),
+            },
+            apps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn active_status_evidence_cannot_also_be_recoverable() {
+        let session = cleanup_required_session();
+
+        let control_active = session_status_from_observations(
+            &session,
+            &[],
+            true,
+            ProcessIdentityObservation::Absent,
+            &[],
+        );
+        assert_eq!(control_active["status"], "running");
+        assert_eq!(control_active["recoverable"], false);
+
+        let supervisor_active = session_status_from_observations(
+            &session,
+            &[],
+            false,
+            ProcessIdentityObservation::Alive,
+            &[],
+        );
+        assert_eq!(supervisor_active["status"], "running");
+        assert_eq!(supervisor_active["recoverable"], false);
+    }
+
+    #[test]
+    fn inactive_recovery_snapshot_is_reported_consistently() {
+        let session = cleanup_required_session();
+
+        let status = session_status_from_observations(
+            &session,
+            &[],
+            false,
+            ProcessIdentityObservation::Absent,
+            &[],
+        );
+
+        assert_eq!(status["status"], "recoverable");
+        assert_eq!(status["recoverable"], true);
+        assert_eq!(status["supervisor_alive"], false);
+        assert_eq!(status["control_alive"], false);
+    }
+
+    #[test]
+    fn live_app_observation_cannot_also_be_recoverable() {
+        let mut session = cleanup_required_session();
+        session.apps.push(DevSessionApp {
+            name: "web".into(),
+            hostname: None,
+            target_host: "127.0.0.1".into(),
+            target_port: Some(4000),
+            spawn_state_tracked: true,
+            spawn_pending: false,
+            process: Some(DevProcessIdentity {
+                pid: u32::MAX - 1,
+                start_token: Some("example-app".into()),
+            }),
+        });
+
+        let status = session_status_from_observations(
+            &session,
+            &[],
+            false,
+            ProcessIdentityObservation::Absent,
+            &[Some(ProcessIdentityObservation::Alive)],
+        );
+
+        assert_eq!(status["status"], "orphaned");
+        assert_eq!(status["recoverable"], false);
+        assert_eq!(status["apps"][0]["alive"], true);
+        assert_eq!(status["apps"][0]["identity_observation"], "alive");
+    }
 }
