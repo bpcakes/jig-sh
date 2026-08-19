@@ -179,8 +179,13 @@ pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path)
 #[derive(Debug)]
 struct Interrupted {
     reason: TerminationReason,
-    recoveries: Option<Value>,
     cleanup: InterruptionCleanup,
+}
+
+#[derive(Debug)]
+struct DevErrorWithRecoveries {
+    source: anyhow::Error,
+    recoveries: Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,55 +202,81 @@ impl fmt::Display for Interrupted {
 
 impl StdError for Interrupted {}
 
+impl fmt::Display for DevErrorWithRecoveries {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if formatter.alternate() {
+            write!(formatter, "{:#}", self.source)
+        } else {
+            write!(formatter, "{}", self.source)
+        }
+    }
+}
+
+impl StdError for DevErrorWithRecoveries {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
 pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
-    interruption_error_with_state(reason, None, InterruptionCleanup::Confirmed)
+    interruption_error_with_state(reason, InterruptionCleanup::Confirmed)
 }
 
 pub(crate) fn interruption_error_with_recoveries(
     reason: TerminationReason,
     recoveries: Value,
 ) -> anyhow::Error {
-    interruption_error_with_state(reason, Some(recoveries), InterruptionCleanup::Confirmed)
+    dev_error_with_recoveries(interruption_error(reason), recoveries)
 }
 
 pub(crate) fn interruption_error_with_unconfirmed_cleanup(
     reason: TerminationReason,
     recoveries: Option<Value>,
 ) -> anyhow::Error {
-    interruption_error_with_state(reason, recoveries, InterruptionCleanup::Unconfirmed)
+    let error = interruption_error_with_state(reason, InterruptionCleanup::Unconfirmed);
+    match recoveries {
+        Some(recoveries) => dev_error_with_recoveries(error, recoveries),
+        None => error,
+    }
 }
 
 fn interruption_error_with_state(
     reason: TerminationReason,
-    recoveries: Option<Value>,
     cleanup: InterruptionCleanup,
 ) -> anyhow::Error {
-    Interrupted {
-        reason,
-        recoveries,
-        cleanup,
-    }
-    .into()
+    Interrupted { reason, cleanup }.into()
+}
+
+pub(crate) fn dev_error_with_recoveries(source: anyhow::Error, recoveries: Value) -> anyhow::Error {
+    DevErrorWithRecoveries { source, recoveries }.into()
+}
+
+pub(crate) fn dev_error_parts(error: &anyhow::Error) -> (&anyhow::Error, Option<&Value>) {
+    error
+        .downcast_ref::<DevErrorWithRecoveries>()
+        .map_or((error, None), |context| {
+            (&context.source, Some(&context.recoveries))
+        })
+}
+
+fn dev_error_source(error: &anyhow::Error) -> &anyhow::Error {
+    dev_error_parts(error).0
 }
 
 pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<Interrupted>().is_some()
+    dev_error_source(error)
+        .downcast_ref::<Interrupted>()
+        .is_some()
 }
 
 pub(crate) fn interruption_reason(error: &anyhow::Error) -> Option<TerminationReason> {
-    error
+    dev_error_source(error)
         .downcast_ref::<Interrupted>()
         .map(|error| error.reason)
 }
 
-pub(crate) fn interruption_recoveries(error: &anyhow::Error) -> Option<&Value> {
-    error
-        .downcast_ref::<Interrupted>()
-        .and_then(|error| error.recoveries.as_ref())
-}
-
 pub(crate) fn interruption_cleanup_unconfirmed(error: &anyhow::Error) -> bool {
-    error
+    dev_error_source(error)
         .downcast_ref::<Interrupted>()
         .is_some_and(|error| error.cleanup == InterruptionCleanup::Unconfirmed)
 }

@@ -47,10 +47,11 @@ pub fn dev_resolved(request: crate::ResolvedDevRequest) -> Result<Value> {
 pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
     match result {
         Err(error) => {
-            let Some(reason) = processes::interruption_reason(&error) else {
+            let (source, recoveries) = processes::dev_error_parts(&error);
+            let Some(reason) = processes::interruption_reason(source) else {
                 return Err(error);
             };
-            let recoveries = processes::interruption_recoveries(&error).cloned();
+            let recoveries = recoveries.cloned();
             if processes::interruption_cleanup_unconfirmed(&error) {
                 let mut output = json!({
                     "ok": false,
