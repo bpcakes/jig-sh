@@ -11,7 +11,9 @@ use super::process_identity::{
 };
 use super::{CanonicalRepo, next_timestamp, session_owns_route};
 use crate::session_control::{ping, request_stop};
-use crate::state::{DevSessionPhase, DevSessionRecord, LockOutcome, StateStore};
+use crate::state::{
+    DevSessionAppSpawnEvidence, DevSessionPhase, DevSessionRecord, LockOutcome, StateStore,
+};
 use crate::types::{DevStatusRequest, DevStopRequest, Route};
 
 const CONTROL_RETIRE_BASE_TIMEOUT: Duration = Duration::from_secs(35);
@@ -332,18 +334,19 @@ fn orphan_recovery_assessment(session: &DevSessionRecord) -> OrphanRecoveryAsses
         return OrphanRecoveryAssessment::Retirable;
     }
     for app in &session.apps {
-        if app.spawn_pending {
-            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnPending(
-                app.name.clone(),
-            ));
-        }
-        if app.process.is_none() && !app.spawn_state_tracked {
-            return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnUntracked(
-                app.name.clone(),
-            ));
-        }
-        let Some(process) = app.process.as_ref() else {
-            continue;
+        let process = match app.spawn_evidence() {
+            DevSessionAppSpawnEvidence::Untracked => {
+                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnUntracked(
+                    app.name.clone(),
+                ));
+            }
+            DevSessionAppSpawnEvidence::Pending => {
+                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnPending(
+                    app.name.clone(),
+                ));
+            }
+            DevSessionAppSpawnEvidence::NotStarted => continue,
+            DevSessionAppSpawnEvidence::Registered(process) => process,
         };
         match observe_process_identity(process) {
             ProcessIdentityObservation::Alive => {

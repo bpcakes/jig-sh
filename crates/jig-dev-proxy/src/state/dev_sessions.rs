@@ -66,6 +66,48 @@ pub(crate) struct DevSessionApp {
     pub(crate) process: Option<DevProcessIdentity>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DevSessionAppSpawnEvidence<'a> {
+    Untracked,
+    NotStarted,
+    Pending,
+    Registered(&'a DevProcessIdentity),
+}
+
+impl DevSessionApp {
+    pub(crate) fn spawn_evidence(&self) -> DevSessionAppSpawnEvidence<'_> {
+        if self.spawn_pending {
+            DevSessionAppSpawnEvidence::Pending
+        } else if let Some(process) = self.process.as_ref() {
+            DevSessionAppSpawnEvidence::Registered(process)
+        } else if self.spawn_state_tracked {
+            DevSessionAppSpawnEvidence::NotStarted
+        } else {
+            DevSessionAppSpawnEvidence::Untracked
+        }
+    }
+
+    pub(crate) fn prepare_spawn(&mut self, session_id: &str, target_port: u16) -> Result<()> {
+        if self.process.is_some() {
+            bail!(
+                "Jig dev session '{session_id}' app '{}' already has a registered process",
+                self.name
+            );
+        }
+        self.target_port = Some(target_port);
+        self.spawn_state_tracked = true;
+        self.spawn_pending = true;
+        Ok(())
+    }
+
+    pub(crate) fn register_process(&mut self, target_port: u16, process: DevProcessIdentity) {
+        self.target_port = Some(target_port);
+        self.spawn_state_tracked = true;
+        self.spawn_pending = false;
+        self.process = Some(process);
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct DevSessionRecord {
     pub(crate) session_id: String,

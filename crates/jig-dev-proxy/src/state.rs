@@ -18,8 +18,8 @@ use crate::host::{RouteHostname, validate_routed_hostname};
 use crate::types::{Route, RouteMode};
 
 pub(crate) use dev_sessions::{
-    DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    DevStateSnapshot,
+    DevProcessIdentity, DevSessionApp, DevSessionAppSpawnEvidence, DevSessionControl,
+    DevSessionPhase, DevSessionRecord, DevStateSnapshot,
 };
 use process_identity::route_is_alive;
 #[cfg(test)]

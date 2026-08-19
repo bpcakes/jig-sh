@@ -246,16 +246,7 @@ impl DevSessionRuntime {
                     app_name
                 )
             })?;
-        if app.process.is_some() {
-            bail!(
-                "Jig dev session '{}' app '{}' already has a registered process",
-                self.session_id,
-                app_name
-            );
-        }
-        app.target_port = Some(target_port);
-        app.spawn_state_tracked = true;
-        app.spawn_pending = true;
+        app.prepare_spawn(&self.session_id, target_port)?;
         session.cleanup_required = true;
         session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
@@ -311,10 +302,7 @@ impl DevSessionRuntime {
                     app_name
                 )
             })?;
-        app.target_port = Some(target_port);
-        app.spawn_state_tracked = true;
-        app.spawn_pending = false;
-        app.process = Some(process);
+        app.register_process(target_port, process);
         session.cleanup_required = true;
         session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
