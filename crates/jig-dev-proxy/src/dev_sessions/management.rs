@@ -486,7 +486,21 @@ fn orphan_recovery_assessment(
     session: &DevSessionRecord,
     policy: AmbiguousOrphanPolicy,
 ) -> OrphanRecoveryAssessment {
-    match observe_process_identity(&session.supervisor) {
+    orphan_recovery_assessment_with_observations(
+        session,
+        policy,
+        observe_process_identity(&session.supervisor),
+        |_, app| app.process.as_ref().map(observe_process_identity),
+    )
+}
+
+fn orphan_recovery_assessment_with_observations(
+    session: &DevSessionRecord,
+    policy: AmbiguousOrphanPolicy,
+    supervisor_observation: ProcessIdentityObservation,
+    mut app_observation: impl FnMut(usize, &DevSessionApp) -> Option<ProcessIdentityObservation>,
+) -> OrphanRecoveryAssessment {
+    match supervisor_observation {
         ProcessIdentityObservation::Alive => {
             return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorAlive);
         }
@@ -501,8 +515,8 @@ fn orphan_recovery_assessment(
     if session.preflight_cleanup_pending && policy == AmbiguousOrphanPolicy::Retain {
         return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::PreflightCleanupPending);
     }
-    for app in &session.apps {
-        let process = match app.spawn_evidence() {
+    for (index, app) in session.apps.iter().enumerate() {
+        match app.spawn_evidence() {
             DevSessionAppSpawnEvidence::Untracked => {
                 if policy == AmbiguousOrphanPolicy::Retain {
                     return OrphanRecoveryAssessment::Retain(
@@ -520,9 +534,11 @@ fn orphan_recovery_assessment(
                 continue;
             }
             DevSessionAppSpawnEvidence::NotStarted => continue,
-            DevSessionAppSpawnEvidence::Registered(process) => process,
-        };
-        match observe_process_identity(process) {
+            DevSessionAppSpawnEvidence::Registered(_) => {}
+        }
+        match app_observation(index, app)
+            .expect("registered development app must have a process observation")
+        {
             ProcessIdentityObservation::Alive => {
                 return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppAlive(
                     app.name.clone(),
