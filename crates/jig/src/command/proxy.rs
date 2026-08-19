@@ -28,6 +28,7 @@ pub(crate) struct DevStatusRequest {
 #[derive(Debug, Default)]
 pub(crate) struct DevStopRequest {
     pub(crate) state_dir: Option<PathBuf>,
+    pub(crate) forget_ambiguous_orphans: bool,
 }
 
 #[derive(Clone, Debug, Default)]

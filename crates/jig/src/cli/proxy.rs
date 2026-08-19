@@ -203,6 +203,11 @@ pub(crate) struct DevStopOpts {
         help = "Proxy state directory; defaults to JIG_PROXY_STATE_DIR or ~/.jig/proxy"
     )]
     pub(crate) state_dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Forget dead-supervisor orphan records whose spawn history cannot be proven; never signals stored PIDs"
+    )]
+    pub(crate) forget_ambiguous_orphans: bool,
 }
 
 #[derive(Args, Debug)]

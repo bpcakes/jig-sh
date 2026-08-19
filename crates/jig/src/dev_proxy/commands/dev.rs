@@ -82,9 +82,12 @@ fn dev_status(ctx: &RepoContext, opts: DevStatusRequest) -> Result<Value> {
 }
 
 fn dev_stop(ctx: &RepoContext, opts: DevStopRequest) -> Result<Value> {
-    jig_dev_proxy::dev_stop(jig_dev_proxy::DevStopRequest::new(
-        ctx.repo_name(),
-        ctx.root().to_path_buf(),
-        opts.state_dir,
-    ))
+    jig_dev_proxy::dev_stop(
+        jig_dev_proxy::DevStopRequest::new(
+            ctx.repo_name(),
+            ctx.root().to_path_buf(),
+            opts.state_dir,
+        )
+        .with_forget_ambiguous_orphans(opts.forget_ambiguous_orphans),
+    )
 }

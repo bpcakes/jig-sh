@@ -38,9 +38,15 @@ enum OrphanRecoveryAssessment {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RetireDeadOrphanOutcome {
-    Retired,
+    Retired { forgot_ambiguous_spawn: bool },
     AlreadyAbsent,
     Retained(OrphanRetentionReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AmbiguousOrphanPolicy {
+    Retain,
+    Forget,
 }
 
 pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
@@ -85,7 +91,12 @@ pub(crate) fn stop(request: DevStopRequest) -> Result<Value> {
         .filter(|session| session.repo_root_identity == repo.root_identity)
         .map(|session| session.session_id)
         .collect::<BTreeSet<_>>();
-    let report = stop_session_ids(&store, &repo, &ids)?;
+    let policy = if request.forget_ambiguous_orphans {
+        AmbiguousOrphanPolicy::Forget
+    } else {
+        AmbiguousOrphanPolicy::Retain
+    };
+    let report = stop_session_ids(&store, &repo, &ids, policy)?;
     Ok(report.into_json(&repo, store.root()))
 }
 
@@ -116,12 +127,13 @@ impl StopReport {
     }
 }
 
-pub(super) fn stop_session_ids(
+fn stop_session_ids(
     store: &StateStore,
     repo: &CanonicalRepo,
     target_ids: &BTreeSet<String>,
+    policy: AmbiguousOrphanPolicy,
 ) -> Result<StopReport> {
-    match stop_session_ids_interruptible(store, repo, target_ids, &|| false)? {
+    match stop_session_ids_interruptible_with_policy(store, repo, target_ids, policy, &|| false)? {
         LockOutcome::Acquired(report) => Ok(report),
         LockOutcome::Cancelled => bail!("uncancelled Jig dev stop was cancelled"),
     }
@@ -131,6 +143,22 @@ pub(super) fn stop_session_ids_interruptible(
     store: &StateStore,
     repo: &CanonicalRepo,
     target_ids: &BTreeSet<String>,
+    cancelled: &impl Fn() -> bool,
+) -> Result<LockOutcome<StopReport>> {
+    stop_session_ids_interruptible_with_policy(
+        store,
+        repo,
+        target_ids,
+        AmbiguousOrphanPolicy::Retain,
+        cancelled,
+    )
+}
+
+fn stop_session_ids_interruptible_with_policy(
+    store: &StateStore,
+    repo: &CanonicalRepo,
+    target_ids: &BTreeSet<String>,
+    policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
 ) -> Result<LockOutcome<StopReport>> {
     if target_ids.is_empty() {
@@ -219,16 +247,26 @@ pub(super) fn stop_session_ids_interruptible(
         }
         match (
             session.cleanup_required,
-            orphan_recovery_assessment(&session),
+            orphan_recovery_assessment(&session, policy),
         ) {
             (true, OrphanRecoveryAssessment::Retirable) => {
-                match retire_dead_orphan(store, &session, cancelled)? {
+                match retire_orphan(store, &session, policy, cancelled)? {
                     LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
-                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired) => {
-                        recovery_warnings.push(format!(
-                            "session '{}': retired a dead orphan and its exact-owned stale routes without signaling persisted PIDs; unrecorded descendants could not be ruled out",
-                            session.session_id
-                        ));
+                    LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired {
+                        forgot_ambiguous_spawn,
+                    }) => {
+                        let warning = if forgot_ambiguous_spawn {
+                            format!(
+                                "session '{}': explicitly forgot a dead-supervisor orphan with ambiguous spawn history and retired its exact-owned stale routes without signaling persisted PIDs; an unrecorded process may still be running",
+                                session.session_id
+                            )
+                        } else {
+                            format!(
+                                "session '{}': retired a dead orphan and its exact-owned stale routes without signaling persisted PIDs; unrecorded descendants could not be ruled out",
+                                session.session_id
+                            )
+                        };
+                        recovery_warnings.push(warning);
                     }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::AlreadyAbsent) => {}
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
@@ -296,9 +334,10 @@ pub(super) fn stop_session_ids_interruptible(
     }))
 }
 
-fn retire_dead_orphan(
+fn retire_orphan(
     store: &StateStore,
     session: &DevSessionRecord,
+    policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
 ) -> Result<LockOutcome<RetireDeadOrphanOutcome>> {
     store.mutate_dev_state_interruptible(cancelled, |sessions, routes| {
@@ -310,17 +349,32 @@ fn retire_dead_orphan(
             return Ok(RetireDeadOrphanOutcome::AlreadyAbsent);
         };
         let current = &sessions[index];
-        if let OrphanRecoveryAssessment::Retain(reason) = orphan_recovery_assessment(current) {
+        let strict_assessment = orphan_recovery_assessment(current, AmbiguousOrphanPolicy::Retain);
+        if let OrphanRecoveryAssessment::Retain(reason) =
+            orphan_recovery_assessment(current, policy)
+        {
             return Ok(RetireDeadOrphanOutcome::Retained(reason));
         }
+        let forgot_ambiguous_spawn = matches!(
+            strict_assessment,
+            OrphanRecoveryAssessment::Retain(
+                OrphanRetentionReason::AppSpawnPending(_)
+                    | OrphanRetentionReason::AppSpawnUntracked(_)
+            )
+        );
 
         routes.retain(|route| !session_owns_route(current, route));
         sessions.remove(index);
-        Ok(RetireDeadOrphanOutcome::Retired)
+        Ok(RetireDeadOrphanOutcome::Retired {
+            forgot_ambiguous_spawn,
+        })
     })
 }
 
-fn orphan_recovery_assessment(session: &DevSessionRecord) -> OrphanRecoveryAssessment {
+fn orphan_recovery_assessment(
+    session: &DevSessionRecord,
+    policy: AmbiguousOrphanPolicy,
+) -> OrphanRecoveryAssessment {
     match observe_process_identity(&session.supervisor) {
         ProcessIdentityObservation::Alive => {
             return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::SupervisorAlive);
@@ -336,14 +390,20 @@ fn orphan_recovery_assessment(session: &DevSessionRecord) -> OrphanRecoveryAsses
     for app in &session.apps {
         let process = match app.spawn_evidence() {
             DevSessionAppSpawnEvidence::Untracked => {
-                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnUntracked(
-                    app.name.clone(),
-                ));
+                if policy == AmbiguousOrphanPolicy::Retain {
+                    return OrphanRecoveryAssessment::Retain(
+                        OrphanRetentionReason::AppSpawnUntracked(app.name.clone()),
+                    );
+                }
+                continue;
             }
             DevSessionAppSpawnEvidence::Pending => {
-                return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::AppSpawnPending(
-                    app.name.clone(),
-                ));
+                if policy == AmbiguousOrphanPolicy::Retain {
+                    return OrphanRecoveryAssessment::Retain(
+                        OrphanRetentionReason::AppSpawnPending(app.name.clone()),
+                    );
+                }
+                continue;
             }
             DevSessionAppSpawnEvidence::NotStarted => continue,
             DevSessionAppSpawnEvidence::Registered(process) => process,
@@ -533,7 +593,7 @@ fn session_status(session: &DevSessionRecord, routes: &[Route]) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let recovery_assessment = orphan_recovery_assessment(session);
+    let recovery_assessment = orphan_recovery_assessment(session, AmbiguousOrphanPolicy::Retain);
     let recoverable =
         session.cleanup_required && recovery_assessment == OrphanRecoveryAssessment::Retirable;
     let supervisor_active = control_alive || supervisor_observation.may_be_alive();

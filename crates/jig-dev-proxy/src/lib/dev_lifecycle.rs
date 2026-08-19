@@ -682,11 +682,10 @@ fn unconfirmed_cleanup_with_a_live_registered_app_stays_visible_and_fails_closed
         })
         .unwrap();
 
-    let stopped = dev_stop(DevStopRequest::new(
-        "demo",
-        temp.path().to_path_buf(),
-        Some(state_dir),
-    ))
+    let stopped = dev_stop(
+        DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
+            .with_forget_ambiguous_orphans(true),
+    )
     .unwrap();
     assert_eq!(stopped["ok"], false);
     assert_eq!(stopped["matched_sessions"], 1);
@@ -755,7 +754,7 @@ fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identit
     let stopped = dev_stop(DevStopRequest::new(
         "demo",
         temp.path().to_path_buf(),
-        Some(state_dir),
+        Some(state_dir.clone()),
     ))
     .unwrap();
     assert_eq!(stopped["ok"], false);
@@ -769,6 +768,26 @@ fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identit
             .any(|warning| warning.as_str().is_some_and(|warning| {
                 warning.contains("may have spawned")
                     && warning.contains("process identity was durably recorded")
+            }))
+    );
+
+    let forgotten = dev_stop(
+        DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
+            .with_forget_ambiguous_orphans(true),
+    )
+    .unwrap();
+    assert_eq!(forgotten["ok"], true);
+    assert_eq!(forgotten["stopped_sessions"], 1);
+    assert!(forgotten["sessions"].as_array().unwrap().is_empty());
+    assert!(
+        forgotten["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("explicitly forgot")
+                    && warning.contains("ambiguous spawn history")
+                    && warning.contains("may still be running")
             }))
     );
 }
@@ -910,7 +929,7 @@ fn uncertain_live_identities_remain_alive_without_claiming_verification() {
 }
 
 #[test]
-fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade() {
+fn legacy_missing_process_identity_requires_explicit_forget_after_spawn_tracking_upgrade() {
     let temp = tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
     let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
@@ -944,7 +963,7 @@ fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade(
     let stopped = dev_stop(DevStopRequest::new(
         "demo",
         temp.path().to_path_buf(),
-        Some(state_dir),
+        Some(state_dir.clone()),
     ))
     .unwrap();
     assert_eq!(stopped["ok"], false);
@@ -956,6 +975,24 @@ fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade(
             .iter()
             .any(|warning| warning.as_str().is_some_and(|warning| {
                 warning.contains("predates durable spawn-state tracking")
+            }))
+    );
+
+    let forgotten = dev_stop(
+        DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
+            .with_forget_ambiguous_orphans(true),
+    )
+    .unwrap();
+    assert_eq!(forgotten["ok"], true);
+    assert_eq!(forgotten["stopped_sessions"], 1);
+    assert!(forgotten["sessions"].as_array().unwrap().is_empty());
+    assert!(
+        forgotten["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|warning| {
+                warning.contains("explicitly forgot") && warning.contains("ambiguous spawn history")
             }))
     );
 }

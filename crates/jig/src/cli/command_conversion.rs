@@ -382,6 +382,7 @@ impl From<DevStopOpts> for command::DevStopRequest {
     fn from(opts: DevStopOpts) -> Self {
         Self {
             state_dir: opts.state_dir,
+            forget_ambiguous_orphans: opts.forget_ambiguous_orphans,
         }
     }
 }
@@ -606,6 +607,7 @@ mod tests {
         let stop: command::DevCommand = DevOpts {
             command: Some(DevSubcommand::Stop(DevStopOpts {
                 state_dir: Some("/tmp/stop".into()),
+                forget_ambiguous_orphans: true,
             })),
             launch: DevLaunchOpts::default(),
         }
@@ -613,6 +615,7 @@ mod tests {
         match stop {
             command::DevCommand::Stop(request) => {
                 assert_eq!(request.state_dir, Some("/tmp/stop".into()));
+                assert!(request.forget_ambiguous_orphans);
             }
             other => panic!("expected dev stop request, got {other:?}"),
         }
