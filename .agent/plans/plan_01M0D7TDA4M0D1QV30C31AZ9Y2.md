@@ -8,7 +8,7 @@ This work corrects two findings from the review of `origin/master...HEAD`: the d
 - [x] Run the Fowler Rust refactoring heuristic scanner and manually validate its relevant candidates.
 - [x] Establish the documented pre-change baseline.
 - [x] Clarify the destructive repair option and add CLI help coverage.
-- [ ] Extract app-stop accounting without changing behavior.
+- [x] Extract app-stop accounting without changing behavior.
 - [ ] Exclude explicit orphan recoveries from `stopped_apps` and add deterministic regression coverage.
 - [ ] Run all configured gates, record evidence, close the plan, and leave a clean worktree.
 

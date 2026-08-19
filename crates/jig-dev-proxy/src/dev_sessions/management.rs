@@ -346,7 +346,7 @@ fn stop_session_ids_interruptible_inner(
         }
     };
     let matched_sessions = targets.len();
-    let initially_live_apps = targets
+    let initially_maybe_live_apps = targets
         .iter()
         .map(|session| {
             (
@@ -471,11 +471,7 @@ fn stop_session_ids_interruptible_inner(
     let ok = blocking_warnings.is_empty() && sessions.is_empty();
     let warnings = blocking_warnings;
     let stopped_sessions = matched_sessions.saturating_sub(sessions.len());
-    let stopped_apps = initially_live_apps
-        .into_iter()
-        .filter(|(session_id, _)| !remaining_ids.contains(session_id.as_str()))
-        .map(|(_, app_count)| app_count)
-        .sum();
+    let stopped_apps = count_stopped_apps(initially_maybe_live_apps, &remaining_ids);
     Ok(StopSessionOutcome::Complete(StopReport {
         ok,
         matched_sessions,
@@ -485,6 +481,17 @@ fn stop_session_ids_interruptible_inner(
         recoveries: std::mem::take(recoveries),
         warnings,
     }))
+}
+
+fn count_stopped_apps(
+    initially_maybe_live_apps: HashMap<String, usize>,
+    remaining_ids: &HashSet<&str>,
+) -> usize {
+    initially_maybe_live_apps
+        .into_iter()
+        .filter(|(session_id, _)| !remaining_ids.contains(session_id.as_str()))
+        .map(|(_, app_count)| app_count)
+        .sum()
 }
 
 fn retire_orphan(
@@ -999,5 +1006,17 @@ mod tests {
         assert_eq!(status["recoverable"], false);
         assert_eq!(status["apps"][0]["alive"], true);
         assert_eq!(status["apps"][0]["identity_observation"], "alive");
+    }
+
+    #[test]
+    fn stopped_app_count_includes_removed_targets_and_excludes_remaining_targets() {
+        let initially_maybe_live_apps =
+            HashMap::from([("stopped".to_owned(), 2), ("remaining".to_owned(), 3)]);
+        let remaining_ids = HashSet::from(["remaining"]);
+
+        assert_eq!(
+            count_stopped_apps(initially_maybe_live_apps, &remaining_ids),
+            2
+        );
     }
 }
