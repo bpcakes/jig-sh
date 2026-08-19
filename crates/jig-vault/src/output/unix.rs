@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -7,8 +6,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 
+use self::error::{PrivateOutputConflict, install_error_kind, preflight_error_kind};
 use super::{OutputFailureStage, OutputInstallFailure};
-use crate::VaultErrorKind;
+
+mod error;
 
 pub(super) fn preflight_private_destination(
     path: &Path,
@@ -158,37 +159,6 @@ enum InstallPolicy {
     Upsert,
     Exact(DestinationState),
 }
-
-#[derive(Debug)]
-enum PrivateOutputConflict {
-    ExistingWithoutOverwrite(PathBuf),
-    ExistingWithoutReplacement(PathBuf),
-    ChangedSincePreview(PathBuf),
-}
-
-impl fmt::Display for PrivateOutputConflict {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ExistingWithoutOverwrite(path) => write!(
-                formatter,
-                "private vault output already exists at {}; pass --overwrite to replace it",
-                path.display()
-            ),
-            Self::ExistingWithoutReplacement(path) => write!(
-                formatter,
-                "private vault output already exists at {}; enable replacement to replace it",
-                path.display()
-            ),
-            Self::ChangedSincePreview(path) => write!(
-                formatter,
-                "private vault output destination changed since preview at {}; preview again",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PrivateOutputConflict {}
 
 pub(super) struct PrivateDestinationPrecondition {
     destination: PathBuf,
@@ -506,35 +476,6 @@ fn sync_parent(parent: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to sync output parent {}", parent.display()))
 }
 
-fn preflight_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-    if is_private_output_conflict(error) {
-        VaultErrorKind::AlreadyExists
-    } else if error.chain().any(|source| source.is::<std::io::Error>()) {
-        VaultErrorKind::Io
-    } else {
-        VaultErrorKind::InvalidInput
-    }
-}
-
-fn install_error_kind(error: &anyhow::Error) -> VaultErrorKind {
-    if is_private_output_conflict(error)
-        || error
-            .chain()
-            .filter_map(|source| source.downcast_ref::<std::io::Error>())
-            .any(|error| error.kind() == std::io::ErrorKind::AlreadyExists)
-    {
-        VaultErrorKind::AlreadyExists
-    } else {
-        VaultErrorKind::Io
-    }
-}
-
-fn is_private_output_conflict(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|source| source.is::<PrivateOutputConflict>())
-}
-
 #[cfg(all(test, target_os = "macos"))]
 mod macos_path_tests;
 
@@ -542,6 +483,8 @@ mod macos_path_tests;
 mod tests {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
+
+    use crate::VaultErrorKind;
 
     fn private_tempdir() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
