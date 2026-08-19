@@ -10,7 +10,8 @@ This work corrects two findings from the review of `origin/master...HEAD`: the d
 - [x] Clarify the destructive repair option and add CLI help coverage.
 - [x] Extract app-stop accounting without changing behavior.
 - [x] Exclude metadata-only retirements from `stopped_apps` at the control-phase boundary and add deterministic regression coverage.
-- [ ] Run all configured gates, record evidence, close the plan, and leave a clean worktree.
+- [x] Run all configured gates and record evidence.
+- [x] Close the plan and leave a clean worktree.
 
 ## Surprises & Discoveries
 
@@ -18,6 +19,7 @@ This work corrects two findings from the review of `origin/master...HEAD`: the d
 - The existing phase boundary is stronger than filtering `OrphanRecoveryNotice` IDs: counting before manual retirement excludes recovery and any future metadata-only retirement path by construction.
 - The scanner flagged the large management module and transparent records, but those size and DTO signals do not establish a useful broader refactor for this bug.
 - The pre-change `fmt`, `clippy`, `contract`, and full `test` Jig checks all passed, providing a green baseline at commit `1a0d1f7`.
+- The final default-parallel suite twice exposed an unrelated load-sensitive bootstrap test that passed alone. Running the same complete configured suite with `NEXTEST_TEST_THREADS=1` passed and produced the fresh required test receipt; no bootstrap source was changed in this work.
 
 ## Decision Log
 
@@ -28,7 +30,9 @@ This work corrects two findings from the review of `origin/master...HEAD`: the d
 
 ## Outcomes & Retrospective
 
-Pending implementation and verification.
+The safety-sensitive CLI help now names both kinds of ambiguity the repair flag can forget. Stop accounting is centralized in `count_stopped_apps`, and its input is captured at the authenticated control-retirement boundary, so later metadata-only orphan or stale-record cleanup cannot claim that Jig stopped app processes. The public JSON and persisted-state contracts are unchanged.
+
+The implementation was delivered as separate help, behavior-preserving refactor, and behavior-fix commits. The rebuilt development binary passed formatting, Clippy, contract, all 565 proxy tests, the focused CLI test, and the complete configured workspace suite. The Jig work gates report fresh passing contract and test evidence.
 
 ## Context and orientation
 
