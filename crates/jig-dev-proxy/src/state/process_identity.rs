@@ -16,6 +16,16 @@ pub(crate) enum PidObservation {
     Uncertain,
 }
 
+impl PidObservation {
+    pub(crate) const fn is_absent(self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    pub(crate) const fn may_be_alive(self) -> bool {
+        !self.is_absent()
+    }
+}
+
 pub(crate) fn route_is_alive(route: &Route) -> bool {
     match route.mode {
         RouteMode::Alias => true,
@@ -26,7 +36,7 @@ pub(crate) fn route_is_alive(route: &Route) -> bool {
 }
 
 fn pid_matches_owner(pid: u32, expected_start_token: Option<&str>) -> bool {
-    if !pid_is_alive(pid) {
+    if observe_pid(pid).is_absent() {
         return false;
     }
     let Some(expected_start_token) = expected_start_token else {
@@ -115,10 +125,6 @@ fn classify_unix_pid_probe(result: i32, error: impl FnOnce() -> std::io::Error) 
     } else {
         PidObservation::Uncertain
     }
-}
-
-pub(crate) fn pid_is_alive(pid: u32) -> bool {
-    observe_pid(pid) != PidObservation::Absent
 }
 
 #[cfg(all(test, unix))]

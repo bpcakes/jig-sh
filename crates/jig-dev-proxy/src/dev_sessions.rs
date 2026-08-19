@@ -13,7 +13,7 @@ use self::process_identity::{capture_process_identity, process_identity_may_be_a
 use crate::session_control::SessionControlServer;
 use crate::state::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    LockOutcome, StateStore, now_ms, pid_is_alive, process_start_token,
+    LockOutcome, StateStore, now_ms, observe_pid, process_start_token,
 };
 use crate::types::{AppRunSpec, Route, RouteMode};
 
@@ -631,7 +631,7 @@ fn route_is_live(route: &Route) -> bool {
             .owner_pid
             .zip(route.owner_start_token.as_deref())
             .is_some_and(|(pid, token)| {
-                pid_is_alive(pid)
+                observe_pid(pid).may_be_alive()
                     && process_start_token(pid)
                         .as_deref()
                         .is_none_or(|current| current == token)

@@ -60,7 +60,7 @@ pub(crate) fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
 
 use crate::host::{RouteHostname, TargetHost};
 use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_listener};
-use crate::state::{StateStore, now_ms, pid_is_alive};
+use crate::state::{StateStore, now_ms, observe_pid};
 use crate::types::{Route, RouteMode};
 
 pub use crate::dev_api::{dev, dev_resolved, dev_status, dev_stop};
@@ -661,12 +661,12 @@ fn terminate_proxy_pid(pid: u32) -> bool {
 fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !pid_is_alive(pid) {
+        if observe_pid(pid).is_absent() {
             return true;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    !pid_is_alive(pid)
+    observe_pid(pid).is_absent()
 }
 
 /// Lists proxy routes and runtime status.
@@ -758,7 +758,7 @@ struct ProxyRuntimeStatus {
 
 fn proxy_runtime_status(store: &StateStore) -> Result<ProxyRuntimeStatus> {
     let pid = store.read_pid()?;
-    let pid_alive = pid.is_some_and(pid_is_alive);
+    let pid_alive = pid.is_some_and(|pid| observe_pid(pid).may_be_alive());
     let http_port = store.read_http_port()?;
     let health_token = store.read_health_token()?;
     let health_pid = match (http_port, health_token.as_deref()) {

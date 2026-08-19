@@ -14,7 +14,7 @@ mod dev_session;
 
 #[cfg(target_os = "linux")]
 fn process_identity_is_alive(pid: u32, start_token: &str) -> bool {
-    crate::state::pid_is_alive(pid)
+    crate::state::observe_pid(pid).may_be_alive()
         && crate::state::process_start_token(pid).as_deref() == Some(start_token)
 }
 
@@ -1925,14 +1925,14 @@ fn app_readiness_wait_rejects_listener_in_different_process_group() {
     let _ = child.wait();
     if let Some((pid, token)) = detached_identity {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while crate::state::pid_is_alive(pid)
+        while crate::state::observe_pid(pid).may_be_alive()
             && crate::state::process_start_token(pid).as_deref() == Some(token.as_str())
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            !crate::state::pid_is_alive(pid)
+            crate::state::observe_pid(pid).is_absent()
                 || crate::state::process_start_token(pid).as_deref() != Some(token.as_str()),
             "detached listener did not stop cooperatively"
         );
@@ -2194,7 +2194,7 @@ fn direct_proxy_start_sigint_reaps_unready_background_process_group() {
     let leader_token = crate::state::process_start_token(leader_pid).unwrap();
     let descendant_token = crate::state::process_start_token(descendant_pid).unwrap();
     let identity_is_alive = |pid, token: &str| {
-        crate::state::pid_is_alive(pid)
+        crate::state::observe_pid(pid).may_be_alive()
             && crate::state::process_start_token(pid).as_deref() == Some(token)
     };
     assert!(identity_is_alive(leader_pid, &leader_token));

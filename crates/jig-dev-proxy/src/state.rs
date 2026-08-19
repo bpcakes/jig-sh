@@ -25,7 +25,7 @@ use process_identity::route_is_alive;
 #[cfg(test)]
 use process_identity::windows_tasklist_csv_pid;
 pub(crate) use process_identity::{
-    PidObservation, observe_pid, pid_is_alive, process_start_token, process_start_tokens_supported,
+    PidObservation, observe_pid, process_start_token, process_start_tokens_supported,
 };
 pub(crate) use signature::{FileSignature, file_signature};
 
@@ -1480,7 +1480,7 @@ fn replace_backup_can_be_promoted(path: &Path, backup_pid: &str) -> bool {
         || backup_pid
             .parse()
             .ok()
-            .is_some_and(|pid| !pid_is_alive(pid))
+            .is_some_and(|pid| observe_pid(pid).is_absent())
 }
 
 fn replace_backup_is_stale(path: &Path) -> bool {

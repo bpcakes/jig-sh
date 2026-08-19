@@ -1432,7 +1432,7 @@ fn classify_liveness_probe(result: i32, error: impl FnOnce() -> io::Error) -> io
 }
 #[cfg(windows)]
 pub(super) fn terminate_pid(pid: u32) -> Result<()> {
-    if !crate::state::pid_is_alive(pid) {
+    if crate::state::observe_pid(pid).is_absent() {
         return Ok(());
     }
     run_taskkill(pid, false)?;
@@ -1468,16 +1468,16 @@ fn run_taskkill(pid: u32, force: bool) -> Result<()> {
 fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !crate::state::pid_is_alive(pid) {
+        if crate::state::observe_pid(pid).is_absent() {
             return true;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    !crate::state::pid_is_alive(pid)
+    crate::state::observe_pid(pid).is_absent()
 }
 #[cfg(windows)]
 pub(super) fn kill_pid(pid: u32) -> Result<()> {
-    if !crate::state::pid_is_alive(pid) {
+    if crate::state::observe_pid(pid).is_absent() {
         return Ok(());
     }
     run_taskkill(pid, true)?;
