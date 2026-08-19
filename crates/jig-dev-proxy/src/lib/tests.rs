@@ -132,11 +132,40 @@ fn proxy_runtime_status_reports_missing_runtime_state() {
     let status = proxy_runtime_status(&store).unwrap();
 
     assert_eq!(status.pid, None);
-    assert!(!status.pid_alive);
+    assert!(!status.pid_is_alive());
+    assert!(!status.pid_may_be_alive());
+    assert_eq!(status.pid_observation, None);
     assert_eq!(status.http_port, None);
     assert_eq!(status.health_pid, None);
     assert!(!status.handshake_ok);
     assert!(!status.pid_matches_proxy);
+}
+
+#[test]
+fn uncertain_proxy_pid_is_not_reported_alive_but_remains_conservative() {
+    let status = ProxyRuntimeStatus {
+        pid: Some(123),
+        pid_observation: Some(PidObservation::Uncertain),
+        http_port: None,
+        health_pid: None,
+        handshake_ok: false,
+        pid_matches_proxy: false,
+    };
+
+    assert!(!status.pid_is_alive());
+    assert!(status.pid_may_be_alive());
+    let warning = stop_warning(StopWarningStatus {
+        pid: status.pid,
+        health_pid: status.health_pid,
+        pid_observation: status.pid_observation,
+        handshake_ok: status.handshake_ok,
+        pid_matches_proxy: status.pid_matches_proxy,
+        stopped: false,
+        service_keepalive_active: false,
+        service_status_uncertain: false,
+    })
+    .unwrap();
+    assert!(warning.contains("could not classify whether that PID is still alive"));
 }
 
 #[cfg(unix)]
@@ -477,7 +506,7 @@ fn stop_warning_reports_service_keepalive_after_stopped_pid() {
     let warning = stop_warning(StopWarningStatus {
         pid: Some(123),
         health_pid: Some(123),
-        pid_alive: true,
+        pid_observation: Some(PidObservation::Alive),
         handshake_ok: true,
         pid_matches_proxy: true,
         stopped: true,
@@ -495,7 +524,7 @@ fn stop_warning_reports_uncertain_service_status_after_stopped_pid() {
     let warning = stop_warning(StopWarningStatus {
         pid: Some(123),
         health_pid: Some(123),
-        pid_alive: true,
+        pid_observation: Some(PidObservation::Alive),
         handshake_ok: true,
         pid_matches_proxy: true,
         stopped: true,
@@ -513,7 +542,7 @@ fn stop_warning_reports_service_keepalive_without_pid() {
     let warning = stop_warning(StopWarningStatus {
         pid: None,
         health_pid: None,
-        pid_alive: false,
+        pid_observation: None,
         handshake_ok: false,
         pid_matches_proxy: false,
         stopped: false,
@@ -531,7 +560,7 @@ fn stop_warning_reports_uncertain_service_status_without_pid() {
     let warning = stop_warning(StopWarningStatus {
         pid: None,
         health_pid: None,
-        pid_alive: false,
+        pid_observation: None,
         handshake_ok: false,
         pid_matches_proxy: false,
         stopped: false,

@@ -17,12 +17,24 @@ pub(crate) enum PidObservation {
 }
 
 impl PidObservation {
+    pub(crate) const fn is_alive(self) -> bool {
+        matches!(self, Self::Alive)
+    }
+
     pub(crate) const fn is_absent(self) -> bool {
         matches!(self, Self::Absent)
     }
 
     pub(crate) const fn may_be_alive(self) -> bool {
         !self.is_absent()
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Alive => "alive",
+            Self::Absent => "absent",
+            Self::Uncertain => "uncertain",
+        }
     }
 }
 
