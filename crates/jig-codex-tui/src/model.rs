@@ -16,7 +16,7 @@ use crate::{Home, HomeUpdate};
 
 mod projection;
 
-pub(crate) use projection::{Projection, UsageSnapshotAssessment};
+pub(crate) use projection::{Projection, UsageSnapshotAssessment, WindowRole};
 use projection::{UsageSnapshotFreshness, WindowProjection};
 
 const UNKNOWN: &str = "-";
@@ -656,7 +656,7 @@ impl RateLimitBucket {
             [only] if self.id == "codex" => format!(
                 "{} {}",
                 only.codex_role()
-                    .map(str::to_owned)
+                    .map(|role| role.to_string())
                     .unwrap_or_else(|| format_duration(only.duration_minutes)),
                 only.remaining()
             ),
@@ -702,7 +702,7 @@ impl RateLimitBucket {
         }
 
         let mut worst: Option<Projection> = None;
-        let mut collecting: Option<(&'static str, f64)> = None;
+        let mut collecting: Option<(WindowRole, f64)> = None;
         let mut incomplete = false;
         for (index, window) in self.windows.iter().enumerate() {
             let role = self.window_role(index);
@@ -744,14 +744,14 @@ impl RateLimitBucket {
             .unwrap_or(Projection::Unavailable)
     }
 
-    pub(crate) fn window_role(&self, index: usize) -> &'static str {
+    pub(crate) fn window_role(&self, index: usize) -> WindowRole {
         if self.id != "codex" {
-            return "window";
+            return WindowRole::Window;
         }
         self.windows
             .get(index)
             .and_then(RateLimitWindow::codex_role)
-            .unwrap_or("window")
+            .unwrap_or(WindowRole::Window)
     }
 
     fn projection_expires_at(&self, observed_at: u64) -> u64 {
@@ -887,10 +887,10 @@ impl RateLimitWindow {
         }
     }
 
-    fn codex_role(&self) -> Option<&'static str> {
+    fn codex_role(&self) -> Option<WindowRole> {
         match self.duration_minutes {
-            Some(300) => Some("5h"),
-            Some(10_080) => Some("weekly"),
+            Some(300) => Some(WindowRole::FiveHour),
+            Some(10_080) => Some(WindowRole::Weekly),
             _ => None,
         }
     }

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use jig_tui::format_percent;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -9,6 +11,23 @@ pub(super) enum WindowProjection {
     Exhausted,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowRole {
+    FiveHour,
+    Weekly,
+    Window,
+}
+
+impl fmt::Display for WindowRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FiveHour => "5h",
+            Self::Weekly => "weekly",
+            Self::Window => "window",
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Projection {
     Loading,
@@ -18,22 +37,22 @@ pub(crate) enum Projection {
     SignedOut,
     Unavailable,
     Collecting {
-        role: &'static str,
+        role: WindowRole,
         remaining_percent: f64,
     },
     Remaining {
-        role: &'static str,
+        role: WindowRole,
         percent: f64,
         partial: bool,
     },
     ExhaustsEarly {
-        role: &'static str,
+        role: WindowRole,
         seconds: u64,
         score: f64,
         partial: bool,
     },
     Exhausted {
-        role: &'static str,
+        role: WindowRole,
         partial: bool,
     },
 }
@@ -104,7 +123,7 @@ impl UsageSnapshotAssessment {
 
 impl Projection {
     pub(super) fn from_window(
-        role: &'static str,
+        role: WindowRole,
         projection: WindowProjection,
         partial: bool,
     ) -> Self {
@@ -130,7 +149,7 @@ impl Projection {
     }
 
     pub(super) fn from_scored_window(
-        role: &'static str,
+        role: WindowRole,
         projection: WindowProjection,
         partial: bool,
     ) -> Option<(Self, f64)> {

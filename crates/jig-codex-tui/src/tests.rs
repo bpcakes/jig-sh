@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::{
     Home, HomeUpdate,
-    model::{App, ExitState, Focus, Inspection, Projection},
+    model::{App, ExitState, Focus, Inspection, Projection, WindowRole},
     render,
     runtime::{Action, handle_key},
 };
@@ -187,7 +187,7 @@ fn projection_collects_data_during_the_first_tenth_of_a_window() {
     assert_eq!(
         app.rows[0].projection(),
         Projection::Collecting {
-            role: "weekly",
+            role: WindowRole::Weekly,
             remaining_percent: 98.0,
         }
     );
@@ -244,7 +244,7 @@ fn valid_projection_survives_an_unavailable_sibling_but_remains_unranked() {
     assert!(matches!(
         app.rows[1].projection(),
         Projection::Remaining {
-            role: "weekly",
+            role: WindowRole::Weekly,
             percent,
             partial: true,
             ..
@@ -281,7 +281,7 @@ fn valid_warning_survives_a_collecting_sibling_but_remains_unranked() {
     assert!(matches!(
         app.rows[1].projection(),
         Projection::ExhaustsEarly {
-            role: "weekly",
+            role: WindowRole::Weekly,
             partial: true,
             ..
         }
@@ -304,7 +304,7 @@ fn exhausted_quota_is_explicit_instead_of_a_future_exhaustion() {
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Exhausted {
-            role: "weekly",
+            role: WindowRole::Weekly,
             partial: false,
             ..
         }
@@ -328,7 +328,7 @@ fn overreported_quota_is_clamped_to_zero_remaining_and_exhausted() {
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Exhausted {
-            role: "weekly",
+            role: WindowRole::Weekly,
             partial: false,
         }
     ));
@@ -337,7 +337,7 @@ fn overreported_quota_is_clamped_to_zero_remaining_and_exhausted() {
 #[test]
 fn sub_minute_overrun_is_not_rounded_up_to_one_minute() {
     let projection = Projection::ExhaustsEarly {
-        role: "weekly",
+        role: WindowRole::Weekly,
         seconds: 10,
         score: -0.1,
         partial: false,
@@ -350,7 +350,7 @@ fn sub_minute_overrun_is_not_rounded_up_to_one_minute() {
 #[test]
 fn rounded_overrun_labels_promote_across_unit_boundaries() {
     let projection = |seconds| Projection::ExhaustsEarly {
-        role: "weekly",
+        role: WindowRole::Weekly,
         seconds,
         score: -0.1,
         partial: false,
@@ -375,7 +375,7 @@ fn exhausted_window_dominates_other_complete_window_projections() {
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Exhausted {
-            role: "5h",
+            role: WindowRole::FiveHour,
             partial: false,
         }
     ));
@@ -476,7 +476,7 @@ fn generic_usage_fallback_keeps_bucket_window_context_without_ranking() {
     assert!(matches!(
         app.rows[0].projection(),
         Projection::Remaining {
-            role: "window",
+            role: WindowRole::Window,
             percent,
             partial: false,
         } if (percent - 50.0).abs() < PROJECTION_TOLERANCE
@@ -532,7 +532,10 @@ fn best_projection_uses_the_tightest_returned_codex_window() {
 
     assert!(matches!(
         app.rows[1].projection(),
-        Projection::ExhaustsEarly { role: "5h", .. }
+        Projection::ExhaustsEarly {
+            role: WindowRole::FiveHour,
+            ..
+        }
     ));
     assert_eq!(app.best_projection_index_at(NOW), Some(0));
 }
