@@ -1,0 +1,1 @@
+Unify projection outcome, freshness, provenance, and recommendation policy; fix time-driven refresh and boundary labels; verify focused and full gates.

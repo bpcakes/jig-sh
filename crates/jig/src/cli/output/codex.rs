@@ -1,4 +1,4 @@
-use jig_tui::sanitize_text;
+use jig_tui::{format_percent, sanitize_text};
 
 use super::{value_bool, value_str};
 
@@ -115,8 +115,8 @@ fn format_codex_limits(value: &serde_json::Value) -> String {
             });
             match windows.as_slice() {
                 [window] if is_codex => format!(
-                    "{label}: weekly {}",
-                    format_codex_window(window).expect("window was checked above")
+                    "{label}: {}",
+                    format_codex_window_with_duration_role(window)
                 ),
                 [window] => format!(
                     "{label}: {}",
@@ -151,17 +151,13 @@ fn format_codex_window_with_duration_role(window: &serde_json::Value) -> String 
 
 fn format_codex_window(window: &serde_json::Value) -> Option<String> {
     let object = window.as_object()?;
-    let used = object
+    let remaining = object
         .get("used_percent")
         .and_then(serde_json::Value::as_f64)
-        .map(|used| {
-            if used.fract() == 0.0 {
-                format!("{used:.0}%")
-            } else {
-                format!("{used:.1}%")
-            }
-        })
-        .unwrap_or_else(|| "-%".into());
+        .filter(|used| used.is_finite() && *used >= 0.0)
+        .map(|used| (100.0 - used).max(0.0))
+        .map(|remaining| format!("{} left", format_percent(remaining)))
+        .unwrap_or_else(|| "remaining unavailable".into());
     let duration = object
         .get("duration_minutes")
         .and_then(serde_json::Value::as_u64)
@@ -173,7 +169,7 @@ fn format_codex_window(window: &serde_json::Value) -> Option<String> {
         .and_then(format_codex_reset)
         .map(|reset| format!(", resets in {reset}"))
         .unwrap_or_default();
-    Some(format!("{used}/{duration}{reset}"))
+    Some(format!("{remaining} ({duration}{reset})"))
 }
 
 fn format_codex_duration(minutes: u64) -> String {
@@ -264,6 +260,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_remaining_uses_bounded_percentage_formatting() {
+        for (remaining, expected) in [
+            (0.04, "0.1% left"),
+            (99.98, "99.9% left"),
+            (100.0, "100% left"),
+            (42.26, "42.3% left"),
+        ] {
+            let used = 100.0 - remaining;
+            let rendered = format_codex_window(&json!({
+                "used_percent": used,
+                "duration_minutes": 60,
+                "resets_at": null
+            }))
+            .unwrap();
+            assert!(rendered.starts_with(expected), "{rendered}");
+        }
+    }
+
+    #[test]
     fn codex_homes_summary_uses_server_window_durations_and_all_buckets() {
         let summary = format_codex_homes_summary(&json!({
             "outcome": "complete",
@@ -303,8 +318,8 @@ mod tests {
         assert!(summary.contains("Codex homes: 1 found (complete)"));
         assert!(summary.contains("* codex-work"));
         assert!(summary.contains("person@example.com"));
-        assert!(summary.contains("codex: weekly 25%/7d"));
-        assert!(summary.contains("Spark: 5.5%/1h"));
+        assert!(summary.contains("codex: weekly 75% left (7d"));
+        assert!(summary.contains("Spark: 94.5% left (1h"));
     }
 
     #[test]
@@ -523,7 +538,7 @@ mod tests {
             }]
         }));
 
-        assert!(summary.contains("codex: 5h 10%/5h, weekly 20%/7d"));
+        assert!(summary.contains("codex: 5h 90% left (5h), weekly 80% left (7d)"));
     }
 
     #[test]
@@ -541,11 +556,11 @@ mod tests {
             }]
         }));
 
-        assert!(summary.contains("codex: 5h 10%/5h, 5h 20%/5h"));
+        assert!(summary.contains("codex: 5h 90% left (5h), 5h 80% left (5h)"));
     }
 
     #[test]
-    fn codex_homes_summary_treats_the_only_codex_window_as_weekly() {
+    fn codex_homes_summary_uses_the_only_codex_windows_reported_duration() {
         let summary = format_codex_homes_summary(&json!({
             "usage_included": true,
             "homes": [{
@@ -559,7 +574,7 @@ mod tests {
             }]
         }));
 
-        assert!(summary.contains("codex: weekly 10%/5h"));
+        assert!(summary.contains("codex: 5h 90% left (5h)"));
     }
 
     #[test]
