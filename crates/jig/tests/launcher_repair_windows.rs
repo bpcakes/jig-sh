@@ -112,14 +112,16 @@ fn git_bash_path_reuse_accepts_a_compatible_pe_jig_binary() {
     let jig = Path::new(env!("CARGO_BIN_EXE_jig"));
     initialize_embedded_repo(jig, &destination, "windows-path-reuse");
 
-    let path = std::env::join_paths(std::iter::once(jig.parent().unwrap().to_path_buf()).chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))
-    .unwrap();
     let version = Command::new(git_bash())
+        .args([
+            "-c",
+            r#"PATH="$(cygpath -u -- "$1"):$PATH"
+export PATH
+exec "$(cygpath -u -- "$2")" --version"#,
+            "jig-path-reuse",
+        ])
+        .arg(jig.parent().unwrap())
         .arg(destination.join("scripts/jig"))
-        .arg("--version")
-        .env("PATH", path)
         .env("JIG_INSTALL_ALLOW_PATH_BINARY", "1")
         .env_remove("JIG_DEV_BIN")
         .current_dir(&destination)
