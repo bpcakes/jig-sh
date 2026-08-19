@@ -9,20 +9,20 @@ This work corrects two findings from the review of `origin/master...HEAD`: the d
 - [x] Establish the documented pre-change baseline.
 - [x] Clarify the destructive repair option and add CLI help coverage.
 - [x] Extract app-stop accounting without changing behavior.
-- [ ] Exclude explicit orphan recoveries from `stopped_apps` and add deterministic regression coverage.
+- [x] Exclude metadata-only retirements from `stopped_apps` at the control-phase boundary and add deterministic regression coverage.
 - [ ] Run all configured gates, record evidence, close the plan, and leave a clean worktree.
 
 ## Surprises & Discoveries
 
 - The app count predates orphan recovery. Recovery later added a second way for a target session to disappear, but the count still equates disappearance with a supervisor-stopped process.
-- `OrphanRecoveryNotice` already carries the exact recovered session ID, so the correction needs no new persisted schema, public API, process probing, or concurrency mechanism.
+- The existing phase boundary is stronger than filtering `OrphanRecoveryNotice` IDs: counting before manual retirement excludes recovery and any future metadata-only retirement path by construction.
 - The scanner flagged the large management module and transparent records, but those size and DTO signals do not establish a useful broader refactor for this bug.
 - The pre-change `fmt`, `clippy`, `contract`, and full `test` Jig checks all passed, providing a green baseline at commit `1a0d1f7`.
 
 ## Decision Log
 
 - Treat the help defect as a local omission. Keep the policy implementation authoritative in `jig-dev-proxy`; add a rendered-help regression test instead of coupling the CLI crate to runtime policy strings.
-- Treat stop accounting as a structural defect. First apply Fowler's **Extract Function** to centralize the existing derived count, then make the behavior change separately by supplying explicit recovery outcomes to that function.
+- Treat stop accounting as a structural defect. First apply Fowler's **Extract Function** to centralize the existing derived count, then move that query to the boundary after authenticated control retirement and before manual metadata retirement.
 - Preserve the current JSON schema and `stopped_sessions` semantics. Only `stopped_apps` is proven incorrect because recovery guarantees that Jig did not signal persisted app PIDs.
 - Use deterministic unit coverage for accounting rather than a timing-dependent process-liveness race.
 
@@ -34,7 +34,7 @@ Pending implementation and verification.
 
 The CLI option is declared in `crates/jig/src/cli/proxy.rs`, with rendered help tests in `crates/jig/src/cli/help_tests.rs`. Stop orchestration and `StopReport` live in `crates/jig-dev-proxy/src/dev_sessions/management.rs`; lifecycle integration coverage lives in `crates/jig-dev-proxy/src/lib/dev_lifecycle.rs`.
 
-`stopped_apps` starts from the number of target app identities that might be alive, then currently sums every target whose registry record is absent from the final snapshot. A dead-orphan recovery also removes the registry record, but deliberately sends no signal to stored PIDs. `OrphanRecoveryNotice.session_id` distinguishes this outcome.
+`stopped_apps` starts from the number of target app identities that might be alive, then originally summed every target whose registry record was absent from the final snapshot. A dead-orphan recovery also removes the registry record, but deliberately sends no signal to stored PIDs. The corrected boundary counts only target records retired before manual orphan/stale cleanup begins.
 
 Compatibility constraints are the Rust 2024 workspace with Rust 1.85 MSRV, existing JSON field names, append-only agent state, and the cross-platform process-safety behavior documented by the proxy crate. No public Rust signature, persistent state format, unsafe code, FFI, async behavior, or dependency should change.
 
@@ -43,7 +43,7 @@ Compatibility constraints are the Rust 2024 workspace with Rust 1.85 MSRV, exist
 1. Capture baseline results using the repository-defined Jig checks with the freshly built development binary.
 2. Update the CLI help to name both unconfirmed preflight cleanup and unprovable spawn history; test the rendered `jig dev stop` help; run the Jig crate's narrow test; commit.
 3. Extract the existing stopped-app calculation into one private function without changing inputs or semantics; run proxy tests; commit.
-4. Pass explicit recovery notices into the extracted query and exclude those session IDs; add a deterministic test covering stopped, recovered, and remaining sessions; run proxy tests; commit.
+4. Evaluate the extracted query immediately after the authenticated control-retirement wait and before manual orphan/stale retirement; add a deterministic test naming that phase contract; run proxy tests; commit.
 5. Rebuild the development binary, run work checks and configured gates, inspect receipts and the final diff, close structured work, and commit generated evidence separately.
 
 ## Concrete steps
@@ -62,7 +62,7 @@ Run from `/Users/aa/Documents/jig-sh`:
 
 - Rendered `jig dev stop` help names both ambiguity classes and retains the no-signal warning.
 - Existing stop reports are unchanged by the extraction commit.
-- A recovered orphan session contributes zero to `stopped_apps`, while a removed non-recovery target retains its initial maybe-live app count and a remaining target contributes zero.
+- A target still registered after the authenticated control phase contributes zero to `stopped_apps`, even when later recovery removes its metadata; a target retired during that control phase retains its initial maybe-live app count.
 - `scripts/jig check test`, `check fmt`, `check clippy`, and `check contract` all pass with the current development binary.
 - `git diff --check` passes and the worktree is clean after separate commits.
 
@@ -72,4 +72,4 @@ All source edits are local and independently committed. If a slice fails its nar
 
 ## Interfaces and dependencies
 
-No dependency or external service changes. The internal source of recovery identity is `OrphanRecoveryNotice.session_id`; the public JSON interface remains `StopReport` with `matched_sessions`, `stopped_sessions`, `stopped_apps`, `sessions`, `recoveries`, and `warnings`.
+No dependency or external service changes. The internal accounting boundary is the target-session snapshot taken after the authenticated stop wait and before manual metadata retirement; the public JSON interface remains `StopReport` with `matched_sessions`, `stopped_sessions`, `stopped_apps`, `sessions`, `recoveries`, and `warnings`.

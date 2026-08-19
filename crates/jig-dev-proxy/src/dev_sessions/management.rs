@@ -405,6 +405,13 @@ fn stop_session_ids_interruptible_inner(
             return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
         }
     };
+    // Only retirement before this boundary acknowledges the authenticated stop path. The
+    // branches below may retire metadata, but deliberately do not signal persisted app PIDs.
+    let unretired_after_control_ids = remaining
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<HashSet<_>>();
+    let stopped_apps = count_stopped_apps(initially_maybe_live_apps, &unretired_after_control_ids);
     for session in remaining {
         if cancelled() {
             return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
@@ -471,7 +478,6 @@ fn stop_session_ids_interruptible_inner(
     let ok = blocking_warnings.is_empty() && sessions.is_empty();
     let warnings = blocking_warnings;
     let stopped_sessions = matched_sessions.saturating_sub(sessions.len());
-    let stopped_apps = count_stopped_apps(initially_maybe_live_apps, &remaining_ids);
     Ok(StopSessionOutcome::Complete(StopReport {
         ok,
         matched_sessions,
@@ -485,11 +491,11 @@ fn stop_session_ids_interruptible_inner(
 
 fn count_stopped_apps(
     initially_maybe_live_apps: HashMap<String, usize>,
-    remaining_ids: &HashSet<&str>,
+    unretired_after_control_ids: &HashSet<&str>,
 ) -> usize {
     initially_maybe_live_apps
         .into_iter()
-        .filter(|(session_id, _)| !remaining_ids.contains(session_id.as_str()))
+        .filter(|(session_id, _)| !unretired_after_control_ids.contains(session_id.as_str()))
         .map(|(_, app_count)| app_count)
         .sum()
 }
@@ -1009,13 +1015,13 @@ mod tests {
     }
 
     #[test]
-    fn stopped_app_count_includes_removed_targets_and_excludes_remaining_targets() {
+    fn stopped_app_count_only_includes_targets_retired_during_control_phase() {
         let initially_maybe_live_apps =
-            HashMap::from([("stopped".to_owned(), 2), ("remaining".to_owned(), 3)]);
-        let remaining_ids = HashSet::from(["remaining"]);
+            HashMap::from([("retired".to_owned(), 2), ("unretired".to_owned(), 3)]);
+        let unretired_after_control_ids = HashSet::from(["unretired"]);
 
         assert_eq!(
-            count_stopped_apps(initially_maybe_live_apps, &remaining_ids),
+            count_stopped_apps(initially_maybe_live_apps, &unretired_after_control_ids),
             2
         );
     }
