@@ -93,6 +93,10 @@ impl UsageSnapshotAssessment {
         self.freshness == UsageSnapshotFreshness::Stale
     }
 
+    pub(crate) fn has_sample(self) -> bool {
+        self.freshness != UsageSnapshotFreshness::NotSampled
+    }
+
     pub(crate) fn recommendation(self) -> Option<Recommendation> {
         self.recommendation
     }

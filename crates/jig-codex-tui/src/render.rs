@@ -396,11 +396,13 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                 key_value("Type", &details.account_type),
                 key_value("Plan", &details.plan),
                 key_value("Status", &details.status),
-                key_value(
-                    "Usage sample",
-                    &format!("{} · reopen to refresh", details.sample_age_label_at(now)),
-                ),
             ]);
+            if let Some(sample_age) = details.usage_sample_age_label_at(now) {
+                lines.push(key_value(
+                    "Usage sample",
+                    &format!("{sample_age} · reopen to refresh"),
+                ));
+            }
             for bucket in &details.buckets {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -563,7 +565,7 @@ fn projection_style(projection: Projection) -> Style {
 
 fn stale_snapshot_label(label: String, stale: bool) -> String {
     if stale {
-        format!("{label} · stale")
+        format!("stale · {label}")
     } else {
         label
     }

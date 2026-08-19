@@ -602,12 +602,15 @@ impl Details {
         )
     }
 
-    pub(crate) fn sample_age_label_at(&self, now: u64) -> String {
+    pub(crate) fn usage_sample_age_label_at(&self, now: u64) -> Option<String> {
+        if !self.usage_snapshot_assessment_at(now).has_sample() {
+            return None;
+        }
         let age = now.saturating_sub(self.observed_at);
         if age < 60 {
-            "just now".into()
+            Some("just now".into())
         } else {
-            format!("{} ago", format_countdown(age))
+            Some(format!("{} ago", format_countdown(age)))
         }
     }
 }

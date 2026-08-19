@@ -95,9 +95,9 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("stale"), "{rendered}");
-    assert!(rendered.contains("weekly 75% left · stale"), "{rendered}");
+    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
     assert!(
-        rendered.contains("At current pace: ~50% left at reset · stale"),
+        rendered.contains("stale ·     At current pace: ~50% left at reset"),
         "{rendered}"
     );
     assert!(!rendered.contains("+*"), "{rendered}");
@@ -120,11 +120,85 @@ fn stale_remaining_is_labeled_even_when_projection_metadata_is_unavailable() {
         .unwrap();
 
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("weekly 75% left · stale"), "{rendered}");
+    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
     assert!(
-        rendered.contains("projection unavailable · stale"),
+        rendered.contains("stale ·     At current pace: projection unavailable"),
         "{rendered}"
     );
+}
+
+#[test]
+fn common_width_lists_keep_stale_state_visible() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    for width in [100, 120] {
+        let backend = TestBackend::new(width, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = app(homes());
+        app.apply_update_at(
+            projected_update(0, 25.0, 10_080, 0.5, OBSERVED_AT),
+            OBSERVED_AT,
+        );
+
+        terminal
+            .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+            .unwrap();
+
+        let rendered = terminal.backend().to_string();
+        let account_row = rendered
+            .lines()
+            .find(|line| line.contains("stale · weekly"))
+            .expect("inspected account row should remain visible");
+        assert!(
+            account_row.matches("stale ·").count() >= 2,
+            "{width}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn details_only_label_an_observed_usage_sample() {
+    const NOW: u64 = 2_000_000_000;
+    let cases = [
+        json!({
+            "account": null,
+            "status": "not logged in",
+            "rate_limits": [],
+            "inspection_error": null,
+            "usage_error": null
+        }),
+        json!({
+            "account": null,
+            "status": "unknown",
+            "rate_limits": [],
+            "inspection_error": "app-server unavailable",
+            "usage_error": null
+        }),
+        json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "person@example.com",
+                "plan_type": "pro"
+            },
+            "status": "authenticated",
+            "rate_limits": [],
+            "inspection_error": null,
+            "usage_error": "usage unavailable"
+        }),
+    ];
+
+    for details in cases {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = app(homes());
+        app.apply_update_at(HomeUpdate { index: 0, details }, NOW);
+
+        terminal
+            .draw(|frame| render::draw_at(frame, &app, NOW))
+            .unwrap();
+
+        let rendered = terminal.backend().to_string();
+        assert!(!rendered.contains("Usage sample"), "{rendered}");
+    }
 }
 
 #[test]
@@ -143,9 +217,9 @@ fn usage_errors_are_not_mislabeled_as_stale_snapshots() {
 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("usage error"), "{rendered}");
-    assert!(!rendered.contains("usage error · stale"), "{rendered}");
+    assert!(!rendered.contains("stale · usage error"), "{rendered}");
     assert!(
-        !rendered.contains("error: usage unavailable · stale"),
+        !rendered.contains("stale · error: usage unavailable"),
         "{rendered}"
     );
 }
