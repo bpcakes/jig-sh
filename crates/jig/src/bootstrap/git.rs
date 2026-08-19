@@ -928,19 +928,7 @@ fn prepare_private_git_template(
         require_absent_git_template_redirect(&private.join(relative))?;
     }
     require_empty_or_absent_alternates(&private.join("objects/info/alternates"))?;
-    #[cfg(windows)]
-    let private = git_template_environment_path(&private)?;
-    Ok(Some(private))
-}
-
-#[cfg(windows)]
-fn git_template_environment_path(path: &Path) -> Result<PathBuf> {
-    crate::shell::windows_legacy_compatible_path(path).with_context(|| {
-        format!(
-            "Git template path is incompatible with Git for Windows: {}",
-            path.display()
-        )
-    })
+    Ok(Some(crate::shell::git_env_path(&private)?))
 }
 
 fn inherited_git_template_dir() -> Option<std::ffi::OsString> {

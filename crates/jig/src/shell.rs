@@ -1,10 +1,14 @@
-use std::{ffi::OsStr, process::Command};
+use std::{
+    ffi::OsStr,
+    io,
+    path::{Path, PathBuf},
+    process::Command,
+};
 #[cfg(windows)]
 use std::{
     ffi::OsString,
-    io,
     os::windows::ffi::OsStrExt,
-    path::{Component, Path, PathBuf, Prefix},
+    path::{Component, Prefix},
 };
 
 pub(crate) const OPTIONAL_CARGO_COMMAND_PREFIX: &str = "if [ -f Cargo.toml ]; then ";
@@ -50,6 +54,16 @@ pub(crate) fn is_exported_bash_function_environment_key(key: &OsStr) -> bool {
 #[cfg(windows)]
 pub(crate) fn windows_bash_compatible_path(path: &Path) -> io::Result<PathBuf> {
     windows_legacy_compatible_path(path)
+}
+
+#[cfg(windows)]
+pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
+    windows_legacy_compatible_path(path)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
+    Ok(path.to_path_buf())
 }
 
 #[cfg(windows)]

@@ -912,7 +912,6 @@ mod tests {
         std::fs::write(temp.path().join("old name.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "old name.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         run_git(temp.path(), &["mv", "old name.txt", "new name.txt"]);
         std::fs::write(temp.path().join("loose note.txt"), "untracked").unwrap();
 
@@ -938,7 +937,6 @@ mod tests {
         std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "old\n").unwrap();
         run_git(temp.path(), &["add", "."]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         std::fs::write(temp.path().join("src.rs"), "one\ntwo\n").unwrap();
         std::fs::write(
             temp.path().join(".agent/state/receipts.jsonl"),
@@ -1011,7 +1009,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         std::fs::write(temp.path().join("new.txt"), "one").unwrap();
         let first = repo_worktree_fingerprint(temp.path()).unwrap();
         std::fs::write(temp.path().join("new.txt"), "two").unwrap();
@@ -1033,7 +1030,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         let large_path = temp.path().join("large.bin");
         let fixed_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         std::fs::write(
@@ -1075,7 +1071,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         let first_target = temp.path().join("outside-one");
         let second_target = temp.path().join("outside-two");
         let link = temp.path().join("link");
