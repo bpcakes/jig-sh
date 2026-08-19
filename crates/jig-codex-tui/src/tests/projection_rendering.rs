@@ -355,6 +355,24 @@ fn compact_layout_keeps_the_projection_visible() {
 }
 
 #[test]
+fn filtered_compact_layout_keeps_a_row_visible_at_the_minimum_size() {
+    const NOW: u64 = 2_000_000_000;
+    let backend = TestBackend::new(46, 12);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 25.0, 10_080, 0.5, NOW), NOW);
+    app.searching = true;
+    app.push_filter('c');
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("person@example.com"), "{rendered}");
+}
+
+#[test]
 fn compact_layout_names_inspection_errors_and_signed_out_accounts() {
     const NOW: u64 = 2_000_000_000;
     let backend = TestBackend::new(50, 20);

@@ -15,6 +15,11 @@ const WARN: Color = Color::Yellow;
 const BAD: Color = Color::Red;
 const MIN_WIDTH: u16 = 46;
 const MIN_HEIGHT: u16 = 12;
+const STACKED_LIST_PERCENT: u32 = 58;
+const STACKED_ROW_HEIGHT: u16 = 2;
+const TABLE_CHROME_HEIGHT: u16 = 3;
+const MIN_STACKED_LIST_HEIGHT: u16 = TABLE_CHROME_HEIGHT + STACKED_ROW_HEIGHT;
+const MIN_STACKED_DETAILS_HEIGHT: u16 = 2;
 
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     draw_at(frame, app, unix_timestamp_now());
@@ -58,9 +63,10 @@ pub(crate) fn draw_at(frame: &mut Frame, app: &App, now: u64) {
         draw_list(frame, content[0], app, now, best);
         draw_details(frame, content[1], app, now, best);
     } else {
+        let list_height = stacked_list_height(outer[1].height);
         let content = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .constraints([Constraint::Length(list_height), Constraint::Min(0)])
             .split(outer[1]);
         draw_list(frame, content[0], app, now, best);
         draw_details(frame, content[1], app, now, best);
@@ -240,7 +246,7 @@ fn draw_projection_list(
                 ))
                 .style(stale_projection_style(projection, projection_stale)),
             ])
-            .height(2)
+            .height(STACKED_ROW_HEIGHT)
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
@@ -306,7 +312,7 @@ fn draw_compact_list(
                 ))
                 .style(stale_projection_style(projection, projection_stale)),
             ])
-            .height(2)
+            .height(STACKED_ROW_HEIGHT)
             .style(match row.inspection() {
                 Inspection::Ready(details) if details.inspection_error.is_some() => {
                     Style::default().fg(BAD)
@@ -508,6 +514,14 @@ fn detail_title(app: &App) -> &'static str {
     } else {
         "Selected home"
     }
+}
+
+fn stacked_list_height(content_height: u16) -> u16 {
+    let proportional = (u32::from(content_height) * STACKED_LIST_PERCENT + 50) / 100;
+    let proportional = u16::try_from(proportional).unwrap_or(u16::MAX);
+    proportional
+        .max(MIN_STACKED_LIST_HEIGHT)
+        .min(content_height.saturating_sub(MIN_STACKED_DETAILS_HEIGHT))
 }
 
 fn panel(title: &str) -> Block<'_> {
