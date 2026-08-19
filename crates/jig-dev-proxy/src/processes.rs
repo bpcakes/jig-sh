@@ -174,18 +174,36 @@ pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path)
 }
 
 #[derive(Debug)]
-struct Interrupted(TerminationReason);
+struct Interrupted {
+    reason: TerminationReason,
+    recoveries: Option<Value>,
+}
 
 impl fmt::Display for Interrupted {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Interrupted by {}", self.0.label())
+        write!(formatter, "Interrupted by {}", self.reason.label())
     }
 }
 
 impl StdError for Interrupted {}
 
 pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
-    Interrupted(reason).into()
+    Interrupted {
+        reason,
+        recoveries: None,
+    }
+    .into()
+}
+
+pub(crate) fn interruption_error_with_recoveries(
+    reason: TerminationReason,
+    recoveries: Value,
+) -> anyhow::Error {
+    Interrupted {
+        reason,
+        recoveries: Some(recoveries),
+    }
+    .into()
 }
 
 pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {
@@ -193,7 +211,15 @@ pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn interruption_reason(error: &anyhow::Error) -> Option<TerminationReason> {
-    error.downcast_ref::<Interrupted>().map(|error| error.0)
+    error
+        .downcast_ref::<Interrupted>()
+        .map(|error| error.reason)
+}
+
+pub(crate) fn interruption_recoveries(error: &anyhow::Error) -> Option<&Value> {
+    error
+        .downcast_ref::<Interrupted>()
+        .and_then(|error| error.recoveries.as_ref())
 }
 
 pub(crate) fn run_app(

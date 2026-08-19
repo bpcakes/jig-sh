@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use self::management::stop_session_ids_interruptible;
+use self::management::{OrphanRecoveryNotice, stop_session_ids_interruptible};
 use self::process_identity::{capture_process_identity, process_identity_may_be_alive};
 use crate::session_control::SessionControlServer;
 use crate::state::{
@@ -31,6 +31,7 @@ pub(crate) struct DevSessionRuntime {
     supervisor: DevProcessIdentity,
     control: SessionControlServer,
     pending_cleanup: Arc<AtomicUsize>,
+    replacement_recoveries: Vec<OrphanRecoveryNotice>,
 }
 
 pub(crate) struct DevCleanupLease {
@@ -107,6 +108,7 @@ impl DevSessionRuntime {
                 })
                 .collect(),
         };
+        let mut replacement_recoveries = Vec::new();
 
         let first_claim = match claim_session_interruptible(&store, &record, cancelled)? {
             LockOutcome::Acquired(claim) => claim,
@@ -133,6 +135,7 @@ impl DevSessionRuntime {
                 for recovery in &stop.recoveries {
                     eprintln!("jig dev --replace recovery: {}", recovery.message);
                 }
+                replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
                     bail!(
                         "Could not replace the existing Jig dev session safely: {}",
@@ -156,11 +159,16 @@ impl DevSessionRuntime {
             supervisor,
             control,
             pending_cleanup: Arc::new(AtomicUsize::new(0)),
+            replacement_recoveries,
         }))
     }
 
     pub(crate) fn requested_stop(&self) -> bool {
         self.control.stop_requested()
+    }
+
+    pub(crate) fn replacement_recoveries(&self) -> &[OrphanRecoveryNotice] {
+        &self.replacement_recoveries
     }
 
     pub(crate) fn arm_cleanup(&self) -> DevCleanupLease {

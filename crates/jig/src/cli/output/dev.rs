@@ -33,6 +33,13 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
     if value_bool(value, "proxy_failed").unwrap_or(false) {
         lines.push("  Proxy: failed".into());
     }
+    if let Some(recoveries) = value["recoveries"].as_array() {
+        for recovery in recoveries {
+            if let Some(message) = value_str(recovery, "message") {
+                lines.push(format!("  Recovery: {message}"));
+            }
+        }
+    }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
 }
@@ -182,6 +189,23 @@ mod tests {
 
         assert!(summary.contains("Dev: stopped (dev stop)"));
         assert!(!summary.contains("Dev: ok"));
+    }
+
+    #[test]
+    fn dev_summary_reports_replacement_recovery() {
+        let summary = format_dev_summary(&json!({
+            "ok": true,
+            "first_exit": {"app": "web", "exit_status": 0},
+            "proxy_failed": false,
+            "routes": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_123': retired a dead orphan"
+            }]
+        }));
+
+        assert!(summary.contains("Dev: ok"));
+        assert!(summary.contains("Recovery: session 'dev_123': retired a dead orphan"));
     }
 
     #[test]

@@ -20,14 +20,14 @@ use super::{
     child_exit_status, choose_app_port, cleanup_children, command_argv,
     dev_app_environment_interruptible, ensure_not_interrupted_with,
     ensure_process_routes_supported, ensure_proxy_running_interruptible, force_cleanup_requested,
-    interruption_error, interruption_reason, is_interruption, lock_outcome_or_interruption,
-    new_route_cleanup_deadline, preflight_process_routes, prepare_certs_for_hosts_interruptible,
-    print_dev_table, process_route_parts, proxy_health_failed, proxy_ready_interruptible,
-    publish_process_route_interruptible, require_cleanup_for_success, select_interruption,
-    select_primary_outcome, spawn_child_with_cleanup_report, start_termination_cleanup_session,
-    terminate_and_reap_logged, termination_requested, try_wait_preserving_process_group,
-    validate_dev_specs_for_session, validate_explicit_ports, validate_process_routes,
-    wait_for_app_ready_interruptible,
+    interruption_error, interruption_error_with_recoveries, interruption_reason, is_interruption,
+    lock_outcome_or_interruption, new_route_cleanup_deadline, preflight_process_routes,
+    prepare_certs_for_hosts_interruptible, print_dev_table, process_route_parts,
+    proxy_health_failed, proxy_ready_interruptible, publish_process_route_interruptible,
+    require_cleanup_for_success, select_interruption, select_primary_outcome,
+    spawn_child_with_cleanup_report, start_termination_cleanup_session, terminate_and_reap_logged,
+    termination_requested, try_wait_preserving_process_group, validate_dev_specs_for_session,
+    validate_explicit_ports, validate_process_routes, wait_for_app_ready_interruptible,
 };
 
 pub(crate) fn run_apps_with_preflight(
@@ -90,7 +90,7 @@ pub(crate) fn run_apps_with_preflight(
         &requested_reason,
     )?;
     ensure_not_interrupted_with(requested_reason)?;
-    let result = run_apps_with_session_and_interrupt_probe(
+    let mut result = run_apps_with_session_and_interrupt_probe(
         specs,
         settings,
         current_exe,
@@ -98,6 +98,16 @@ pub(crate) fn run_apps_with_preflight(
         &session,
         requested_reason,
     );
+    if let Ok(value) = &mut result {
+        attach_replacement_recoveries(value, &session)?;
+    } else if !session.replacement_recoveries().is_empty() {
+        if let Some(reason) = result.as_ref().err().and_then(interruption_reason) {
+            result = Err(interruption_error_with_recoveries(
+                reason,
+                serde_json::to_value(session.replacement_recoveries())?,
+            ));
+        }
+    }
     if result
         .as_ref()
         .err()
@@ -110,6 +120,20 @@ pub(crate) fn run_apps_with_preflight(
         );
     }
     result
+}
+
+fn attach_replacement_recoveries(value: &mut Value, session: &DevSessionRuntime) -> Result<()> {
+    if session.replacement_recoveries().is_empty() {
+        return Ok(());
+    }
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("development result was not a JSON object"))?;
+    object.insert(
+        "recoveries".to_owned(),
+        serde_json::to_value(session.replacement_recoveries())?,
+    );
+    Ok(())
 }
 
 pub(super) fn normalize_preflight_result(

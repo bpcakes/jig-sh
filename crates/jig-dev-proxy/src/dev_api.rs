@@ -50,8 +50,9 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
             let Some(reason) = processes::interruption_reason(&error) else {
                 return Err(error);
             };
+            let recoveries = processes::interruption_recoveries(&error).cloned();
             if reason.is_requested_stop() {
-                return Ok(json!({
+                let mut output = json!({
                     "ok": true,
                     "interrupted": false,
                     "stopped": true,
@@ -62,9 +63,13 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                     "first_exit": null,
                     "proxy_failed": false,
                     "routes": [],
-                }));
+                });
+                if let Some(recoveries) = recoveries {
+                    output["recoveries"] = recoveries;
+                }
+                return Ok(output);
             }
-            Ok(json!({
+            let mut output = json!({
                 "ok": false,
                 "interrupted": true,
                 "exit_status": reason.exit_status(),
@@ -73,7 +78,11 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                 "first_exit": null,
                 "proxy_failed": false,
                 "routes": [],
-            }))
+            });
+            if let Some(recoveries) = recoveries {
+                output["recoveries"] = recoveries;
+            }
+            Ok(output)
         }
         result => result,
     }

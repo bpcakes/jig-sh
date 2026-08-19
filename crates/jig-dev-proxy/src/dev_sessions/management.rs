@@ -52,6 +52,28 @@ enum AmbiguousOrphanPolicy {
     Forget,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForgottenCleanupAmbiguity {
+    PreflightCleanup,
+    SpawnHistory,
+}
+
+impl ForgottenCleanupAmbiguity {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::PreflightCleanup => "preflight-cleanup",
+            Self::SpawnHistory => "spawn-history",
+        }
+    }
+
+    const fn diagnostic(self) -> &'static str {
+        match self {
+            Self::PreflightCleanup => "unconfirmed preflight cleanup",
+            Self::SpawnHistory => "ambiguous spawn history",
+        }
+    }
+}
+
 pub(crate) fn status(request: DevStatusRequest) -> Result<Value> {
     let repo = CanonicalRepo::resolve(&request.repo_name, &request.root)?;
     let Some(store) = StateStore::resolve_existing(request.state_dir.clone())? else {
@@ -115,10 +137,10 @@ pub(super) struct StopReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub(super) struct OrphanRecoveryNotice {
+pub(crate) struct OrphanRecoveryNotice {
     session_id: String,
     kind: &'static str,
-    forgot_ambiguous_spawn: bool,
+    forgotten_ambiguities: Vec<&'static str>,
     apps: Vec<OrphanRecoveryApp>,
     pub(super) message: String,
 }
@@ -167,7 +189,10 @@ impl OrphanRecoveryApp {
 }
 
 impl OrphanRecoveryNotice {
-    fn from_session(session: &DevSessionRecord, forgot_ambiguous_spawn: bool) -> Self {
+    fn from_session(
+        session: &DevSessionRecord,
+        forgotten_ambiguities: &[ForgottenCleanupAmbiguity],
+    ) -> Self {
         let apps = session
             .apps
             .iter()
@@ -183,11 +208,16 @@ impl OrphanRecoveryNotice {
         } else {
             format!("; retired app diagnostics: {app_diagnostics}")
         };
-        let (kind, message) = if forgot_ambiguous_spawn {
+        let forgotten_diagnostic = forgotten_ambiguities
+            .iter()
+            .map(|ambiguity| ambiguity.diagnostic())
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let (kind, message) = if !forgotten_ambiguities.is_empty() {
             (
                 "ambiguous-orphan-forgotten",
                 format!(
-                    "session '{}': explicitly forgot a dead-supervisor orphan with ambiguous spawn history and retired its exact-owned stale routes without signaling persisted PIDs; an unrecorded process may still be running{diagnostic_suffix}",
+                    "session '{}': explicitly forgot a dead-supervisor orphan with {forgotten_diagnostic} and retired its exact-owned stale routes without signaling persisted PIDs; an unrecorded process may still be running{diagnostic_suffix}",
                     session.session_id
                 ),
             )
@@ -203,7 +233,10 @@ impl OrphanRecoveryNotice {
         Self {
             session_id: session.session_id.clone(),
             kind,
-            forgot_ambiguous_spawn,
+            forgotten_ambiguities: forgotten_ambiguities
+                .iter()
+                .map(|ambiguity| ambiguity.label())
+                .collect(),
             apps,
             message,
         }
@@ -435,21 +468,14 @@ fn retire_orphan(
             return Ok(RetireDeadOrphanOutcome::AlreadyAbsent);
         };
         let current = &sessions[index];
-        let forgot_ambiguous_spawn = policy == AmbiguousOrphanPolicy::Forget
-            && current.cleanup_required
-            && current.apps.iter().any(|app| {
-                matches!(
-                    app.spawn_evidence(),
-                    DevSessionAppSpawnEvidence::Pending | DevSessionAppSpawnEvidence::Untracked
-                )
-            });
+        let forgotten_ambiguities = forgotten_cleanup_ambiguities(current, policy);
         if let OrphanRecoveryAssessment::Retain(reason) =
             orphan_recovery_assessment(current, policy)
         {
             return Ok(RetireDeadOrphanOutcome::Retained(reason));
         }
 
-        let recovery = OrphanRecoveryNotice::from_session(current, forgot_ambiguous_spawn);
+        let recovery = OrphanRecoveryNotice::from_session(current, &forgotten_ambiguities);
         routes.retain(|route| !session_owns_route(current, route));
         sessions.remove(index);
         Ok(RetireDeadOrphanOutcome::Retired(recovery))
@@ -472,7 +498,7 @@ fn orphan_recovery_assessment(
     if !session.cleanup_required {
         return OrphanRecoveryAssessment::Retirable;
     }
-    if session.preflight_cleanup_pending {
+    if session.preflight_cleanup_pending && policy == AmbiguousOrphanPolicy::Retain {
         return OrphanRecoveryAssessment::Retain(OrphanRetentionReason::PreflightCleanupPending);
     }
     for app in &session.apps {
@@ -542,13 +568,45 @@ fn retention_warning(
             "legacy app '{app}' has no process identity and predates durable spawn-state tracking"
         ),
     };
+    let repair = matches!(
+        reason,
+        OrphanRetentionReason::PreflightCleanupPending
+            | OrphanRetentionReason::AppSpawnPending(_)
+            | OrphanRetentionReason::AppSpawnUntracked(_)
+    )
+    .then_some(
+        "; after independently confirming that no unrecorded process remains, retry with `jig dev stop --forget-ambiguous-orphans`",
+    )
+    .unwrap_or_default();
     (
         session.session_id.clone(),
         format!(
-            "session '{}': {detail}; the registry entry was retained without signaling numeric PIDs",
+            "session '{}': {detail}; the registry entry was retained without signaling numeric PIDs{repair}",
             session.session_id
         ),
     )
+}
+
+fn forgotten_cleanup_ambiguities(
+    session: &DevSessionRecord,
+    policy: AmbiguousOrphanPolicy,
+) -> Vec<ForgottenCleanupAmbiguity> {
+    if policy == AmbiguousOrphanPolicy::Retain || !session.cleanup_required {
+        return Vec::new();
+    }
+    let mut ambiguities = Vec::new();
+    if session.preflight_cleanup_pending {
+        ambiguities.push(ForgottenCleanupAmbiguity::PreflightCleanup);
+    }
+    if session.apps.iter().any(|app| {
+        matches!(
+            app.spawn_evidence(),
+            DevSessionAppSpawnEvidence::Pending | DevSessionAppSpawnEvidence::Untracked
+        )
+    }) {
+        ambiguities.push(ForgottenCleanupAmbiguity::SpawnHistory);
+    }
+    ambiguities
 }
 
 fn control_retire_timeout(targets: &[DevSessionRecord]) -> Duration {

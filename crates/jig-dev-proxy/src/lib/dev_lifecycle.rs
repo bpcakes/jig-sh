@@ -39,6 +39,23 @@ fn interrupted_dev_result_is_structured_after_cleanup() {
 }
 
 #[test]
+fn interrupted_dev_result_preserves_replacement_recoveries() {
+    let reason = processes::TerminationReason::requested_stop();
+    let recoveries = json!([{
+        "kind": "dead-orphan-retired",
+        "message": "session 'dev_example': retired a dead orphan"
+    }]);
+    let output = dev_api::normalize_dev_result(Err(processes::interruption_error_with_recoveries(
+        reason,
+        recoveries.clone(),
+    )))
+    .unwrap();
+
+    assert_eq!(output["stopped"], true);
+    assert_eq!(output["recoveries"], recoveries);
+}
+
+#[test]
 fn dev_result_normalization_preserves_success_and_ordinary_errors() {
     let success = json!({ "ok": true, "routes": [] });
     assert_eq!(
@@ -567,7 +584,7 @@ fn dead_unconfirmed_cleanup_retires_the_orphan_and_only_its_owned_routes() {
     assert_eq!(stopped["warnings"], json!([]));
     let recovery = &stopped["recoveries"][0];
     assert_eq!(recovery["kind"], "dead-orphan-retired");
-    assert_eq!(recovery["forgot_ambiguous_spawn"], false);
+    assert_eq!(recovery["forgotten_ambiguities"], json!([]));
     assert_eq!(recovery["apps"][0]["name"], "web");
     assert_eq!(recovery["apps"][0]["target_port"], 4005);
     assert_eq!(recovery["apps"][0]["pid"], u32::MAX - 1);
@@ -716,6 +733,9 @@ fn replace_recovers_a_dead_orphan_before_claiming_the_same_app() {
         dev_sessions::DevSessionRuntime::start(store.clone(), "demo", temp.path(), &[spec], true)
             .unwrap();
 
+    let recoveries = serde_json::to_value(replacement.replacement_recoveries()).unwrap();
+    assert_eq!(recoveries[0]["kind"], "dead-orphan-retired");
+    assert_eq!(recoveries[0]["apps"][0]["name"], "web");
     let snapshot = store.snapshot_dev_state().unwrap();
     assert_eq!(snapshot.sessions.len(), 1);
     assert_ne!(snapshot.sessions[0].session_id, orphan_id);
@@ -825,7 +845,7 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
     let stopped = dev_stop(DevStopRequest::new(
         "demo",
         temp.path().to_path_buf(),
-        Some(state_dir),
+        Some(state_dir.clone()),
     ))
     .unwrap();
     assert_eq!(stopped["ok"], false);
@@ -838,6 +858,7 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
             .any(|warning| {
                 warning.as_str().is_some_and(|warning| {
                     warning.contains("development preflight cleanup was not confirmed")
+                        && warning.contains("--forget-ambiguous-orphans")
                 })
             })
     );
@@ -860,6 +881,23 @@ fn unconfirmed_preflight_cleanup_blocks_ordinary_stop_and_replacement() {
     let persisted = store.snapshot_dev_state().unwrap();
     assert_eq!(persisted.sessions.len(), 1);
     assert!(persisted.sessions[0].preflight_cleanup_pending);
+
+    let forgotten = dev_stop(
+        DevStopRequest::new("demo", temp.path().to_path_buf(), Some(state_dir))
+            .with_forget_ambiguous_orphans(true),
+    )
+    .unwrap();
+    assert_eq!(forgotten["ok"], true);
+    assert_eq!(forgotten["stopped_sessions"], 1);
+    assert_eq!(
+        forgotten["recoveries"][0]["forgotten_ambiguities"],
+        json!(["preflight-cleanup"])
+    );
+    assert!(
+        forgotten["recoveries"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unconfirmed preflight cleanup"))
+    );
 }
 
 #[test]
@@ -936,7 +974,7 @@ fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identit
     assert_eq!(forgotten["warnings"], json!([]));
     let recovery = &forgotten["recoveries"][0];
     assert_eq!(recovery["kind"], "ambiguous-orphan-forgotten");
-    assert_eq!(recovery["forgot_ambiguous_spawn"], true);
+    assert_eq!(recovery["forgotten_ambiguities"], json!(["spawn-history"]));
     assert_eq!(recovery["apps"][0]["name"], "web");
     assert_eq!(recovery["apps"][0]["target_port"], 4005);
     assert_eq!(recovery["apps"][0]["pid"], json!(null));
