@@ -17,7 +17,7 @@ The root cause is structural rather than a pair of unrelated omissions. Recovery
 - [x] (2026-08-19) Moved recovery-bearing error context to the command/outcome boundary without behavior change; all 562 `jig-dev-proxy` tests pass.
 - [x] (2026-08-19) Preserved typed recovery evidence through partial stop, cancellation, second-claim conflict, and second-claim error exits; added failure and cancellation regressions, and passed all 564 proxy tests plus strict Clippy.
 - [x] (2026-08-19) Emitted the standard structured error object for recovery-bearing and cleanup-unconfirmed dev failures, kept the human renderer backward-compatible, documented the contract, and passed focused tests, all 564 proxy tests, and strict Clippy for both affected crates.
-- [ ] Run all configured gates with `JIG_DEV_BIN=target/debug/jig`, inspect receipts and diff, and finish structured work.
+- [x] (2026-08-19) Ran all configured gates with `JIG_DEV_BIN=target/debug/jig`; the locked full workspace tests and contract gate passed with fresh receipts, and harness-native formatting and Clippy checks also passed.
 
 ## Surprises & Discoveries
 
@@ -45,7 +45,9 @@ The root cause is structural rather than a pair of unrelated omissions. Recovery
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The lifecycle boundary now owns recovery evidence independently of process-runtime construction. Stop and start phases use closed outcomes that carry recoveries on cancellation, errors after a completed recovery are decorated at one phase boundary, and the second claim cannot silently discard prior state mutations. Recovery-bearing failures and cleanup-unconfirmed failures now share the normal CLI `{kind, message}` error envelope, while human output remains tolerant of the prior string form.
+
+The work was delivered as one behavior-preserving ownership refactor followed by two independently tested behavior commits. All 564 proxy tests passed after each behavior slice. Final verification used the freshly rebuilt development binary: the locked full workspace suite passed, the contract gate was fresh and passed, and harness-native format and Clippy checks passed. The sole bootstrap failure seen in the initial baseline passed both its isolated rerun and the final full suite, so no unrelated bootstrap change was made.
 
 ## Context and Orientation
 
