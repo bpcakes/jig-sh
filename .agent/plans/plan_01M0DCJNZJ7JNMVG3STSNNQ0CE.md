@@ -60,7 +60,17 @@ The root cause is structural. Backend identity is currently carried through `bac
 
 ## Outcomes & Retrospective
 
-Work is in progress. At completion this section will list observable generated-project results, validation receipts, commits, and any deferred design work.
+The five implementation slices now align the Go scaffold's API contract, database lifecycle, CI prerequisites, migration policy, and validation boundaries:
+
+- `e15a7a8` makes generated Go tests reject stale Huma OpenAPI and makes web CI observe the full application contract.
+- `6625e52` gives local setup, integration tests, and Playwright one idempotent create-and-migrate database path with optional `.env` loading.
+- `eb24310` makes fresh Go CI runners install Jig's Rust prerequisite, cache from `go.mod`, and observe sqlc query changes.
+- `e0b30a9` introduces backend-neutral `migration_dir` policy with a legacy Rust fallback and enables migration immutability for Go/PostgreSQL.
+- `8625a3c` closes module-validation, formatting-error, wizard-compatibility, documentation, and backend-aware path-reservation gaps.
+
+The repository's full configured test suite passed as receipt `receipt_01M0DEWZHVZDW8W0ATTBD9N42J`; formatting, Clippy, and contract checks passed as `receipt_01M0DEX7WHEWM19BMP9DA02B12`, `receipt_01M0DEXPZJ380F6TYNPVNPQ82E`, and `receipt_01M0DEXQ1MV26MF1JV4F313YJM`. Fresh generated database-free and PostgreSQL repositories passed bootstrap, Go format/vet/locked tests, contract checks, TypeScript typechecking, sqlc drift, disposable PostgreSQL integration, and a Chromium Playwright smoke test against the live Go API.
+
+The work confirms the original diagnosis: the individual defects were omissions at several call sites, but their common cause was structural—backend lifecycle capabilities were implicit and therefore easy for templates, workflows, runtime policy, and documentation to disagree about. The fixes reduce future bug surface by sharing runtime entrypoints, selecting optional source at file boundaries, deriving reservations from the rendering selector, and naming migration policy independently of Rust/SQLx.
 
 ## Context and Orientation
 
