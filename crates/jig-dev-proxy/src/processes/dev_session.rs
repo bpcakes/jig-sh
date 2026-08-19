@@ -185,7 +185,10 @@ pub(super) fn finish_preflight_cleanup(
     result: DevPreflightResult,
     termination_reason: &impl Fn() -> Option<TerminationReason>,
 ) -> Result<()> {
-    if result.is_ok() {
+    let cleanup_was_confirmed = result
+        .as_ref()
+        .map_or_else(DevPreflightError::cleanup_was_confirmed, |()| true);
+    if cleanup_was_confirmed {
         let cancelled = || termination_reason().is_some();
         lock_outcome_or_interruption(
             session
@@ -194,11 +197,6 @@ pub(super) fn finish_preflight_cleanup(
             termination_reason,
         )
         .context("Failed to persist confirmed development preflight cleanup")?;
-    } else if result
-        .as_ref()
-        .is_err_and(|error| error.cleanup_was_confirmed())
-    {
-        cleanup.confirm();
     }
     normalize_preflight_result(result, termination_reason())
 }

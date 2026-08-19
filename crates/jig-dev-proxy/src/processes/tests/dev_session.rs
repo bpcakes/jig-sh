@@ -125,6 +125,83 @@ fn confirmed_preflight_cleanup_is_persisted_before_pending_interruption() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn failed_preflight_with_confirmed_cleanup_clears_the_durable_obligation() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = AppRunSpec::new(
+        "web",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
+        "web.demo.localhost",
+    )
+    .with_proxy(false);
+    let session = DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let mut cleanup = session.begin_preflight_cleanup().unwrap();
+
+    let error = finish_preflight_cleanup(
+        &session,
+        &mut cleanup,
+        Err(DevPreflightError::failed(anyhow::anyhow!(
+            "preflight failed"
+        ))),
+        &|| None,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "preflight failed");
+    assert!(session.cleanup_is_confirmed());
+    let sessions = store.snapshot_dev_state().unwrap().sessions;
+    assert_eq!(sessions.len(), 1);
+    assert!(!sessions[0].preflight_cleanup_pending);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn cancelled_preflight_with_confirmed_cleanup_clears_the_durable_obligation() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = AppRunSpec::new(
+        "web",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
+        "web.demo.localhost",
+    )
+    .with_proxy(false);
+    let session = DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let mut cleanup = session.begin_preflight_cleanup().unwrap();
+    let reason = TerminationReason::requested_stop();
+
+    let error = finish_preflight_cleanup(
+        &session,
+        &mut cleanup,
+        Err(DevPreflightError::cancelled()),
+        &|| Some(reason),
+    )
+    .unwrap_err();
+
+    assert_eq!(interruption_reason(&error), Some(reason));
+    assert!(session.cleanup_is_confirmed());
+    let sessions = store.snapshot_dev_state().unwrap().sessions;
+    assert_eq!(sessions.len(), 1);
+    assert!(!sessions[0].preflight_cleanup_pending);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn requested_stop_with_unconfirmed_cleanup_is_a_structured_failure() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
