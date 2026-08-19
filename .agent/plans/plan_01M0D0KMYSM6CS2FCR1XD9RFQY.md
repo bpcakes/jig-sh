@@ -15,7 +15,7 @@ The root cause is structural rather than a pair of unrelated omissions. Recovery
 - [x] (2026-08-19) Established a green baseline: `cargo check -p jig-dev-proxy`, `cargo test -p jig-dev-proxy`, and `cargo test -p jig-sh --lib`.
 - [x] (2026-08-19) Ran the configured workspace baseline: 2,025 of 2,026 selected tests passed; the sole bootstrap failure passed immediately when rerun in isolation and is tracked below.
 - [x] (2026-08-19) Moved recovery-bearing error context to the command/outcome boundary without behavior change; all 562 `jig-dev-proxy` tests pass.
-- [ ] Preserve typed recovery evidence through partial stop, cancellation, second-claim conflict, and second-claim error exits.
+- [x] (2026-08-19) Preserved typed recovery evidence through partial stop, cancellation, second-claim conflict, and second-claim error exits; added failure and cancellation regressions, and passed all 564 proxy tests plus strict Clippy.
 - [ ] Emit one stable structured error object for every dev failure and keep human output compatible.
 - [ ] Run all configured gates with `JIG_DEV_BIN=target/debug/jig`, inspect receipts and diff, and finish structured work.
 
@@ -38,6 +38,9 @@ The root cause is structural rather than a pair of unrelated omissions. Recovery
   Date/Author: 2026-08-19 / Codex
 - Decision: separate the preparatory refactor, recovery behavior fix, and JSON contract fix into independently verified commits.
   Rationale: this follows the two-hats rule and keeps regressions bisectable.
+  Date/Author: 2026-08-19 / Codex
+- Decision: represent cancellation as a closed outcome carrying accumulated recovery notices at both the stop and session-start phase boundaries.
+  Rationale: a boolean-like cancellation result cannot express already-committed recovery side effects; the closed outcomes make omission visible in every caller match and preserve notices without prematurely serializing them.
   Date/Author: 2026-08-19 / Codex
 
 ## Outcomes & Retrospective

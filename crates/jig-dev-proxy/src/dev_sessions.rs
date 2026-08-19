@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use self::management::{OrphanRecoveryNotice, stop_session_ids_interruptible};
+use self::management::{StopSessionOutcome, stop_session_ids_interruptible};
 use self::process_identity::{capture_process_identity, process_identity_may_be_alive};
 use crate::session_control::SessionControlServer;
 use crate::state::{
@@ -20,7 +20,7 @@ use crate::types::{AppRunSpec, Route, RouteMode};
 mod management;
 mod process_identity;
 
-pub(crate) use management::{status, stop};
+pub(crate) use management::{OrphanRecoveryNotice, status, stop};
 
 const SESSION_ID_RANDOM_BYTES: usize = 16;
 
@@ -37,6 +37,11 @@ pub(crate) struct DevSessionRuntime {
 pub(crate) struct DevCleanupLease {
     pending_cleanup: Arc<AtomicUsize>,
     confirmed: bool,
+}
+
+pub(crate) enum DevSessionStartOutcome {
+    Claimed(DevSessionRuntime),
+    Cancelled(Vec<OrphanRecoveryNotice>),
 }
 
 impl DevCleanupLease {
@@ -60,8 +65,8 @@ impl DevSessionRuntime {
         replace: bool,
     ) -> Result<Self> {
         match Self::start_interruptible(store, repo_name, root, specs, replace, &|| false)? {
-            LockOutcome::Acquired(session) => Ok(session),
-            LockOutcome::Cancelled => {
+            DevSessionStartOutcome::Claimed(session) => Ok(session),
+            DevSessionStartOutcome::Cancelled(_) => {
                 bail!("uncancelled Jig dev session startup was cancelled")
             }
         }
@@ -74,7 +79,7 @@ impl DevSessionRuntime {
         specs: &[AppRunSpec],
         replace: bool,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<Self>> {
+    ) -> Result<DevSessionStartOutcome> {
         let repo = CanonicalRepo::resolve(repo_name, root)?;
         let session_id = new_session_id()?;
         let control = SessionControlServer::start(&session_id)?;
@@ -112,7 +117,7 @@ impl DevSessionRuntime {
 
         let first_claim = match claim_session_interruptible(&store, &record, cancelled)? {
             LockOutcome::Acquired(claim) => claim,
-            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+            LockOutcome::Cancelled => return Ok(DevSessionStartOutcome::Cancelled(Vec::new())),
         };
         match first_claim {
             ClaimOutcome::Claimed => {}
@@ -125,34 +130,55 @@ impl DevSessionRuntime {
                 }
                 let target_ids = conflicts.same_repo_session_ids();
                 if cancelled() {
-                    return Ok(LockOutcome::Cancelled);
+                    return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                 }
                 let stop =
                     match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled)? {
-                        LockOutcome::Acquired(stop) => stop,
-                        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                        StopSessionOutcome::Complete(stop) => stop,
+                        StopSessionOutcome::Cancelled(recoveries) => {
+                            replacement_recoveries.extend(recoveries);
+                            return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                        }
                     };
                 for recovery in &stop.recoveries {
                     eprintln!("jig dev --replace recovery: {}", recovery.message);
                 }
                 replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
-                    bail!(
+                    let error = anyhow!(
                         "Could not replace the existing Jig dev session safely: {}",
                         stop.warnings.join("; ")
                     );
+                    return Err(crate::dev_outcome::with_recovery_notices(
+                        error,
+                        replacement_recoveries,
+                    ));
                 }
-                match claim_session_interruptible(&store, &record, cancelled)? {
-                    LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                let second_claim = match claim_session_interruptible(&store, &record, cancelled) {
+                    Ok(claim) => claim,
+                    Err(error) => {
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            error,
+                            replacement_recoveries,
+                        ));
+                    }
+                };
+                match second_claim {
+                    LockOutcome::Cancelled => {
+                        return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                    }
                     LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
                     LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
-                        return Err(conflicts.concurrent_launch_error());
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            conflicts.concurrent_launch_error(),
+                            replacement_recoveries,
+                        ));
                     }
                 }
             }
         }
 
-        Ok(LockOutcome::Acquired(Self {
+        Ok(DevSessionStartOutcome::Claimed(Self {
             store,
             session_id,
             repo_root_identity: repo.root_identity,

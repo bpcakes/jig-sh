@@ -3,10 +3,27 @@ use std::fmt;
 
 use serde_json::Value;
 
+use crate::dev_sessions::OrphanRecoveryNotice;
+
+#[derive(Debug)]
+pub(crate) enum DevRecoveries {
+    Serialized(Value),
+    Notices(Vec<OrphanRecoveryNotice>),
+}
+
+impl DevRecoveries {
+    pub(crate) fn to_value(&self) -> serde_json::Result<Value> {
+        match self {
+            Self::Serialized(value) => Ok(value.clone()),
+            Self::Notices(notices) => serde_json::to_value(notices),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DevErrorWithRecoveries {
     source: anyhow::Error,
-    recoveries: Value,
+    recoveries: DevRecoveries,
 }
 
 impl fmt::Display for DevErrorWithRecoveries {
@@ -26,10 +43,28 @@ impl StdError for DevErrorWithRecoveries {
 }
 
 pub(crate) fn with_recoveries(source: anyhow::Error, recoveries: Value) -> anyhow::Error {
-    DevErrorWithRecoveries { source, recoveries }.into()
+    DevErrorWithRecoveries {
+        source,
+        recoveries: DevRecoveries::Serialized(recoveries),
+    }
+    .into()
 }
 
-pub(crate) fn parts(error: &anyhow::Error) -> (&anyhow::Error, Option<&Value>) {
+pub(crate) fn with_recovery_notices(
+    source: anyhow::Error,
+    recoveries: Vec<OrphanRecoveryNotice>,
+) -> anyhow::Error {
+    if recoveries.is_empty() {
+        return source;
+    }
+    DevErrorWithRecoveries {
+        source,
+        recoveries: DevRecoveries::Notices(recoveries),
+    }
+    .into()
+}
+
+pub(crate) fn parts(error: &anyhow::Error) -> (&anyhow::Error, Option<&DevRecoveries>) {
     error
         .downcast_ref::<DevErrorWithRecoveries>()
         .map_or((error, None), |context| {

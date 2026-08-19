@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use crate::dev_outcome;
-use crate::dev_sessions::{DevCleanupLease, DevSessionRuntime};
+use crate::dev_sessions::{DevCleanupLease, DevSessionRuntime, DevSessionStartOutcome};
 use crate::state::{
     DevProcessIdentity, LockOutcome, ProcessRouteOwnership, StateStore, now_ms, process_start_token,
 };
@@ -60,7 +60,7 @@ pub(crate) fn run_apps_with_preflight(
             return Err(interruption_error(reason));
         }
     };
-    let session = lock_outcome_or_interruption(
+    let session = claimed_dev_session_or_interruption(
         DevSessionRuntime::start_interruptible(
             store.clone(),
             repo_name,
@@ -72,6 +72,22 @@ pub(crate) fn run_apps_with_preflight(
         &termination_requested,
     )?;
     run_claimed_dev_session(specs, settings, current_exe, store, &session, preflight)
+}
+
+fn claimed_dev_session_or_interruption(
+    outcome: DevSessionStartOutcome,
+    requested_reason: &impl Fn() -> Option<TerminationReason>,
+) -> Result<DevSessionRuntime> {
+    match outcome {
+        DevSessionStartOutcome::Claimed(session) => Ok(session),
+        DevSessionStartOutcome::Cancelled(recoveries) => {
+            let error = requested_reason().map_or_else(
+                || anyhow::anyhow!("Jig dev session startup was cancelled without a stop request"),
+                interruption_error,
+            );
+            Err(dev_outcome::with_recovery_notices(error, recoveries))
+        }
+    }
 }
 
 fn run_claimed_dev_session(
@@ -798,7 +814,7 @@ pub(super) fn run_apps_with_interrupt_probe(
         .ok_or_else(|| anyhow::anyhow!("test dev session requires at least one app"))?;
     let store = StateStore::resolve(settings.state_dir.clone())?;
     let cancelled = || interrupt_requested().is_some();
-    let session = lock_outcome_or_interruption(
+    let session = claimed_dev_session_or_interruption(
         DevSessionRuntime::start_interruptible(
             store.clone(),
             "test",

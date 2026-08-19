@@ -1291,6 +1291,144 @@ fn partial_stop_separates_successful_recoveries_from_blocking_warnings() {
 }
 
 #[test]
+fn failed_replacement_preserves_recoveries_completed_before_the_failure() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let web_spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
+    let admin_spec = lifecycle_spec(temp.path(), "admin", "admin.demo.localhost", false);
+
+    let recoverable = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&web_spec),
+        false,
+    )
+    .unwrap();
+    let _recoverable_cleanup = recoverable.arm_cleanup();
+    drop(recoverable);
+
+    let blocked = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&admin_spec),
+        false,
+    )
+    .unwrap();
+    let _blocked_cleanup = blocked.arm_cleanup();
+    drop(blocked);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            for session in sessions {
+                session.supervisor = state::DevProcessIdentity {
+                    pid: u32::MAX,
+                    start_token: Some("retired-supervisor".into()),
+                };
+                if let Some(app) = session.apps.iter_mut().find(|app| app.name == "admin") {
+                    app.process = Some(state::DevProcessIdentity {
+                        pid: std::process::id(),
+                        start_token: state::process_start_token(std::process::id()),
+                    });
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let error = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[web_spec, admin_spec],
+        true,
+    )
+    .err()
+    .expect("the live admin app must block replacement");
+    let failed = dev_api::normalize_dev_result(Err(error)).unwrap();
+
+    assert_eq!(failed["ok"], false);
+    assert_eq!(failed["interrupted"], false);
+    assert_eq!(failed["recoveries"].as_array().unwrap().len(), 1);
+    assert_eq!(failed["recoveries"][0]["apps"][0]["name"], "web");
+    assert!(failed["error"].as_str().unwrap().contains("admin"));
+
+    let snapshot = store.snapshot_dev_state().unwrap();
+    assert_eq!(snapshot.sessions.len(), 1);
+    assert_eq!(snapshot.sessions[0].apps[0].name, "admin");
+}
+
+#[test]
+fn cancelled_replacement_preserves_recoveries_completed_before_cancellation() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let web_spec = lifecycle_spec(temp.path(), "web", "web.demo.localhost", false);
+    let admin_spec = lifecycle_spec(temp.path(), "admin", "admin.demo.localhost", false);
+
+    for spec in [&web_spec, &admin_spec] {
+        let runtime = dev_sessions::DevSessionRuntime::start(
+            store.clone(),
+            "demo",
+            temp.path(),
+            std::slice::from_ref(spec),
+            false,
+        )
+        .unwrap();
+        let _unconfirmed_cleanup = runtime.arm_cleanup();
+        drop(runtime);
+    }
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            for session in sessions {
+                session.supervisor = state::DevProcessIdentity {
+                    pid: u32::MAX,
+                    start_token: Some("retired-supervisor".into()),
+                };
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    let sessions_path = store.root().join("dev-sessions.json");
+    let cancel_after_first_recovery = || {
+        std::fs::read_to_string(&sessions_path)
+            .ok()
+            .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+            .and_then(|document| document["sessions"].as_array().map(Vec::len))
+            == Some(1)
+    };
+    let outcome = dev_sessions::DevSessionRuntime::start_interruptible(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[web_spec, admin_spec],
+        true,
+        &cancel_after_first_recovery,
+    )
+    .unwrap();
+    let recoveries = match outcome {
+        dev_sessions::DevSessionStartOutcome::Cancelled(recoveries) => recoveries,
+        dev_sessions::DevSessionStartOutcome::Claimed(_) => {
+            panic!("replacement must observe cancellation after the first recovery")
+        }
+    };
+    let output = dev_api::normalize_dev_result(Err(dev_outcome::with_recovery_notices(
+        processes::interruption_error(processes::TerminationReason::requested_stop()),
+        recoveries,
+    )))
+    .unwrap();
+
+    assert_eq!(output["stopped"], true);
+    assert_eq!(output["recoveries"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        store.snapshot_dev_state().unwrap().sessions.len(),
+        1,
+        "the cancellation must happen between the two orphan recoveries"
+    );
+}
+
+#[test]
 fn confirmed_cleanup_retires_the_exact_session() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();

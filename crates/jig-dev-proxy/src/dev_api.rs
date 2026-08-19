@@ -54,6 +54,7 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                 let Some(recoveries) = recoveries else {
                     return Err(error);
                 };
+                let recoveries = recoveries.to_value()?;
                 return Ok(json!({
                     "ok": false,
                     "interrupted": false,
@@ -68,7 +69,9 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                     "recoveries": recoveries,
                 }));
             };
-            let recoveries = recoveries.cloned();
+            let recoveries = recoveries
+                .map(dev_outcome::DevRecoveries::to_value)
+                .transpose()?;
             if processes::interruption_cleanup_unconfirmed(&error) {
                 let mut output = json!({
                     "ok": false,

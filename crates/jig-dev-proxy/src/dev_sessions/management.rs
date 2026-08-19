@@ -136,6 +136,11 @@ pub(super) struct StopReport {
     pub(super) warnings: Vec<String>,
 }
 
+pub(super) enum StopSessionOutcome {
+    Complete(StopReport),
+    Cancelled(Vec<OrphanRecoveryNotice>),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct OrphanRecoveryNotice {
     session_id: String,
@@ -268,8 +273,8 @@ fn stop_session_ids(
     policy: AmbiguousOrphanPolicy,
 ) -> Result<StopReport> {
     match stop_session_ids_interruptible_with_policy(store, repo, target_ids, policy, &|| false)? {
-        LockOutcome::Acquired(report) => Ok(report),
-        LockOutcome::Cancelled => bail!("uncancelled Jig dev stop was cancelled"),
+        StopSessionOutcome::Complete(report) => Ok(report),
+        StopSessionOutcome::Cancelled(_) => bail!("uncancelled Jig dev stop was cancelled"),
     }
 }
 
@@ -278,7 +283,7 @@ pub(super) fn stop_session_ids_interruptible(
     repo: &CanonicalRepo,
     target_ids: &BTreeSet<String>,
     cancelled: &impl Fn() -> bool,
-) -> Result<LockOutcome<StopReport>> {
+) -> Result<StopSessionOutcome> {
     stop_session_ids_interruptible_with_policy(
         store,
         repo,
@@ -294,9 +299,31 @@ fn stop_session_ids_interruptible_with_policy(
     target_ids: &BTreeSet<String>,
     policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
-) -> Result<LockOutcome<StopReport>> {
+) -> Result<StopSessionOutcome> {
+    let mut recoveries = Vec::new();
+    match stop_session_ids_interruptible_inner(
+        store,
+        repo,
+        target_ids,
+        policy,
+        cancelled,
+        &mut recoveries,
+    ) {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => Err(crate::dev_outcome::with_recovery_notices(error, recoveries)),
+    }
+}
+
+fn stop_session_ids_interruptible_inner(
+    store: &StateStore,
+    repo: &CanonicalRepo,
+    target_ids: &BTreeSet<String>,
+    policy: AmbiguousOrphanPolicy,
+    cancelled: &impl Fn() -> bool,
+    recoveries: &mut Vec<OrphanRecoveryNotice>,
+) -> Result<StopSessionOutcome> {
     if target_ids.is_empty() {
-        return Ok(LockOutcome::Acquired(StopReport {
+        return Ok(StopSessionOutcome::Complete(StopReport {
             ok: true,
             ..StopReport::default()
         }));
@@ -314,7 +341,9 @@ fn stop_session_ids_interruptible_with_policy(
         Ok(targets)
     })? {
         LockOutcome::Acquired(targets) => targets,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        LockOutcome::Cancelled => {
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+        }
     };
     let matched_sessions = targets.len();
     let initially_live_apps = targets
@@ -336,7 +365,7 @@ fn stop_session_ids_interruptible_with_policy(
     let mut control_warnings = Vec::new();
     for session in &targets {
         if cancelled() {
-            return Ok(LockOutcome::Cancelled);
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
         }
         match request_stop(
             session.control.port,
@@ -366,18 +395,19 @@ fn stop_session_ids_interruptible_with_policy(
         control_retire_timeout(&targets),
         cancelled,
     )? {
-        return Ok(LockOutcome::Cancelled);
+        return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
     }
 
     let mut lifecycle_warnings = Vec::new();
-    let mut recoveries = Vec::new();
     let remaining = match current_target_sessions(store, repo, target_ids, cancelled)? {
         LockOutcome::Acquired(remaining) => remaining,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        LockOutcome::Cancelled => {
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+        }
     };
     for session in remaining {
         if cancelled() {
-            return Ok(LockOutcome::Cancelled);
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
         }
         match (
             session.cleanup_required,
@@ -385,7 +415,9 @@ fn stop_session_ids_interruptible_with_policy(
         ) {
             (true, OrphanRecoveryAssessment::Retirable) => {
                 match retire_orphan(store, &session, policy, cancelled)? {
-                    LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                    LockOutcome::Cancelled => {
+                        return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+                    }
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retired(recovery)) => {
                         recoveries.push(recovery);
                     }
@@ -393,7 +425,7 @@ fn stop_session_ids_interruptible_with_policy(
                     LockOutcome::Acquired(RetireDeadOrphanOutcome::Retained(reason)) => {
                         lifecycle_warnings.push(retention_warning(&session, &reason));
                         if !mark_orphaned(store, &session, cancelled)? {
-                            return Ok(LockOutcome::Cancelled);
+                            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
                         }
                     }
                 }
@@ -401,19 +433,21 @@ fn stop_session_ids_interruptible_with_policy(
             (_, OrphanRecoveryAssessment::Retain(reason)) => {
                 lifecycle_warnings.push(retention_warning(&session, &reason));
                 if !mark_orphaned(store, &session, cancelled)? {
-                    return Ok(LockOutcome::Cancelled);
+                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
                 }
             }
             (false, OrphanRecoveryAssessment::Retirable) => {
                 if !remove_exact_session(store, &session, cancelled)? {
-                    return Ok(LockOutcome::Cancelled);
+                    return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
                 }
             }
         }
     }
     let snapshot = match store.snapshot_dev_state_interruptible(cancelled)? {
         LockOutcome::Acquired(snapshot) => snapshot,
-        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+        LockOutcome::Cancelled => {
+            return Ok(StopSessionOutcome::Cancelled(std::mem::take(recoveries)));
+        }
     };
     let sessions = snapshot
         .sessions
@@ -442,13 +476,13 @@ fn stop_session_ids_interruptible_with_policy(
         .filter(|(session_id, _)| !remaining_ids.contains(session_id.as_str()))
         .map(|(_, app_count)| app_count)
         .sum();
-    Ok(LockOutcome::Acquired(StopReport {
+    Ok(StopSessionOutcome::Complete(StopReport {
         ok,
         matched_sessions,
         stopped_sessions,
         stopped_apps,
         sessions,
-        recoveries,
+        recoveries: std::mem::take(recoveries),
         warnings,
     }))
 }
