@@ -45,8 +45,8 @@ fn interrupted_dev_result_preserves_replacement_recoveries() {
         "kind": "dead-orphan-retired",
         "message": "session 'dev_example': retired a dead orphan"
     }]);
-    let output = dev_api::normalize_dev_result(Err(processes::interruption_error_with_recoveries(
-        reason,
+    let output = dev_api::normalize_dev_result(Err(processes::dev_error_with_recoveries(
+        processes::interruption_error(reason),
         recoveries.clone(),
     )))
     .unwrap();
@@ -736,6 +736,16 @@ fn replace_recovers_a_dead_orphan_before_claiming_the_same_app() {
     let recoveries = serde_json::to_value(replacement.replacement_recoveries()).unwrap();
     assert_eq!(recoveries[0]["kind"], "dead-orphan-retired");
     assert_eq!(recoveries[0]["apps"][0]["name"], "web");
+
+    let failed = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
+        Err(anyhow::anyhow!("replacement launch failed")),
+        &replacement,
+    ))
+    .unwrap();
+    assert_eq!(failed["ok"], false);
+    assert_eq!(failed["interrupted"], false);
+    assert_eq!(failed["error"], "replacement launch failed");
+    assert_eq!(failed["recoveries"], recoveries);
 
     let stopped = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
         Err(processes::interruption_error(

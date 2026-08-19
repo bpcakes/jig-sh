@@ -33,6 +33,8 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
     }
     if value_bool(value, "cleanup_unconfirmed").unwrap_or(false) {
         lines.push("  Cleanup: unconfirmed; session retained for inspection".into());
+    } else if let Some(error) = value_str(value, "error") {
+        lines.push(format!("  Error: {error}"));
     }
     append_recovery_messages(&mut lines, value);
     lines.push("  full report: rerun with --json".into());
@@ -230,6 +232,25 @@ mod tests {
         }));
 
         assert!(summary.contains("Dev: ok"));
+        assert!(summary.contains("Recovery: session 'dev_123': retired a dead orphan"));
+    }
+
+    #[test]
+    fn dev_summary_reports_failure_after_replacement_recovery() {
+        let summary = format_dev_summary(&json!({
+            "ok": false,
+            "error": "replacement launch failed",
+            "first_exit": null,
+            "proxy_failed": false,
+            "routes": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_123': retired a dead orphan"
+            }]
+        }));
+
+        assert!(summary.contains("Dev: failed"));
+        assert!(summary.contains("Error: replacement launch failed"));
         assert!(summary.contains("Recovery: session 'dev_123': retired a dead orphan"));
     }
 

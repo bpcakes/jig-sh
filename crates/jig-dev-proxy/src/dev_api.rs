@@ -49,7 +49,22 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
         Err(error) => {
             let (source, recoveries) = processes::dev_error_parts(&error);
             let Some(reason) = processes::interruption_reason(source) else {
-                return Err(error);
+                let Some(recoveries) = recoveries else {
+                    return Err(error);
+                };
+                return Ok(json!({
+                    "ok": false,
+                    "interrupted": false,
+                    "stopped": false,
+                    "error": format!("{source:#}"),
+                    "exit_status": 1,
+                    "exit_signal": null,
+                    "termination_signal": null,
+                    "first_exit": null,
+                    "proxy_failed": false,
+                    "routes": [],
+                    "recoveries": recoveries,
+                }));
             };
             let recoveries = recoveries.cloned();
             if processes::interruption_cleanup_unconfirmed(&error) {

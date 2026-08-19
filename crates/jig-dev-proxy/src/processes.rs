@@ -222,13 +222,6 @@ pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
     interruption_error_with_state(reason, InterruptionCleanup::Confirmed)
 }
 
-pub(crate) fn interruption_error_with_recoveries(
-    reason: TerminationReason,
-    recoveries: Value,
-) -> anyhow::Error {
-    dev_error_with_recoveries(interruption_error(reason), recoveries)
-}
-
 pub(crate) fn interruption_error_with_unconfirmed_cleanup(
     reason: TerminationReason,
     recoveries: Option<Value>,
