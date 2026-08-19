@@ -58,6 +58,8 @@ pub(crate) struct DevSessionApp {
     pub(crate) target_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) target_port: Option<u16>,
+    // A missing v1 field is legacy evidence, not proof that no spawn occurred.
+    // `spawn_evidence` deliberately maps this default to `Untracked`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) spawn_state_tracked: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -131,6 +133,8 @@ pub(crate) struct DevSessionRecord {
     pub(crate) updated_at_ms: u64,
     #[serde(default)]
     pub(crate) cleanup_required: bool,
+    // Older v1 writers can omit this narrower obligation. The retained
+    // `cleanup_required` flag and untracked app evidence remain fail-closed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) preflight_cleanup_pending: bool,
     pub(crate) supervisor: DevProcessIdentity,

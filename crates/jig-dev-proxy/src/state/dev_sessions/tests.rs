@@ -166,18 +166,28 @@ fn mutation_writes_versioned_private_state_and_round_trips() {
 }
 
 #[test]
-fn records_without_preflight_cleanup_state_remain_compatible() {
+fn older_v1_writer_degrades_new_cleanup_evidence_to_legacy_ambiguity() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let mut expected = session("dev_legacy_cleanup_evidence");
+    expected.preflight_cleanup_pending = true;
+    expected.apps[0]
+        .prepare_spawn(&expected.session_id, 4_005)
+        .unwrap();
     let mut document = serde_json::to_value(DevSessionsDocument {
         version: VERSION,
-        sessions: &[session("dev_legacy_preflight")],
+        sessions: std::slice::from_ref(&expected),
     })
     .unwrap();
     document["sessions"][0]
         .as_object_mut()
         .unwrap()
         .remove("preflight_cleanup_pending");
+    for app in document["sessions"][0]["apps"].as_array_mut().unwrap() {
+        let app = app.as_object_mut().unwrap();
+        app.remove("spawn_state_tracked");
+        app.remove("spawn_pending");
+    }
     write_private_fixture(
         &store.dev_sessions_path(),
         serde_json::to_vec_pretty(&document).unwrap(),
@@ -186,7 +196,17 @@ fn records_without_preflight_cleanup_state_remain_compatible() {
     let persisted = store.snapshot_dev_state().unwrap();
 
     assert_eq!(persisted.sessions.len(), 1);
-    assert!(!persisted.sessions[0].preflight_cleanup_pending);
+    let legacy = &persisted.sessions[0];
+    assert!(legacy.cleanup_required);
+    assert!(!legacy.preflight_cleanup_pending);
+    assert_eq!(
+        legacy.apps[0].spawn_evidence(),
+        DevSessionAppSpawnEvidence::Untracked
+    );
+    assert!(matches!(
+        legacy.apps[1].spawn_evidence(),
+        DevSessionAppSpawnEvidence::Registered(_)
+    ));
 }
 
 #[test]
