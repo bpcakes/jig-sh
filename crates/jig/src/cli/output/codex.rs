@@ -1,4 +1,4 @@
-use jig_tui::{format_percent, sanitize_text};
+use jig_tui::{format_countdown, format_percent, sanitize_text};
 
 use super::{value_bool, value_str};
 
@@ -115,8 +115,8 @@ fn format_codex_limits(value: &serde_json::Value) -> String {
             });
             match windows.as_slice() {
                 [window] if is_codex => format!(
-                    "{label}: weekly {}",
-                    format_codex_window(window).expect("window was checked above")
+                    "{label}: {}",
+                    format_codex_window_with_duration_role(window)
                 ),
                 [window] => format!(
                     "{label}: {}",
@@ -195,13 +195,7 @@ fn format_codex_reset_from(timestamp: u64, now: u64) -> Option<String> {
     let remaining = timestamp
         .checked_sub(now)
         .filter(|remaining| *remaining > 0)?;
-    if remaining < 60 * 60 {
-        Some(format!("{}m", remaining / 60))
-    } else if remaining < 60 * 60 * 24 {
-        Some(format!("{}h", remaining / (60 * 60)))
-    } else {
-        Some(format!("{}d", remaining / (60 * 60 * 24)))
-    }
+    Some(format_countdown(remaining))
 }
 
 pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
@@ -560,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_homes_summary_treats_the_only_codex_window_as_weekly() {
+    fn codex_homes_summary_uses_the_only_codex_windows_reported_duration() {
         let summary = format_codex_homes_summary(&json!({
             "usage_included": true,
             "homes": [{
@@ -574,11 +568,12 @@ mod tests {
             }]
         }));
 
-        assert!(summary.contains("codex: weekly 90% left (5h)"));
+        assert!(summary.contains("codex: 5h 90% left (5h)"));
     }
 
     #[test]
     fn codex_reset_uses_epoch_seconds_and_omits_elapsed_resets() {
+        assert_eq!(format_codex_reset_from(10_059, 10_000), Some("<1m".into()));
         assert_eq!(
             format_codex_reset_from(10_000 + 90 * 60, 10_000),
             Some("1h".into())

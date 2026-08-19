@@ -1,6 +1,6 @@
-use jig_tui::format_percent;
+use std::fmt;
 
-use super::format_early;
+use jig_tui::format_percent;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum WindowProjection {
@@ -9,6 +9,27 @@ pub(super) enum WindowProjection {
     Remaining { percent: f64 },
     ExhaustsEarly { seconds: u64, score: f64 },
     Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowRole {
+    FiveHour,
+    Weekly,
+    DurationMinutes(u64),
+    Window,
+}
+
+impl fmt::Display for WindowRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::FiveHour => "5h",
+            Self::Weekly => "weekly",
+            Self::DurationMinutes(minutes) => {
+                return formatter.write_str(&super::format_duration(Some(*minutes)));
+            }
+            Self::Window => "window",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,22 +41,22 @@ pub(crate) enum Projection {
     SignedOut,
     Unavailable,
     Collecting {
-        role: &'static str,
+        role: WindowRole,
         remaining_percent: f64,
     },
     Remaining {
-        role: &'static str,
+        role: WindowRole,
         percent: f64,
         partial: bool,
     },
     ExhaustsEarly {
-        role: &'static str,
+        role: WindowRole,
         seconds: u64,
         score: f64,
         partial: bool,
     },
     Exhausted {
-        role: &'static str,
+        role: WindowRole,
         partial: bool,
     },
 }
@@ -46,19 +67,67 @@ pub(crate) struct Recommendation {
     pub(crate) label: &'static str,
 }
 
-impl Projection {
-    pub(super) fn is_usage_projection(self) -> bool {
-        matches!(
-            self,
-            Self::Collecting { .. }
-                | Self::Remaining { .. }
-                | Self::ExhaustsEarly { .. }
-                | Self::Exhausted { .. }
-        )
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct UsageSnapshotAssessment {
+    projection: Projection,
+    freshness: UsageSnapshotFreshness,
+    recommendation: Option<Recommendation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum UsageSnapshotFreshness {
+    NotSampled,
+    Fresh,
+    Stale,
+}
+
+impl UsageSnapshotFreshness {
+    pub(super) fn sampled_at(now: u64, expires_at: u64) -> Self {
+        if now >= expires_at {
+            Self::Stale
+        } else {
+            Self::Fresh
+        }
+    }
+}
+
+impl UsageSnapshotAssessment {
+    pub(super) fn at(
+        projection: Projection,
+        freshness: UsageSnapshotFreshness,
+        recommendation_eligible: bool,
+    ) -> Self {
+        let recommendation = (freshness == UsageSnapshotFreshness::Fresh
+            && recommendation_eligible)
+            .then(|| projection.recommendation())
+            .flatten();
+        Self {
+            projection,
+            freshness,
+            recommendation,
+        }
     }
 
+    pub(crate) fn projection(self) -> Projection {
+        self.projection
+    }
+
+    pub(crate) fn is_stale(self) -> bool {
+        self.freshness == UsageSnapshotFreshness::Stale
+    }
+
+    pub(crate) fn has_sample(self) -> bool {
+        self.freshness != UsageSnapshotFreshness::NotSampled
+    }
+
+    pub(crate) fn recommendation(self) -> Option<Recommendation> {
+        self.recommendation
+    }
+}
+
+impl Projection {
     pub(super) fn from_window(
-        role: &'static str,
+        role: WindowRole,
         projection: WindowProjection,
         partial: bool,
     ) -> Self {
@@ -84,7 +153,7 @@ impl Projection {
     }
 
     pub(super) fn from_scored_window(
-        role: &'static str,
+        role: WindowRole,
         projection: WindowProjection,
         partial: bool,
     ) -> Option<(Self, f64)> {
@@ -253,5 +322,33 @@ impl Projection {
             Self::Exhausted { .. } => Some(f64::NEG_INFINITY),
             _ => None,
         }
+    }
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    let (value, unit) = if seconds >= 86_400 {
+        (seconds as f64 / 86_400.0, "d")
+    } else if seconds >= 3_600 {
+        (seconds as f64 / 3_600.0, "h")
+    } else {
+        (seconds as f64 / 60.0, "m")
+    };
+    if (value - value.round()).abs() < 0.05 {
+        let rounded = value.round() as u64;
+        match (rounded, unit) {
+            (60, "m") => "1h".into(),
+            (24, "h") => "1d".into(),
+            _ => format!("{rounded}{unit}"),
+        }
+    } else {
+        format!("{value:.1}{unit}")
+    }
+}
+
+fn format_early(seconds: u64) -> String {
+    if seconds < 60 {
+        "<1m".into()
+    } else {
+        format!("~{}", format_elapsed(seconds))
     }
 }

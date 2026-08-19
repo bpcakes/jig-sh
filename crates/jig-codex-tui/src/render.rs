@@ -161,14 +161,16 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, now: u64, best: Option<us
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let projection = row.projection();
-            let stale = row.projection_is_stale_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
+            let projection = assessment.projection();
+            let stale = assessment.is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(row.display_name().to_owned()),
                 Cell::from(row.account()),
-                Cell::from(row.usage()),
-                Cell::from(stale_projection_label(projection.label(), stale))
+                Cell::from(stale_snapshot_label(row.usage(), stale))
+                    .style(stale_usage_style(stale)),
+                Cell::from(stale_snapshot_label(projection.label(), stale))
                     .style(stale_projection_style(projection, stale)),
             ])
             .style(match row.inspection() {
@@ -222,17 +224,16 @@ fn draw_projection_list(
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let projection = row.projection();
-            let stale = row.projection_is_stale_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
+            let projection = assessment.projection();
+            let stale = assessment.is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!("{}\n{}", row.display_name(), row.account())),
-                Cell::from(row.usage()),
-                Cell::from(stale_projection_label(
-                    projection.list_outcome_label(),
-                    stale,
-                ))
-                .style(stale_projection_style(projection, stale)),
+                Cell::from(stale_snapshot_label(row.usage(), stale))
+                    .style(stale_usage_style(stale)),
+                Cell::from(stale_snapshot_label(projection.list_outcome_label(), stale))
+                    .style(stale_projection_style(projection, stale)),
             ])
             .height(2)
             .style(match row.inspection() {
@@ -287,15 +288,16 @@ fn draw_compact_list(
         .iter()
         .map(|index| {
             let row = &app.rows[*index];
-            let projection = row.projection();
-            let stale = row.projection_is_stale_at(now);
+            let assessment = row.usage_snapshot_assessment_at(now);
+            let projection = assessment.projection();
+            let stale = assessment.is_stale();
             Row::new([
                 Cell::from(row_marker(*index, row.is_current(), best)),
                 Cell::from(format!(
                     "{} · {}\n{}",
                     row.display_name(),
                     row.account(),
-                    stale_projection_label(projection.label(), stale)
+                    stale_snapshot_label(projection.label(), stale)
                 ))
                 .style(stale_projection_style(projection, stale)),
             ])
@@ -368,7 +370,7 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
         key_value("Current", if row.is_current() { "yes" } else { "no" }),
     ];
     if app.selected.is_some() && app.selected == best {
-        if let Some(recommendation) = row.recommendation() {
+        if let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation() {
             lines.push(key_value("Recommendation", recommendation.label));
         }
     }
@@ -394,11 +396,13 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                 key_value("Type", &details.account_type),
                 key_value("Plan", &details.plan),
                 key_value("Status", &details.status),
-                key_value(
-                    "Usage sample",
-                    &format!("{} · reopen to refresh", details.sample_age_label_at(now)),
-                ),
             ]);
+            if let Some(sample_age) = details.usage_sample_age_label_at(now) {
+                lines.push(key_value(
+                    "Usage sample",
+                    &format!("{sample_age} · reopen to refresh"),
+                ));
+            }
             for bucket in &details.buckets {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -418,10 +422,15 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
                         window.usage_detail(),
                         window.reset_label_at(now)
                     )));
-                    let projection = details.window_projection(bucket, index);
+                    let assessment =
+                        details.window_usage_snapshot_assessment_at(bucket, index, now);
+                    let projection = assessment.projection();
                     lines.push(Line::from(Span::styled(
-                        format!("    At current pace: {}", projection.outcome_label()),
-                        projection_style(projection),
+                        stale_snapshot_label(
+                            format!("    At current pace: {}", projection.outcome_label()),
+                            assessment.is_stale(),
+                        ),
+                        stale_projection_style(projection, assessment.is_stale()),
                     )));
                 }
             }
@@ -554,11 +563,19 @@ fn projection_style(projection: Projection) -> Style {
     }
 }
 
-fn stale_projection_label(label: String, stale: bool) -> String {
+fn stale_snapshot_label(label: String, stale: bool) -> String {
     if stale {
-        format!("{label} · stale")
+        format!("stale · {label}")
     } else {
         label
+    }
+}
+
+fn stale_usage_style(stale: bool) -> Style {
+    if stale {
+        Style::default().fg(MUTED)
+    } else {
+        Style::default()
     }
 }
 

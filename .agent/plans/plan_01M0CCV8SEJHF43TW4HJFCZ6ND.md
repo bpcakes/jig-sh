@@ -1,0 +1,1 @@
+Refactor usage snapshot freshness ownership, fix stale remaining-quota presentation, centralize reset countdown formatting, and verify focused and full repository gates.

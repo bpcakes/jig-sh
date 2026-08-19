@@ -18,7 +18,8 @@ use crate::{
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
-const SPINNER_INTERVAL: Duration = Duration::from_millis(100);
+const ACTIVE_REDRAW_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn run(
     homes: Vec<Home>,
@@ -34,7 +35,7 @@ pub(crate) fn run(
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
     let mut worker = InspectionWorker::spawn(Arc::new(source), Arc::clone(&external_cancellation))?;
     let mut dirty = true;
-    let mut next_spinner = Instant::now() + SPINNER_INTERVAL;
+    let mut next_redraw = Instant::now() + ACTIVE_REDRAW_INTERVAL;
 
     loop {
         if external_cancellation() {
@@ -51,7 +52,7 @@ pub(crate) fn run(
             &mut app,
             &mut worker,
             &mut dirty,
-            &mut next_spinner,
+            &mut next_redraw,
             Instant::now(),
             |app| {
                 terminal
@@ -125,7 +126,7 @@ fn prepare_for_input(
     app: &mut App,
     worker: &mut InspectionWorker,
     dirty: &mut bool,
-    next_spinner: &mut Instant,
+    next_redraw: &mut Instant,
     now: Instant,
     mut draw: impl FnMut(&App) -> Result<()>,
 ) -> Result<()> {
@@ -139,9 +140,14 @@ fn prepare_for_input(
         *dirty = true;
     }
 
-    if !app.inspection_finished && now >= *next_spinner {
-        app.tick = app.tick.wrapping_add(1);
-        *next_spinner = now + SPINNER_INTERVAL;
+    if now >= *next_redraw {
+        let interval = if app.inspection_finished {
+            IDLE_REFRESH_INTERVAL
+        } else {
+            app.tick = app.tick.wrapping_add(1);
+            ACTIVE_REDRAW_INTERVAL
+        };
+        *next_redraw = now + interval;
         *dirty = true;
     }
 
@@ -378,14 +384,14 @@ mod tests {
         };
         let mut dirty = false;
         let now = Instant::now();
-        let mut next_spinner = now + Duration::from_secs(1);
+        let mut next_redraw = now + Duration::from_secs(1);
         let mut rendered_selection = None;
 
         prepare_for_input(
             &mut app,
             &mut worker,
             &mut dirty,
-            &mut next_spinner,
+            &mut next_redraw,
             now,
             |app| {
                 rendered_selection = app.selected_path();
@@ -401,5 +407,36 @@ mod tests {
             Action::Select
         );
         assert_eq!(app.selected_path(), rendered_selection);
+    }
+
+    #[test]
+    fn completed_inspection_still_redraws_when_the_refresh_deadline_arrives() {
+        let mut app = App::new(Vec::new(), Vec::new());
+        app.finish_inspection(None);
+        let (_sender, updates) = mpsc::channel();
+        let mut worker = InspectionWorker {
+            updates,
+            worker: None,
+        };
+        let mut dirty = false;
+        let now = Instant::now();
+        let mut next_redraw = now;
+        let mut draws = 0;
+
+        prepare_for_input(
+            &mut app,
+            &mut worker,
+            &mut dirty,
+            &mut next_redraw,
+            now,
+            |_| {
+                draws += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(draws, 1);
+        assert!(next_redraw > now);
     }
 }

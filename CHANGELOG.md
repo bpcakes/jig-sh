@@ -11,9 +11,13 @@
 - Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
 - Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
 - Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
+- Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
+- Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
+- Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
 - Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
+- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
 
 ## v0.2.0 - 2026-08-05
 

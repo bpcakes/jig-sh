@@ -57,9 +57,28 @@ fn rendering_marks_projection_as_an_aging_usage_snapshot() {
 }
 
 #[test]
+fn rendering_labels_sub_minute_reset_countdowns_without_zero_minutes() {
+    const NOW: u64 = 2_000_000_000;
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(NOW + 59);
+    app.apply_update_at(update, NOW);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("resets in <1m"), "{rendered}");
+    assert!(!rendered.contains("resets in 0m"), "{rendered}");
+}
+
+#[test]
 fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
     const OBSERVED_AT: u64 = 2_000_000_000;
-    let backend = TestBackend::new(120, 30);
+    let backend = TestBackend::new(168, 30);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut app = app(homes());
     app.apply_update_at(
@@ -68,7 +87,7 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
     );
     let stale_at = OBSERVED_AT + 15 * 60;
 
-    assert_eq!(app.best_projection_index(), Some(0));
+    assert_eq!(app.best_projection_index_at(OBSERVED_AT), Some(0));
     assert_eq!(app.best_projection_index_at(stale_at), None);
     terminal
         .draw(|frame| render::draw_at(frame, &app, stale_at))
@@ -76,9 +95,131 @@ fn stale_projection_is_labeled_and_no_longer_recommended_in_the_list() {
 
     let rendered = terminal.backend().to_string();
     assert!(rendered.contains("stale"), "{rendered}");
+    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
+    assert!(
+        rendered.contains("stale ·     At current pace: ~50% left at reset"),
+        "{rendered}"
+    );
     assert!(!rendered.contains("+*"), "{rendered}");
     assert!(
         rendered.contains("no rankable Codex projection"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn stale_remaining_is_labeled_even_when_projection_metadata_is_unavailable() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let backend = TestBackend::new(168, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    app.apply_update_at(ready_update(0), OBSERVED_AT);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("stale · weekly 75% left"), "{rendered}");
+    assert!(
+        rendered.contains("stale ·     At current pace: projection unavailable"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn common_width_lists_keep_stale_state_visible() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    for width in [100, 120] {
+        let backend = TestBackend::new(width, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = app(homes());
+        app.apply_update_at(
+            projected_update(0, 25.0, 10_080, 0.5, OBSERVED_AT),
+            OBSERVED_AT,
+        );
+
+        terminal
+            .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+            .unwrap();
+
+        let rendered = terminal.backend().to_string();
+        let account_row = rendered
+            .lines()
+            .find(|line| line.contains("stale · weekly"))
+            .expect("inspected account row should remain visible");
+        assert!(
+            account_row.matches("stale ·").count() >= 2,
+            "{width}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn details_only_label_an_observed_usage_sample() {
+    const NOW: u64 = 2_000_000_000;
+    let cases = [
+        json!({
+            "account": null,
+            "status": "not logged in",
+            "rate_limits": [],
+            "inspection_error": null,
+            "usage_error": null
+        }),
+        json!({
+            "account": null,
+            "status": "unknown",
+            "rate_limits": [],
+            "inspection_error": "app-server unavailable",
+            "usage_error": null
+        }),
+        json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "person@example.com",
+                "plan_type": "pro"
+            },
+            "status": "authenticated",
+            "rate_limits": [],
+            "inspection_error": null,
+            "usage_error": "usage unavailable"
+        }),
+    ];
+
+    for details in cases {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = app(homes());
+        app.apply_update_at(HomeUpdate { index: 0, details }, NOW);
+
+        terminal
+            .draw(|frame| render::draw_at(frame, &app, NOW))
+            .unwrap();
+
+        let rendered = terminal.backend().to_string();
+        assert!(!rendered.contains("Usage sample"), "{rendered}");
+    }
+}
+
+#[test]
+fn usage_errors_are_not_mislabeled_as_stale_snapshots() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let backend = TestBackend::new(168, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut app = app(homes());
+    let mut failed = ready_update(0);
+    failed.details["usage_error"] = json!("usage unavailable");
+    app.apply_update_at(failed, OBSERVED_AT);
+
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 15 * 60))
+        .unwrap();
+
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("usage error"), "{rendered}");
+    assert!(!rendered.contains("stale · usage error"), "{rendered}");
+    assert!(
+        !rendered.contains("stale · error: usage unavailable"),
         "{rendered}"
     );
 }
@@ -166,7 +307,7 @@ fn compact_warmup_shows_current_remaining_instead_of_only_collecting() {
         rendered.contains("weekly: 5% left · collecting"),
         "{rendered}"
     );
-    assert_eq!(app.best_projection_index(), None);
+    assert_eq!(app.best_projection_index_at(NOW), None);
 }
 
 #[test]

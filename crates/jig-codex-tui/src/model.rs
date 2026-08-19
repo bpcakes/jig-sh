@@ -5,7 +5,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, format_percent, sanitize_text};
+use jig_tui::{
+    FuzzyMatchScore, PreparedFuzzyText, format_countdown, format_percent, sanitize_text,
+};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
@@ -14,8 +16,8 @@ use crate::{Home, HomeUpdate};
 
 mod projection;
 
-use projection::WindowProjection;
-pub(crate) use projection::{Projection, Recommendation};
+pub(crate) use projection::{Projection, UsageSnapshotAssessment, WindowRole};
+use projection::{UsageSnapshotFreshness, WindowProjection};
 
 const UNKNOWN: &str = "-";
 const MIN_PROJECTION_ELAPSED_FRACTION: f64 = 0.1;
@@ -93,26 +95,12 @@ impl App {
         self.selected_row().map(|row| row.home.path.clone())
     }
 
-    #[cfg(test)]
-    pub(crate) fn best_projection_index(&self) -> Option<usize> {
-        self.best_projection_index_where(|_| true)
-    }
-
     pub(crate) fn best_projection_index_at(&self, now: u64) -> Option<usize> {
-        self.best_projection_index_where(|row| !row.projection_is_stale_at(now))
-    }
-
-    fn best_projection_index_where(
-        &self,
-        mut eligible: impl FnMut(&HomeRow) -> bool,
-    ) -> Option<usize> {
         let mut best: Option<(usize, f64)> = None;
         for index in self.visible_indices() {
             let row = &self.rows[index];
-            if !eligible(row) {
-                continue;
-            }
-            let Some(recommendation) = row.recommendation() else {
+            let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+            else {
                 continue;
             };
             if best.is_none_or(|(_, best_score)| recommendation.score > best_score) {
@@ -416,6 +404,7 @@ impl HomeRow {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn projection(&self) -> Projection {
         match &self.inspection {
             Inspection::Loading => Projection::Loading,
@@ -424,17 +413,20 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn projection_is_stale_at(&self, now: u64) -> bool {
+    pub(crate) fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
         match &self.inspection {
-            Inspection::Ready(details) => {
-                details.sample_is_stale_at(now) && details.projection().is_usage_projection()
-            }
-            Inspection::Loading | Inspection::Unavailable => false,
+            Inspection::Ready(details) => details.usage_snapshot_assessment_at(now),
+            Inspection::Loading => UsageSnapshotAssessment::at(
+                Projection::Loading,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
+            Inspection::Unavailable => UsageSnapshotAssessment::at(
+                Projection::InspectionUnavailable,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
         }
-    }
-
-    pub(crate) fn recommendation(&self) -> Option<Recommendation> {
-        self.projection().recommendation()
     }
 }
 
@@ -526,6 +518,31 @@ impl Details {
         bucket.projection_at(self.observed_at)
     }
 
+    fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
+        let primary_bucket = self.primary_bucket();
+        let expires_at = primary_bucket.map_or_else(
+            || {
+                self.observed_at
+                    .saturating_add(STALE_PROJECTION_AFTER_SECONDS)
+            },
+            |bucket| bucket.projection_expires_at(self.observed_at),
+        );
+        let has_presented_usage_sample = self.inspection_error.is_none()
+            && self.usage_error.is_none()
+            && self.status != "not logged in"
+            && primary_bucket.is_some_and(RateLimitBucket::has_usage_sample);
+        let freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, expires_at)
+        } else {
+            UsageSnapshotFreshness::NotSampled
+        };
+        UsageSnapshotAssessment::at(
+            self.projection(),
+            freshness,
+            primary_bucket.is_some_and(|bucket| bucket.id == "codex"),
+        )
+    }
+
     fn primary_bucket(&self) -> Option<&RateLimitBucket> {
         self.buckets
             .iter()
@@ -549,25 +566,52 @@ impl Details {
         None
     }
 
-    pub(crate) fn window_projection(&self, bucket: &RateLimitBucket, index: usize) -> Projection {
-        bucket.window_projection_at(index, self.observed_at)
+    pub(crate) fn window_usage_snapshot_assessment_at(
+        &self,
+        bucket: &RateLimitBucket,
+        index: usize,
+        now: u64,
+    ) -> UsageSnapshotAssessment {
+        let expires_at = bucket
+            .windows
+            .get(index)
+            .and_then(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
+            .map_or_else(
+                || {
+                    self.observed_at
+                        .saturating_add(STALE_PROJECTION_AFTER_SECONDS)
+                },
+                |reset| {
+                    reset.min(
+                        self.observed_at
+                            .saturating_add(STALE_PROJECTION_AFTER_SECONDS),
+                    )
+                },
+            );
+        let freshness = bucket
+            .windows
+            .get(index)
+            .filter(|window| window.has_usage_sample())
+            .map_or(UsageSnapshotFreshness::NotSampled, |_| {
+                UsageSnapshotFreshness::sampled_at(now, expires_at)
+            });
+        UsageSnapshotAssessment::at(
+            bucket.window_projection_at(index, self.observed_at),
+            freshness,
+            false,
+        )
     }
 
-    pub(crate) fn sample_age_label_at(&self, now: u64) -> String {
+    pub(crate) fn usage_sample_age_label_at(&self, now: u64) -> Option<String> {
+        if !self.usage_snapshot_assessment_at(now).has_sample() {
+            return None;
+        }
         let age = now.saturating_sub(self.observed_at);
         if age < 60 {
-            "just now".into()
-        } else if age < 3_600 {
-            format!("{}m ago", age / 60)
-        } else if age < 86_400 {
-            format!("{}h ago", age / 3_600)
+            Some("just now".into())
         } else {
-            format!("{}d ago", age / 86_400)
+            Some(format!("{} ago", format_countdown(age)))
         }
-    }
-
-    fn sample_is_stale_at(&self, now: u64) -> bool {
-        now.saturating_sub(self.observed_at) >= STALE_PROJECTION_AFTER_SECONDS
     }
 }
 
@@ -609,7 +653,13 @@ impl RateLimitBucket {
     pub(crate) fn summary(&self) -> String {
         match self.windows.as_slice() {
             [] => "unavailable".into(),
-            [only] if self.id == "codex" => format!("weekly {}", only.remaining()),
+            [only] if self.id == "codex" => format!(
+                "{} {}",
+                only.codex_role()
+                    .map(|role| role.to_string())
+                    .unwrap_or_else(|| format_duration(only.duration_minutes)),
+                only.remaining()
+            ),
             [only] => self.generic_summary(std::slice::from_ref(only)),
             [first, second, ..] if self.id == "codex" => [first, second]
                 .into_iter()
@@ -652,7 +702,7 @@ impl RateLimitBucket {
         }
 
         let mut worst: Option<Projection> = None;
-        let mut collecting: Option<(&'static str, f64)> = None;
+        let mut collecting: Option<(WindowRole, f64)> = None;
         let mut incomplete = false;
         for (index, window) in self.windows.iter().enumerate() {
             let role = self.window_role(index);
@@ -694,17 +744,34 @@ impl RateLimitBucket {
             .unwrap_or(Projection::Unavailable)
     }
 
-    pub(crate) fn window_role(&self, index: usize) -> &'static str {
+    pub(crate) fn window_role(&self, index: usize) -> WindowRole {
         if self.id != "codex" {
-            return "window";
-        }
-        if self.windows.len() == 1 {
-            return "weekly";
+            return WindowRole::Window;
         }
         self.windows
             .get(index)
             .and_then(RateLimitWindow::codex_role)
-            .unwrap_or("window")
+            .unwrap_or(WindowRole::Window)
+    }
+
+    fn projection_expires_at(&self, observed_at: u64) -> u64 {
+        self.windows
+            .iter()
+            .filter(|window| {
+                !matches!(
+                    window.projection_at(observed_at),
+                    WindowProjection::Unavailable
+                )
+            })
+            .filter_map(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
+            .fold(
+                observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS),
+                u64::min,
+            )
+    }
+
+    fn has_usage_sample(&self) -> bool {
+        self.windows.iter().any(RateLimitWindow::has_usage_sample)
     }
 
     pub(crate) fn window_projection_at(&self, index: usize, now: u64) -> Projection {
@@ -768,13 +835,7 @@ impl RateLimitWindow {
         else {
             return "reset due".into();
         };
-        if remaining < 3_600 {
-            format!("resets in {}m", remaining / 60)
-        } else if remaining < 86_400 {
-            format!("resets in {}h", remaining / 3_600)
-        } else {
-            format!("resets in {}d", remaining / 86_400)
-        }
+        format!("resets in {}", format_countdown(remaining))
     }
 
     fn projection_at(&self, now: u64) -> WindowProjection {
@@ -826,17 +887,22 @@ impl RateLimitWindow {
         }
     }
 
-    fn codex_role(&self) -> Option<&'static str> {
+    fn codex_role(&self) -> Option<WindowRole> {
         match self.duration_minutes {
-            Some(300) => Some("5h"),
-            Some(10_080) => Some("weekly"),
-            _ => None,
+            Some(300) => Some(WindowRole::FiveHour),
+            Some(10_080) => Some(WindowRole::Weekly),
+            Some(minutes) => Some(WindowRole::DurationMinutes(minutes)),
+            None => None,
         }
     }
 
     fn valid_used_percent(&self) -> Option<f64> {
         self.used_percent
             .filter(|used| used.is_finite() && *used >= 0.0)
+    }
+
+    fn has_usage_sample(&self) -> bool {
+        self.valid_used_percent().is_some()
     }
 }
 
@@ -876,29 +942,6 @@ fn format_duration(minutes: Option<u64>) -> String {
         Some(minutes) if minutes > 0 && minutes % 60 == 0 => format!("{}h", minutes / 60),
         Some(minutes) => format!("{minutes}m"),
         None => "?".into(),
-    }
-}
-
-fn format_elapsed(seconds: u64) -> String {
-    let (value, unit) = if seconds >= 86_400 {
-        (seconds as f64 / 86_400.0, "d")
-    } else if seconds >= 3_600 {
-        (seconds as f64 / 3_600.0, "h")
-    } else {
-        (seconds as f64 / 60.0, "m")
-    };
-    if (value - value.round()).abs() < 0.05 {
-        format!("{value:.0}{unit}")
-    } else {
-        format!("{value:.1}{unit}")
-    }
-}
-
-fn format_early(seconds: u64) -> String {
-    if seconds < 60 {
-        "<1m".into()
-    } else {
-        format!("~{}", format_elapsed(seconds))
     }
 }
 
