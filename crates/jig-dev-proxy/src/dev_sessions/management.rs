@@ -139,6 +139,10 @@ pub(super) struct StopReport {
 pub(super) enum StopSessionOutcome {
     Complete(StopReport),
     Cancelled(Vec<OrphanRecoveryNotice>),
+    Failed {
+        error: anyhow::Error,
+        recoveries: Vec<OrphanRecoveryNotice>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -272,9 +276,12 @@ fn stop_session_ids(
     target_ids: &BTreeSet<String>,
     policy: AmbiguousOrphanPolicy,
 ) -> Result<StopReport> {
-    match stop_session_ids_interruptible_with_policy(store, repo, target_ids, policy, &|| false)? {
+    match stop_session_ids_interruptible_with_policy(store, repo, target_ids, policy, &|| false) {
         StopSessionOutcome::Complete(report) => Ok(report),
         StopSessionOutcome::Cancelled(_) => bail!("uncancelled Jig dev stop was cancelled"),
+        StopSessionOutcome::Failed { error, recoveries } => {
+            Err(crate::dev_outcome::with_recovery_notices(error, recoveries))
+        }
     }
 }
 
@@ -283,7 +290,7 @@ pub(super) fn stop_session_ids_interruptible(
     repo: &CanonicalRepo,
     target_ids: &BTreeSet<String>,
     cancelled: &impl Fn() -> bool,
-) -> Result<StopSessionOutcome> {
+) -> StopSessionOutcome {
     stop_session_ids_interruptible_with_policy(
         store,
         repo,
@@ -299,7 +306,7 @@ fn stop_session_ids_interruptible_with_policy(
     target_ids: &BTreeSet<String>,
     policy: AmbiguousOrphanPolicy,
     cancelled: &impl Fn() -> bool,
-) -> Result<StopSessionOutcome> {
+) -> StopSessionOutcome {
     let mut recoveries = Vec::new();
     match stop_session_ids_interruptible_inner(
         store,
@@ -309,8 +316,8 @@ fn stop_session_ids_interruptible_with_policy(
         cancelled,
         &mut recoveries,
     ) {
-        Ok(outcome) => Ok(outcome),
-        Err(error) => Err(crate::dev_outcome::with_recovery_notices(error, recoveries)),
+        Ok(outcome) => outcome,
+        Err(error) => StopSessionOutcome::Failed { error, recoveries },
     }
 }
 
