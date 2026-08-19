@@ -104,7 +104,7 @@ pub(super) fn init_git_repo_with_validation(
             destination.display()
         )
     })?;
-    let staged_destination = staged.path().to_path_buf();
+    let staged_destination = crate::shell::git_env_path(staged.path())?;
     let staged_git = staged_destination.join(".git");
 
     let git_program = external_program(GIT_BIN_ENV, "git");
