@@ -603,26 +603,6 @@ fn scaffold_package_exec(package_manager: &str) -> &'static str {
     }
 }
 
-#[cfg(test)]
-pub(super) fn render_frontend_workspace_files(
-    package_manager: &str,
-    package_name: &str,
-    database: FrontendDatabaseContext<'_>,
-    default_branch: &str,
-    ci_github_runner: &str,
-    frontends: &[FrontendScaffold],
-) -> Result<Vec<ScaffoldFile>> {
-    render_frontend_workspace_files_for_backend(
-        super::ScaffoldPreset::RustReact,
-        package_manager,
-        package_name,
-        database,
-        default_branch,
-        ci_github_runner,
-        frontends,
-    )
-}
-
 pub(super) fn render_frontend_workspace_files_for_backend(
     preset: super::ScaffoldPreset,
     package_manager: &str,
@@ -801,11 +781,12 @@ fn e2e_workflow_paths_for_backend(
     paths
 }
 
-pub(super) fn frontend_workspace_relative_paths(
+pub(super) fn frontend_workspace_relative_paths_for_backend(
+    preset: super::ScaffoldPreset,
     package_manager: &str,
     frontends: &[FrontendScaffold],
 ) -> Vec<PathBuf> {
-    frontend_workspace_template_files(package_manager, frontends)
+    frontend_workspace_template_files_for_backend(preset, package_manager, frontends)
         .into_iter()
         .map(|file| PathBuf::from(file.output))
         .collect()

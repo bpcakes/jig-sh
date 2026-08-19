@@ -46,7 +46,7 @@ mod templates;
 mod write;
 
 use frontend::{
-    FrontendDatabaseContext, FrontendScaffold, frontend_workspace_relative_paths,
+    FrontendDatabaseContext, FrontendScaffold, frontend_workspace_relative_paths_for_backend,
     render_frontend_workspace_files_for_backend, scaffold_bootstrap_command,
 };
 use names::{
@@ -461,7 +461,8 @@ impl InitScaffoldPlan {
         } else {
             self.rust_workspace_relative_paths()
         };
-        paths.extend(frontend_workspace_relative_paths(
+        paths.extend(frontend_workspace_relative_paths_for_backend(
+            self.preset,
             &self.package_manager,
             &self.frontends,
         ));

@@ -86,13 +86,15 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
     }
     if value.starts_with('/')
         || value.ends_with('/')
-        || value.split('/').any(str::is_empty)
+        || value
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
         || !value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | '~' | '+'))
     {
         bail!(
-            "Invalid --go-module '{value}'. Use ASCII module path segments without spaces or empty components"
+            "Invalid --go-module '{value}'. Use ASCII module path segments without spaces, empty components, '.', or '..'"
         );
     }
     Ok(())
@@ -230,6 +232,23 @@ pub(super) fn validate_scaffold_relative_path(label: &str, value: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn go_module_rejects_relative_path_segments() {
+        validate_go_module("github.com/acme/demo").unwrap();
+
+        for module in [
+            "github.com/acme/./demo",
+            "github.com/acme/../demo",
+            "github.com/./demo",
+        ] {
+            let error = validate_go_module(module).unwrap_err().to_string();
+            assert!(
+                error.contains("empty components, '.', or '..'"),
+                "{module}: {error}"
+            );
+        }
+    }
 
     #[test]
     fn rust_react_package_stem_limit_applies_after_normalization() {

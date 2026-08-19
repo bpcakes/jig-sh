@@ -16,7 +16,7 @@ The root cause is structural. Backend identity is currently carried through `bac
 - [x] (2026-08-19T16:25:02Z) Commit slice 2: make optional `.env` loading, database creation, Goose migration, local setup, integration tests, and browser E2E share one Go bootstrap lifecycle.
 - [x] (2026-08-19T16:27:11Z) Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
 - [x] (2026-08-19T16:31:44Z) Commit slice 4: make migration immutability consume a backend-neutral configured migration directory and enable it for PostgreSQL Go repositories.
-- [ ] Commit slice 5: reject invalid Go module segments, preserve wizard numeric compatibility, make format failure propagation reliable, and keep reserved output paths backend-aware.
+- [x] (2026-08-19T16:36:18Z) Commit slice 5: reject invalid Go module segments, preserve wizard numeric compatibility, make format failure propagation reliable, and keep reserved output paths backend-aware.
 - [ ] Run the complete repository test suite through the development Jig binary, record evidence, close structured work, and commit the final plan/state update.
 
 ## Surprises & Discoveries
@@ -53,6 +53,9 @@ The root cause is structural. Backend identity is currently carried through `bac
   Date/Author: 2026-08-19 / Codex
 - Decision: Represent the PostgreSQL-only API command parser as its own generated file.
   Rationale: File-level capability selection avoids whitespace-sensitive source fragments and keeps database-free source independent of PostgreSQL command policy.
+  Date/Author: 2026-08-19 / Codex
+- Decision: Derive reserved frontend workspace paths through the same backend-aware template selector used for rendering.
+  Rationale: One selector now defines both ownership preflight and publication, preventing future Go/Rust template divergence from becoming a collision or overwrite bug.
   Date/Author: 2026-08-19 / Codex
 
 ## Outcomes & Retrospective

@@ -41,6 +41,26 @@ timeout_seconds = 45
 }
 
 #[test]
+fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_files() {
+    let rendered = RawAnswers {
+        repo_name: Some("demo".into()),
+        backend_language: Some(BackendLanguage::Go),
+        go_database: Some("none".into()),
+        sqlx_enabled: Some(false),
+        schema_dump_enabled: Some(false),
+        ..RawAnswers::default()
+    }
+    .resolve(None)
+    .unwrap();
+
+    assert!(rendered.go_fmt_check_command.contains("set -o pipefail"));
+    assert!(rendered.go_fmt_check_command.contains("git ls-files"));
+    assert!(rendered.go_fmt_check_command.contains("--exclude-standard"));
+    assert!(rendered.go_fmt_check_command.contains("xargs -0 gofmt -l"));
+    assert!(rendered.go_fmt_check_command.contains(") || exit $?"));
+}
+
+#[test]
 fn recopy_normalizes_exact_former_generated_sqlx_default() {
     let metadata_dir = "db/sqlx metadata";
     let former_default = format!(

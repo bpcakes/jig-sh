@@ -93,10 +93,10 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig check schema`
 - `scripts/jig sqlx schema dump`
 [% endif %]
+- `scripts/jig sqlx migration add NAME`
+[% endif %]
 [% if backend_language == "go" and go_database == "postgres" %]
 - `scripts/jig check sqlc`
-[% endif %]
-- `scripts/jig sqlx migration add NAME`
 [% endif %]
 - `scripts/jig check contract`
 

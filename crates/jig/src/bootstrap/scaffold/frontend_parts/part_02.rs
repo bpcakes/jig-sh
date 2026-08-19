@@ -1,15 +1,4 @@
 
-fn frontend_workspace_template_files(
-    package_manager: &str,
-    frontends: &[FrontendScaffold],
-) -> Vec<ScaffoldTemplateFile> {
-    frontend_workspace_template_files_for_backend(
-        ScaffoldPreset::RustReact,
-        package_manager,
-        frontends,
-    )
-}
-
 fn frontend_workspace_template_files_for_backend(
     preset: ScaffoldPreset,
     package_manager: &str,

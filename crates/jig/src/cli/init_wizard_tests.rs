@@ -166,6 +166,19 @@ fn json_output_does_not_disable_init_wizard() {
 }
 
 #[test]
+fn numeric_scaffold_aliases_preserve_harness_only_and_append_go() {
+    let mut output = Vec::new();
+    assert_eq!(
+        prompt_scaffold_choice(&mut Cursor::new("2\n"), &mut output).unwrap(),
+        ScaffoldChoice::HarnessOnly
+    );
+    assert_eq!(
+        prompt_scaffold_choice(&mut Cursor::new("3\n"), &mut output).unwrap(),
+        ScaffoldChoice::GoReact
+    );
+}
+
+#[test]
 fn harness_only_choice_resolves_omitted_sqlx_answers_safely() {
     let mut opts = init_opts(&["jig", "init", "demo", "--no-vault"]);
     let mut input = Cursor::new("harness-only\n");

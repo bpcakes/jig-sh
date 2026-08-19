@@ -278,10 +278,10 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
             "1" | "rust-react" | "app" | "yes" | "y" => {
                 return Ok(ScaffoldChoice::RustReact);
             }
-            "2" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
-            "3" | "harness" | "harness-only" | "no" | "n" => {
+            "2" | "harness" | "harness-only" | "no" | "n" => {
                 return Ok(ScaffoldChoice::HarnessOnly);
             }
+            "3" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
             _ => writeln!(output, "  Enter rust-react, go-react, or harness-only.")?,
         }
     }

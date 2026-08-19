@@ -110,25 +110,35 @@ mod tests {
                 vec![astro.clone()],
                 vec![spa.clone(), astro.clone()],
             ] {
-                let declared = frontend_workspace_relative_paths(package_manager, &frontends);
-                let rendered = render_frontend_workspace_files(
-                    package_manager,
-                    "demo",
-                    FrontendDatabaseContext {
-                        db: ScaffoldDb::None,
-                        migration_dir: "migrations",
-                        sqlx_metadata_dir: ".sqlx",
-                    },
-                    "main",
-                    "ubuntu-latest",
-                    &frontends,
-                )
-                .unwrap()
-                .into_iter()
-                .map(|file| PathBuf::from(file.relative))
-                .collect::<Vec<_>>();
+                for preset in [ScaffoldPreset::RustReact, ScaffoldPreset::GoReact] {
+                    let declared = frontend_workspace_relative_paths_for_backend(
+                        preset,
+                        package_manager,
+                        &frontends,
+                    );
+                    let rendered = render_frontend_workspace_files_for_backend(
+                        preset,
+                        package_manager,
+                        "demo",
+                        FrontendDatabaseContext {
+                            db: ScaffoldDb::None,
+                            migration_dir: "migrations",
+                            sqlx_metadata_dir: ".sqlx",
+                        },
+                        "main",
+                        "ubuntu-latest",
+                        &frontends,
+                    )
+                    .unwrap()
+                    .into_iter()
+                    .map(|file| PathBuf::from(file.relative))
+                    .collect::<Vec<_>>();
 
-                assert_eq!(declared, rendered, "{package_manager}: {frontends:?}");
+                    assert_eq!(
+                        declared, rendered,
+                        "{preset:?}: {package_manager}: {frontends:?}"
+                    );
+                }
             }
         }
     }
