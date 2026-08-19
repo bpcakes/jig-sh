@@ -12,7 +12,7 @@ The root cause is structural. Backend identity is currently carried through `bac
 
 - [x] (2026-08-19T16:10:11Z) Reviewed the merged Claude/Codex findings and grouped them by lifecycle boundary.
 - [x] (2026-08-19T16:10:11Z) Started structured work `plan_01M0DCJNZJ7JNMVG3STSNNQ0CE` and wrote this ExecPlan.
-- [ ] Commit slice 1: enforce Huma OpenAPI and Hey API client drift checks from Go-owned source changes.
+- [x] (2026-08-19T16:16:14Z) Commit slice 1: enforce Huma OpenAPI and Hey API client drift checks from Go-owned source changes.
 - [ ] Commit slice 2: make optional `.env` loading, database creation, Goose migration, local setup, integration tests, and browser E2E share one Go bootstrap lifecycle.
 - [ ] Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
 - [ ] Commit slice 4: make migration immutability consume a backend-neutral configured migration directory and enable it for PostgreSQL Go repositories.
@@ -27,6 +27,10 @@ The root cause is structural. Backend identity is currently carried through `bac
   Evidence: `templates/scaffolds/rust-react/frontend/workspace/e2e.yml.jinja` sets `POSTGRES_DB: postgres`; the Go Playwright command directly starts `cmd/api`, whose Goose adapter can migrate only after connecting to the named database.
 - Observation: generated `scripts/jig` installs its Rust implementation with `cargo install` when no compatible cache exists.
   Evidence: `templates/project/scripts/install-jig.sh.jinja` invokes `cargo install`, while the new Go workflows install only Go.
+- Observation: a foreground `scripts/jig work check` continued its full test gate after the shell wrapper returned at 30 seconds, and correctly rejected its receipt because template refresh changed the worktree during the check.
+  Evidence: receipt `receipt_01M0DCVEWRB132A9SZ1V641A0K` records exit status 100 and the before/after worktree fingerprints. The final work check must run only after all edits settle.
+- Observation: the first OpenAPI regression test used one too many parent components when locating the generated repository root.
+  Evidence: generated `go test ./...` failed while looking above the temporary app; changing the path from three parents to two made the generated test pass.
 
 ## Decision Log
 

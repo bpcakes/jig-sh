@@ -17,7 +17,7 @@ After changing [% if backend_language == "go" %]Huma operations or HTTP types[% 
 
     <<[ web_run_command ]>> contract:generate
 
-[% if backend_language == "go" %]`scripts/jig check contract`[% else %]`cargo test`[% endif %] rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` runs `contract:check`, which regenerates every contract in a temporary directory and rejects drift without modifying the worktree. The build gate also scans public application artifacts for privileged package, contract, and binary markers.
+[% if backend_language == "go" %]`go test ./...`[% else %]`cargo test`[% endif %] rejects stale OpenAPI documents. `scripts/check-webapps.sh typecheck` runs `contract:check`, which regenerates every contract and TypeScript client in a temporary directory and rejects drift without modifying the worktree. The generated web workflow observes backend source, OpenAPI documents, and client output so either side of the application contract cannot drift silently. The build gate also scans public application artifacts for privileged package, contract, and binary markers.
 
 A full `scripts/jig dev` session supplies the current backend through `JIG_DEV_API_ORIGIN`, which takes precedence over an inherited generic override. For a direct Vite start or `scripts/jig dev --app <frontend-name>` against a separately managed backend, set `API_ORIGIN`. Replace the starter with the first product feature while keeping the tested API boundary or evolving it with the backend.
 

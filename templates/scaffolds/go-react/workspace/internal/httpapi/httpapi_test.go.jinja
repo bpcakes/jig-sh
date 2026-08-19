@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -29,9 +33,28 @@ func TestStatus(t *testing.T) {
 	}
 }
 
-func TestOpenAPIIsAvailableWithoutStartingServer(t *testing.T) {
+func TestOpenAPIIsCurrent(t *testing.T) {
 	service := New(Dependencies{})
 	if service.API.OpenAPI().Info.Title != "<<[ repo_name ]>> API" {
 		t.Fatalf("unexpected OpenAPI title %q", service.API.OpenAPI().Info.Title)
+	}
+
+	generated, err := json.MarshalIndent(service.API.OpenAPI(), "", "  ")
+	if err != nil {
+		t.Fatalf("encode OpenAPI: %v", err)
+	}
+	generated = append(generated, '\n')
+
+	_, testFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	contractPath := filepath.Join(filepath.Dir(testFile), "..", "..", "openapi", "public.json")
+	committed, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatalf("read committed OpenAPI: %v", err)
+	}
+	if !bytes.Equal(committed, generated) {
+		t.Fatal("public OpenAPI document is stale; run the contract:generate package script")
 	}
 }

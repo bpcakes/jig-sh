@@ -142,6 +142,58 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(contracts.contents.contains(r#"run("go", ["run", "./cmd/openapi""#));
     assert!(!contracts.contents.contains(r#"run("cargo""#));
+    let httpapi_test = rendered
+        .iter()
+        .find(|file| file.relative == "internal/httpapi/httpapi_test.go")
+        .unwrap();
+    assert!(httpapi_test.contents.contains("func TestOpenAPIIsCurrent"));
+    assert!(httpapi_test.contents.contains("public OpenAPI document is stale"));
+}
+
+#[test]
+fn go_react_web_workflow_observes_the_complete_application_contract() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let destination = temp.path().join("go-contract-workflow");
+
+    run_init(InitOpts {
+        path: destination.clone(),
+        scaffold: ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![ScaffoldFrontend {
+                name: "web".into(),
+                kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
+            }],
+            frontend_list: Vec::new(),
+        },
+        template: Some(template.path().display().to_string()),
+        template_mode: None,
+        vcs_ref: None,
+        force: false,
+        defaults: false,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("go-contract-workflow".into()),
+            go_module: Some("example.com/go-contract-workflow".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let workflow =
+        fs::read_to_string(destination.join(".github/workflows/webapp-checks.yml")).unwrap();
+    for path in [
+        r#"- "cmd/**""#,
+        r#"- "internal/**""#,
+        r#"- "openapi/**""#,
+        r#"- "packages/public-api-client/**""#,
+    ] {
+        assert_eq!(workflow.matches(path).count(), 2, "missing {path}");
+    }
 }
 
 #[test]
