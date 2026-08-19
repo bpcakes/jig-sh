@@ -17,7 +17,7 @@ The root cause is structural. Backend identity is currently carried through `bac
 - [x] (2026-08-19T16:27:11Z) Commit slice 3: install the Jig runtime prerequisite explicitly in Go CI, use a cache key available immediately after init, and trigger sqlc for query changes.
 - [x] (2026-08-19T16:31:44Z) Commit slice 4: make migration immutability consume a backend-neutral configured migration directory and enable it for PostgreSQL Go repositories.
 - [x] (2026-08-19T16:36:18Z) Commit slice 5: reject invalid Go module segments, preserve wizard numeric compatibility, make format failure propagation reliable, and keep reserved output paths backend-aware.
-- [ ] Run the complete repository test suite through the development Jig binary, record evidence, close structured work, and commit the final plan/state update.
+- [x] (2026-08-19T17:07:31Z) Ran the complete repository test suite through the development Jig binary, recorded fresh plan-scoped evidence, and closed structured work successfully.
 
 ## Surprises & Discoveries
 
@@ -68,7 +68,7 @@ The five implementation slices now align the Go scaffold's API contract, databas
 - `e0b30a9` introduces backend-neutral `migration_dir` policy with a legacy Rust fallback and enables migration immutability for Go/PostgreSQL.
 - `8625a3c` closes module-validation, formatting-error, wizard-compatibility, documentation, and backend-aware path-reservation gaps.
 
-The repository's full configured test suite passed as receipt `receipt_01M0DEWZHVZDW8W0ATTBD9N42J`; formatting, Clippy, and contract checks passed as `receipt_01M0DEX7WHEWM19BMP9DA02B12`, `receipt_01M0DEXPZJ380F6TYNPVNPQ82E`, and `receipt_01M0DEXQ1MV26MF1JV4F313YJM`. Fresh generated database-free and PostgreSQL repositories passed bootstrap, Go format/vet/locked tests, contract checks, TypeScript typechecking, sqlc drift, disposable PostgreSQL integration, and a Chromium Playwright smoke test against the live Go API.
+The repository's full configured test suite passed as receipt `receipt_01M0DEWZHVZDW8W0ATTBD9N42J`; formatting, Clippy, and contract checks passed as `receipt_01M0DEX7WHEWM19BMP9DA02B12`, `receipt_01M0DEXPZJ380F6TYNPVNPQ82E`, and `receipt_01M0DEXQ1MV26MF1JV4F313YJM`. The final plan-scoped rerun also passed with batch receipt `receipt_01M0DFXV064VC22CJN7FY2R92D`, clearing the earlier invalidated evidence. Fresh generated database-free and PostgreSQL repositories passed bootstrap, Go format/vet/locked tests, contract checks, TypeScript typechecking, sqlc drift, disposable PostgreSQL integration, and a Chromium Playwright smoke test against the live Go API.
 
 The work confirms the original diagnosis: the individual defects were omissions at several call sites, but their common cause was structural—backend lifecycle capabilities were implicit and therefore easy for templates, workflows, runtime policy, and documentation to disagree about. The fixes reduce future bug surface by sharing runtime entrypoints, selecting optional source at file boundaries, deriving reservations from the rendering selector, and naming migration policy independently of Rust/SQLx.
 
@@ -156,3 +156,5 @@ The generated Go module will add `github.com/joho/godotenv` for optional develop
 The Jig runtime will expose a backend-neutral migration-directory accessor used only by migration immutability policy. Existing `rust_migration_dir` configuration remains accepted as a fallback so generated repository updates are compatible.
 
 Plan revision note (2026-08-19): Replaced the structured-work placeholder with a self-contained implementation plan after the comprehensive review. The revision records the structural root cause, five commit slices, compatibility decisions, and executable acceptance criteria.
+
+Plan revision note (2026-08-19): Recorded all slice commits, final receipts, generated-project acceptance, and successful structured-work closure.
