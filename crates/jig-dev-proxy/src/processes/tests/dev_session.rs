@@ -3,17 +3,19 @@ use crate::test_tempdir as tempdir;
 
 use crate::DevPreflightError;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::dev_api;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::dev_sessions::DevSessionRuntime;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::state::StateStore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::types::{AppRunSpec, CommandSpec};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use super::super::finish_preflight_cleanup;
 use super::super::{
     TerminationReason, interruption_reason, is_interruption, normalize_preflight_result,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::super::{finalize_claimed_dev_session_result, finish_preflight_cleanup};
 
 #[test]
 fn typed_preflight_cancellation_requires_a_pending_termination_reason() {
@@ -119,6 +121,45 @@ fn confirmed_preflight_cleanup_is_persisted_before_pending_interruption() {
     let sessions = store.snapshot_dev_state().unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert!(!sessions[0].preflight_cleanup_pending);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn requested_stop_with_unconfirmed_cleanup_is_a_structured_failure() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().join("proxy-state"))).unwrap();
+    let spec = AppRunSpec::new(
+        "web",
+        temp.path().to_path_buf(),
+        CommandSpec::Argv(vec!["unused-preflight-command".into()]),
+        "web.demo.localhost",
+    )
+    .with_proxy(false);
+    let session = DevSessionRuntime::start(
+        store,
+        "demo",
+        temp.path(),
+        std::slice::from_ref(&spec),
+        false,
+    )
+    .unwrap();
+    let _cleanup = session.arm_cleanup();
+    let reason = TerminationReason::requested_stop();
+
+    let output = dev_api::normalize_dev_result(finalize_claimed_dev_session_result(
+        Err(super::super::interruption_error(reason)),
+        &session,
+    ))
+    .unwrap();
+
+    assert_eq!(output["ok"], false);
+    assert_eq!(output["stopped"], false);
+    assert_eq!(output["cleanup_unconfirmed"], true);
+    assert_eq!(output["stop_reason"], reason.label());
+    assert_eq!(
+        output["error"],
+        super::super::UNCONFIRMED_DEV_CLEANUP_MESSAGE
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

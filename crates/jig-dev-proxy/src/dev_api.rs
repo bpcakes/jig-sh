@@ -51,6 +51,26 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                 return Err(error);
             };
             let recoveries = processes::interruption_recoveries(&error).cloned();
+            if processes::interruption_cleanup_unconfirmed(&error) {
+                let mut output = json!({
+                    "ok": false,
+                    "interrupted": false,
+                    "stopped": false,
+                    "cleanup_unconfirmed": true,
+                    "error": processes::UNCONFIRMED_DEV_CLEANUP_MESSAGE,
+                    "stop_reason": reason.label(),
+                    "exit_status": 1,
+                    "exit_signal": null,
+                    "termination_signal": null,
+                    "first_exit": null,
+                    "proxy_failed": false,
+                    "routes": [],
+                });
+                if let Some(recoveries) = recoveries {
+                    output["recoveries"] = recoveries;
+                }
+                return Ok(output);
+            }
             if reason.is_requested_stop() {
                 let mut output = json!({
                     "ok": true,

@@ -20,7 +20,8 @@ use super::{
     child_exit_status, choose_app_port, cleanup_children, command_argv,
     dev_app_environment_interruptible, ensure_not_interrupted_with,
     ensure_process_routes_supported, ensure_proxy_running_interruptible, force_cleanup_requested,
-    interruption_error, interruption_error_with_recoveries, interruption_reason, is_interruption,
+    interruption_error, interruption_error_with_recoveries,
+    interruption_error_with_unconfirmed_cleanup, interruption_reason, is_interruption,
     lock_outcome_or_interruption, new_route_cleanup_deadline, preflight_process_routes,
     prepare_certs_for_hosts_interruptible, print_dev_table, process_route_parts,
     proxy_health_failed, proxy_ready_interruptible, publish_process_route_interruptible,
@@ -80,6 +81,21 @@ fn run_claimed_dev_session(
     session: &DevSessionRuntime,
     preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
 ) -> Result<Value> {
+    // Keep every post-claim exit on one path so recovery notices and cleanup
+    // status cannot be skipped by a newly introduced `?` in a lifecycle phase.
+    let result =
+        run_claimed_dev_session_phases(specs, settings, current_exe, store, session, preflight);
+    finalize_claimed_dev_session_result(result, session)
+}
+
+fn run_claimed_dev_session_phases(
+    specs: Vec<AppRunSpec>,
+    settings: &ProxySettings,
+    current_exe: &Path,
+    store: StateStore,
+    session: &DevSessionRuntime,
+    preflight: impl FnOnce(&[AppRunSpec], &dyn Fn() -> bool) -> DevPreflightResult,
+) -> Result<Value> {
     let requested_reason = || {
         termination_requested().or_else(|| {
             session
@@ -101,49 +117,47 @@ fn run_claimed_dev_session(
         &requested_reason,
     )?;
     ensure_not_interrupted_with(requested_reason)?;
-    let mut result = run_apps_with_session_and_interrupt_probe(
+    run_apps_with_session_and_interrupt_probe(
         specs,
         settings,
         current_exe,
         store,
-        &session,
+        session,
         requested_reason,
-    );
-    if let Ok(value) = &mut result {
-        attach_replacement_recoveries(value, &session)?;
-    } else if !session.replacement_recoveries().is_empty() {
-        if let Some(reason) = result.as_ref().err().and_then(interruption_reason) {
-            result = Err(interruption_error_with_recoveries(
-                reason,
-                serde_json::to_value(session.replacement_recoveries())?,
+    )
+}
+
+pub(crate) fn finalize_claimed_dev_session_result(
+    mut result: Result<Value>,
+    session: &DevSessionRuntime,
+) -> Result<Value> {
+    let recoveries = (!session.replacement_recoveries().is_empty())
+        .then(|| serde_json::to_value(session.replacement_recoveries()))
+        .transpose()?;
+    let interruption = result.as_ref().err().and_then(interruption_reason);
+
+    if let Some(reason) = interruption.filter(|reason| reason.is_requested_stop()) {
+        if !session.cleanup_is_confirmed() {
+            return Err(interruption_error_with_unconfirmed_cleanup(
+                reason, recoveries,
             ));
         }
     }
-    if result
-        .as_ref()
-        .err()
-        .and_then(interruption_reason)
-        .is_some_and(TerminationReason::is_requested_stop)
-        && !session.cleanup_is_confirmed()
-    {
-        bail!(
-            "Jig dev received a stop request, but process-tree or route cleanup could not be confirmed; the session was retained for inspection"
-        );
+    if let Ok(value) = &mut result {
+        if let Some(recoveries) = recoveries {
+            attach_replacement_recoveries(value, recoveries)?;
+        }
+    } else if let (Some(reason), Some(recoveries)) = (interruption, recoveries) {
+        result = Err(interruption_error_with_recoveries(reason, recoveries));
     }
     result
 }
 
-fn attach_replacement_recoveries(value: &mut Value, session: &DevSessionRuntime) -> Result<()> {
-    if session.replacement_recoveries().is_empty() {
-        return Ok(());
-    }
+fn attach_replacement_recoveries(value: &mut Value, recoveries: Value) -> Result<()> {
     let object = value
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("development result was not a JSON object"))?;
-    object.insert(
-        "recoveries".to_owned(),
-        serde_json::to_value(session.replacement_recoveries())?,
-    );
+    object.insert("recoveries".to_owned(), recoveries);
     Ok(())
 }
 

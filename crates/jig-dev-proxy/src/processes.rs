@@ -34,6 +34,8 @@ use self::cleanup::{
     termination_requested,
 };
 pub(crate) use self::cleanup::{TerminationReason, force_cleanup_requested};
+#[cfg(test)]
+pub(crate) use self::dev_session::finalize_claimed_dev_session_result;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 use self::dev_session::finish_preflight_cleanup;
 #[cfg(test)]
@@ -69,6 +71,7 @@ mod startup_failure_tests;
 mod windows_launch;
 
 const PROXY_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const UNCONFIRMED_DEV_CLEANUP_MESSAGE: &str = "Jig dev received a stop request, but process-tree or route cleanup could not be confirmed; the session was retained for inspection";
 // Keep this exact prefix aligned with the npm branch rendered for
 // `generated_frontend_dev_apps` in templates/project/.jig.toml.jinja. Matching
 // the complete generated form keeps ordinary repository-authored npm commands
@@ -177,6 +180,13 @@ pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path)
 struct Interrupted {
     reason: TerminationReason,
     recoveries: Option<Value>,
+    cleanup: InterruptionCleanup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterruptionCleanup {
+    Confirmed,
+    Unconfirmed,
 }
 
 impl fmt::Display for Interrupted {
@@ -188,20 +198,32 @@ impl fmt::Display for Interrupted {
 impl StdError for Interrupted {}
 
 pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
-    Interrupted {
-        reason,
-        recoveries: None,
-    }
-    .into()
+    interruption_error_with_state(reason, None, InterruptionCleanup::Confirmed)
 }
 
 pub(crate) fn interruption_error_with_recoveries(
     reason: TerminationReason,
     recoveries: Value,
 ) -> anyhow::Error {
+    interruption_error_with_state(reason, Some(recoveries), InterruptionCleanup::Confirmed)
+}
+
+pub(crate) fn interruption_error_with_unconfirmed_cleanup(
+    reason: TerminationReason,
+    recoveries: Option<Value>,
+) -> anyhow::Error {
+    interruption_error_with_state(reason, recoveries, InterruptionCleanup::Unconfirmed)
+}
+
+fn interruption_error_with_state(
+    reason: TerminationReason,
+    recoveries: Option<Value>,
+    cleanup: InterruptionCleanup,
+) -> anyhow::Error {
     Interrupted {
         reason,
-        recoveries: Some(recoveries),
+        recoveries,
+        cleanup,
     }
     .into()
 }
@@ -220,6 +242,12 @@ pub(crate) fn interruption_recoveries(error: &anyhow::Error) -> Option<&Value> {
     error
         .downcast_ref::<Interrupted>()
         .and_then(|error| error.recoveries.as_ref())
+}
+
+pub(crate) fn interruption_cleanup_unconfirmed(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<Interrupted>()
+        .is_some_and(|error| error.cleanup == InterruptionCleanup::Unconfirmed)
 }
 
 pub(crate) fn run_app(

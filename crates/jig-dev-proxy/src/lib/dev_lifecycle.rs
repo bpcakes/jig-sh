@@ -736,6 +736,17 @@ fn replace_recovers_a_dead_orphan_before_claiming_the_same_app() {
     let recoveries = serde_json::to_value(replacement.replacement_recoveries()).unwrap();
     assert_eq!(recoveries[0]["kind"], "dead-orphan-retired");
     assert_eq!(recoveries[0]["apps"][0]["name"], "web");
+
+    let stopped = dev_api::normalize_dev_result(processes::finalize_claimed_dev_session_result(
+        Err(processes::interruption_error(
+            processes::TerminationReason::requested_stop(),
+        )),
+        &replacement,
+    ))
+    .unwrap();
+    assert_eq!(stopped["stopped"], true);
+    assert_eq!(stopped["recoveries"], recoveries);
+
     let snapshot = store.snapshot_dev_state().unwrap();
     assert_eq!(snapshot.sessions.len(), 1);
     assert_ne!(snapshot.sessions[0].session_id, orphan_id);
