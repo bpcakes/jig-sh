@@ -111,7 +111,7 @@ fn run_claimed_dev_session_phases(
     .context("Failed to persist cleanup intent before development preflight")?;
     let preflight_result = preflight(&specs, &interrupted);
     finish_preflight_cleanup(
-        &session,
+        session,
         &mut preflight_cleanup,
         preflight_result,
         &requested_reason,
