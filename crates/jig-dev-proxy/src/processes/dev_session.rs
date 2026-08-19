@@ -275,6 +275,23 @@ fn run_apps_with_session_and_interrupt_probe(
                     spawned_process,
                 } = failure;
                 if cleanup_confirmed {
+                    let cleanup_cancelled =
+                        || force_cleanup_requested() || session.requested_stop();
+                    match session
+                        .confirm_app_spawn_absent_cleanup_cancelable(&spec.name, &cleanup_cancelled)
+                    {
+                        Ok(Some(())) => {}
+                        Ok(None) => {
+                            error = error.context(
+                                "Forced cleanup cancelled a contended attempt to confirm that the failed app spawn left no process behind; conservative spawn-pending evidence remains in the Jig dev session",
+                            );
+                        }
+                        Err(record_error) => {
+                            error = error.context(format!(
+                                "Failed to confirm in the Jig dev session that the app spawn left no process behind: {record_error:#}"
+                            ));
+                        }
+                    }
                     session_cleanup.confirm();
                 } else if let Some(process) = spawned_process {
                     let cleanup_cancelled =

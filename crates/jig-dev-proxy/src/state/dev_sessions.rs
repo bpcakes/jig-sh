@@ -106,6 +106,18 @@ impl DevSessionApp {
         self.spawn_pending = false;
         self.process = Some(process);
     }
+
+    pub(crate) fn confirm_spawn_absent(&mut self, session_id: &str) -> Result<()> {
+        if self.process.is_some() {
+            bail!(
+                "Jig dev session '{session_id}' app '{}' cannot confirm an absent spawn while a process is registered",
+                self.name
+            );
+        }
+        self.spawn_state_tracked = true;
+        self.spawn_pending = false;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

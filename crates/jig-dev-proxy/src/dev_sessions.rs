@@ -308,6 +308,36 @@ impl DevSessionRuntime {
         Ok(())
     }
 
+    pub(crate) fn confirm_app_spawn_absent_cleanup_cancelable(
+        &self,
+        app_name: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<()>> {
+        self.store
+            .mutate_dev_sessions_cleanup_cancelable(cancelled, |sessions, _| {
+                let session = exact_session_mut(
+                    sessions,
+                    &self.session_id,
+                    &self.repo_root_identity,
+                    &self.supervisor,
+                )?;
+                let app = session
+                    .apps
+                    .iter_mut()
+                    .find(|app| app.name == app_name)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Jig dev session '{}' did not contain configured app '{}'",
+                            self.session_id,
+                            app_name
+                        )
+                    })?;
+                app.confirm_spawn_absent(&self.session_id)?;
+                session.updated_at_ms = next_timestamp(session.updated_at_ms);
+                Ok(())
+            })
+    }
+
     pub(crate) fn mark_running_interruptible(
         &self,
         cancelled: &impl Fn() -> bool,

@@ -774,6 +774,72 @@ fn unconfirmed_spawn_window_is_retained_without_trusting_missing_process_identit
 }
 
 #[test]
+fn confirmed_failed_spawn_does_not_poison_later_orphan_recovery() {
+    let temp = tempdir().unwrap();
+    let state_dir = temp.path().join("proxy-state");
+    let store = StateStore::resolve(Some(state_dir.clone())).unwrap();
+    let runtime = dev_sessions::DevSessionRuntime::start(
+        store.clone(),
+        "demo",
+        temp.path(),
+        &[
+            lifecycle_spec(temp.path(), "web", "web.demo.localhost", false),
+            lifecycle_spec(temp.path(), "admin", "admin.demo.localhost", false),
+        ],
+        false,
+    )
+    .unwrap();
+    runtime.prepare_app_spawn("web", 4005).unwrap();
+    assert!(matches!(
+        runtime
+            .record_app_process_interruptible(
+                "web",
+                4005,
+                state::DevProcessIdentity {
+                    pid: u32::MAX - 1,
+                    start_token: Some("retired-app".into()),
+                },
+                &|| false,
+            )
+            .unwrap(),
+        state::LockOutcome::Acquired(())
+    ));
+    let _unconfirmed_web_cleanup = runtime.arm_cleanup();
+    runtime.prepare_app_spawn("admin", 4006).unwrap();
+    let mut admin_cleanup = runtime.arm_cleanup();
+    assert!(
+        runtime
+            .confirm_app_spawn_absent_cleanup_cancelable("admin", &|| false)
+            .unwrap()
+            .is_some()
+    );
+    admin_cleanup.confirm();
+    drop(runtime);
+
+    store
+        .mutate_dev_sessions(|sessions, _| {
+            sessions[0].supervisor = state::DevProcessIdentity {
+                pid: u32::MAX,
+                start_token: Some("retired-supervisor".into()),
+            };
+            Ok(())
+        })
+        .unwrap();
+
+    let persisted = store.snapshot_dev_state().unwrap();
+    assert!(!persisted.sessions[0].apps[1].spawn_pending);
+    let stopped = dev_stop(DevStopRequest::new(
+        "demo",
+        temp.path().to_path_buf(),
+        Some(state_dir),
+    ))
+    .unwrap();
+    assert_eq!(stopped["ok"], true);
+    assert_eq!(stopped["stopped_sessions"], 1);
+    assert!(store.snapshot_dev_state().unwrap().sessions.is_empty());
+}
+
+#[test]
 fn legacy_missing_process_identity_remains_unknown_after_spawn_tracking_upgrade() {
     let temp = tempdir().unwrap();
     let state_dir = temp.path().join("proxy-state");
