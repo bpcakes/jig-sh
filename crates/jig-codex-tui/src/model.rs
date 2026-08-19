@@ -5,7 +5,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, format_percent, sanitize_text};
+use jig_tui::{
+    FuzzyMatchScore, PreparedFuzzyText, format_countdown, format_percent, sanitize_text,
+};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
@@ -834,13 +836,7 @@ impl RateLimitWindow {
         else {
             return "reset due".into();
         };
-        if remaining < 3_600 {
-            format!("resets in {}m", remaining / 60)
-        } else if remaining < 86_400 {
-            format!("resets in {}h", remaining / 3_600)
-        } else {
-            format!("resets in {}d", remaining / 86_400)
-        }
+        format!("resets in {}", format_countdown(remaining))
     }
 
     fn projection_at(&self, now: u64) -> WindowProjection {

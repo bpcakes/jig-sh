@@ -1,4 +1,4 @@
-use jig_tui::{format_percent, sanitize_text};
+use jig_tui::{format_countdown, format_percent, sanitize_text};
 
 use super::{value_bool, value_str};
 
@@ -195,13 +195,7 @@ fn format_codex_reset_from(timestamp: u64, now: u64) -> Option<String> {
     let remaining = timestamp
         .checked_sub(now)
         .filter(|remaining| *remaining > 0)?;
-    if remaining < 60 * 60 {
-        Some(format!("{}m", remaining / 60))
-    } else if remaining < 60 * 60 * 24 {
-        Some(format!("{}h", remaining / (60 * 60)))
-    } else {
-        Some(format!("{}d", remaining / (60 * 60 * 24)))
-    }
+    Some(format_countdown(remaining))
 }
 
 pub(super) fn format_codex_launch_summary(value: &serde_json::Value) -> String {
