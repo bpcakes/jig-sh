@@ -132,7 +132,7 @@ rust_migration_dir = "   "
     assert!(
         error
             .to_string()
-            .contains("sqlx_enabled is true, but rust_migration_dir is empty")
+            .contains("migration_dir is empty and no legacy rust_migration_dir fallback")
     );
 }
 
@@ -492,6 +492,52 @@ fn migration_immutability_ignores_truncated_rename_entry() {
     let violations = migration_immutability_violations(b"R100\0migrations/old.sql\0");
 
     assert!(violations.is_empty());
+}
+
+#[test]
+fn migration_immutability_prefers_the_backend_neutral_directory() {
+    let temp = tempdir().unwrap();
+    let migration_dir = temp.path().join("internal/database/migrations");
+    let legacy_dir = temp.path().join("legacy-migrations");
+    fs::create_dir_all(&migration_dir).unwrap();
+    fs::create_dir_all(&legacy_dir).unwrap();
+    fs::write(migration_dir.join("00001_app.sql"), "-- initial\n").unwrap();
+    fs::write(legacy_dir.join("00001_legacy.sql"), "-- initial\n").unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+rust_migration_dir = "legacy-migrations"
+"#,
+        )
+        .write();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "initial"]);
+    fs::write(migration_dir.join("00001_app.sql"), "-- changed\n").unwrap();
+    fs::write(legacy_dir.join("00001_legacy.sql"), "-- changed\n").unwrap();
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-qm", "change migrations"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = check_migration_immutability(
+        &ctx,
+        &MigrationImmutabilityInput {
+            changed_against: "HEAD^".into(),
+        },
+    )
+    .unwrap();
+    let violations = output["violations"].as_array().unwrap();
+
+    assert_eq!(violations.len(), 1);
+    assert!(
+        violations[0]
+            .as_str()
+            .unwrap()
+            .contains("internal/database/migrations/00001_app.sql")
+    );
 }
 
 #[test]

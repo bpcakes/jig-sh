@@ -89,6 +89,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     rust_migration_dir: String,
+    #[serde(default)]
+    migration_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
     rust_sqlx_metadata_dir: String,
@@ -442,6 +444,19 @@ impl RepoContext {
 
     pub(crate) fn rust_migration_dir(&self) -> &str {
         &self.config.rust_migration_dir
+    }
+
+    pub(crate) fn migration_dir(&self) -> &str {
+        if self.config.migration_dir.trim().is_empty() {
+            self.rust_migration_dir()
+        } else {
+            &self.config.migration_dir
+        }
+    }
+
+    pub(crate) fn migration_policy_enabled(&self) -> bool {
+        self.sqlx_enabled()
+            || (self.backend_language() == "go" && self.config.go_database == "postgres")
     }
 
     pub(crate) fn schema_dump_command(&self) -> &str {

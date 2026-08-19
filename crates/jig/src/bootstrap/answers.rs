@@ -73,6 +73,7 @@ pub(super) struct RenderAnswers {
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
+    migration_dir: Option<String>,
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: bool,
     schema_dump_command: String,
@@ -715,6 +716,12 @@ impl RawAnswers {
             )
         });
         let migration_add_command = self.migration_add_command;
+        let migration_dir = if backend_language == BackendLanguage::Go && go_database == "postgres"
+        {
+            Some("internal/database/migrations".into())
+        } else {
+            rust_migration_dir.clone()
+        };
 
         Ok(RenderAnswers {
             repo_name,
@@ -737,6 +744,7 @@ impl RawAnswers {
                     .unwrap_or_else(|| vec!["crates".into()])
             },
             rust_migration_dir,
+            migration_dir,
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
             schema_dump_command,

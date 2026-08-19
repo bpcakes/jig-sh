@@ -160,6 +160,9 @@ jobs:
         run: |
           scripts/jig check sqlx-unchecked-non-test
 
+[% endif %]
+[% endif %]
+[% if sqlx_enabled or (backend_language == "go" and go_database == "postgres") %]
   migration-immutability:
     name: Enforce migration immutability
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -212,5 +215,4 @@ jobs:
       - name: Check migration immutability
         run: |
           scripts/jig check migration-immutability --changed-against "${{ steps.base_ref.outputs.ref }}"
-[% endif %]
 [% endif %]

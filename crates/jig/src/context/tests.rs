@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_env::{CurrentDirGuard, EnvVarGuard, lock_env};
+use crate::test_env::{CurrentDirGuard, EnvVarGuard, TestRepoBuilder, lock_env};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -94,6 +94,28 @@ typescript_typecheck_command = "scripts/check-webapps.sh typecheck"
     for key in jig_features::supported_command_keys() {
         assert!(ctx.command_for_key(key).is_ok(), "{key}");
     }
+}
+
+#[test]
+fn migration_directory_prefers_neutral_config_and_falls_back_to_legacy_rust_config() {
+    let neutral = tempdir().unwrap();
+    TestRepoBuilder::new(neutral.path())
+        .config(
+            r#"
+migration_dir = "internal/database/migrations"
+rust_migration_dir = "legacy-migrations"
+"#,
+        )
+        .write();
+    let neutral_ctx = RepoContext::load_from(neutral.path()).unwrap();
+    assert_eq!(neutral_ctx.migration_dir(), "internal/database/migrations");
+
+    let legacy = tempdir().unwrap();
+    TestRepoBuilder::new(legacy.path())
+        .config(r#"rust_migration_dir = "migrations""#)
+        .write();
+    let legacy_ctx = RepoContext::load_from(legacy.path()).unwrap();
+    assert_eq!(legacy_ctx.migration_dir(), "migrations");
 }
 
 #[test]

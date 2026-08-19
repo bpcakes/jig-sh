@@ -254,6 +254,15 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
     assert!(browser_e2e.contains("cache-dependency-path: go.mod"));
+
+    let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+    assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
+    assert!(!config.contains("rust_migration_dir ="));
+    let policy =
+        fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
+    let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();
+    assert!(policy["jobs"]["migration-immutability"].is_object());
+    assert!(policy["jobs"]["sqlx-unchecked-queries"].is_null());
 }
 
 #[test]

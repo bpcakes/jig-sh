@@ -157,8 +157,11 @@ pub(crate) fn validate_contract(
             errors.push("Missing scripts/install-jig.sh installer.".into());
         }
     }
-    if ctx.sqlx_enabled() && ctx.rust_migration_dir().trim().is_empty() {
-        errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
+    if ctx.migration_policy_enabled() && ctx.migration_dir().trim().is_empty() {
+        errors.push(
+            "Migration immutability is enabled, but migration_dir is empty and no legacy rust_migration_dir fallback is configured."
+                .into(),
+        );
     }
     // RepoContext construction has already rejected unsupported contract epochs.
     for command_key in ctx.required_commands() {
@@ -467,9 +470,9 @@ fn check_migration_immutability(
     ctx: &RepoContext,
     opts: &MigrationImmutabilityInput,
 ) -> Result<Value> {
-    let dir = ctx.rust_migration_dir();
+    let dir = ctx.migration_dir();
     if dir.trim().is_empty() {
-        bail!("rust_migration_dir is empty");
+        bail!("migration_dir is empty and no legacy rust_migration_dir fallback is configured");
     }
     let bytes = git_output(
         ctx.root(),
