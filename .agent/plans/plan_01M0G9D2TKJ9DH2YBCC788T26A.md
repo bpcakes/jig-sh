@@ -13,7 +13,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 - [x] (2026-08-20) Reviewed `origin/master...HEAD`, classified nine findings by root cause, and opened structured work plan `plan_01M0G9D2TKJ9DH2YBCC788T26A`.
 - [x] (2026-08-20) Made migration configuration, CLI authoring, native-tool registration, generated contracts, and backend-specific file formats one coherent abstraction; retained legacy command/config compatibility at one boundary.
 - [x] (2026-08-20) Disabled Huma create hooks with schema routes, asserted response bodies and headers have no unresolved schema links, and regenerated the committed OpenAPI/client artifacts.
-- [ ] Reuse one bounded numeric-version authority reader for Node and Go.
+- [x] (2026-08-20) Reused one regular-file-only, size-capped numeric-version authority reader for Node and Go, with regression coverage for symlinks, invalid UTF-8, multiple tokens, and oversized/empty files.
 - [ ] Make generated Go formatting and PostgreSQL readiness checks robust on supported worktree/platform states.
 - [ ] Align interactive Go module defaults, reject inapplicable migration answers, and reserve Go backend roots from frontend placement.
 - [ ] Point byte-identical Go client runtime templates at their single shared source and remove redundant copies.

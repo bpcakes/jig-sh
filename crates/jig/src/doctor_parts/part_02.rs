@@ -570,6 +570,84 @@ fn parse_numeric_version_component(value: &str) -> Option<u64> {
     value.parse().ok()
 }
 
+fn numeric_version_authority(
+    path: &Path,
+    product: &str,
+    allow_missing_patch: bool,
+    example: &str,
+) -> std::result::Result<Option<NumericVersion>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(format!(
+                "Could not inspect the {product} version authority at {}",
+                path.display()
+            ));
+        }
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "{product} version authority {} must be a real regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > VERSION_AUTHORITY_MAX_BYTES {
+        return Err(format!(
+            "{product} version authority {} must contain exactly one bounded version token",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(path).map_err(|_| {
+        format!(
+            "Could not read the {product} version authority at {}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(VERSION_AUTHORITY_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            format!(
+                "Could not read the {product} version authority at {}",
+                path.display()
+            )
+        })?;
+    if bytes.is_empty() || bytes.len() as u64 > VERSION_AUTHORITY_MAX_BYTES {
+        return Err(format!(
+            "{product} version authority {} must contain exactly one bounded version token",
+            path.display()
+        ));
+    }
+    let contents = std::str::from_utf8(&bytes).map_err(|_| {
+        format!(
+            "{product} version authority {} must contain valid UTF-8",
+            path.display()
+        )
+    })?;
+    let mut tokens = contents.split_ascii_whitespace();
+    let Some(token) = tokens.next() else {
+        return Err(format!(
+            "{product} version authority {} is empty",
+            path.display()
+        ));
+    };
+    if tokens.next().is_some() {
+        return Err(format!(
+            "{product} version authority {} must contain exactly one version token",
+            path.display()
+        ));
+    }
+    parse_numeric_version(token, false, allow_missing_patch)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "{product} version authority {} must contain an exact numeric version such as {example}",
+                path.display()
+            )
+        })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VersionSeries {
     major: u64,
@@ -722,9 +800,9 @@ fn go_runtime_check(
         return None;
     }
     let authority_path = ctx.root().join(".go-version");
-    let required_text = match fs::read_to_string(&authority_path) {
-        Ok(value) => value,
-        Err(error) => {
+    let required = match numeric_version_authority(&authority_path, "Go", true, "1.26.0") {
+        Ok(Some(required)) => required,
+        Ok(None) => {
             return Some(
                 check(
                     "go_runtime",
@@ -732,27 +810,29 @@ fn go_runtime_check(
                     true,
                     false,
                     "invalid authority",
-                    format!("Failed to read {}: {error}", authority_path.display()),
+                    format!(
+                        "Go version authority {} is missing",
+                        authority_path.display()
+                    ),
                 )
-                .with_fix("Restore .go-version with a numeric Go version such as 1.26.0."),
+                .with_fix("Restore .go-version with a numeric Go version such as 1.26.0.")
+                .with_data(json!({ "authority": authority_path.display().to_string() })),
             );
         }
-    };
-    let Some(required) = parse_numeric_version(required_text.trim(), false, true) else {
-        return Some(
-            check(
-                "go_runtime",
-                "Go runtime",
-                true,
-                false,
-                "invalid authority",
-                format!(
-                    "Go version authority in {} must be numeric, such as 1.26.0",
-                    authority_path.display()
-                ),
-            )
-            .with_fix("Correct .go-version, then rerun scripts/jig doctor."),
-        );
+        Err(reason) => {
+            return Some(
+                check(
+                    "go_runtime",
+                    "Go runtime",
+                    true,
+                    false,
+                    "invalid authority",
+                    reason,
+                )
+                .with_fix("Correct .go-version, then rerun scripts/jig doctor.")
+                .with_data(json!({ "authority": authority_path.display().to_string() })),
+            );
+        }
     };
     let Some(resolution) = resolve_program(
         ctx.root(),

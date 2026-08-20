@@ -403,6 +403,52 @@ fn missing_go_runtime_fix_uses_the_go_version_authority() {
     );
 }
 
+#[test]
+fn numeric_version_authority_bounds_and_validates_go_files() {
+    for (contents, expected) in [
+        (Vec::new(), "bounded version token"),
+        (vec![b'1'; 129], "bounded version token"),
+        (vec![0xff], "valid UTF-8"),
+        (b"1.27.0 1.28.0\n".to_vec(), "exactly one version token"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join(".go-version");
+        fs::write(&authority, contents).unwrap();
+
+        let error = numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap_err();
+
+        assert!(error.contains(expected), "{error:?}");
+    }
+
+    let temp = tempdir().unwrap();
+    let authority = temp.path().join(".go-version");
+    fs::write(&authority, "1.27\n").unwrap();
+    assert_eq!(
+        numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 27,
+            patch: 0,
+        })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn numeric_version_authority_rejects_symlinks_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target-version");
+    let authority = temp.path().join(".go-version");
+    fs::write(&target, "1.27.0\n").unwrap();
+    symlink(&target, &authority).unwrap();
+
+    let error = numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap_err();
+
+    assert!(error.contains("real regular file"), "{error:?}");
+}
+
 #[cfg(unix)]
 #[test]
 fn sqlx_cli_version_check_requires_the_dependency_minor_line() {
