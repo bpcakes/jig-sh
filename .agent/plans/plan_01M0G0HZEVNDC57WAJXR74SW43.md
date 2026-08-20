@@ -9,8 +9,8 @@ This ExecPlan turns the comprehensive-review findings into four independently re
 - [x] Centralize derived Go module naming with Go-compatible validation.
 - [x] Align the interactive preset presentation with the retained numeric aliases.
 - [x] Make agent-guide discovery and entrypoint validation backend-aware, and render matching Go guidance.
-- [ ] Build the development binary, run focused tests after each slice, then run the full configured test, format, Clippy, and contract gates.
-- [ ] Record receipts, inspect the final commit series, and close structured work.
+- [x] Build the development binary, run focused tests after each slice, then run the full configured test, format, Clippy, and contract gates.
+- [x] Record receipts, inspect the final commit series, and close structured work.
 
 ## Surprises & Discoveries
 
@@ -28,7 +28,7 @@ This ExecPlan turns the comprehensive-review findings into four independently re
 
 ## Outcomes & Retrospective
 
-Pending. Update this section after all gates pass with the final behavior, commit series, and any residual limitations.
+The fixes shipped as four independent implementation commits after the planning commit: migration policy paths now remain project-owned through updates; derived and explicit Go module paths share Go-compatible rules; the wizard presents its stable numeric aliases explicitly; and agent-guide policy discovers either Rust crates or Go packages with backend-appropriate entrypoint references. The development binary exercised the repo-local harness. Focused regressions passed after each slice, followed by fresh contract and complete test receipts for 2,146 tests across 25 binaries, plus successful format and Clippy checks. No compatibility migration was introduced: existing numeric aliases and persisted Rust configuration keys remain unchanged.
 
 ## Context and orientation
 
