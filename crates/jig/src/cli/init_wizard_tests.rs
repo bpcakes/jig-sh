@@ -75,6 +75,34 @@ fn go_react_defaults_derive_module_and_web_shape() {
 }
 
 #[test]
+fn go_react_defaults_derive_valid_modules_from_edge_case_repo_names() {
+    for (repo_name, expected) in [
+        (".ExampleProject", "example.com/exampleproject"),
+        ("ExampleProject.", "example.com/exampleproject"),
+        ("CON", "example.com/app-con"),
+    ] {
+        let mut opts = init_opts(&[
+            "jig",
+            "init",
+            repo_name,
+            "--preset",
+            "go-react",
+            "--defaults",
+            "--no-vault",
+        ]);
+
+        prepare_init_interaction_with_io(
+            &mut opts,
+            &mut Cursor::new(Vec::<u8>::new()),
+            &mut Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(opts.answers.go_module.as_deref(), Some(expected));
+    }
+}
+
+#[test]
 fn go_react_strict_mode_requires_module() {
     let mut opts = init_opts(&[
         "jig",

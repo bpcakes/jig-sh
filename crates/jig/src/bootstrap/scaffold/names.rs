@@ -77,6 +77,35 @@ pub(super) fn normalize_rust_react_package_name(value: &str) -> Result<String> {
     Ok(package)
 }
 
+pub(super) fn default_go_module(value: &str) -> String {
+    let mut stem = String::new();
+    let mut previous_dash = false;
+    for ch in value.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+        if mapped == '-' {
+            if previous_dash {
+                continue;
+            }
+            previous_dash = true;
+        } else {
+            previous_dash = false;
+        }
+        stem.push(mapped);
+    }
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "app" } else { stem };
+    let mut module = format!("example.com/{stem}");
+    if validate_go_module(&module).is_err() {
+        module = format!("example.com/app-{stem}");
+    }
+    debug_assert!(validate_go_module(&module).is_ok());
+    module
+}
+
 pub(super) fn validate_go_module(value: &str) -> Result<()> {
     let domain = value.split('/').next().unwrap_or_default();
     if value.is_empty() || value.trim() != value || !value.contains('/') || !domain.contains('.') {
@@ -102,6 +131,11 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
             "Invalid --go-module '{value}'. Go module path segments cannot start or end with '.'"
         );
     }
+    if value.split('/').any(|segment| segment.contains("..")) {
+        bail!(
+            "Invalid --go-module '{value}'. Go module path segments cannot contain consecutive '.' characters"
+        );
+    }
     if !value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | '~'))
@@ -110,7 +144,72 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
             "Invalid --go-module '{value}'. Use ASCII letters, digits, '/', '.', '-', '_', or '~'"
         );
     }
+    if domain.starts_with('-')
+        || !domain
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '-'))
+    {
+        bail!(
+            "Invalid --go-module '{value}'. The domain must use lowercase ASCII letters, digits, '.', or '-', and cannot start with '-'"
+        );
+    }
+    for segment in value.split('/') {
+        let short = segment.split('.').next().unwrap_or_default();
+        if is_windows_reserved_name(short) {
+            bail!(
+                "Invalid --go-module '{value}'. Path element component '{short}' is reserved on Windows"
+            );
+        }
+        if let Some((_, suffix)) = short.rsplit_once('~')
+            && !suffix.is_empty()
+            && suffix.chars().all(|ch| ch.is_ascii_digit())
+        {
+            bail!(
+                "Invalid --go-module '{value}'. Path elements cannot end with a tilde followed by digits"
+            );
+        }
+    }
+    if !has_valid_go_module_version_suffix(value) {
+        bail!(
+            "Invalid --go-module '{value}'. Major-version suffixes must use /v2 or later without leading zeroes or dots"
+        );
+    }
     Ok(())
+}
+
+fn is_windows_reserved_name(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    matches!(value.as_str(), "con" | "prn" | "aux" | "nul")
+        || value
+            .strip_prefix("com")
+            .or_else(|| value.strip_prefix("lpt"))
+            .is_some_and(
+                |suffix| matches!(suffix.as_bytes(), [digit] if (b'1'..=b'9').contains(digit)),
+            )
+}
+
+fn has_valid_go_module_version_suffix(value: &str) -> bool {
+    if value.starts_with("gopkg.in/") {
+        let value = value.strip_suffix("-unstable").unwrap_or(value);
+        let Some((_, version)) = value.rsplit_once(".v") else {
+            return false;
+        };
+        return !version.is_empty()
+            && version.chars().all(|ch| ch.is_ascii_digit())
+            && (!version.starts_with('0') || version == "0");
+    }
+
+    let segment = value.rsplit('/').next().unwrap_or_default();
+    let Some(version) = segment.strip_prefix('v') else {
+        return true;
+    };
+    if version.is_empty() || !version.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+        return true;
+    }
+    !version.contains('.')
+        && !version.starts_with('0')
+        && version != "1"
+        && version.chars().all(|ch| ch.is_ascii_digit())
 }
 
 pub(super) fn rust_react_repo_dns_label(package_name: &str) -> String {
@@ -272,6 +371,52 @@ mod tests {
         ] {
             let error = validate_go_module(module).unwrap_err().to_string();
             assert!(error.contains("Invalid --go-module"), "{module}: {error}");
+        }
+    }
+
+    #[test]
+    fn derived_go_modules_are_valid_by_construction() {
+        for (repo_name, expected) in [
+            (".ExampleProject", "example.com/exampleproject"),
+            ("ExampleProject.", "example.com/exampleproject"),
+            ("CON", "example.com/app-con"),
+            ("...", "example.com/app"),
+        ] {
+            let module = default_go_module(repo_name);
+            assert_eq!(module, expected);
+            validate_go_module(&module).unwrap();
+        }
+    }
+
+    #[test]
+    fn go_module_rejects_platform_reserved_elements_and_short_names() {
+        for module in [
+            "example.com/con",
+            "example.com/ExampleVault/COM1.txt",
+            "example.com/vault-consumer-fixture/foo~1",
+        ] {
+            let error = validate_go_module(module).unwrap_err().to_string();
+            assert!(error.contains("Invalid --go-module"), "{module}: {error}");
+        }
+    }
+
+    #[test]
+    fn go_module_enforces_domain_and_major_version_rules() {
+        for module in [
+            "Example.com/ExampleProject",
+            "example.com/ExampleProject/v1",
+            "example.com/ExampleProject/v01",
+            "example.com/ExampleProject/v2.0",
+        ] {
+            let error = validate_go_module(module).unwrap_err().to_string();
+            assert!(error.contains("Invalid --go-module"), "{module}: {error}");
+        }
+        for module in [
+            "example.com/ExampleProject/v2",
+            "gopkg.in/yaml.v2",
+            "gopkg.in/check.v1",
+        ] {
+            validate_go_module(module).unwrap();
         }
     }
 

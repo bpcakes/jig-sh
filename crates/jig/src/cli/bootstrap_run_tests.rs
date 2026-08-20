@@ -146,37 +146,46 @@ fn invalid_go_module_fails_before_vault_capture_or_destination_writes() {
     let _env = lock_env();
     let _passphrase = EnvVarGuard::remove("JIG_VAULT_PASSPHRASE");
     let temp = tempfile::tempdir().unwrap();
-    let destination = temp.path().join("ExampleProject");
 
-    let error = run_init_command(
-        bootstrap::InitOpts {
-            path: destination.clone(),
-            scaffold: bootstrap::ScaffoldOpts {
-                preset: Some(bootstrap::ScaffoldPreset::GoReact),
-                db: Some(bootstrap::ScaffoldDb::None),
-                frontends: vec![bootstrap::parse_scaffold_frontend("web").unwrap()],
-                frontend_list: Vec::new(),
+    for (destination_name, module) in [
+        ("ExampleProjectDot", "example.com/ExampleProject."),
+        ("ExampleProjectReserved", "example.com/con"),
+        (
+            "ExampleProjectShortName",
+            "example.com/vault-consumer-fixture/foo~1",
+        ),
+    ] {
+        let destination = temp.path().join(destination_name);
+        let error = run_init_command(
+            bootstrap::InitOpts {
+                path: destination.clone(),
+                scaffold: bootstrap::ScaffoldOpts {
+                    preset: Some(bootstrap::ScaffoldPreset::GoReact),
+                    db: Some(bootstrap::ScaffoldDb::None),
+                    frontends: vec![bootstrap::parse_scaffold_frontend("web").unwrap()],
+                    frontend_list: Vec::new(),
+                },
+                template: None,
+                template_mode: None,
+                vcs_ref: None,
+                force: false,
+                defaults: true,
+                no_input: false,
+                no_vault: false,
+                answers: bootstrap::AnswerOpts {
+                    go_module: Some(module.into()),
+                    ..bootstrap::AnswerOpts::default()
+                },
             },
-            template: None,
-            template_mode: None,
-            vcs_ref: None,
-            force: false,
-            defaults: true,
-            no_input: false,
-            no_vault: false,
-            answers: bootstrap::AnswerOpts {
-                go_module: Some("example.com/ExampleProject.".into()),
-                ..bootstrap::AnswerOpts::default()
-            },
-        },
-        true,
-    )
-    .unwrap_err()
-    .to_string();
+            true,
+        )
+        .unwrap_err()
+        .to_string();
 
-    assert!(error.contains("Go module path segments cannot start or end"));
-    assert!(!error.contains("JIG_VAULT_PASSPHRASE"));
-    assert!(!destination.exists());
+        assert!(error.contains("Invalid --go-module"), "{module}: {error}");
+        assert!(!error.contains("JIG_VAULT_PASSPHRASE"));
+        assert!(!destination.exists());
+    }
 }
 
 #[test]

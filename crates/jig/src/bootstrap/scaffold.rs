@@ -60,6 +60,10 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
     names::validate_go_module(value)
 }
 
+pub(crate) fn default_go_module(value: &str) -> String {
+    names::default_go_module(value)
+}
+
 impl InitScaffoldPlan {
     pub(super) fn from_opts(
         opts: &ScaffoldOpts,

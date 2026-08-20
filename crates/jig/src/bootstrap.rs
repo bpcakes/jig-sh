@@ -89,6 +89,7 @@ mod preview_seed;
 mod renderer;
 mod runtime_config;
 mod scaffold;
+pub(crate) use scaffold::default_go_module;
 mod staged_render;
 mod sync;
 mod template_source;

@@ -132,21 +132,7 @@ fn apply_project_shape_defaults(opts: &mut InitOpts) -> Result<()> {
             .as_deref()
             .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
             .unwrap_or("app");
-        let stem = repo_name
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '-'
-                }
-            })
-            .collect::<String>();
-        let stem = stem.trim_matches('-');
-        opts.answers.go_module = Some(format!(
-            "example.com/{}",
-            if stem.is_empty() { "app" } else { stem }
-        ));
+        opts.answers.go_module = Some(bootstrap::default_go_module(repo_name));
     }
     Ok(())
 }
