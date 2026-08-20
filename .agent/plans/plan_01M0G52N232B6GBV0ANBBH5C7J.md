@@ -14,8 +14,8 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 - [x] (2026-08-20 18:00Z) Moved migration execution out of ordinary pool opening and into explicit bootstrap, refreshed snapshots, and passed the focused rendering regression.
 - [x] (2026-08-20 18:14Z) Made HTTP serving and graceful shutdown one joined lifecycle and passed the generated API test for both no-database and PostgreSQL scaffolds.
 - [x] (2026-08-20 18:23Z) Reused canonical Go module validation inside a case-preserving interactive retry loop and passed the focused wizard regression.
-- [ ] Rebuild the development binary and run the complete configured test, format, Clippy, and contract gates.
-- [ ] Record evidence, review the final commit series, update this plan's outcome, and close structured work.
+- [x] (2026-08-20 18:24Z) Rebuilt the development binary and passed the complete configured test, format, warnings-denied Clippy, and contract gates.
+- [x] (2026-08-20 18:24Z) Confirmed fresh work-gate evidence, reviewed the three behavioral commits, and updated this plan's outcome before closing structured work.
 
 ## Surprises & Discoveries
 
@@ -47,7 +47,11 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. At completion this section will compare the observed migration, shutdown, and prompt behavior with the purpose above and record final gate receipts.
+The three reviewed defects did not have one shared cause. Migration-on-open and early shutdown return were structural lifecycle-ownership problems: connection setup unexpectedly owned schema mutation, and no single operation owned serving through completed drain. The fixes move those responsibilities to explicit, testable lifecycle boundaries. The module prompt failure was a smaller omission, but implementation uncovered a related abstraction leak where a choice-oriented helper lowercased free-form data; separating raw value capture from choice normalization removes that wider bug surface.
+
+The implementation produced three independently revertible behavioral commits: `1485e14` isolates migration bootstrap, `991674c` joins graceful API shutdown, and `2c9b17c` retries invalid Go modules without changing case. Generated `cmd/api` tests passed for both no-database and PostgreSQL renderings after the normal `go mod tidy` bootstrap step. The focused wizard module passed all 30 tests.
+
+Repository-wide verification passed with work-check batch `receipt_01M0G6KG81EK2RWX22V1NSX5S3`: `jig.test` exited zero under receipt `receipt_01M0G6KG6NYGEWM4MRES7QZT15`, and `jig.contract_check` exited zero under receipt `receipt_01M0G5PN3JQS64385723ZWX9N6`. Independent format, Clippy, and contract receipts were `receipt_01M0G6KQDJSWJ6SJDH4GRFWSDM`, `receipt_01M0G6MB6VE2W1FACA6R7YJM2B`, and `receipt_01M0G6MF96XARNGYCCA4ABS6XB`. `scripts/jig work gates` and `scripts/jig work evidence` reported both required gates fresh with no unresolved gates.
 
 ## Context and Orientation
 
@@ -91,7 +95,7 @@ At the end, build and use the current runtime:
     scripts/jig check fmt
     scripts/jig check clippy
     scripts/jig check contract
-    scripts/jig check test
+    # work check runs the configured jig.test gate; do not duplicate that full-suite run
     scripts/jig work gates --plan-id plan_01M0G52N232B6GBV0ANBBH5C7J
     scripts/jig work evidence --plan-id plan_01M0G52N232B6GBV0ANBBH5C7J
     scripts/jig work receipts --plan-id plan_01M0G52N232B6GBV0ANBBH5C7J
