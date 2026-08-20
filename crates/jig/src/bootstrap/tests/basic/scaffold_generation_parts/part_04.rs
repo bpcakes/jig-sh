@@ -185,6 +185,12 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(httpapi_test.contents.contains("func TestOpenAPIIsCurrent"));
     assert!(httpapi_test.contents.contains("public OpenAPI document is stale"));
+    assert!(
+        httpapi_test
+            .contents
+            .contains(r#"filepath.Join("..", "..", "openapi", "public.json")"#)
+    );
+    assert!(!httpapi_test.contents.contains("runtime.Caller"));
 }
 
 #[test]
@@ -251,6 +257,10 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             2
         );
     }
+
+    let go_tests =
+        fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+    assert_eq!(go_tests.matches(r#"- ".go-version""#).count(), 2);
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
     assert!(browser_e2e.contains("cache-dependency-path: go.mod"));

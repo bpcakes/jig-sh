@@ -14,7 +14,7 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 - [x] (2026-08-20 07:28Z) Slice 1: made application preset identity and generated backend-name reservations early, canonical invariants; added conflict and collision tests; focused scaffold generation tests passed.
 - [x] (2026-08-20 07:33Z) Slice 2: moved Go module validation into the shared early scaffold-invariant phase, retained plan-level defense in depth, rejected dot-edged segments and unsupported punctuation, and proved validation precedes vault capture and writes.
 - [x] (2026-08-20 07:36Z) Slice 3: shared the database configuration guard across application presets, aligned Go bootstrap ordering with the lifecycle contract, corrected Goose documentation, and passed focused Rust and Go command-generation tests.
-- [ ] Slice 4: harden generated Go workflow and OpenAPI test paths; add template and generated-runtime tests; commit.
+- [x] (2026-08-20 07:40Z) Slice 4: added `.go-version` to both Go workflow filters, removed compiler-source metadata from the OpenAPI freshness test, passed both template snapshot checks and rendering tests, and proved a generated `ExampleProject` passes `GOFLAGS=-trimpath go test ./...`.
 - [ ] Slice 5: make Go doctor remediation version-aware; add diagnostic tests; commit.
 - [ ] Run formatting, Clippy, full repository tests and Jig gates; inspect receipts and working tree; finish structured work.
 
@@ -28,6 +28,8 @@ The Go scaffold currently works on its primary path, but several edge cases expo
   Evidence: `crates/jig/src/cli/bootstrap_run.rs` prepares the vault before `bootstrap::run_init`, while `validate_go_module` is called from `InitScaffoldPlan::go_react`.
 - Observation: Preserving answer-file command overrides is compatible with strong preset identity checks.
   Evidence: The implementation rejects only contradictory application backend identity, then derives canonical identity from `ScaffoldPreset`; harness-only remains free to describe an existing Rust or Go project.
+- Observation: Go test package working-directory semantics provide a simpler and more portable repository path than `runtime.Caller`.
+  Evidence: A freshly generated Go project passed every package test with `GOFLAGS=-trimpath`; the old implementation failed reading a module-import-text path under the same flag.
 
 ## Decision Log
 
@@ -141,3 +143,5 @@ Plan revision note (2026-08-20 07:28Z): Recorded completion and focused test evi
 Plan revision note (2026-08-20 07:33Z): Recorded the early-validation design decision and successful Go module and CLI vault-ordering tests.
 
 Plan revision note (2026-08-20 07:36Z): Recorded completion of shared database preflight and generated Go bootstrap lifecycle ordering.
+
+Plan revision note (2026-08-20 07:40Z): Recorded workflow authority coverage, snapshot checks, and the successful generated-project trimpath proof.
