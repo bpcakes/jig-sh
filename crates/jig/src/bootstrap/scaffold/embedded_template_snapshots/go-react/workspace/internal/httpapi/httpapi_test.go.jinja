@@ -23,9 +23,15 @@ func TestStatus(t *testing.T) {
 	if response.Header().Get("X-Request-ID") == "" {
 		t.Fatal("X-Request-ID header is empty")
 	}
+	if link := response.Header().Get("Link"); link != "" {
+		t.Fatalf("Link header = %q, want empty when schema routes are disabled", link)
+	}
 	var body map[string]any
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
+	}
+	if schema, exists := body["$schema"]; exists {
+		t.Fatalf("$schema = %v, want field omitted when schema routes are disabled", schema)
 	}
 	if body["ready"] != true {
 		t.Fatalf("ready = %v, want true", body["ready"])

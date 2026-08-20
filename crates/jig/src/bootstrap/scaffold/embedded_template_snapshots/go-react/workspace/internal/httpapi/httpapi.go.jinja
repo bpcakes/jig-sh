@@ -43,6 +43,7 @@ func New(deps Dependencies) Service {
 	router.Use(middleware.RequestID)
 	router.Use(requestIDHeader)
 	config := huma.DefaultConfig("<<[ repo_name ]>> API", "1.0.0")
+	config.CreateHooks = nil
 	config.OpenAPIPath = ""
 	config.DocsPath = ""
 	config.SchemasPath = ""

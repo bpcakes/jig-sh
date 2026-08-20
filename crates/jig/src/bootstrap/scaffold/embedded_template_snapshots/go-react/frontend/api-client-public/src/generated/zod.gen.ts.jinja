@@ -3,13 +3,11 @@
 import * as z from 'zod';
 
 export const zAppVersionResponse = z.object({
-    $schema: z.url().readonly().optional(),
     name: z.string(),
     version: z.string()
 });
 
 export const zAppStatusResponse = z.object({
-    $schema: z.url().readonly().optional(),
     ready: z.boolean(),
     version: zAppVersionResponse
 });
@@ -21,26 +19,6 @@ export const zErrorDetail = z.object({
 });
 
 export const zErrorModel = z.object({
-    $schema: z.url().readonly().optional(),
-    detail: z.string().optional(),
-    errors: z.array(zErrorDetail).nullish(),
-    instance: z.url().optional(),
-    status: z.coerce.bigint().min(BigInt('-9223372036854775808'), { error: 'Invalid value: Expected int64 to be >= -9223372036854775808' }).max(BigInt('9223372036854775807'), { error: 'Invalid value: Expected int64 to be <= 9223372036854775807' }).optional(),
-    title: z.string().optional(),
-    type: z.url().optional().default('about:blank')
-});
-
-export const zAppVersionResponseWritable = z.object({
-    name: z.string(),
-    version: z.string()
-});
-
-export const zAppStatusResponseWritable = z.object({
-    ready: z.boolean(),
-    version: zAppVersionResponseWritable
-});
-
-export const zErrorModelWritable = z.object({
     detail: z.string().optional(),
     errors: z.array(zErrorDetail).nullish(),
     instance: z.url().optional(),

@@ -312,6 +312,18 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert!(root_guide.contains("scripts/jig migration add NAME"));
     let go_mod = fs::read_to_string(destination.join("go.mod")).unwrap();
     assert!(!go_mod.contains("github.com/pressly/goose/v3/cmd/goose"));
+    let http_api = fs::read_to_string(destination.join("internal/httpapi/httpapi.go")).unwrap();
+    assert!(http_api.contains("config.CreateHooks = nil"));
+    let http_api_test =
+        fs::read_to_string(destination.join("internal/httpapi/httpapi_test.go")).unwrap();
+    assert!(http_api_test.contains("want field omitted when schema routes are disabled"));
+    let openapi = fs::read_to_string(destination.join("openapi/public.json")).unwrap();
+    assert!(!openapi.contains("\"$schema\""));
+    let client_types = fs::read_to_string(
+        destination.join("packages/public-api-client/src/generated/types.gen.ts"),
+    )
+    .unwrap();
+    assert!(!client_types.contains("$schema"));
     let policy =
         fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
     let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();

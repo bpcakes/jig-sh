@@ -12,7 +12,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 
 - [x] (2026-08-20) Reviewed `origin/master...HEAD`, classified nine findings by root cause, and opened structured work plan `plan_01M0G9D2TKJ9DH2YBCC788T26A`.
 - [x] (2026-08-20) Made migration configuration, CLI authoring, native-tool registration, generated contracts, and backend-specific file formats one coherent abstraction; retained legacy command/config compatibility at one boundary.
-- [ ] Disable Huma schema-link transformation when generated schema routes are disabled, then regenerate the committed API contract/client.
+- [x] (2026-08-20) Disabled Huma create hooks with schema routes, asserted response bodies and headers have no unresolved schema links, and regenerated the committed OpenAPI/client artifacts.
 - [ ] Reuse one bounded numeric-version authority reader for Node and Go.
 - [ ] Make generated Go formatting and PostgreSQL readiness checks robust on supported worktree/platform states.
 - [ ] Align interactive Go module defaults, reject inapplicable migration answers, and reserve Go backend roots from frontend placement.
@@ -20,6 +20,9 @@ After this work, migration path and authoring behavior will have one backend-neu
 - [ ] Rebuild the development runtime; pass focused tests, the complete configured test gate, format, Clippy, contract, and structured-work evidence; close the plan.
 
 ## Surprises & Discoveries
+
+- Observation: Removing Huma's read-only `$schema` properties also removes Hey API's generated `*Writable` aliases; those aliases existed only to omit the read-only link field and become redundant once the response and writable shapes are identical.
+  Evidence: `node scripts/contracts.mjs check` identified `index.ts`, `types.gen.ts`, and `zod.gen.ts` drift; regeneration removed only `$schema` members and the now-identical writable aliases.
 
 - Observation: A prior hardening slice intentionally made `migration_dir` project-owned and backend-neutral, but SQLx migration creation, command inventory, Rust workflow triggers, and generated Rust guidance still read `rust_migration_dir` directly.
   Evidence: `RepoContext::migration_dir` prefers the neutral key, while `policy::migration_add`, `info::commands::sqlx_command`, and `templates/project/.github/workflows/repo-policy.yml.jinja` use the legacy key.
