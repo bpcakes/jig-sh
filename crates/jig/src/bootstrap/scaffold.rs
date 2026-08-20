@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
-use crate::backend::GoDatabase;
+use crate::backend::{GO_POSTGRES_MIGRATION_DIR, GoDatabase};
 use crate::context::validate_web_package_manager;
 
 use super::{
@@ -102,6 +102,7 @@ impl InitScaffoldPlan {
             answers.sqlx_enabled = Some(false);
             answers.rust_crate_roots.clear();
             answers.rust_migration_dir = None;
+            answers.migration_dir = Some(GO_POSTGRES_MIGRATION_DIR.into());
             answers.rust_sqlx_metadata_dir = None;
             answers.schema_dump_enabled = Some(false);
         } else if answers.sqlx_enabled.is_none() {
@@ -448,7 +449,7 @@ impl InitScaffoldPlan {
             go_module,
             repo_dns_label,
             db,
-            migration_dir: "internal/database/migrations".into(),
+            migration_dir: GO_POSTGRES_MIGRATION_DIR.into(),
             sqlx_metadata_dir: "internal/database/sqlc".into(),
             package_manager,
             default_branch,

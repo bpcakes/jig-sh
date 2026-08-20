@@ -10,7 +10,7 @@ use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
 };
-use crate::backend::{BackendLanguage, GoDatabase};
+use crate::backend::{BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GoDatabase};
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
     config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
@@ -342,6 +342,7 @@ struct RawAnswers {
     sqlx_enabled: Option<bool>,
     rust_crate_roots: Option<Vec<String>>,
     rust_migration_dir: Option<String>,
+    migration_dir: Option<String>,
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: Option<bool>,
     schema_dump_command: Option<String>,
@@ -474,6 +475,7 @@ impl RawAnswers {
             &mut self.rust_migration_dir,
             opts.rust_migration_dir.clone(),
         );
+        merge_option(&mut self.migration_dir, opts.migration_dir.clone());
         merge_option(
             &mut self.rust_sqlx_metadata_dir,
             opts.rust_sqlx_metadata_dir.clone(),
@@ -564,6 +566,7 @@ impl RawAnswers {
             sqlx_enabled: self.sqlx_enabled,
             rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
             rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),
+            migration_dir: self.migration_dir.filter(|value| !value.is_empty()),
             rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
             schema_dump_enabled: self.schema_dump_enabled,
             schema_dump_command: self.schema_dump_command,
@@ -694,11 +697,16 @@ impl RawAnswers {
             )
         });
         let migration_add_command = self.migration_add_command;
-        let migration_dir = if backend_language.is_go() && go_database.is_postgres() {
-            Some("internal/database/migrations".into())
-        } else {
-            rust_migration_dir.clone()
-        };
+        let migration_dir = self
+            .migration_dir
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                if backend_language.is_go() && go_database.is_postgres() {
+                    Some(GO_POSTGRES_MIGRATION_DIR.into())
+                } else {
+                    rust_migration_dir.clone()
+                }
+            });
 
         Ok(RenderAnswers {
             repo_name,

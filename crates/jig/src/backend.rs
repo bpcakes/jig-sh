@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub(crate) const GO_POSTGRES_MIGRATION_DIR: &str = "internal/database/migrations";
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum BackendLanguage {

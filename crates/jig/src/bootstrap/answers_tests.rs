@@ -41,6 +41,34 @@ timeout_seconds = 45
 }
 
 #[test]
+fn migration_dir_survives_effective_options_and_render_serialization() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        r#"repo_name = "ExampleProject"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "database/migrations"
+sqlx_enabled = false
+schema_dump_enabled = false
+"#,
+    )
+    .unwrap();
+
+    let input = AnswerInput::from_file(&path).unwrap();
+    let effective = input.effective_opts(&AnswerOpts::default()).unwrap();
+    assert_eq!(
+        effective.migration_dir.as_deref(),
+        Some("database/migrations")
+    );
+
+    let rendered = RenderAnswers::from_answers_file(&path).unwrap();
+    let value = serde_json::to_value(rendered).unwrap();
+    assert_eq!(value["migration_dir"], "database/migrations");
+}
+
+#[test]
 fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_files() {
     let rendered = RawAnswers {
         repo_name: Some("demo".into()),

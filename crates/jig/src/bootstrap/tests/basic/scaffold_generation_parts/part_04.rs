@@ -256,6 +256,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
                 .count(),
             2
         );
+        assert_eq!(
+            workflow
+                .matches(r#"- "internal/database/migrations/**""#)
+                .count(),
+            2
+        );
     }
 
     let go_tests =
@@ -273,6 +279,25 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();
     assert!(policy["jobs"]["migration-immutability"].is_object());
     assert!(policy["jobs"]["sqlx-unchecked-queries"].is_null());
+
+    let config_path = destination.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        r#"migration_dir = "internal/database/migrations""#,
+        r#"migration_dir = "database/migrations""#,
+    );
+    fs::write(&config_path, config).unwrap();
+    run_update(update_opts(&destination, template.path(), true)).unwrap();
+
+    for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
+        let workflow = fs::read_to_string(
+            destination
+                .join(".github/workflows")
+                .join(workflow_name),
+        )
+        .unwrap();
+        assert_eq!(workflow.matches(r#"- "database/migrations/**""#).count(), 2);
+        assert!(!workflow.contains(r#"- "internal/database/migrations/**""#));
+    }
 }
 
 #[test]

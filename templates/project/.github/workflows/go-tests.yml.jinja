@@ -7,9 +7,11 @@ on:
       - "go.mod"
       - "go.sum"
       - ".go-version"
+[% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
-      - "internal/database/migrations/**"
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
+[% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - ".github/workflows/go-tests.yml"
@@ -21,9 +23,11 @@ on:
       - "go.mod"
       - "go.sum"
       - ".go-version"
+[% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
-      - "internal/database/migrations/**"
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
+[% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - ".github/workflows/go-tests.yml"

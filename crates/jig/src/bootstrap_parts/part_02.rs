@@ -541,6 +541,15 @@ impl ScaffoldOpts {
             if let Some(go_module) = answers.go_module.as_deref() {
                 scaffold::validate_go_module(go_module)?;
             }
+            if self.db == Some(ScaffoldDb::Postgres)
+                && let Some(migration_dir) = answers.migration_dir.as_deref()
+                && migration_dir != crate::backend::GO_POSTGRES_MIGRATION_DIR
+            {
+                bail!(
+                    "--preset go-react owns its initial migration layout at {}; remove migration_dir from the answers file and customize the project-owned scaffold after init",
+                    crate::backend::GO_POSTGRES_MIGRATION_DIR
+                );
+            }
             if self.db == Some(ScaffoldDb::Sqlite) {
                 bail!(
                     "--preset go-react does not support --db sqlite; use --db none or --db postgres"

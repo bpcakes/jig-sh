@@ -58,6 +58,9 @@ pub struct AnswerOpts {
     /// Set by the Go scaffold to `none` or `postgres`.
     #[arg(skip)]
     pub(crate) go_database: Option<crate::backend::GoDatabase>,
+    /// Backend-neutral migration policy path loaded from persisted answers.
+    #[arg(skip)]
+    pub(crate) migration_dir: Option<String>,
     #[arg(
         long,
         help_heading = "Common Answers",
