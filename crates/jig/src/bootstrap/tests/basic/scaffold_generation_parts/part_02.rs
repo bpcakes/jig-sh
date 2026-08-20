@@ -904,6 +904,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(postgres_script.contains("test_db_my_app"));
     assert!(postgres_script.contains("--command 'SELECT 1'"));
     assert!(!postgres_script.contains("pg_isready"));
+    assert!(!postgres_script.contains("seq 1 60"));
+    assert!(postgres_script.contains("attempt=$((attempt + 1))"));
     assert!(postgres_script.contains("-- --ignored --nocapture"));
     let root_readme = fs::read_to_string(destination.join("README.md")).unwrap();
     assert!(root_readme.contains("Prerequisites: Rust 1.94 or newer"));

@@ -324,6 +324,10 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     )
     .unwrap();
     assert!(!client_types.contains("$schema"));
+    let postgres_script = fs::read_to_string(destination.join("scripts/test-postgres.sh")).unwrap();
+    assert!(!postgres_script.contains("seq 1 60"));
+    assert!(postgres_script.contains("attempt=$((attempt + 1))"));
+    assert!(postgres_script.contains("PostgreSQL container did not become queryable"));
     let policy =
         fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
     let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();

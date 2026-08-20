@@ -756,7 +756,7 @@ impl RawAnswers {
             rust_test_locked_command: self.rust_test_locked_command.unwrap_or_else(|| {
                 optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
-            go_fmt_check_command: "set -o pipefail; files=$(git ls-files --cached --others --exclude-standard -z -- '*.go' | xargs -0 gofmt -l) || exit $?; test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into(),
+            go_fmt_check_command: "set -o pipefail; files=$(git ls-files --cached --others --exclude-standard -z -- '*.go' | while IFS= read -r -d '' file; do if [ -f \"$file\" ]; then printf '%s\\0' \"$file\"; fi; done | xargs -0 gofmt -l --) || exit $?; test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into(),
             go_lint_command: "go vet ./...".into(),
             go_test_command: "go test ./...".into(),
             go_test_locked_command: "go mod verify && go test -mod=readonly ./...".into(),

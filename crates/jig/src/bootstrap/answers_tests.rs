@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, process::Command};
 
 use tempfile::tempdir;
 
@@ -84,8 +84,45 @@ fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_file
     assert!(rendered.go_fmt_check_command.contains("set -o pipefail"));
     assert!(rendered.go_fmt_check_command.contains("git ls-files"));
     assert!(rendered.go_fmt_check_command.contains("--exclude-standard"));
-    assert!(rendered.go_fmt_check_command.contains("xargs -0 gofmt -l"));
+    assert!(rendered.go_fmt_check_command.contains("[ -f \"$file\" ]"));
+    assert!(
+        rendered
+            .go_fmt_check_command
+            .contains("xargs -0 gofmt -l --")
+    );
     assert!(rendered.go_fmt_check_command.contains(") || exit $?"));
+
+    let temp = tempdir().unwrap();
+    fs::write(temp.path().join("current.go"), "package example\n").unwrap();
+    fs::write(temp.path().join("deleted.go"), "package example\n").unwrap();
+    fs::write(temp.path().join("ignored.go"), "not valid Go\n").unwrap();
+    fs::write(temp.path().join(".gitignore"), "ignored.go\n").unwrap();
+    assert!(
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["add", "current.go", "deleted.go", ".gitignore"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    fs::remove_file(temp.path().join("deleted.go")).unwrap();
+
+    let output = Command::new("bash")
+        .args(["-c", &rendered.go_fmt_check_command])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
 }
 
 #[test]
