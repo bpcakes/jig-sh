@@ -83,6 +83,8 @@ pub(crate) mod cli_command {
     pub(crate) const LOOP_STATUS: &str = "status";
     pub(crate) const LOOP_TICK: &str = "tick";
     pub(crate) const MCP: &str = "mcp";
+    pub(crate) const MIGRATION: &str = "migration";
+    pub(crate) const MIGRATION_ADD_NESTED: &str = "add";
     pub(crate) const MIGRATION_ADD: &str = "migration-add";
     pub(crate) const PRESETS: &str = "presets";
     pub(crate) const PROMPT: &str = "prompt";

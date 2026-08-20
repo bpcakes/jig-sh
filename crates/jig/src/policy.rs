@@ -249,12 +249,12 @@ pub(crate) fn validate_contract(
 }
 
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
-    if !ctx.sqlx_enabled() {
-        bail!("sqlx migration add requires sqlx_enabled = true");
+    if !ctx.migration_policy_enabled() {
+        bail!("migration add requires a configured SQLx or Go/PostgreSQL migration backend");
     }
-    let migration_dir = ctx.rust_migration_dir();
+    let migration_dir = ctx.migration_dir();
     if migration_dir.trim().is_empty() {
-        bail!("rust_migration_dir is empty");
+        bail!("migration_dir is empty and no legacy rust_migration_dir fallback is configured");
     }
     let slug = slugify(name);
     if slug.is_empty() {
@@ -265,6 +265,36 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
         .root()
         .join(migration_dir)
         .join(format!("{timestamp}_{slug}"));
+    if ctx.is_go_backend() {
+        return goose_migration_add(&base, &slug);
+    }
+    sqlx_migration_add(&base, &slug)
+}
+
+fn goose_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
+    let migration = base.with_extension("sql");
+    if migration.exists() {
+        bail!("Migration file already exists: {}.", migration.display());
+    }
+    if let Some(parent) = migration.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    fs::write(
+        &migration,
+        format!(
+            "-- +goose Up\n-- forward migration: {slug}\n\n-- +goose Down\n-- rollback migration: {slug}\n"
+        ),
+    )
+    .with_context(|| format!("Failed to write {}", migration.display()))?;
+    Ok(NativeToolOutput {
+        exit_status: 0,
+        stdout: format!("Created:\n  - {}\n", migration.display()),
+        stderr: String::new(),
+    })
+}
+
+fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
     let up = base.with_extension("up.sql");
     let down = base.with_extension("down.sql");
     if up.exists() || down.exists() {

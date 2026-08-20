@@ -16,6 +16,7 @@ mod codex;
 mod codex_run;
 mod init_wizard;
 mod loops;
+mod migration;
 mod prompt;
 mod proxy;
 mod setup_run;
@@ -31,6 +32,7 @@ pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{
     LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
+pub(crate) use migration::{MigrationAddOpts, MigrationCommand};
 pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{
     DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand, ProxyAliasOpts,
@@ -39,7 +41,7 @@ pub(crate) use proxy::{
     ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
     ProxyStartOpts, ProxyStopOpts,
 };
-pub(crate) use sqlx::{MigrationAddOpts, SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
+pub(crate) use sqlx::{SqlxCommand, SqlxMigrationCommand, SqlxSchemaCommand};
 pub(crate) use state::{
     StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
@@ -88,7 +90,7 @@ const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
 #[cfg(test)]
 const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
 #[cfg(test)]
-const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
 #[cfg(test)]
 const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,lint,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,sqlc,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
 
@@ -320,6 +322,14 @@ pub(crate) enum CommandKind {
         after_help = loops::LOOP_AFTER_HELP
     )]
     Loop(LoopCommand),
+    /// Create migrations in the configured backend format.
+    #[command(
+        name = root_commands::MIGRATION.name,
+        display_order = root_commands::MIGRATION.display_order,
+        subcommand,
+        after_help = migration::MIGRATION_AFTER_HELP
+    )]
+    Migration(MigrationCommand),
     /// Manage SQLx migrations and schema documentation.
     #[command(
         name = root_commands::SQLX.name,
@@ -328,7 +338,7 @@ pub(crate) enum CommandKind {
         after_help = sqlx::SQLX_AFTER_HELP
     )]
     Sqlx(SqlxCommand),
-    /// Add a forward-only SQLx migration file when SQLx is enabled.
+    /// Add a forward-only migration through the legacy flattened command.
     #[command(name = tool_defs::cli_command::MIGRATION_ADD, hide = true)]
     MigrationAdd(MigrationAddOpts),
     /// Regenerate schema documentation when schema dumps are enabled.

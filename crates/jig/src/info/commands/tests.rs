@@ -35,7 +35,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
     );
 
     assert_eq!(output["command"], "info commands");
-    assert_eq!(output["schema_version"], 2);
+    assert_eq!(output["schema_version"], 3);
     assert_eq!(output["repo"]["context_status"], "valid");
     let commands = output["commands"].as_array().unwrap();
     let names = commands
@@ -69,7 +69,7 @@ fn command_inventory_has_stable_schema_order_and_grouped_human_output() {
 }
 
 #[test]
-fn schema_v2_reason_codes_are_stable() {
+fn schema_v3_reason_codes_are_stable() {
     let reason_codes = reason::ALL
         .iter()
         .copied()
@@ -87,6 +87,7 @@ fn schema_v2_reason_codes_are_stable() {
             "dev_proxy_feature_not_built",
             "migration_add_tool_invalid",
             "migration_add_tool_missing",
+            "migration_backend_not_configured",
             "migration_directory_not_configured",
             "repo_context_unavailable",
             "sqlx_disabled",
@@ -495,7 +496,7 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &missing_output,
-        "sqlx",
+        "migration",
         "needs_setup",
         "migration_add_tool_missing",
     );
@@ -542,7 +543,7 @@ fn command_inventory_distinguishes_missing_and_invalid_manifest_tools() {
     );
     assert_command_status(
         &invalid_output,
-        "sqlx",
+        "migration",
         "needs_setup",
         "migration_add_tool_invalid",
     );
@@ -583,17 +584,45 @@ marketplaces = []
 
         assert_command_status(
             &output,
-            "sqlx",
+            "migration",
             "needs_setup",
             "migration_directory_not_configured",
         );
         assert!(
-            command_by_name(&output, "sqlx")["next_step"]
+            command_by_name(&output, "migration")["next_step"]
                 .as_str()
                 .unwrap()
-                .contains("--rust-migration-dir migrations")
+                .contains("Set migration_dir in .jig.toml")
         );
     }
+}
+
+#[test]
+fn go_postgres_exposes_generic_migration_authoring_without_sqlx() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+
+[agent_tooling.codex]
+marketplaces = []
+"#,
+        )
+        .tool(json!({
+            "name": tool::MIGRATION_ADD,
+            "kind": "native",
+            "description": "Add a migration."
+        }))
+        .write();
+    let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
+
+    let output = ready_local_inventory(&ctx);
+
+    assert_eq!(command_by_name(&output, "migration")["status"], "ready");
+    assert_command_status(&output, "sqlx", "not_configured", "sqlx_disabled");
 }
 
 #[cfg(not(feature = "dev-proxy"))]

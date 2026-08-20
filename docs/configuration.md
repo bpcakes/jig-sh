@@ -98,7 +98,7 @@ When `backend_language = "go"` and `go_database = "postgres"`, `migration_dir` i
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig sqlx migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
 
 Contracts that declare `"kind": "native"` tools require a runtime that supports the repository contract epoch. Use `scripts/jig`; it probes the repository, required tools, and requested build profile before selecting any development, cached, PATH, or newly installed binary.
 
@@ -638,7 +638,10 @@ The compatibility policy for generated CLI commands, MCP tools, and `.agent/jig-
 When `sqlx_enabled` is `true`, it also exposes:
 
 - `scripts/jig check sqlx`
-- `scripts/jig sqlx migration add NAME`
+
+When SQLx or Go/PostgreSQL migrations are configured, it also exposes:
+
+- `scripts/jig migration add NAME`
 
 When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 
@@ -647,7 +650,7 @@ When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 
 `scripts/jig check schema` reruns `schema_dump_command`, then checks `SCHEMA_DOCS_DIR` for drift. `SCHEMA_DOCS_DIR` defaults to `docs/schema` when the environment variable is unset.
 
-The legacy `scripts/jig migration-add NAME` and `scripts/jig schema-dump` paths remain accepted as compatibility shims, but new documentation and automation should use the `scripts/jig sqlx ...` namespace.
+The legacy `scripts/jig migration-add NAME`, `scripts/jig sqlx migration add NAME`, and `scripts/jig schema-dump` paths remain accepted as compatibility shims. New migration automation should use `scripts/jig migration add NAME`; SQLx schema commands remain under `scripts/jig sqlx schema ...`.
 
 Generated repos also get these runtime-owned files:
 

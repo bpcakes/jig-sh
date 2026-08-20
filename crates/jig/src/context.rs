@@ -451,13 +451,9 @@ impl RepoContext {
         }
     }
 
-    pub(crate) fn rust_migration_dir(&self) -> &str {
-        &self.config.rust_migration_dir
-    }
-
     pub(crate) fn migration_dir(&self) -> &str {
         if self.config.migration_dir.trim().is_empty() {
-            self.rust_migration_dir()
+            &self.config.rust_migration_dir
         } else {
             &self.config.migration_dir
         }
@@ -612,6 +608,10 @@ impl FeatureContext for RepoContext {
         self.required_commands()
     }
 
+    fn migration_authoring_enabled(&self) -> bool {
+        self.migration_policy_enabled()
+    }
+
     fn sqlx_enabled(&self) -> bool {
         self.sqlx_enabled()
     }
@@ -717,6 +717,17 @@ fn validate_backend_config(config: &RepoConfig) -> Result<()> {
         bail!(
             "go_database = \"{}\" requires backend_language = \"go\" in .jig.toml",
             config.go_database.as_str()
+        );
+    }
+    if config.sqlx_enabled
+        && !config.migration_dir.trim().is_empty()
+        && !config.rust_migration_dir.trim().is_empty()
+        && Path::new(&config.migration_dir) != Path::new(&config.rust_migration_dir)
+    {
+        bail!(
+            "migration_dir = {:?} and legacy rust_migration_dir = {:?} must identify the same SQLx migration directory in .jig.toml; keep migration_dir as the canonical value and synchronize the compatibility key",
+            config.migration_dir,
+            config.rust_migration_dir
         );
     }
     Ok(())

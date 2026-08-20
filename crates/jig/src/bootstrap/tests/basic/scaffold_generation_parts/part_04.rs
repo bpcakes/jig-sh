@@ -302,10 +302,16 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
     assert!(!config.contains("rust_migration_dir ="));
+    let contract =
+        fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
+    assert!(contract.contains(r#""name": "jig.migration_add""#));
     let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
     assert!(root_guide.contains("business logic in the owning package"));
     assert!(!root_guide.contains("business logic in the owning crate"));
     assert!(root_guide.contains("## Backend Guide Conventions"));
+    assert!(root_guide.contains("scripts/jig migration add NAME"));
+    let go_mod = fs::read_to_string(destination.join("go.mod")).unwrap();
+    assert!(!go_mod.contains("github.com/pressly/goose/v3/cmd/goose"));
     let policy =
         fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
     let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();

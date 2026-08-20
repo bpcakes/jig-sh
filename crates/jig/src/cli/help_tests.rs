@@ -77,6 +77,7 @@ fn top_level_help_orders_commands_by_user_intent() {
         "  ui ",
         "  work ",
         "  loop ",
+        "  migration ",
         "  sqlx ",
         "  vault ",
         "  proxy ",
@@ -586,10 +587,13 @@ fn dev_help_describes_launch_and_session_management() {
 
 #[test]
 fn migration_help_includes_examples() {
-    let migration_help = rendered_help(&["sqlx", "migration", "add"]);
+    let migration_help = rendered_help(&["migration", "add"]);
     assert_help_contains(&migration_help, "open structured work plan");
-    assert_help_contains(&migration_help, "jig sqlx migration add create_users");
+    assert_help_contains(&migration_help, "jig migration add create_users");
     assert_help_contains(&migration_help, "--plan-id plan_abc123");
+
+    let sqlx_migration_help = rendered_help(&["sqlx", "migration", "add"]);
+    assert_help_contains(&sqlx_migration_help, "jig migration add create_users");
 
     let sqlx_help = rendered_help(&["sqlx"]);
     assert_help_contains(&sqlx_help, "migration");
@@ -601,5 +605,5 @@ fn migration_help_includes_examples() {
     assert_help_omits(&root_help, "  schema-dump ");
 
     let legacy_help = rendered_help(&["migration-add"]);
-    assert_help_contains(&legacy_help, "remains accepted for compatibility");
+    assert_help_contains(&legacy_help, "accepted for compatibility");
 }

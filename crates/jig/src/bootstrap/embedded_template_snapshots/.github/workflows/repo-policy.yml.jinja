@@ -22,7 +22,7 @@ on:
       - "scripts/jig"
       - "scripts/install-jig.sh"
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
       - ".github/workflows/repo-policy.yml"
   push:
@@ -48,7 +48,7 @@ on:
       - "scripts/jig"
       - "scripts/install-jig.sh"
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
       - ".github/workflows/repo-policy.yml"
   merge_group:

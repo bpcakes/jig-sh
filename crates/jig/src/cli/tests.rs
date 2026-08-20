@@ -5,6 +5,12 @@ mod launcher_only;
 
 #[test]
 fn parses_canonical_and_legacy_sqlx_commands() {
+    let canonical = Cli::try_parse_from(["jig", "migration", "add", "create_users"]).unwrap();
+    assert!(matches!(
+        canonical.command,
+        CommandKind::Migration(MigrationCommand::Add(_))
+    ));
+
     let migration = Cli::try_parse_from([
         "jig",
         "sqlx",

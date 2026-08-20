@@ -128,6 +128,7 @@ impl FeatureDescriptor {
 pub trait FeatureContext {
     fn contract_version(&self) -> u32;
     fn required_commands(&self) -> &[String];
+    fn migration_authoring_enabled(&self) -> bool;
     fn sqlx_enabled(&self) -> bool;
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;

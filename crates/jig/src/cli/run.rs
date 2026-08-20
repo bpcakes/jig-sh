@@ -148,6 +148,7 @@ impl CommandKind {
             Self::Ui(_) => (tool_defs::cli_command::UI, Repository),
             Self::Work(_) => (tool_defs::cli_command::WORK, Repository),
             Self::Loop(_) => (tool_defs::cli_command::LOOP, Repository),
+            Self::Migration(_) => (root_commands::MIGRATION.name, Repository),
             Self::Sqlx(_) => (root_commands::SQLX.name, Repository),
             Self::MigrationAdd(_) => (tool_defs::cli_command::MIGRATION_ADD, Repository),
             Self::SchemaDump(_) => (tool_defs::cli_command::SCHEMA_DUMP, Repository),
@@ -291,6 +292,7 @@ fn run_command(cli: Cli) -> Result<()> {
                 human_output,
             )
         }
+        CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
         CommandKind::Sqlx(command) => run_sqlx_command(command, json_output),
         CommandKind::SchemaDump(opts) => dispatch_runtime_command(
             crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
@@ -300,14 +302,7 @@ fn run_command(cli: Cli) -> Result<()> {
             json_output,
             HumanOutput::ToolExecution,
         ),
-        CommandKind::MigrationAdd(opts) => dispatch_runtime_command(
-            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
-                opts.into(),
-            )),
-            false,
-            json_output,
-            HumanOutput::MigrationAdd,
-        ),
+        CommandKind::MigrationAdd(opts) => run_migration_add(opts, json_output),
         CommandKind::AgentMap(command) => dispatch_runtime_command(
             crate::command::RuntimeCommand::AgentMap(command.into()),
             false,
@@ -364,15 +359,27 @@ fn run_command(cli: Cli) -> Result<()> {
 }
 
 fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {
-    let human_output = match &command {
-        SqlxCommand::Migration(SqlxMigrationCommand::Add(_)) => HumanOutput::MigrationAdd,
-        SqlxCommand::Schema(SqlxSchemaCommand::Dump(_)) => HumanOutput::ToolExecution,
-    };
+    match command {
+        SqlxCommand::Migration(SqlxMigrationCommand::Add(opts)) => {
+            run_migration_add(opts, json_output)
+        }
+        SqlxCommand::Schema(SqlxSchemaCommand::Dump(opts)) => dispatch_runtime_command(
+            crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
+                opts.into(),
+            )),
+            false,
+            json_output,
+            HumanOutput::ToolExecution,
+        ),
+    }
+}
+
+fn run_migration_add(opts: MigrationAddOpts, json_output: bool) -> Result<()> {
     dispatch_runtime_command(
-        crate::command::RuntimeCommand::Sqlx(command.into()),
+        crate::command::RuntimeCommand::MigrationAdd(opts.into()),
         false,
         json_output,
-        human_output,
+        HumanOutput::MigrationAdd,
     )
 }
 

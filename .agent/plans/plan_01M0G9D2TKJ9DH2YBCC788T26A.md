@@ -11,7 +11,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 ## Progress
 
 - [x] (2026-08-20) Reviewed `origin/master...HEAD`, classified nine findings by root cause, and opened structured work plan `plan_01M0G9D2TKJ9DH2YBCC788T26A`.
-- [ ] Make migration configuration, CLI authoring, native-tool registration, generated contracts, and backend-specific file formats one coherent abstraction.
+- [x] (2026-08-20) Made migration configuration, CLI authoring, native-tool registration, generated contracts, and backend-specific file formats one coherent abstraction; retained legacy command/config compatibility at one boundary.
 - [ ] Disable Huma schema-link transformation when generated schema routes are disabled, then regenerate the committed API contract/client.
 - [ ] Reuse one bounded numeric-version authority reader for Node and Go.
 - [ ] Make generated Go formatting and PostgreSQL readiness checks robust on supported worktree/platform states.

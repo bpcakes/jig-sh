@@ -13,6 +13,7 @@ use crate::tool_defs::{self, MemoryTool, tool};
 
 mod agent;
 mod loops;
+mod migration;
 mod prompt;
 mod sqlx;
 mod tool_execution;
@@ -57,6 +58,7 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
             tool_execution::execute_manifest_tool_request(ctx, tool::BOOTSTRAP, json!({}), opts)
         }
         RuntimeCommand::Check(command) => dispatch_check(ctx, command),
+        RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request),
         RuntimeCommand::Sqlx(command) => sqlx::dispatch(ctx, command),
         RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
             ctx,

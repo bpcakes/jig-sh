@@ -104,10 +104,12 @@
       "description": "Run the configured SQLx check command.",
       "command": "sqlx_check_command"
     },
+[% endif %]
+[% if sqlx_enabled or (backend_language == "go" and go_database == "postgres") %]
     {
       "name": "jig.migration_add",
       "kind": "native",
-      "description": "Add timestamped SQL migration stubs."
+      "description": "Add a backend-compatible timestamped SQL migration."
     },
 [% endif %]
 [% if backend_language == "go" and go_database == "postgres" %]

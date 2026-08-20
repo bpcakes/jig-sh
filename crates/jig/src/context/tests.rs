@@ -97,13 +97,12 @@ typescript_typecheck_command = "scripts/check-webapps.sh typecheck"
 }
 
 #[test]
-fn migration_directory_prefers_neutral_config_and_falls_back_to_legacy_rust_config() {
+fn migration_directory_accepts_neutral_config_and_falls_back_to_legacy_rust_config() {
     let neutral = tempdir().unwrap();
     TestRepoBuilder::new(neutral.path())
         .config(
             r#"
 migration_dir = "internal/database/migrations"
-rust_migration_dir = "legacy-migrations"
 "#,
         )
         .write();
@@ -116,6 +115,28 @@ rust_migration_dir = "legacy-migrations"
         .write();
     let legacy_ctx = RepoContext::load_from(legacy.path()).unwrap();
     assert_eq!(legacy_ctx.migration_dir(), "migrations");
+}
+
+#[test]
+fn sqlx_migration_directory_rejects_divergent_compatibility_keys() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+migration_dir = "database/migrations"
+rust_migration_dir = "legacy-migrations"
+"#,
+        )
+        .write();
+
+    let error = RepoContext::load_from(temp.path()).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("must identify the same SQLx migration directory")
+    );
 }
 
 #[test]

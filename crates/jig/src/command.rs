@@ -9,6 +9,7 @@
 mod agent;
 mod check;
 mod loops;
+mod migration;
 mod prompt;
 mod proxy;
 mod sqlx;
@@ -24,6 +25,7 @@ pub(crate) use check::{
 pub(crate) use loops::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
+pub(crate) use migration::MigrationAddRequest;
 pub(crate) use prompt::{
     PROMPT_BODY_KEY, PromptAddRequest, PromptCommand, PromptEditRequest, PromptExportRequest,
     PromptImportRequest, PromptListRequest, PromptNameRequest, PromptRenderRequest,
@@ -36,7 +38,7 @@ pub(crate) use proxy::{
     ProxyRuntimeOptions, ProxyServiceCommand, ProxyServiceInstallRequest,
     ProxyServiceRuntimeRequest, ProxyStartRequest, ProxyStopRequest,
 };
-pub(crate) use sqlx::{MigrationAddRequest, SqlxCommand};
+pub(crate) use sqlx::SqlxCommand;
 pub(crate) use state::{
     StateArchiveRequest, StateCommand, StateCompactSessionsRequest, StateDiagnoseRequest,
     StateExportReceiptsRequest, StateRestoreRequest,
@@ -63,6 +65,7 @@ pub(crate) use work::{
 pub(crate) enum RuntimeCommand {
     Bootstrap(ToolRequest),
     Check(CheckCommand),
+    MigrationAdd(MigrationAddRequest),
     Sqlx(SqlxCommand),
     AgentMap(AgentMapCommand),
     GenerateSqlxUncheckedQueriesTodo(SqlxTodoRequest),

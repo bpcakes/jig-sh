@@ -63,6 +63,19 @@ rust_test_command = "cargo test"
         .write();
 }
 
+fn write_go_postgres_policy_repo(root: &Path) {
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "internal/database/migrations"
+"#,
+        )
+        .contract_version(2)
+        .write();
+}
+
 fn write_schema_policy_repo(root: &Path, schema_dump_command: &str) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
     TestRepoBuilder::new(root)
@@ -568,6 +581,57 @@ fn migration_add_creates_slugged_migration_files() {
 }
 
 #[test]
+fn migration_add_uses_a_neutral_only_sqlx_directory() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+migration_dir = "database/migrations"
+"#,
+        )
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    migration_add(&ctx, "Create Users").unwrap();
+
+    assert_eq!(
+        fs::read_dir(temp.path().join("database/migrations"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn migration_add_creates_a_goose_migration_for_go_postgres() {
+    let temp = tempdir().unwrap();
+    write_go_postgres_policy_repo(temp.path());
+    init_git(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = migration_add(&ctx, "Create Users!").unwrap();
+
+    assert_eq!(output.exit_status, 0);
+    let entries = fs::read_dir(temp.path().join("internal/database/migrations"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 1);
+    assert!(
+        entries[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("_create_users.sql")
+    );
+    assert_eq!(
+        fs::read_to_string(&entries[0]).unwrap(),
+        "-- +goose Up\n-- forward migration: create_users\n\n-- +goose Down\n-- rollback migration: create_users\n"
+    );
+}
+
+#[test]
 fn migration_add_rejects_when_sqlx_is_disabled() {
     let temp = tempdir().unwrap();
     write_policy_repo(temp.path());
@@ -576,7 +640,11 @@ fn migration_add_rejects_when_sqlx_is_disabled() {
 
     let error = migration_add(&ctx, "create users").unwrap_err();
 
-    assert!(error.to_string().contains("sqlx_enabled = true"));
+    assert!(
+        error
+            .to_string()
+            .contains("configured SQLx or Go/PostgreSQL migration backend")
+    );
 }
 
 #[test]
