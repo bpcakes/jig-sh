@@ -541,6 +541,11 @@ impl ScaffoldOpts {
             if let Some(go_module) = answers.go_module.as_deref() {
                 scaffold::validate_go_module(go_module)?;
             }
+            if self.db == Some(ScaffoldDb::None) && answers.migration_dir.is_some() {
+                bail!(
+                    "migration_dir requires --preset go-react --db postgres; remove the answer or select PostgreSQL"
+                );
+            }
             if self.db == Some(ScaffoldDb::Postgres)
                 && let Some(migration_dir) = answers.migration_dir.as_deref()
                 && migration_dir != crate::backend::GO_POSTGRES_MIGRATION_DIR

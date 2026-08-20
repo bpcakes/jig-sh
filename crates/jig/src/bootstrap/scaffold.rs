@@ -106,7 +106,8 @@ impl InitScaffoldPlan {
             answers.sqlx_enabled = Some(false);
             answers.rust_crate_roots.clear();
             answers.rust_migration_dir = None;
-            answers.migration_dir = Some(GO_POSTGRES_MIGRATION_DIR.into());
+            answers.migration_dir =
+                (self.db == ScaffoldDb::Postgres).then(|| GO_POSTGRES_MIGRATION_DIR.into());
             answers.rust_sqlx_metadata_dir = None;
             answers.schema_dump_enabled = Some(false);
         } else if answers.sqlx_enabled.is_none() {
@@ -356,7 +357,11 @@ impl InitScaffoldPlan {
                 .collect::<Result<Vec<_>>>()?
         };
         let root_workspace_package_name = format!("{package_name}-workspace");
-        validate_unique_frontends(&frontends, &root_workspace_package_name)?;
+        validate_unique_frontends(
+            &frontends,
+            &root_workspace_package_name,
+            ScaffoldPreset::RustReact,
+        )?;
         Ok(Self {
             preset: ScaffoldPreset::RustReact,
             requested_repo_name,
@@ -443,7 +448,11 @@ impl InitScaffoldPlan {
                 "--preset go-react does not yet support the admin frontend because it requires a separate privileged API and client boundary; use web and/or landing"
             );
         }
-        validate_unique_frontends(&frontends, &format!("{package_name}-workspace"))?;
+        validate_unique_frontends(
+            &frontends,
+            &format!("{package_name}-workspace"),
+            ScaffoldPreset::GoReact,
+        )?;
         Ok(Self {
             preset: ScaffoldPreset::GoReact,
             requested_repo_name,
@@ -504,6 +513,7 @@ fn collect_frontend_specs(opts: &ScaffoldOpts) -> Vec<ScaffoldFrontend> {
 fn validate_unique_frontends(
     frontends: &[FrontendScaffold],
     root_workspace_package_name: &str,
+    preset: ScaffoldPreset,
 ) -> Result<()> {
     let mut names = HashSet::new();
     let mut dirs = HashSet::new();
@@ -534,7 +544,7 @@ fn validate_unique_frontends(
             );
         }
         let root_dir = frontend.dir.split('/').next().unwrap_or_default();
-        if matches!(root_dir, "apps" | "crates") {
+        if preset.reserved_backend_roots().contains(&root_dir) {
             bail!(
                 "Scaffold frontend '{}' uses reserved directory '{}'",
                 frontend.name,

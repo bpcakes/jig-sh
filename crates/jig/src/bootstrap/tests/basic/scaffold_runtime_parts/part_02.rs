@@ -338,6 +338,58 @@ fn scaffold_rejects_frontend_dirs_reserved_for_rust_roots() {
 }
 
 #[test]
+fn go_scaffold_rejects_direct_frontends_under_backend_roots() {
+    let temp = tempdir().unwrap();
+    for dir in ["cmd", "internal"] {
+        let error = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::GoReact),
+                db: Some(ScaffoldDb::None),
+                frontends: vec![parse_scaffold_frontend(dir).unwrap()],
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                go_module: Some("example.com/example-project".into()),
+                ..AnswerOpts::default()
+            },
+            temp.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(&format!("uses reserved directory '{dir}'")));
+    }
+}
+
+#[test]
+fn go_scaffold_rejects_answer_frontends_under_backend_roots() {
+    let temp = tempdir().unwrap();
+    let error = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            go_module: Some("example.com/example-project".into()),
+            frontend_apps: vec![FrontendApp {
+                name: "web".into(),
+                dir: "internal/web".into(),
+                coverage_threshold: 80,
+                kind: "vite".into(),
+                role: "spa".into(),
+            }],
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("uses reserved directory 'internal/web'"));
+}
+
+#[test]
 fn scaffold_db_rejects_explicit_sqlx_disabled_answer() {
     let temp = tempdir().unwrap();
     let error = scaffold::InitScaffoldPlan::from_opts(

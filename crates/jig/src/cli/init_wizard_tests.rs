@@ -40,6 +40,7 @@ fn bare_init_defaults_to_rust_react_with_no_database_and_web() {
     assert_eq!(opts.scaffold.preset, Some(ScaffoldPreset::RustReact));
     assert_eq!(opts.scaffold.db, Some(ScaffoldDb::None));
     assert_eq!(opts.scaffold.frontends.len(), 1);
+    assert_eq!(opts.answers.migration_dir, None);
 }
 
 #[test]
@@ -146,11 +147,75 @@ fn go_react_interactive_module_prompt_retries_without_changing_case() {
     assert_eq!(output.matches("Invalid --go-module").count(), 1, "{output}");
     assert_eq!(
         output
-            .matches("Go module (for example github.com/acme/my-app):")
+            .matches("Go module [example.com/demo] (for example github.com/acme/my-app):")
             .count(),
         2,
         "{output}"
     );
+}
+
+#[test]
+fn go_react_interactive_module_prompt_uses_the_derived_default() {
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "My Demo",
+        "--preset",
+        "go-react",
+        "--no-vault",
+    ]);
+    let mut input = Cursor::new("none\nweb\n\n");
+    let mut output = Vec::new();
+
+    prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
+
+    assert_eq!(
+        opts.answers.go_module.as_deref(),
+        Some("example.com/my-demo")
+    );
+    let output = String::from_utf8(output).unwrap();
+    assert!(
+        output.contains("Go module [example.com/my-demo]"),
+        "{output}"
+    );
+}
+
+#[test]
+fn go_react_without_postgres_rejects_a_migration_directory_answer() {
+    let temp = tempdir().unwrap();
+    let answers_file = temp.path().join("answers.toml");
+    fs::write(
+        &answers_file,
+        "repo_name = \"demo\"\nmigration_dir = \"internal/database/migrations\"\n",
+    )
+    .unwrap();
+    let mut opts = init_opts(&[
+        "jig",
+        "init",
+        "demo",
+        "--preset",
+        "go-react",
+        "--db",
+        "none",
+        "--frontends",
+        "web",
+        "--go-module",
+        "example.com/demo",
+        "--answers-file",
+        answers_file.to_str().unwrap(),
+        "--no-input",
+        "--no-vault",
+    ]);
+
+    let error = prepare_init_interaction_with_io(
+        &mut opts,
+        &mut Cursor::new(Vec::<u8>::new()),
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("migration_dir requires --preset go-react --db postgres"));
 }
 
 #[test]

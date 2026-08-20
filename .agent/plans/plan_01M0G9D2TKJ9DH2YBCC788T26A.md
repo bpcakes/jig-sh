@@ -15,7 +15,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 - [x] (2026-08-20) Disabled Huma create hooks with schema routes, asserted response bodies and headers have no unresolved schema links, and regenerated the committed OpenAPI/client artifacts.
 - [x] (2026-08-20) Reused one regular-file-only, size-capped numeric-version authority reader for Node and Go, with regression coverage for symlinks, invalid UTF-8, multiple tokens, and oversized/empty files.
 - [x] (2026-08-20) Filtered missing tracked files before `gofmt`, proved the generated command against a deleted-file/ignored-file Git fixture, and replaced `seq` readiness loops with Bash arithmetic in both backend scaffolds.
-- [ ] Align interactive Go module defaults, reject inapplicable migration answers, and reserve Go backend roots from frontend placement.
+- [x] (2026-08-20) Unified interactive/default Go module derivation, rejected migration configuration without Go/PostgreSQL, omitted that config from no-database scaffolds, and made reserved frontend roots preset-specific.
 - [ ] Point byte-identical Go client runtime templates at their single shared source and remove redundant copies.
 - [ ] Rebuild the development runtime; pass focused tests, the complete configured test gate, format, Clippy, contract, and structured-work evidence; close the plan.
 

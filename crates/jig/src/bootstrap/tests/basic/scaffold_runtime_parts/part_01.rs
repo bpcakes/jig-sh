@@ -536,6 +536,10 @@ fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
 
     plan.apply_answer_defaults(&mut answers);
 
+    assert_eq!(
+        answers.migration_dir.as_deref(),
+        Some("internal/database/migrations")
+    );
     let command = answers.bootstrap_command.unwrap();
     let module_tidy = command.find("go mod tidy").unwrap();
     let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
@@ -550,6 +554,33 @@ fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
     assert!(database_guard < sqlc_generate);
     assert!(sqlc_generate < database_bootstrap);
     assert!(database_bootstrap < contract_generate);
+}
+
+#[test]
+fn go_scaffold_without_postgres_does_not_emit_migration_configuration() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: vec![parse_scaffold_frontend("web").unwrap()],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("example-project".into()),
+            go_module: Some("example.com/example-project".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+    let mut answers = AnswerOpts::default();
+
+    plan.apply_answer_defaults(&mut answers);
+
+    assert_eq!(answers.go_database, Some(crate::backend::GoDatabase::None));
+    assert_eq!(answers.migration_dir, None);
 }
 
 #[test]

@@ -86,6 +86,14 @@ impl ScaffoldPreset {
         }
     }
 
+    pub(crate) const fn reserved_backend_roots(self) -> &'static [&'static str] {
+        match self {
+            Self::RustReact => &["apps", "crates"],
+            Self::GoReact => &["cmd", "internal"],
+            Self::HarnessOnly => &[],
+        }
+    }
+
     pub(crate) const fn descriptor(self) -> ScaffoldPresetDescriptor {
         match self {
             Self::RustReact => ScaffoldPresetDescriptor {

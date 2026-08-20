@@ -126,13 +126,7 @@ fn apply_project_shape_defaults(opts: &mut InitOpts) -> Result<()> {
         }
     }
     if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
-        let repo_name = opts
-            .answers
-            .repo_name
-            .as_deref()
-            .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
-            .unwrap_or("app");
-        opts.answers.go_module = Some(bootstrap::default_go_module(repo_name));
+        opts.answers.go_module = Some(default_go_module_for_init(opts));
     }
     Ok(())
 }
@@ -213,7 +207,8 @@ fn guide_project_shape<R: BufRead, W: Write>(
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
     }
     if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
-        opts.answers.go_module = Some(prompt_go_module(input, output)?);
+        let default = default_go_module_for_init(opts);
+        opts.answers.go_module = Some(prompt_go_module(input, output, &default)?);
     }
     Ok(())
 }
@@ -394,15 +389,24 @@ fn confirm_custom_frontend_names<R: BufRead, W: Write>(
     }
 }
 
-fn prompt_go_module<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<String> {
+fn default_go_module_for_init(opts: &InitOpts) -> String {
+    let repo_name = opts
+        .answers
+        .repo_name
+        .as_deref()
+        .or_else(|| opts.path.file_name().and_then(|value| value.to_str()))
+        .unwrap_or("app");
+    bootstrap::default_go_module(repo_name)
+}
+
+fn prompt_go_module<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    default: &str,
+) -> Result<String> {
+    let prompt = format!("Go module [{default}] (for example github.com/acme/my-app): ");
     loop {
-        let module = prompt_value(
-            input,
-            output,
-            "Go module (for example github.com/acme/my-app): ",
-            "example.com/app",
-            "Go module",
-        )?;
+        let module = prompt_value(input, output, &prompt, default, "Go module")?;
         match bootstrap::validate_go_module(&module) {
             Ok(()) => return Ok(module),
             Err(error) => writeln!(output, "  {error}")?,
