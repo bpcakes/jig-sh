@@ -159,6 +159,17 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(database.contents.contains("func Bootstrap("));
     assert!(database.contents.contains("CREATE DATABASE"));
+    let bootstrap_start = database.contents.find("func Bootstrap(").unwrap();
+    let open_start = database.contents.find("func Open(").unwrap();
+    let migrate_start = database.contents.find("func migrate(").unwrap();
+    assert!(
+        database.contents[bootstrap_start..open_start]
+            .contains("if err := migrate(ctx, databaseURL); err != nil")
+    );
+    assert!(
+        !database.contents[open_start..migrate_start]
+            .contains("migrate(ctx, databaseURL)")
+    );
     let database_test = rendered
         .iter()
         .find(|file| file.relative == "internal/database/database_test.go")

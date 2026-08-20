@@ -53,6 +53,9 @@ func Bootstrap(ctx context.Context, databaseURL string) error {
 		}
 	}
 
+	if err := migrate(ctx, databaseURL); err != nil {
+		return err
+	}
 	pool, err := Open(ctx, databaseURL)
 	if err != nil {
 		return err
@@ -62,9 +65,6 @@ func Bootstrap(ctx context.Context, databaseURL string) error {
 }
 
 func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	if err := migrate(ctx, databaseURL); err != nil {
-		return nil, err
-	}
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("create PostgreSQL pool: %w", err)

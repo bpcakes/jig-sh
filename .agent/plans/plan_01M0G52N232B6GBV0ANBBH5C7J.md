@@ -11,7 +11,7 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 ## Progress
 
 - [x] (2026-08-20 17:57Z) Classified the comprehensive-review findings by root cause and opened structured work plan `plan_01M0G52N232B6GBV0ANBBH5C7J`.
-- [ ] Move migration execution out of ordinary pool opening and into explicit bootstrap, add focused regressions, and commit the slice.
+- [x] (2026-08-20 18:00Z) Moved migration execution out of ordinary pool opening and into explicit bootstrap, refreshed snapshots, and passed the focused rendering regression.
 - [ ] Make HTTP serving and graceful shutdown one joined lifecycle, add a generated Go regression test, and commit the slice.
 - [ ] Reuse canonical Go module validation inside an interactive retry loop, add focused wizard tests, and commit the slice.
 - [ ] Rebuild the development binary and run the complete configured test, format, Clippy, and contract gates.
