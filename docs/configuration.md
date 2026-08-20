@@ -73,10 +73,13 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `rust_migration_dir`: SQL migration directory
 - `rust_sqlx_metadata_dir`: committed SQLx metadata directory
 
+When `backend_language = "go"` and `go_database = "postgres"`, `migration_dir` is required even though the Go scaffold disables SQLx.
+
 ## Optional Keys
 
-- `backend_language`: generated application backend identity; omitted configurations default to `rust`, while `go-react` persists `go`
-- `go_database`: `none` or `postgres` for a generated Go backend
+- `backend_language`: generated application backend identity; accepted values are `rust` and `go`. Omitted configurations default to `rust`, while `go-react` persists `go`.
+- `go_database`: database identity for a generated Go backend; accepted values are `none` and `postgres`, and omission defaults to `none`. `postgres` requires `backend_language = "go"`.
+- `migration_dir`: backend-neutral migration policy directory. It takes precedence over the legacy Rust-specific `rust_migration_dir`; generated Go/PostgreSQL repositories use `internal/database/migrations`.
 - `schema_dump_enabled`: when `true` and `sqlx_enabled` is also `true`, the template renders schema dump and schema freshness commands; when SQLx is disabled, this is rendered as `false`. New init/adopt answers reject explicitly setting this to `true` while SQLx is disabled; `jig update --recopy` normalizes legacy SQLx-disabled configs back to `false`.
 - `schema_dump_command`: command behind `scripts/jig sqlx schema dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
 - `sqlx_check_command`: command behind `scripts/jig check sqlx` when `sqlx_enabled` is `true`
@@ -103,10 +106,11 @@ Contracts that declare `"kind": "native"` tools require a runtime that supports 
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 renders omit and ignore it. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `commands`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 renders omit and ignore it. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
 
 Nested accepted keys are:
 
+- `[commands]`: command names made from lowercase ASCII letters, numbers, and underscores; names must start with a letter and end in `_command`
 - `[[frontend_apps]]`: `name`, `dir`, `coverage_threshold`, `kind`, `role`
 - `[vault]`: `scope`, `scope_id`, `allow_global`
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`
