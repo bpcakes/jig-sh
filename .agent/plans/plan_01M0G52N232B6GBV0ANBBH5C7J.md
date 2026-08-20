@@ -12,7 +12,7 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 
 - [x] (2026-08-20 17:57Z) Classified the comprehensive-review findings by root cause and opened structured work plan `plan_01M0G52N232B6GBV0ANBBH5C7J`.
 - [x] (2026-08-20 18:00Z) Moved migration execution out of ordinary pool opening and into explicit bootstrap, refreshed snapshots, and passed the focused rendering regression.
-- [ ] Make HTTP serving and graceful shutdown one joined lifecycle, add a generated Go regression test, and commit the slice.
+- [x] (2026-08-20 18:14Z) Made HTTP serving and graceful shutdown one joined lifecycle and passed the generated API test for both no-database and PostgreSQL scaffolds.
 - [ ] Reuse canonical Go module validation inside an interactive retry loop, add focused wizard tests, and commit the slice.
 - [ ] Rebuild the development binary and run the complete configured test, format, Clippy, and contract gates.
 - [ ] Record evidence, review the final commit series, update this plan's outcome, and close structured work.
@@ -24,6 +24,9 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 
 - Observation: The generated browser runner already executes `--bootstrap-database` before starting a PostgreSQL API.
   Evidence: `templates/scaffolds/rust-react/frontend/vite-react/playwright.config.ts.jinja` constructs the Go backend command as bootstrap followed by serve, so removing implicit migration from `Open` preserves generated E2E setup.
+
+- Observation: A directly rendered Go project does not yet have `go.sum`; running `go mod tidy`, which the normal bootstrap lifecycle already owns, is required before testing that temporary project.
+  Evidence: Direct `go test ./cmd/api` first reported missing module checksums, then `go mod tidy && go test ./cmd/api` passed for both no-database and PostgreSQL renderings.
 
 ## Decision Log
 

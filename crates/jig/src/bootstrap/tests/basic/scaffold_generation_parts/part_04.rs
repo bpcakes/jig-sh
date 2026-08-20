@@ -144,6 +144,23 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .find(|file| file.relative == "cmd/api/main.go")
         .unwrap();
     assert!(api_main.contents.contains("godotenv.Load()"));
+    assert!(api_main.contents.contains("net.Listen(\"tcp\", cfg.Address)"));
+    assert!(
+        api_main
+            .contents
+            .contains("func serve(ctx context.Context, server *http.Server, listener net.Listener) error")
+    );
+    assert!(api_main.contents.contains("server.Shutdown(shutdownCtx)"));
+    assert!(api_main.contents.contains("serveErr := <-serverDone"));
+    let api_main_test = rendered
+        .iter()
+        .find(|file| file.relative == "cmd/api/main_test.go")
+        .unwrap();
+    assert!(
+        api_main_test
+            .contents
+            .contains("func TestServeWaitsForInflightRequestsDuringShutdown")
+    );
     let database_command = rendered
         .iter()
         .find(|file| file.relative == "cmd/api/database_command.go")
