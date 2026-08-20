@@ -89,12 +89,25 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
         || value
             .split('/')
             .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-        || !value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | '~' | '+'))
     {
         bail!(
             "Invalid --go-module '{value}'. Use ASCII module path segments without spaces, empty components, '.', or '..'"
+        );
+    }
+    if value
+        .split('/')
+        .any(|segment| segment.starts_with('.') || segment.ends_with('.'))
+    {
+        bail!(
+            "Invalid --go-module '{value}'. Go module path segments cannot start or end with '.'"
+        );
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_' | '~'))
+    {
+        bail!(
+            "Invalid --go-module '{value}'. Use ASCII letters, digits, '/', '.', '-', '_', or '~'"
         );
     }
     Ok(())
@@ -247,6 +260,18 @@ mod tests {
                 error.contains("empty components, '.', or '..'"),
                 "{module}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn go_module_rejects_dot_edges_and_unsupported_punctuation() {
+        for module in [
+            "example.com/.ExampleProject",
+            "example.com/ExampleProject.",
+            "example.com/Example+Project",
+        ] {
+            let error = validate_go_module(module).unwrap_err().to_string();
+            assert!(error.contains("Invalid --go-module"), "{module}: {error}");
         }
     }
 

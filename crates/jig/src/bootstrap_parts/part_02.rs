@@ -538,6 +538,9 @@ impl ScaffoldOpts {
             bail!("--go-module requires --preset go-react");
         }
         if self.preset == Some(ScaffoldPreset::GoReact) {
+            if let Some(go_module) = answers.go_module.as_deref() {
+                scaffold::validate_go_module(go_module)?;
+            }
             if self.db == Some(ScaffoldDb::Sqlite) {
                 bail!(
                     "--preset go-react does not support --db sqlite; use --db none or --db postgres"

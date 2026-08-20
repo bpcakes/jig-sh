@@ -50,10 +50,14 @@ use frontend::{
 };
 use names::{
     default_repo_name, normalize_rust_react_package_name, rust_react_repo_dns_label,
-    validate_go_module, validate_scaffold_relative_path,
+    validate_scaffold_relative_path,
 };
 pub(super) use write::ScaffoldFile;
 use write::ScaffoldReport;
+
+pub(super) fn validate_go_module(value: &str) -> Result<()> {
+    names::validate_go_module(value)
+}
 
 impl InitScaffoldPlan {
     pub(super) fn from_opts(
