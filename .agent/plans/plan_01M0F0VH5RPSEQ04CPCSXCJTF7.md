@@ -13,7 +13,7 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 - [x] (2026-08-20 07:23Z) Recorded this plan and opened structured Jig work as `plan_01M0F0VH5RPSEQ04CPCSXCJTF7`.
 - [x] (2026-08-20 07:28Z) Slice 1: made application preset identity and generated backend-name reservations early, canonical invariants; added conflict and collision tests; focused scaffold generation tests passed.
 - [x] (2026-08-20 07:33Z) Slice 2: moved Go module validation into the shared early scaffold-invariant phase, retained plan-level defense in depth, rejected dot-edged segments and unsupported punctuation, and proved validation precedes vault capture and writes.
-- [ ] Slice 3: align generated Go bootstrap sequencing and documentation with the database preflight contract; add command tests; commit.
+- [x] (2026-08-20 07:36Z) Slice 3: shared the database configuration guard across application presets, aligned Go bootstrap ordering with the lifecycle contract, corrected Goose documentation, and passed focused Rust and Go command-generation tests.
 - [ ] Slice 4: harden generated Go workflow and OpenAPI test paths; add template and generated-runtime tests; commit.
 - [ ] Slice 5: make Go doctor remediation version-aware; add diagnostic tests; commit.
 - [ ] Run formatting, Clippy, full repository tests and Jig gates; inspect receipts and working tree; finish structured work.
@@ -45,6 +45,9 @@ The Go scaffold currently works on its primary path, but several edge cases expo
   Date/Author: 2026-08-20, Codex
 - Decision: Reuse `ScaffoldOpts::validate_init_invariants` for early Go module validation instead of splitting init into additional preparation types.
   Rationale: The CLI already invokes this phase after answer-file merging and interaction but before vault capture, and direct bootstrap callers invoke it before template resolution and writes. Moving the validator to this boundary removes the ordering defect without creating a second input pipeline.
+  Date/Author: 2026-08-20, Codex
+- Decision: Share the existing database guard rather than create a Go-specific preflight string.
+  Rationale: `DATABASE_URL` validity has the same shell contract for Rust and Go scaffolds. One constant prevents backend-specific wording and parsing behavior from drifting.
   Date/Author: 2026-08-20, Codex
 
 ## Outcomes & Retrospective
@@ -136,3 +139,5 @@ Plan revision note (2026-08-20): Expanded the initial structured-work body into 
 Plan revision note (2026-08-20 07:28Z): Recorded completion and focused test evidence for the preset identity and backend-name reservation slice.
 
 Plan revision note (2026-08-20 07:33Z): Recorded the early-validation design decision and successful Go module and CLI vault-ordering tests.
+
+Plan revision note (2026-08-20 07:36Z): Recorded completion of shared database preflight and generated Go bootstrap lifecycle ordering.

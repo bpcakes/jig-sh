@@ -229,7 +229,7 @@ pub(super) const SHADCN_PRESET: &str = "nova";
 pub(super) const SHADCN_BASE: &str = "radix";
 pub(super) const SHADCN_STYLE: &str = "radix-nova";
 pub(super) const SHADCN_TAILWIND_MAJOR: u8 = 4;
-const DATABASE_CONFIG_GUARD: &str = r#"if [ -z "${DATABASE_URL:-}" ] && ! awk '/^[[:space:]]*(#|$)/ { next } /^[[:space:]]*(export[[:space:]]+)?DATABASE_URL[[:space:]]*=/ { value = $0; sub(/^[^=]*=[[:space:]]*/, "", value); sub(/^#.*$/, "", value); sub(/[[:space:]]+#.*$/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); single_quote = sprintf("%c", 39); if (value != "" && value != "\"\"" && value != single_quote single_quote) found = 1 } END { exit found ? 0 : 1 }' .env 2>/dev/null; then printf '%s\n' 'Missing DATABASE_URL; export it or copy .env.example to .env before bootstrap.' >&2; exit 1; fi"#;
+pub(super) const DATABASE_CONFIG_GUARD: &str = r#"if [ -z "${DATABASE_URL:-}" ] && ! awk '/^[[:space:]]*(#|$)/ { next } /^[[:space:]]*(export[[:space:]]+)?DATABASE_URL[[:space:]]*=/ { value = $0; sub(/^[^=]*=[[:space:]]*/, "", value); sub(/^#.*$/, "", value); sub(/[[:space:]]+#.*$/, "", value); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); single_quote = sprintf("%c", 39); if (value != "" && value != "\"\"" && value != single_quote single_quote) found = 1 } END { exit found ? 0 : 1 }' .env 2>/dev/null; then printf '%s\n' 'Missing DATABASE_URL; export it or copy .env.example to .env before bootstrap.' >&2; exit 1; fi"#;
 
 const VITE_REACT_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {

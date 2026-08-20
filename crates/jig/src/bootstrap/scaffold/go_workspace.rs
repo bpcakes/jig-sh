@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde_json::json;
 
+use super::frontend::DATABASE_CONFIG_GUARD;
 use super::names::bounded_postgres_identifier;
 use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
@@ -121,12 +122,15 @@ impl InitScaffoldPlan {
 
     pub(super) fn go_scaffold_bootstrap_command(&self) -> String {
         let mut commands = vec!["go mod tidy".to_string()];
+        if !self.frontends.is_empty() {
+            commands.push("scripts/check-webapps.sh bootstrap".into());
+        }
         if self.db == ScaffoldDb::Postgres {
+            commands.push(DATABASE_CONFIG_GUARD.into());
             commands.push("go tool sqlc generate".into());
             commands.push("go run ./cmd/api --bootstrap-database".into());
         }
         if !self.frontends.is_empty() {
-            commands.push("scripts/check-webapps.sh bootstrap".into());
             commands.push("node scripts/contracts.mjs generate".into());
         }
         commands.join(" && ")

@@ -536,12 +536,20 @@ fn go_scaffold_bootstrap_uses_the_same_database_lifecycle_as_runtime() {
 
     plan.apply_answer_defaults(&mut answers);
 
-    assert_eq!(
-        answers.bootstrap_command.as_deref(),
-        Some(
-            "go mod tidy && go tool sqlc generate && go run ./cmd/api --bootstrap-database && scripts/check-webapps.sh bootstrap && node scripts/contracts.mjs generate"
-        )
-    );
+    let command = answers.bootstrap_command.unwrap();
+    let module_tidy = command.find("go mod tidy").unwrap();
+    let frontend_bootstrap = command.find("scripts/check-webapps.sh bootstrap").unwrap();
+    let database_guard = command.find("Missing DATABASE_URL").unwrap();
+    let sqlc_generate = command.find("go tool sqlc generate").unwrap();
+    let database_bootstrap = command
+        .find("go run ./cmd/api --bootstrap-database")
+        .unwrap();
+    let contract_generate = command.find("node scripts/contracts.mjs generate").unwrap();
+    assert!(module_tidy < frontend_bootstrap);
+    assert!(frontend_bootstrap < database_guard);
+    assert!(database_guard < sqlc_generate);
+    assert!(sqlc_generate < database_bootstrap);
+    assert!(database_bootstrap < contract_generate);
 }
 
 #[test]
