@@ -321,7 +321,7 @@ fn rust_runtime_check_accepts_an_active_version_at_or_above_the_cargo_authority(
 #[cfg(unix)]
 #[test]
 fn go_runtime_check_uses_the_go_version_authority() {
-    for (actual, compatible) in [("1.25.4", false), ("1.26.1", true)] {
+    for (actual, compatible) in [("1.27.2", false), ("1.27.4", true)] {
         let temp = tempdir().unwrap();
         let root = temp.path().join("repo");
         let bin = temp.path().join("bin");
@@ -333,7 +333,7 @@ fn go_runtime_check_uses_the_go_version_authority() {
             fs::read_to_string(&config_path).unwrap()
         );
         fs::write(config_path, config).unwrap();
-        fs::write(root.join(".go-version"), "1.26.0\n").unwrap();
+        fs::write(root.join(".go-version"), "1.27.3\n").unwrap();
         write_test_executable(
             &bin.join("go"),
             &format!("#!/bin/sh\nprintf 'go version go{actual} linux/amd64\\n'\n"),
@@ -348,7 +348,7 @@ fn go_runtime_check_uses_the_go_version_authority() {
         .unwrap();
 
         assert_eq!(check.ok, compatible, "{check:?}");
-        assert_eq!(check.data["required"], "1.26.0");
+        assert_eq!(check.data["required"], "1.27.3");
         assert_eq!(check.data["actual"], actual);
         assert_eq!(
             check.status,
@@ -358,7 +358,49 @@ fn go_runtime_check_uses_the_go_version_authority() {
                 "incompatible"
             }
         );
+        if compatible {
+            assert!(check.fix.is_none());
+        } else {
+            assert_eq!(
+                check.fix.as_deref(),
+                Some(
+                    "Install or activate Go 1.27.3 or newer, then run `scripts/jig doctor`."
+                )
+            );
+        }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_go_runtime_fix_uses_the_go_version_authority() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let empty_bin = temp.path().join("bin");
+    fs::create_dir_all(&empty_bin).unwrap();
+    write_doctor_fixture(&root);
+    let config_path = root.join(".jig.toml");
+    let config = format!(
+        "backend_language = \"go\"\ngo_database = \"none\"\n{}",
+        fs::read_to_string(&config_path).unwrap()
+    );
+    fs::write(config_path, config).unwrap();
+    fs::write(root.join(".go-version"), "1.28.1\n").unwrap();
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let check = go_runtime_check(
+        &ctx,
+        &doctor_environment(&empty_bin, None),
+        DoctorProcessControl::allowed_without_signal_session(),
+    )
+    .unwrap();
+
+    assert!(!check.ok);
+    assert_eq!(check.status, "missing");
+    assert_eq!(
+        check.fix.as_deref(),
+        Some("Install or activate Go 1.28.1 or newer, then run `scripts/jig doctor`.")
+    );
 }
 
 #[cfg(unix)]

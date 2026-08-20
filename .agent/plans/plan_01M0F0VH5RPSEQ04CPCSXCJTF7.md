@@ -15,7 +15,7 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 - [x] (2026-08-20 07:33Z) Slice 2: moved Go module validation into the shared early scaffold-invariant phase, retained plan-level defense in depth, rejected dot-edged segments and unsupported punctuation, and proved validation precedes vault capture and writes.
 - [x] (2026-08-20 07:36Z) Slice 3: shared the database configuration guard across application presets, aligned Go bootstrap ordering with the lifecycle contract, corrected Goose documentation, and passed focused Rust and Go command-generation tests.
 - [x] (2026-08-20 07:40Z) Slice 4: added `.go-version` to both Go workflow filters, removed compiler-source metadata from the OpenAPI freshness test, passed both template snapshot checks and rendering tests, and proved a generated `ExampleProject` passes `GOFLAGS=-trimpath go test ./...`.
-- [ ] Slice 5: make Go doctor remediation version-aware; add diagnostic tests; commit.
+- [x] (2026-08-20 07:43Z) Slice 5: made missing and incompatible Go runtime remediation derive from `.go-version`, shared the remediation formatter, and passed non-default authority tests.
 - [ ] Run formatting, Clippy, full repository tests and Jig gates; inspect receipts and working tree; finish structured work.
 
 ## Surprises & Discoveries
@@ -145,3 +145,5 @@ Plan revision note (2026-08-20 07:33Z): Recorded the early-validation design dec
 Plan revision note (2026-08-20 07:36Z): Recorded completion of shared database preflight and generated Go bootstrap lifecycle ordering.
 
 Plan revision note (2026-08-20 07:40Z): Recorded workflow authority coverage, snapshot checks, and the successful generated-project trimpath proof.
+
+Plan revision note (2026-08-20 07:43Z): Recorded completion and focused test evidence for version-aware Go doctor remediation.

@@ -769,7 +769,7 @@ fn go_runtime_check(
                 "missing",
                 format!("Go {required} or newer is required, but go was not found on PATH"),
             )
-            .with_fix("Install Go 1.26 or newer, then rerun scripts/jig doctor."),
+            .with_fix(&go_runtime_fix(required)),
         );
     };
     if let Some(reason) = process_control.unavailable_reason {
@@ -826,6 +826,6 @@ fn go_runtime_check(
     Some(if compatible {
         result
     } else {
-        result.with_fix("Activate Go 1.26 or newer, then rerun scripts/jig doctor.")
+        result.with_fix(&go_runtime_fix(required))
     })
 }

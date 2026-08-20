@@ -259,6 +259,10 @@ fn rust_runtime_fix(required: NumericVersion) -> String {
     format!("Activate Rust {required} or newer with rustup, then run `scripts/jig doctor`.")
 }
 
+fn go_runtime_fix(required: NumericVersion) -> String {
+    format!("Install or activate Go {required} or newer, then run `scripts/jig doctor`.")
+}
+
 fn sqlx_cli_version_fix(
     ctx: &RepoContext,
     environment: &DoctorEnvironment,
