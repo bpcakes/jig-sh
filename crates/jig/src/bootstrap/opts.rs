@@ -54,10 +54,10 @@ pub struct AnswerOpts {
     pub harness_footprint: Option<super::answers::HarnessFootprint>,
     /// Set by an application scaffold; persisted so updates retain backend-specific policy.
     #[arg(skip)]
-    pub(crate) backend_language: Option<super::answers::BackendLanguage>,
+    pub(crate) backend_language: Option<crate::backend::BackendLanguage>,
     /// Set by the Go scaffold to `none` or `postgres`.
     #[arg(skip)]
-    pub(crate) go_database: Option<String>,
+    pub(crate) go_database: Option<crate::backend::GoDatabase>,
     #[arg(
         long,
         help_heading = "Common Answers",

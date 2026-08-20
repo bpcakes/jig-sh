@@ -1,4 +1,5 @@
 mod agent_guides;
+mod backend;
 mod bootstrap;
 mod cancellation;
 mod cli;

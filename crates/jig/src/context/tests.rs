@@ -119,6 +119,46 @@ rust_migration_dir = "legacy-migrations"
 }
 
 #[test]
+fn backend_selectors_reject_unknown_config_values() {
+    for (selector, expected) in [
+        ("backend_language = \"ruby\"", "unknown variant `ruby`"),
+        ("go_database = \"sqlite\"", "unknown variant `sqlite`"),
+    ] {
+        let config = format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+{selector}
+"#
+        );
+        let error = toml::from_str::<RepoConfig>(&config)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "unexpected error: {error}");
+    }
+}
+
+#[test]
+fn postgres_go_database_requires_go_backend() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+go_database = "postgres"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "go_database = \"postgres\" requires backend_language = \"go\" in .jig.toml"
+    );
+}
+
+#[test]
 fn repo_vault_config_is_loaded() {
     let config: RepoConfig = toml::from_str(
         r#"_src_path = "/tmp/template"

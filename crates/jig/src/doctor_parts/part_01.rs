@@ -648,7 +648,7 @@ fn rust_runtime_probe_required(ctx: &RepoContext) -> bool {
 
 #[cfg(unix)]
 fn go_runtime_probe_required(ctx: &RepoContext) -> bool {
-    ctx.backend_language() == "go" && fs::symlink_metadata(ctx.root().join(".go-version")).is_ok()
+    ctx.is_go_backend() && fs::symlink_metadata(ctx.root().join(".go-version")).is_ok()
 }
 
 #[cfg(unix)]

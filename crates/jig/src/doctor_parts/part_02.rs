@@ -718,7 +718,7 @@ fn go_runtime_check(
     environment: &DoctorEnvironment,
     process_control: DoctorProcessControl<'_>,
 ) -> Option<DoctorCheck> {
-    if ctx.backend_language() != "go" {
+    if !ctx.is_go_backend() {
         return None;
     }
     let authority_path = ctx.root().join(".go-version");

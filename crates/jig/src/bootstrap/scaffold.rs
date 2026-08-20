@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+use crate::backend::GoDatabase;
 use crate::context::validate_web_package_manager;
 
 use super::{
@@ -93,14 +94,11 @@ impl InitScaffoldPlan {
             answers.backend_language = Some(backend_language);
         }
         if self.preset == ScaffoldPreset::GoReact {
-            answers.go_database = Some(
-                match self.db {
-                    ScaffoldDb::None => "none",
-                    ScaffoldDb::Postgres => "postgres",
-                    ScaffoldDb::Sqlite => unreachable!("Go scaffold rejects SQLite"),
-                }
-                .into(),
-            );
+            answers.go_database = Some(match self.db {
+                ScaffoldDb::None => GoDatabase::None,
+                ScaffoldDb::Postgres => GoDatabase::Postgres,
+                ScaffoldDb::Sqlite => unreachable!("Go scaffold rejects SQLite"),
+            });
             answers.sqlx_enabled = Some(false);
             answers.rust_crate_roots.clear();
             answers.rust_migration_dir = None;

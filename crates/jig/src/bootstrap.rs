@@ -70,7 +70,7 @@ use template_source::{
 mod adopt_infer;
 mod answers;
 #[cfg(test)]
-pub(crate) use answers::BackendLanguage;
+pub(crate) use crate::backend::BackendLanguage;
 mod crate_classification;
 mod embedded_templates;
 mod file_copy;

@@ -6,10 +6,11 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::answers::{BackendLanguage, HarnessFootprint, RenderAnswers};
+use super::answers::{HarnessFootprint, RenderAnswers};
 use super::path::{
     validate_no_reserved_git_metadata_components, validate_repository_relative_ancestors,
 };
+use crate::backend::BackendLanguage;
 
 pub(super) const ROOT_AGENTS_PATH: &str = "AGENTS.md";
 pub(super) const ROOT_AGENTS_BLOCK_BEGIN: &str = "<!-- BEGIN JIG MANAGED BLOCK -->";

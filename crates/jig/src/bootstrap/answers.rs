@@ -10,6 +10,7 @@ use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
 };
+use crate::backend::{BackendLanguage, GoDatabase};
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
     config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
@@ -27,23 +28,6 @@ pub enum HarnessFootprint {
     #[default]
     Full,
     Minimal,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum BackendLanguage {
-    #[default]
-    Rust,
-    Go,
-}
-
-impl BackendLanguage {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Go => "go",
-        }
-    }
 }
 
 impl HarnessFootprint {
@@ -67,9 +51,8 @@ pub(super) struct RenderAnswers {
     template_source_url: String,
     #[serde(serialize_with = "serialize_harness_footprint")]
     harness_footprint: HarnessFootprint,
-    #[serde(serialize_with = "serialize_backend_language")]
     backend_language: BackendLanguage,
-    go_database: String,
+    go_database: GoDatabase,
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
@@ -355,7 +338,7 @@ struct RawAnswers {
     #[serde(default)]
     harness_footprint: Option<HarnessFootprint>,
     backend_language: Option<BackendLanguage>,
-    go_database: Option<String>,
+    go_database: Option<GoDatabase>,
     sqlx_enabled: Option<bool>,
     rust_crate_roots: Option<Vec<String>>,
     rust_migration_dir: Option<String>,
@@ -482,7 +465,7 @@ impl RawAnswers {
         );
         merge_option(&mut self.harness_footprint, opts.harness_footprint);
         merge_option(&mut self.backend_language, opts.backend_language);
-        merge_option(&mut self.go_database, opts.go_database.clone());
+        merge_option(&mut self.go_database, opts.go_database);
         merge_option(&mut self.sqlx_enabled, opts.sqlx_enabled);
         if !opts.rust_crate_roots.is_empty() {
             self.rust_crate_roots = Some(opts.rust_crate_roots.clone());
@@ -654,12 +637,7 @@ impl RawAnswers {
     fn resolve(mut self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
         self.normalize_app_dirs()?;
         let backend_language = self.backend_language.unwrap_or_default();
-        let go_database = self.go_database.unwrap_or_else(|| "none".into());
-        if backend_language == BackendLanguage::Go
-            && !matches!(go_database.as_str(), "none" | "postgres")
-        {
-            bail!("Invalid go_database '{go_database}'. Expected 'none' or 'postgres'");
-        }
+        let go_database = self.go_database.unwrap_or_default();
         let repo_name = self
             .repo_name
             .filter(|value| !value.is_empty())
@@ -716,8 +694,7 @@ impl RawAnswers {
             )
         });
         let migration_add_command = self.migration_add_command;
-        let migration_dir = if backend_language == BackendLanguage::Go && go_database == "postgres"
-        {
+        let migration_dir = if backend_language.is_go() && go_database.is_postgres() {
             Some("internal/database/migrations".into())
         } else {
             rust_migration_dir.clone()
@@ -952,13 +929,6 @@ fn serialize_harness_footprint<S>(
     value: &HarnessFootprint,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(value.as_str())
-}
-
-fn serialize_backend_language<S>(value: &BackendLanguage, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

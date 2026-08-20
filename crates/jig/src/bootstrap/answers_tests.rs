@@ -45,7 +45,7 @@ fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_file
     let rendered = RawAnswers {
         repo_name: Some("demo".into()),
         backend_language: Some(BackendLanguage::Go),
-        go_database: Some("none".into()),
+        go_database: Some(GoDatabase::None),
         sqlx_enabled: Some(false),
         schema_dump_enabled: Some(false),
         ..RawAnswers::default()

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{FeatureContext, ManifestTool};
 use serde::Deserialize;
 
+use crate::backend::{BackendLanguage, GoDatabase};
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
@@ -75,11 +76,11 @@ struct RepoConfig {
     #[serde(default)]
     harness_footprint: HarnessFootprintConfig,
     #[allow(dead_code)]
-    #[serde(default = "default_backend_language")]
-    backend_language: String,
+    #[serde(default)]
+    backend_language: BackendLanguage,
     #[allow(dead_code)]
     #[serde(default)]
-    go_database: String,
+    go_database: GoDatabase,
     #[allow(dead_code)]
     #[serde(default)]
     sqlx_enabled: bool,
@@ -418,8 +419,8 @@ impl RepoContext {
         &self.config.default_branch
     }
 
-    pub(crate) fn backend_language(&self) -> &str {
-        &self.config.backend_language
+    pub(crate) const fn is_go_backend(&self) -> bool {
+        self.config.backend_language.is_go()
     }
 
     pub(crate) fn legacy_jig_version(&self) -> Option<&str> {
@@ -455,8 +456,7 @@ impl RepoContext {
     }
 
     pub(crate) fn migration_policy_enabled(&self) -> bool {
-        self.sqlx_enabled()
-            || (self.backend_language() == "go" && self.config.go_database == "postgres")
+        self.sqlx_enabled() || (self.is_go_backend() && self.config.go_database.is_postgres())
     }
 
     pub(crate) fn schema_dump_command(&self) -> &str {
@@ -655,10 +655,6 @@ fn default_web_package_manager() -> String {
     "bun".into()
 }
 
-fn default_backend_language() -> String {
-    "rust".into()
-}
-
 fn configured_frontend_app_metadata<'a>(
     config: &'a RepoConfig,
     app: &'a FrontendAppConfig,
@@ -699,12 +695,23 @@ pub(crate) fn default_codex_marketplace_plugins() -> Vec<String> {
 }
 
 fn validate_config(config: &RepoConfig) -> Result<()> {
+    validate_backend_config(config)?;
     validate_command_map(&config.commands)?;
     validate_web_package_manager(&config.web_package_manager)?;
     validate_frontend_app_roles(config)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
     status_config::validate_runtime_config(config)
+}
+
+fn validate_backend_config(config: &RepoConfig) -> Result<()> {
+    if !config.backend_language.is_go() && config.go_database.is_postgres() {
+        bail!(
+            "go_database = \"{}\" requires backend_language = \"go\" in .jig.toml",
+            config.go_database.as_str()
+        );
+    }
+    Ok(())
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
