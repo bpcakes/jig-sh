@@ -6,10 +6,9 @@ use serde_json::Value;
 
 use crate::context::validate_web_package_manager;
 
-use super::answers::BackendLanguage;
 use super::{
-    AnswerOpts, DevApp, FrontendApp, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
-    RUST_REACT_BACKEND_DEV_APP_NAME, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind,
+    APPLICATION_BACKEND_DEV_APP_NAME, AnswerOpts, DevApp, FrontendApp,
+    RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind,
     ScaffoldOpts, ScaffoldPreset,
 };
 
@@ -86,8 +85,10 @@ impl InitScaffoldPlan {
         if answers.repo_name.as_deref() != Some(self.repo_name.as_str()) {
             answers.repo_name = Some(self.repo_name.clone());
         }
+        if let Some(backend_language) = self.preset.generated_backend_language() {
+            answers.backend_language = Some(backend_language);
+        }
         if self.preset == ScaffoldPreset::GoReact {
-            answers.backend_language = Some(BackendLanguage::Go);
             answers.go_database = Some(
                 match self.db {
                     ScaffoldDb::None => "none",
@@ -143,7 +144,7 @@ impl InitScaffoldPlan {
         }
         if answers.dev_apps.is_empty() {
             answers.dev_apps = vec![DevApp {
-                name: RUST_REACT_BACKEND_DEV_APP_NAME.into(),
+                name: APPLICATION_BACKEND_DEV_APP_NAME.into(),
                 dir: Some(".".into()),
                 kind: "env-port".into(),
                 command: None,

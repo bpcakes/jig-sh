@@ -143,7 +143,7 @@ const TEMPLATE_MODE_KEY: &str = "_template_mode";
 const TEMPLATE_LOCAL_PATH_KEY: &str = "_template_local_path";
 const GENERATED_NODE_VERSION: &str = "24.19.0";
 const GENERATED_NODE_TYPES_VERSION: &str = "24.13.3";
-pub(crate) const RUST_REACT_BACKEND_DEV_APP_NAME: &str = "api";
+pub(crate) const APPLICATION_BACKEND_DEV_APP_NAME: &str = "api";
 pub(crate) const RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME: &str = "admin-api";
 
 include!("bootstrap_parts/part_01.rs");

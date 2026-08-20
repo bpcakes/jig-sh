@@ -497,6 +497,18 @@ impl ScaffoldOpts {
     }
 
     pub(crate) fn validate_init_invariants(&self, answers: &AnswerOpts) -> Result<()> {
+        if let Some(preset) = self.preset
+            && let Some(expected) = preset.generated_backend_language()
+            && let Some(actual) = answers.backend_language
+            && actual != expected
+        {
+            bail!(
+                "--preset {} generates a {} backend but the effective answers select backend_language = \"{}\"; remove the conflicting answer or select a matching preset",
+                preset.as_str(),
+                expected.as_str(),
+                actual.as_str()
+            );
+        }
         if answers.harness_footprint == Some(HarnessFootprint::Minimal)
             && (matches!(
                 self.preset,
@@ -546,11 +558,7 @@ impl ScaffoldOpts {
                 );
             }
         }
-        if self.preset == Some(ScaffoldPreset::RustReact) {
-            let reserved_backends = [
-                RUST_REACT_BACKEND_DEV_APP_NAME,
-                RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
-            ];
+        if let Some(preset) = self.preset {
             for frontend_name in self
                 .frontends
                 .iter()
@@ -563,11 +571,12 @@ impl ScaffoldOpts {
                         .map(|frontend| frontend.name.as_str()),
                 )
             {
-                for backend_name in reserved_backends {
+                for backend_name in preset.reserved_backend_dev_app_names() {
                     let backend_prefix = jig_core::dev_app_env_prefix(backend_name);
                     if jig_core::dev_app_env_prefix(frontend_name) == backend_prefix {
                         bail!(
-                            "Rust React frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{backend_name}' because both derive dev environment prefix {backend_prefix}; choose another frontend name"
+                            "{} frontend app name '{frontend_name}' conflicts with the reserved backend dev app '{backend_name}' because both derive dev environment prefix {backend_prefix}; choose another frontend name",
+                            preset.as_str()
                         );
                     }
                 }
@@ -582,8 +591,13 @@ impl ScaffoldOpts {
         {
             answers.sqlx_enabled = Some(false);
         }
+        if let Some(backend_language) = self
+            .preset
+            .and_then(ScaffoldPreset::generated_backend_language)
+        {
+            answers.backend_language = Some(backend_language);
+        }
         if self.preset == Some(ScaffoldPreset::GoReact) {
-            answers.backend_language = Some(crate::bootstrap::answers::BackendLanguage::Go);
             answers.sqlx_enabled = Some(false);
         }
     }

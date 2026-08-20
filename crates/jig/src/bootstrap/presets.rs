@@ -2,7 +2,10 @@ use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::ScaffoldPreset;
+use super::answers::BackendLanguage;
+use super::{
+    APPLICATION_BACKEND_DEV_APP_NAME, RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME, ScaffoldPreset,
+};
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ScaffoldPresetDescriptor {
@@ -56,6 +59,33 @@ pub fn scaffold_presets_report() -> Value {
 }
 
 impl ScaffoldPreset {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::RustReact => "rust-react",
+            Self::GoReact => "go-react",
+            Self::HarnessOnly => "harness-only",
+        }
+    }
+
+    pub(crate) const fn generated_backend_language(self) -> Option<BackendLanguage> {
+        match self {
+            Self::RustReact => Some(BackendLanguage::Rust),
+            Self::GoReact => Some(BackendLanguage::Go),
+            Self::HarnessOnly => None,
+        }
+    }
+
+    pub(crate) const fn reserved_backend_dev_app_names(self) -> &'static [&'static str] {
+        match self {
+            Self::RustReact => &[
+                APPLICATION_BACKEND_DEV_APP_NAME,
+                RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME,
+            ],
+            Self::GoReact => &[APPLICATION_BACKEND_DEV_APP_NAME],
+            Self::HarnessOnly => &[],
+        }
+    }
+
     pub(crate) const fn descriptor(self) -> ScaffoldPresetDescriptor {
         match self {
             Self::RustReact => ScaffoldPresetDescriptor {

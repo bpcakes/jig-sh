@@ -11,7 +11,7 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 - [x] (2026-08-20 07:23Z) Confirmed the branch is clean and reviewed repository, crate, and ExecPlan guidance.
 - [x] (2026-08-20 07:23Z) Reproduced the reported failures and completed a full baseline review and test pass.
 - [x] (2026-08-20 07:23Z) Recorded this plan and opened structured Jig work as `plan_01M0F0VH5RPSEQ04CPCSXCJTF7`.
-- [ ] Slice 1: make application preset identity and generated backend-name reservations early, canonical invariants; add conflict and collision tests; commit.
+- [x] (2026-08-20 07:28Z) Slice 1: made application preset identity and generated backend-name reservations early, canonical invariants; added conflict and collision tests; focused scaffold generation tests passed.
 - [ ] Slice 2: move complete Go module validation before vault preparation; add grammar and ordering tests; commit.
 - [ ] Slice 3: align generated Go bootstrap sequencing and documentation with the database preflight contract; add command tests; commit.
 - [ ] Slice 4: harden generated Go workflow and OpenAPI test paths; add template and generated-runtime tests; commit.
@@ -26,6 +26,8 @@ The Go scaffold currently works on its primary path, but several edge cases expo
   Evidence: `--preset go-react --frontend api:spa` passes preset validation and later fails generic app-directory consistency validation.
 - Observation: Go module syntax validation currently lives in scaffold-plan construction, after CLI vault preparation.
   Evidence: `crates/jig/src/cli/bootstrap_run.rs` prepares the vault before `bootstrap::run_init`, while `validate_go_module` is called from `InitScaffoldPlan::go_react`.
+- Observation: Preserving answer-file command overrides is compatible with strong preset identity checks.
+  Evidence: The implementation rejects only contradictory application backend identity, then derives canonical identity from `ScaffoldPreset`; harness-only remains free to describe an existing Rust or Go project.
 
 ## Decision Log
 
@@ -127,3 +129,5 @@ Baseline evidence from the review pass:
 No new external dependency is required. `ScaffoldPreset` will expose crate-private methods for its generated backend identity and reserved backend dev-app names. `ScaffoldOpts::validate_init_invariants` remains the public bootstrap-layer guard and will call those methods. `validate_go_module` remains the single grammar validator and will be made visible to the outer bootstrap command only as far as needed. Generated shell command construction continues using the existing `DATABASE_CONFIG_GUARD`. Doctor continues using its existing parsed `GoVersion`; only remediation formatting changes.
 
 Plan revision note (2026-08-20): Expanded the initial structured-work body into a self-contained implementation plan after reproducing and classifying the comprehensive-review findings.
+
+Plan revision note (2026-08-20 07:28Z): Recorded completion and focused test evidence for the preset identity and backend-name reservation slice.
