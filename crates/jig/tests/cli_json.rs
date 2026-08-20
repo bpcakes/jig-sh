@@ -212,7 +212,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     assert!(structured.stderr.is_empty());
     let structured: Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(structured["command"], "info commands");
-    assert_eq!(structured["schema_version"], 2);
+    assert_eq!(structured["schema_version"], 3);
     assert_eq!(structured["repo"]["context_status"], "valid");
     let command_names = structured["commands"]
         .as_array()
@@ -237,6 +237,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
             "ui",
             "work",
             "loop",
+            "migration",
             "sqlx",
             "vault",
             "proxy",
@@ -269,6 +270,7 @@ fn info_commands_exposes_versioned_json_and_grouped_human_output() {
     assert!(human.contains("Jig command availability: phase-two"));
     assert!(human.contains("Get started:"));
     assert!(human.contains("Agent and automation:"));
+    assert!(human.contains("migration  not configured"));
     assert!(human.contains("sqlx       not configured"));
     assert!(human.contains("Next:"));
     assert!(!state_dir.exists());

@@ -24,6 +24,9 @@ After this work, migration path and authoring behavior will have one backend-neu
 - Observation: Removing Huma's read-only `$schema` properties also removes Hey API's generated `*Writable` aliases; those aliases existed only to omit the read-only link field and become redundant once the response and writable shapes are identical.
   Evidence: `node scripts/contracts.mjs check` identified `index.ts`, `types.gen.ts`, and `zod.gen.ts` drift; regeneration removed only `$schema` members and the now-identical writable aliases.
 
+- Observation: The first complete test run passed 2,158 of 2,159 tests; the sole failure was an integration fixture that still asserted command-inventory schema v2 and omitted the new visible `migration` root.
+  Evidence: Nextest run `e78d411a-576c-4060-a3c4-6f4295400343` failed only `jig-sh::cli_json info_commands_exposes_versioned_json_and_grouped_human_output`; the focused rerun reported `left: 3, right: 2` at the stale fixture assertion.
+
 - Observation: A prior hardening slice intentionally made `migration_dir` project-owned and backend-neutral, but SQLx migration creation, command inventory, Rust workflow triggers, and generated Rust guidance still read `rust_migration_dir` directly.
   Evidence: `RepoContext::migration_dir` prefers the neutral key, while `policy::migration_add`, `info::commands::sqlx_command`, and `templates/project/.github/workflows/repo-policy.yml.jinja` use the legacy key.
 
