@@ -8,58 +8,6 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/client.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/client.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/client/index.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/client/index.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
-        relative_path: "go-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja",
-        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja")),
-    },
-    EmbeddedScaffoldTemplateFile {
         relative_path: "go-react/frontend/api-client-public/src/generated/index.ts.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/frontend/api-client-public/src/generated/index.ts.jinja")),
     },

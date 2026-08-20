@@ -16,7 +16,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 - [x] (2026-08-20) Reused one regular-file-only, size-capped numeric-version authority reader for Node and Go, with regression coverage for symlinks, invalid UTF-8, multiple tokens, and oversized/empty files.
 - [x] (2026-08-20) Filtered missing tracked files before `gofmt`, proved the generated command against a deleted-file/ignored-file Git fixture, and replaced `seq` readiness loops with Bash arithmetic in both backend scaffolds.
 - [x] (2026-08-20) Unified interactive/default Go module derivation, rejected migration configuration without Go/PostgreSQL, omitted that config from no-database scaffolds, and made reserved frontend roots preset-specific.
-- [ ] Point byte-identical Go client runtime templates at their single shared source and remove redundant copies.
+- [x] (2026-08-20) Split public-client registration into shared runtime and backend-specific contract templates, removed 13 byte-identical Go copies, and verified every removed file matches its canonical source byte-for-byte.
 - [ ] Rebuild the development runtime; pass focused tests, the complete configured test gate, format, Clippy, contract, and structured-work evidence; close the plan.
 
 ## Surprises & Discoveries

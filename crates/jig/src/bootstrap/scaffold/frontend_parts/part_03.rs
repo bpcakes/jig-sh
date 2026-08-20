@@ -64,7 +64,14 @@ mod tests {
         assert_complete("rust-react/frontend/admin-shadcn/", &[admin.as_slice()]);
         assert_complete(
             "rust-react/frontend/api-client-public/",
-            &[PUBLIC_API_CLIENT_TEMPLATES],
+            &[
+                PUBLIC_API_CLIENT_SHARED_TEMPLATES,
+                RUST_PUBLIC_API_CLIENT_CONTRACT_TEMPLATES,
+            ],
+        );
+        assert_complete(
+            "go-react/frontend/api-client-public/",
+            &[GO_PUBLIC_API_CLIENT_CONTRACT_TEMPLATES],
         );
         assert_complete(
             "rust-react/frontend/api-client-admin/",
@@ -82,7 +89,8 @@ mod tests {
                 e2e,
                 react_eslint,
                 admin.as_slice(),
-                PUBLIC_API_CLIENT_TEMPLATES,
+                PUBLIC_API_CLIENT_SHARED_TEMPLATES,
+                RUST_PUBLIC_API_CLIENT_CONTRACT_TEMPLATES,
                 ADMIN_API_CLIENT_TEMPLATES,
             ],
         );

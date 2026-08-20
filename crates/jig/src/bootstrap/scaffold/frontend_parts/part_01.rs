@@ -38,7 +38,7 @@ const E2E_WORKFLOW_TEMPLATE: ScaffoldTemplateFile = ScaffoldTemplateFile {
 };
 
 const ADMIN_TEMPLATE_PREFIX: &str = "rust-react/frontend/admin-shadcn/";
-const PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
+const PUBLIC_API_CLIENT_SHARED_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
         template: "rust-react/frontend/api-client-public/package.json.jinja",
         output: "packages/public-api-client/package.json",
@@ -99,43 +99,15 @@ const PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
         template: "rust-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja",
         output: "packages/public-api-client/src/generated/core/utils.gen.ts",
     },
-    ScaffoldTemplateFile {
-        template: "rust-react/frontend/api-client-public/src/generated/types.gen.ts.jinja",
-        output: "packages/public-api-client/src/generated/types.gen.ts",
-    },
-    ScaffoldTemplateFile {
-        template: "rust-react/frontend/api-client-public/src/generated/index.ts.jinja",
-        output: "packages/public-api-client/src/generated/index.ts",
-    },
-    ScaffoldTemplateFile {
-        template: "rust-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja",
-        output: "packages/public-api-client/src/generated/sdk.gen.ts",
-    },
-    ScaffoldTemplateFile {
-        template: "rust-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja",
-        output: "packages/public-api-client/src/generated/zod.gen.ts",
-    },
-    ScaffoldTemplateFile {
-        template: "rust-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja",
-        output: "packages/public-api-client/src/generated/@tanstack/react-query.gen.ts",
-    },
 ];
-const GO_PUBLIC_API_CLIENT_TEMPLATES: &[ScaffoldTemplateFile] = &[
-    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/package.json.jinja", output: "packages/public-api-client/package.json" },
-    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/index.ts.jinja", output: "packages/public-api-client/src/index.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client.gen.ts.jinja", output: "packages/public-api-client/src/generated/client.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/client.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/client.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/index.ts.jinja", output: "packages/public-api-client/src/generated/client/index.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/types.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/client/utils.gen.ts.jinja", output: "packages/public-api-client/src/generated/client/utils.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/auth.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/auth.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/bodySerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/bodySerializer.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/params.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/params.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/pathSerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/pathSerializer.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/queryKeySerializer.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/queryKeySerializer.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/serverSentEvents.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/serverSentEvents.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/types.gen.ts" },
-    ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/core/utils.gen.ts.jinja", output: "packages/public-api-client/src/generated/core/utils.gen.ts" },
+const RUST_PUBLIC_API_CLIENT_CONTRACT_TEMPLATES: &[ScaffoldTemplateFile] = &[
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/generated/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/types.gen.ts" },
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/generated/index.ts.jinja", output: "packages/public-api-client/src/generated/index.ts" },
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja", output: "packages/public-api-client/src/generated/sdk.gen.ts" },
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/generated/zod.gen.ts.jinja", output: "packages/public-api-client/src/generated/zod.gen.ts" },
+    ScaffoldTemplateFile { template: "rust-react/frontend/api-client-public/src/generated/@tanstack/react-query.gen.ts.jinja", output: "packages/public-api-client/src/generated/@tanstack/react-query.gen.ts" },
+];
+const GO_PUBLIC_API_CLIENT_CONTRACT_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/types.gen.ts.jinja", output: "packages/public-api-client/src/generated/types.gen.ts" },
     ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/index.ts.jinja", output: "packages/public-api-client/src/generated/index.ts" },
     ScaffoldTemplateFile { template: "go-react/frontend/api-client-public/src/generated/sdk.gen.ts.jinja", output: "packages/public-api-client/src/generated/sdk.gen.ts" },
