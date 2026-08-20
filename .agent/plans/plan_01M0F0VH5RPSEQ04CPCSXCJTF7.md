@@ -16,7 +16,7 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 - [x] (2026-08-20 07:36Z) Slice 3: shared the database configuration guard across application presets, aligned Go bootstrap ordering with the lifecycle contract, corrected Goose documentation, and passed focused Rust and Go command-generation tests.
 - [x] (2026-08-20 07:40Z) Slice 4: added `.go-version` to both Go workflow filters, removed compiler-source metadata from the OpenAPI freshness test, passed both template snapshot checks and rendering tests, and proved a generated `ExampleProject` passes `GOFLAGS=-trimpath go test ./...`.
 - [x] (2026-08-20 07:43Z) Slice 5: made missing and incompatible Go runtime remediation derive from `.go-version`, shared the remediation formatter, and passed non-default authority tests.
-- [ ] Run formatting, Clippy, full repository tests and Jig gates; inspect receipts and working tree; finish structured work.
+- [x] (2026-08-20 07:53Z) Ran formatting, warnings-denied Clippy, the full two-part Nextest repository suite, contract validation, work gates, evidence, and receipt inspection; all passed with fresh no-diff gate evidence.
 
 ## Surprises & Discoveries
 
@@ -54,7 +54,9 @@ The Go scaffold currently works on its primary path, but several edge cases expo
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. Completion requires all five slices, a clean full-suite run, Jig gate evidence, and one commit per slice.
+All five slices are implemented and committed independently. The primary root cause was structural: preset identity, early input invariants, derived defaults, and generated runtime contracts had multiple owners. That fragmentation made several omissions predictable when the Go preset was added. The implementation reduced that bug surface by making `ScaffoldPreset` own generated backend identity and reserved process names, by moving module grammar into the already shared pre-side-effect invariant boundary, and by reusing the database guard and authority values instead of copying literals. The remaining template fixes remove hidden dependencies on compiler metadata and make CI watch its declared toolchain authority.
+
+The complete configured test gate and contract gate passed with fresh evidence. Formatting and warnings-denied Clippy passed. A generated generic `ExampleProject` passed `GOFLAGS=-trimpath go test ./...`, directly exercising the portability fix. No functional gaps from the original seven findings remain.
 
 ## Context and Orientation
 
@@ -132,6 +134,17 @@ Baseline evidence from the review pass:
     cargo test -p jig-sh                               # passed
     GOFLAGS=-trimpath go test ./internal/httpapi       # failed before fix: committed OpenAPI path used module import text
 
+Completion evidence:
+
+    scripts/jig work check --plan-id plan_01M0F0VH5RPSEQ04CPCSXCJTF7
+                                                        # passed; receipt_01M0F2FZVV10H19T8M0ER32PSB
+    scripts/jig check fmt                              # passed; receipt_01M0F2GAE8P7G0ZK2M723ZZ7AE
+    scripts/jig check clippy                           # passed; receipt_01M0F2GQZPQ9M0Y4X5N6HXY4ST
+    scripts/jig check contract                         # passed; receipt_01M0F2GR24WKWN6PJ0MQ624PZC
+    scripts/jig work gates --plan-id plan_01M0F0VH5RPSEQ04CPCSXCJTF7
+                                                        # passed; contract and tests fresh with no changes
+    GOFLAGS=-trimpath go test ./...                    # passed in generated /tmp/.../ExampleProject
+
 ## Interfaces and Dependencies
 
 No new external dependency is required. `ScaffoldPreset` will expose crate-private methods for its generated backend identity and reserved backend dev-app names. `ScaffoldOpts::validate_init_invariants` remains the public bootstrap-layer guard and will call those methods. `validate_go_module` remains the single grammar validator and will be made visible to the outer bootstrap command only as far as needed. Generated shell command construction continues using the existing `DATABASE_CONFIG_GUARD`. Doctor continues using its existing parsed `GoVersion`; only remediation formatting changes.
@@ -147,3 +160,5 @@ Plan revision note (2026-08-20 07:36Z): Recorded completion of shared database p
 Plan revision note (2026-08-20 07:40Z): Recorded workflow authority coverage, snapshot checks, and the successful generated-project trimpath proof.
 
 Plan revision note (2026-08-20 07:43Z): Recorded completion and focused test evidence for version-aware Go doctor remediation.
+
+Plan revision note (2026-08-20 07:53Z): Marked final validation complete, recorded receipts, and replaced the in-progress outcome with the architectural retrospective.
