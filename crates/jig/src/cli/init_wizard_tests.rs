@@ -130,6 +130,30 @@ fn go_react_strict_mode_requires_module() {
 }
 
 #[test]
+fn go_react_interactive_module_prompt_retries_without_changing_case() {
+    let mut opts = init_opts(&["jig", "init", "demo", "--preset", "go-react", "--no-vault"]);
+    let mut input =
+        Cursor::new("none\nweb\nexample.com/ExampleProject.\nexample.com/ExampleProject\n");
+    let mut output = Vec::new();
+
+    prepare_init_interaction_with_io(&mut opts, &mut input, &mut output).unwrap();
+
+    assert_eq!(
+        opts.answers.go_module.as_deref(),
+        Some("example.com/ExampleProject")
+    );
+    let output = String::from_utf8(output).unwrap();
+    assert_eq!(output.matches("Invalid --go-module").count(), 1, "{output}");
+    assert_eq!(
+        output
+            .matches("Go module (for example github.com/acme/my-app):")
+            .count(),
+        2,
+        "{output}"
+    );
+}
+
+#[test]
 fn selected_package_manager_must_be_available_before_init_writes() {
     let mut opts = init_opts(&[
         "jig",

@@ -56,7 +56,7 @@ use names::{
 pub(super) use write::ScaffoldFile;
 use write::ScaffoldReport;
 
-pub(super) fn validate_go_module(value: &str) -> Result<()> {
+pub(crate) fn validate_go_module(value: &str) -> Result<()> {
     names::validate_go_module(value)
 }
 

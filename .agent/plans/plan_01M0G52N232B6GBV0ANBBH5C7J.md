@@ -13,7 +13,7 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 - [x] (2026-08-20 17:57Z) Classified the comprehensive-review findings by root cause and opened structured work plan `plan_01M0G52N232B6GBV0ANBBH5C7J`.
 - [x] (2026-08-20 18:00Z) Moved migration execution out of ordinary pool opening and into explicit bootstrap, refreshed snapshots, and passed the focused rendering regression.
 - [x] (2026-08-20 18:14Z) Made HTTP serving and graceful shutdown one joined lifecycle and passed the generated API test for both no-database and PostgreSQL scaffolds.
-- [ ] Reuse canonical Go module validation inside an interactive retry loop, add focused wizard tests, and commit the slice.
+- [x] (2026-08-20 18:23Z) Reused canonical Go module validation inside a case-preserving interactive retry loop and passed the focused wizard regression.
 - [ ] Rebuild the development binary and run the complete configured test, format, Clippy, and contract gates.
 - [ ] Record evidence, review the final commit series, update this plan's outcome, and close structured work.
 
@@ -28,6 +28,9 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
 - Observation: A directly rendered Go project does not yet have `go.sum`; running `go mod tidy`, which the normal bootstrap lifecycle already owns, is required before testing that temporary project.
   Evidence: Direct `go test ./cmd/api` first reported missing module checksums, then `go mod tidy && go test ./cmd/api` passed for both no-database and PostgreSQL renderings.
 
+- Observation: The generic wizard line helper lowercased every answer because all earlier uses were enumerated choices, but Go module path elements are case-sensitive free-form data.
+  Evidence: The retry regression intentionally accepts `example.com/ExampleProject`; splitting raw prompt reading from choice normalization preserves that value while existing choice prompts remain case-insensitive.
+
 ## Decision Log
 
 - Decision: Make explicit bootstrap the sole migration owner instead of adding a lock around migrations on every server start.
@@ -39,7 +42,7 @@ The behavior is observable in focused Rust rendering and wizard tests, in genera
   Date/Author: 2026-08-20 / Codex
 
 - Decision: Keep `validate_go_module` as the only Go module grammar implementation and call it from a dedicated prompt loop.
-  Rationale: Copying validation into the wizard would create drift. Final invariant validation remains defense in depth for noninteractive and library callers, while the prompt loop adds recoverable interaction.
+  Rationale: Copying validation into the wizard would create drift. The loop uses a case-preserving raw-value prompt because module paths are not enumerated choices. Final invariant validation remains defense in depth for noninteractive and library callers, while the prompt loop adds recoverable interaction.
   Date/Author: 2026-08-20 / Codex
 
 ## Outcomes & Retrospective

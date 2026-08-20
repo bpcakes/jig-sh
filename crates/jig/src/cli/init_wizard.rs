@@ -213,13 +213,7 @@ fn guide_project_shape<R: BufRead, W: Write>(
         opts.scaffold.frontends = prompt_frontends(input, output, &metadata)?;
     }
     if opts.scaffold.preset == Some(ScaffoldPreset::GoReact) && opts.answers.go_module.is_none() {
-        opts.answers.go_module = Some(prompt_line(
-            input,
-            output,
-            "Go module (for example github.com/acme/my-app): ",
-            "example.com/app",
-            "Go module",
-        )?);
+        opts.answers.go_module = Some(prompt_go_module(input, output)?);
     }
     Ok(())
 }
@@ -400,7 +394,33 @@ fn confirm_custom_frontend_names<R: BufRead, W: Write>(
     }
 }
 
+fn prompt_go_module<R: BufRead, W: Write>(input: &mut R, output: &mut W) -> Result<String> {
+    loop {
+        let module = prompt_value(
+            input,
+            output,
+            "Go module (for example github.com/acme/my-app): ",
+            "example.com/app",
+            "Go module",
+        )?;
+        match bootstrap::validate_go_module(&module) {
+            Ok(()) => return Ok(module),
+            Err(error) => writeln!(output, "  {error}")?,
+        }
+    }
+}
+
 fn prompt_line<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    prompt: &str,
+    default: &str,
+    label: &str,
+) -> Result<String> {
+    Ok(prompt_value(input, output, prompt, default, label)?.to_ascii_lowercase())
+}
+
+fn prompt_value<R: BufRead, W: Write>(
     input: &mut R,
     output: &mut W,
     prompt: &str,
@@ -419,11 +439,11 @@ fn prompt_line<R: BufRead, W: Write>(
             "init wizard ended before the {label} was answered; rerun interactively or pass --defaults for default answers"
         );
     }
-    let answer = line.trim().to_ascii_lowercase();
+    let answer = line.trim();
     Ok(if answer.is_empty() {
         default.to_string()
     } else {
-        answer
+        answer.to_string()
     })
 }
 
