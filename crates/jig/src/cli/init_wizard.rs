@@ -229,14 +229,14 @@ fn print_project_shape_header<W: Write>(
     metadata: &InitPresetMetadata,
 ) -> Result<()> {
     writeln!(output, "Project shape")?;
-    writeln!(output, "  rust-react — {}", metadata.preset_summary)?;
+    writeln!(output, "  1. rust-react — {}", metadata.preset_summary)?;
     writeln!(
         output,
-        "  go-react — Go 1.26, chi, Huma, pgx/sqlc/Goose, and React."
+        "  2. harness-only — Jig harness without starter application code."
     )?;
     writeln!(
         output,
-        "  harness-only — Jig harness without starter application code."
+        "  3. go-react — Go 1.26, chi, Huma, pgx/sqlc/Goose, and React."
     )?;
     Ok(())
 }
@@ -244,8 +244,8 @@ fn print_project_shape_header<W: Write>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScaffoldChoice {
     RustReact,
-    GoReact,
     HarnessOnly,
+    GoReact,
 }
 
 fn prompt_scaffold_choice<R: BufRead, W: Write>(
@@ -256,8 +256,8 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
         let answer = prompt_line(
             input,
             output,
-            "Scaffold an app? [rust-react/go-react/harness-only] (rust-react): ",
-            "rust-react",
+            "Scaffold an app? [1 rust-react / 2 harness-only / 3 go-react] (1): ",
+            "1",
             "project scaffold",
         )?;
         match answer.as_str() {
@@ -268,7 +268,10 @@ fn prompt_scaffold_choice<R: BufRead, W: Write>(
                 return Ok(ScaffoldChoice::HarnessOnly);
             }
             "3" | "go" | "go-react" => return Ok(ScaffoldChoice::GoReact),
-            _ => writeln!(output, "  Enter rust-react, go-react, or harness-only.")?,
+            _ => writeln!(
+                output,
+                "  Enter 1, 2, 3, rust-react, harness-only, or go-react."
+            )?,
         }
     }
 }

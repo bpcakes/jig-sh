@@ -204,6 +204,20 @@ fn numeric_scaffold_aliases_preserve_harness_only_and_append_go() {
         prompt_scaffold_choice(&mut Cursor::new("3\n"), &mut output).unwrap(),
         ScaffoldChoice::GoReact
     );
+
+    let mut header = Vec::new();
+    print_project_shape_header(&mut header, &InitPresetMetadata::load()).unwrap();
+    let header = String::from_utf8(header).unwrap();
+    let rust = header.find("1. rust-react").unwrap();
+    let harness = header.find("2. harness-only").unwrap();
+    let go = header.find("3. go-react").unwrap();
+    assert!(rust < harness && harness < go, "{header}");
+
+    let output = String::from_utf8(output).unwrap();
+    assert!(
+        output.contains("[1 rust-react / 2 harness-only / 3 go-react]"),
+        "{output}"
+    );
 }
 
 #[test]
