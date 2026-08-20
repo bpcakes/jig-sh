@@ -17,7 +17,7 @@ After this work, migration path and authoring behavior will have one backend-neu
 - [x] (2026-08-20) Filtered missing tracked files before `gofmt`, proved the generated command against a deleted-file/ignored-file Git fixture, and replaced `seq` readiness loops with Bash arithmetic in both backend scaffolds.
 - [x] (2026-08-20) Unified interactive/default Go module derivation, rejected migration configuration without Go/PostgreSQL, omitted that config from no-database scaffolds, and made reserved frontend roots preset-specific.
 - [x] (2026-08-20) Split public-client registration into shared runtime and backend-specific contract templates, removed 13 byte-identical Go copies, and verified every removed file matches its canonical source byte-for-byte.
-- [ ] Rebuild the development runtime; pass focused tests, the complete configured test gate, format, Clippy, contract, and structured-work evidence; close the plan.
+- [x] (2026-08-20) Rebuilt the development runtime; passed focused tests, all 2,159 complete-suite tests, format, Clippy, contract, and structured-work evidence with fresh receipts.
 
 ## Surprises & Discoveries
 
@@ -56,7 +56,11 @@ After this work, migration path and authoring behavior will have one backend-neu
 
 ## Outcomes & Retrospective
 
-Pending implementation and final gate evidence.
+The review findings had a mixed cause. The dominant cluster was structural: the Go cutover introduced backend-neutral concepts without moving every consumer to the neutral boundary. Migration configuration, CLI ownership, feature registration, scaffold validation, and client template ownership consequently retained independent Rust/SQLx assumptions. The long-term fix was to make backend identity or backend-neutral policy explicit at those boundaries, retain compatibility only at ingestion/alias edges, and keep backend branching limited to genuinely different output formats.
+
+The remaining defects were narrower boundary omissions: Huma's default hook stayed active after its schema routes were disabled; Go authority files lacked the hardened reader already used by Node; and generated shell assumed both present tracked files and an external `seq`. Those were fixed with observable boundary tests and shared helpers so equivalent paths cannot drift independently.
+
+Implementation landed in separate commits for migration abstraction, schema-link behavior, authority-file hardening, generated shell behavior, init/scaffold validation, template deduplication, and the schema-v3 integration fixture. The final `jig.test` receipt `receipt_01M0GCWR44QYAJFBWFYPEHTMK2` records 2,159 passing tests. Format receipt `receipt_01M0GCWZKX8Q4JD48V3Y5AVNDR`, Clippy receipt `receipt_01M0GCXRFKR7A44CNDXRFYXK24`, and contract receipt `receipt_01M0GCXWA4CF292TSXV5V2TTBF` all passed with no changes. `scripts/jig work gates` and `scripts/jig work evidence` reported every required gate fresh and no unresolved gates.
 
 ## Context and Orientation
 
