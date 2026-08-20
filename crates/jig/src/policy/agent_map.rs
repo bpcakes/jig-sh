@@ -68,8 +68,8 @@ pub(crate) fn write_rendered(root: &Path, map_path: &Path, body: &[u8]) -> Resul
 }
 
 pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
-    // Crate guides intentionally use this exact repo-wide heading contract so
-    // agents can scan every crate guide without learning local synonyms.
+    // Backend guides intentionally use this exact repo-wide heading contract so
+    // agents can scan every package or crate guide without learning local synonyms.
     let required = [
         "## Purpose",
         "## Key entrypoints",
@@ -80,14 +80,14 @@ pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
     let mut missing_sections = Vec::new();
     let mut missing_entry_ref = Vec::new();
     let mut guide_count = 0usize;
-    for root in ctx.rust_crate_roots() {
-        let crate_root = ctx.root().join(root);
-        if !crate_root.is_dir() {
+    for root in ctx.backend_guide_roots() {
+        let backend_root = ctx.root().join(root);
+        if !backend_root.is_dir() {
             continue;
         }
-        // Crate roots contain first-level crates; deeper AGENTS.md files are
-        // covered by agent-map link validation rather than crate-guide policy.
-        for entry in sorted_dirs(&crate_root)? {
+        // Backend roots contain first-level packages or crates; deeper AGENTS.md
+        // files are covered by agent-map link validation rather than guide policy.
+        for entry in sorted_dirs(&backend_root)? {
             let guide = entry.join("AGENTS.md");
             let rel = relative_string(ctx.root(), &guide)?;
             if !guide.exists() {
@@ -100,10 +100,18 @@ pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
                     missing_sections.push(format!("{rel}: missing section '{section}'"));
                 }
             }
-            if !text.contains("`src/lib.rs`") && !text.contains("`src/main.rs`") {
-                missing_entry_ref.push(format!(
-                    "{rel}: missing src/lib.rs or src/main.rs entrypoint reference"
-                ));
+            let has_entry_ref = if ctx.is_go_backend() {
+                has_backticked_go_entrypoint(&text)
+            } else {
+                text.contains("`src/lib.rs`") || text.contains("`src/main.rs`")
+            };
+            if !has_entry_ref {
+                let expected = if ctx.is_go_backend() {
+                    "a backticked .go entrypoint"
+                } else {
+                    "src/lib.rs or src/main.rs entrypoint reference"
+                };
+                missing_entry_ref.push(format!("{rel}: missing {expected}"));
             }
         }
     }
@@ -111,10 +119,22 @@ pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
         "ok": missing_sections.is_empty() && missing_entry_ref.is_empty(),
         "guide_count": guide_count,
         "missing_guides": [],
-        "missing_guides_note": "placeholder crate-level AGENTS.md files are no longer required; existing guides are validated when present",
+        "missing_guides_note": "placeholder backend-level AGENTS.md files are no longer required; existing guides are validated when present",
         "missing_sections": missing_sections,
         "missing_entry_ref": missing_entry_ref,
     }))
+}
+
+fn has_backticked_go_entrypoint(text: &str) -> bool {
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::trim)
+        .any(|reference| {
+            !reference.is_empty()
+                && !reference.chars().any(char::is_whitespace)
+                && reference.ends_with(".go")
+        })
 }
 
 struct CheckResult {
@@ -476,5 +496,51 @@ rust_test_command = "cargo test"
                 .iter()
                 .any(|entry| entry.as_str().unwrap().contains("crates/api/AGENTS.md"))
         );
+    }
+
+    #[test]
+    fn check_guides_discovers_go_packages_and_requires_go_entrypoints() {
+        let temp = tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("cmd/api")).unwrap();
+        fs::create_dir_all(temp.path().join("internal/core")).unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"
+backend_language = "go"
+go_database = "none"
+rust_crate_roots = []
+"#,
+            )
+            .write();
+        let required_sections = "## Purpose\nExample package.\n\n## Key entrypoints\nENTRYPOINT\n\n## Edit here for X\nExample edits.\n\n## Invariants\nExample invariant.\n\n## Common commands\nExample command.\n";
+        fs::write(
+            temp.path().join("cmd/api/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- `main.go`"),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("internal/core/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- core.go"),
+        )
+        .unwrap();
+
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let output = check_guides(&ctx).unwrap();
+
+        assert_eq!(output["ok"], false);
+        assert_eq!(output["guide_count"], 2);
+        assert_eq!(
+            output["missing_entry_ref"][0],
+            "internal/core/AGENTS.md: missing a backticked .go entrypoint"
+        );
+
+        fs::write(
+            temp.path().join("internal/core/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- `core.go`"),
+        )
+        .unwrap();
+        let output = check_guides(&ctx).unwrap();
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["guide_count"], 2);
     }
 }

@@ -274,6 +274,10 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
     assert!(!config.contains("rust_migration_dir ="));
+    let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
+    assert!(root_guide.contains("business logic in the owning package"));
+    assert!(!root_guide.contains("business logic in the owning crate"));
+    assert!(root_guide.contains("## Backend Guide Conventions"));
     let policy =
         fs::read_to_string(destination.join(".github/workflows/repo-policy.yml")).unwrap();
     let policy: serde_json::Value = serde_yaml_ng::from_str(&policy).unwrap();

@@ -8,7 +8,7 @@ This ExecPlan turns the comprehensive-review findings into four independently re
 - [x] Preserve the backend-neutral migration directory through rendering and use it in generated policy workflow paths.
 - [x] Centralize derived Go module naming with Go-compatible validation.
 - [x] Align the interactive preset presentation with the retained numeric aliases.
-- [ ] Make agent-guide discovery and entrypoint validation backend-aware, and render matching Go guidance.
+- [x] Make agent-guide discovery and entrypoint validation backend-aware, and render matching Go guidance.
 - [ ] Build the development binary, run focused tests after each slice, then run the full configured test, format, Clippy, and contract gates.
 - [ ] Record receipts, inspect the final commit series, and close structured work.
 

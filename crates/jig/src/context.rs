@@ -443,6 +443,14 @@ impl RepoContext {
         &self.config.rust_crate_roots
     }
 
+    pub(crate) fn backend_guide_roots(&self) -> Vec<&str> {
+        if self.is_go_backend() {
+            vec!["cmd", "internal"]
+        } else {
+            self.rust_crate_roots().iter().map(String::as_str).collect()
+        }
+    }
+
     pub(crate) fn rust_migration_dir(&self) -> &str {
         &self.config.rust_migration_dir
     }
