@@ -264,6 +264,11 @@ jobs:
         run: scripts/check-webapps.sh run-script "$APP_DIR" typecheck
       - name: Run build
         run: scripts/check-webapps.sh run-script "$APP_DIR" build:bundle
+      - name: Check generated API clients and public boundary
+        run: |
+          if [ -f scripts/contracts.mjs ]; then
+            node scripts/contracts.mjs client-check
+          fi
       - name: Run tests with coverage
         run: scripts/check-webapps.sh run-script "$APP_DIR" test:coverage
       - name: Enforce coverage threshold

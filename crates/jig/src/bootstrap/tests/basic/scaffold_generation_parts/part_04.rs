@@ -207,6 +207,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(contracts.contents.contains(r#"run("go", ["run", "./cmd/openapi""#));
     assert!(!contracts.contents.contains(r#"run("cargo""#));
+    assert!(contracts.contents.contains("async function withStagedClients()"));
     let httpapi_test = rendered
         .iter()
         .find(|file| file.relative == "internal/httpapi/httpapi_test.go")
@@ -265,6 +266,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     ] {
         assert_eq!(workflow.matches(path).count(), 2, "missing {path}");
     }
+    assert!(workflow.contains("node scripts/contracts.mjs client-check"));
+    let build_step = workflow.find("Run build").unwrap();
+    let client_check_step = workflow
+        .find("Check generated API clients and public boundary")
+        .unwrap();
+    assert!(build_step < client_check_step);
 
     for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
         let workflow = fs::read_to_string(
@@ -354,6 +361,63 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         .unwrap();
         assert_eq!(workflow.matches(r#"- "database/migrations/**""#).count(), 2);
         assert!(!workflow.contains(r#"- "internal/database/migrations/**""#));
+    }
+
+    #[cfg(unix)]
+    if Command::new("node")
+        .arg("--version")
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        let fake_module = destination.join("node_modules/@hey-api/openapi-ts");
+        fs::create_dir_all(&fake_module).unwrap();
+        fs::write(
+            fake_module.join("package.json"),
+            r#"{"name":"@hey-api/openapi-ts","type":"module","exports":"./index.js"}"#,
+        )
+        .unwrap();
+        fs::write(
+            fake_module.join("index.js"),
+            r#"import { cp } from "node:fs/promises";
+
+export async function createClient({ output }) {
+  await cp("packages/public-api-client/src/generated", output, { recursive: true });
+}
+"#,
+        )
+        .unwrap();
+
+        let fake_bin = destination.join(".fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        write_executable_test_script(
+            &fake_bin.join("go"),
+            "#!/bin/sh\n: > \"$JIG_TEST_GO_MARKER\"\nexit 91\n",
+        );
+        let backend_marker = destination.join(".backend-exporter-ran");
+        let path = std::env::join_paths(
+            std::iter::once(fake_bin).chain(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )),
+        )
+        .unwrap();
+        let before = regular_file_tree_snapshot(&destination);
+
+        let output = Command::new("node")
+            .args(["scripts/contracts.mjs", "client-check"])
+            .current_dir(&destination)
+            .env("PATH", path)
+            .env("JIG_TEST_GO_MARKER", &backend_marker)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "client-check failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!backend_marker.exists(), "client-check invoked Go");
+        assert_eq!(regular_file_tree_snapshot(&destination), before);
     }
 }
 

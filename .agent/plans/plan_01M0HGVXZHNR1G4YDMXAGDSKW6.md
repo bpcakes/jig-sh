@@ -18,7 +18,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Made bounded root `go.mod` parsing the single Go toolchain authority, honored a newer `toolchain` directive, pointed Go and browser CI at `go.mod`, retired generated `.go-version`, refreshed snapshots, and passed focused Doctor/scaffold tests.
 - [x] (2026-08-21) Extracted backend-neutral package normalization, confined Rust keyword/identifier prefixing to Rust-react, reused the neutral stem for default Go modules and frontend packages, and proved `loop` remains unchanged in a generated Go workspace.
 - [x] (2026-08-21) Added defaulted Go capability queries to the feature boundary and backend/database/stale-manifest diagnostics for lint and sqlc, with feature-unit and end-to-end dispatch coverage.
-- [ ] Add a client-only contract drift mode and run it from generated web CI.
+- [x] (2026-08-21) Added client-only staged regeneration from committed OpenAPI documents, ran it after each generated web build, corrected the workflow-boundary documentation, and proved it neither invokes Go nor mutates the generated repository.
 - [ ] Rebuild the development runtime, pass focused tests after each slice, pass the complete repository gates, update outcomes, and close structured work.
 
 ## Surprises & Discoveries

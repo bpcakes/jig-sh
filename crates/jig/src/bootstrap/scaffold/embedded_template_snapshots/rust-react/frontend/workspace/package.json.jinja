@@ -6,6 +6,7 @@
     "bootstrap": "bash scripts/check-webapps.sh bootstrap",
     "contract:generate": "node scripts/contracts.mjs generate",
     "contract:check": "node scripts/contracts.mjs check",
+    "contract:client-check": "node scripts/contracts.mjs client-check",
     "public:artifacts:check": "node scripts/contracts.mjs public-check",
     "api:generate": "node scripts/contracts.mjs generate",
     "api:check": "node scripts/contracts.mjs check"[% if db == "postgres" %],

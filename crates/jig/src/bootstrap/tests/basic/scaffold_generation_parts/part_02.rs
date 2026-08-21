@@ -194,6 +194,7 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(workspace_package.contains(r#""api:check""#));
     assert!(workspace_package.contains(r#""contract:generate""#));
     assert!(workspace_package.contains(r#""contract:check""#));
+    assert!(workspace_package.contains(r#""contract:client-check""#));
     assert!(workspace_package.contains(r#""public:artifacts:check""#));
     assert_eq!(
         workspace_package_json["scripts"]["bootstrap"],
@@ -217,6 +218,8 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     assert!(shared_eslint.contains("src/domain/**/*.{ts,tsx}"));
     let contracts_script = fs::read_to_string(destination.join("scripts/contracts.mjs")).unwrap();
     assert!(contracts_script.contains("await withStagedContracts(mode)"));
+    assert!(contracts_script.contains("await withStagedClients()"));
+    assert!(contracts_script.contains("generateClient(resolve(contract.document), generated)"));
     assert!(contracts_script.contains("async function publishAtomically("));
     assert!(contracts_script.contains("async function assertPublicBoundary("));
     assert!(contracts_script.contains(r#"["tree", "--quiet", "-p", "my-app-api""#));

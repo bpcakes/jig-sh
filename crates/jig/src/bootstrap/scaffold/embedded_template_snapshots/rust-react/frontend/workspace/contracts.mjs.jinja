@@ -53,13 +53,16 @@ const forbiddenPublicMarkers = [
 
 const mode = process.argv[2];
 if (mode === "generate" || mode === "check") {
-  await assertPublicBoundary([]);
+  await assertPublicBoundary([], true);
   await withStagedContracts(mode);
+} else if (mode === "client-check") {
+  await assertPublicBoundary([], false);
+  await withStagedClients();
 } else if (mode === "public-check") {
-  await assertPublicBoundary(process.argv.slice(3));
+  await assertPublicBoundary(process.argv.slice(3), true);
 } else {
   throw new Error(
-    "Usage: node scripts/contracts.mjs generate|check|public-check [public-artifact ...]",
+    "Usage: node scripts/contracts.mjs generate|check|client-check|public-check [public-artifact ...]",
   );
 }
 
@@ -86,11 +89,7 @@ async function withStagedContracts(mode) {
         document,
       ]);
 [% endif %]
-      await createClient({
-        input: document,
-        output: generated,
-        plugins: sharedPlugins,
-      });
+      await generateClient(document, generated);
       if (contract.name === "public") {
         await scanArtifact(document, "staged public OpenAPI document");
         await scanArtifact(generated, "staged public OpenAPI client");
@@ -130,6 +129,30 @@ async function withStagedContracts(mode) {
   } finally {
     if (!preserveStage) await rm(stageRoot, { force: true, recursive: true });
   }
+}
+
+async function withStagedClients() {
+  const stageRoot = await mkdtemp(join(repoRoot, ".contract-client-stage-"));
+  try {
+    for (const contract of contracts) {
+      const generated = join(stageRoot, contract.name);
+      await generateClient(resolve(contract.document), generated);
+      if (contract.name === "public") {
+        await scanArtifact(generated, "staged public OpenAPI client");
+      }
+      await assertTreesEqual(
+        resolve(contract.generated),
+        generated,
+        `${contract.name} OpenAPI client`,
+      );
+    }
+  } finally {
+    await rm(stageRoot, { force: true, recursive: true });
+  }
+}
+
+async function generateClient(input, output) {
+  await createClient({ input, output, plugins: sharedPlugins });
 }
 
 async function publishAtomically(entries, stageRoot) {
@@ -181,7 +204,7 @@ function recoveryError(publishError, restoreErrors) {
   return error;
 }
 
-async function assertPublicBoundary(explicitArtifacts) {
+async function assertPublicBoundary(explicitArtifacts, checkBackendDependencies) {
   const manifests = [
 [% if backend_language == "go" %]
     "go.mod",
@@ -197,14 +220,16 @@ async function assertPublicBoundary(explicitArtifacts) {
     await assertContainsNoMarker(resolve(manifest), `public manifest ${manifest}`);
   }
 [% if backend_language == "rust" %]
-  const { stdout: dependencyTree } = await execFileAsync(
-    "cargo",
-    ["tree", "--quiet", "-p", "<<[ package_name ]>>-api", "--edges", "normal", "--prefix", "none"],
-    { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
-  );
-  for (const marker of ["<<[ package_name ]>>-admin-http", "<<[ package_name ]>>-admin-api"]) {
-    if (dependencyTree.includes(marker)) {
-      throw new Error(`Public API dependency tree contains privileged package ${marker}`);
+  if (checkBackendDependencies) {
+    const { stdout: dependencyTree } = await execFileAsync(
+      "cargo",
+      ["tree", "--quiet", "-p", "<<[ package_name ]>>-api", "--edges", "normal", "--prefix", "none"],
+      { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
+    );
+    for (const marker of ["<<[ package_name ]>>-admin-http", "<<[ package_name ]>>-admin-api"]) {
+      if (dependencyTree.includes(marker)) {
+        throw new Error(`Public API dependency tree contains privileged package ${marker}`);
+      }
     }
   }
 [% endif %]
