@@ -48,6 +48,9 @@ Each independently useful change is committed separately. The complete repositor
 - Observation: the same vault PTY browser test failed twice in the four-thread full vault group after about five seconds, while all other tests passed and the PTY test passed in isolation in 8.1 seconds.
   Evidence: full-suite Nextest runs `1a8b5c78-1069-45d6-962a-1b9e11ab7ed6` and `f37c4675-cda0-4dfe-bec8-6a94723da698` both failed only `browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit`; the exact isolated Cargo test passed unchanged.
 
+- Observation: every PTY timeout orphaned its spawned `jig vault tui` process because `std::process::Child` does not kill on drop and the test only killed the child from its final wait helper.
+  Evidence: five live children with parent PID 1 remained after five failed runs; after terminating those exact children and wrapping subsequent children in a kill-and-reap drop guard, a 20-iteration browser stress run passed and left no child process behind.
+
 ## Decision Log
 
 - Decision: Make contract v5 the first epoch that generated repositories may depend on the backend selector fields, while continuing to load v2-v4 repositories.
@@ -76,6 +79,10 @@ Each independently useful change is committed separately. The complete repositor
 
 - Decision: Give each vault PTY integration test all four slots in the existing vault Nextest group and use one generous harness-only event deadline.
   Rationale: The browser test performs password hashing and many interactive redraws, but its wait bounds are test watchdogs rather than product latency requirements. Group-wide reservation removes known in-suite contention; a centralized 15-second watchdog tolerates external host load while preserving every functional assertion and returning immediately when each event arrives.
+  Date/Author: 2026-08-21 / Codex
+
+- Decision: Own each spawned PTY child with a reusable kill-and-reap guard immediately after spawn.
+  Rationale: Assertions and watchdog panics can occur before the explicit final wait. Cleanup therefore belongs to resource ownership, not the success-path control flow. The guard prevents failed tests from polluting later tests or leaving sensitive TUI processes alive.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective

@@ -18,7 +18,7 @@ use std::{
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
 
-use pty_support::{read_available, wait_for_child_while_draining};
+use pty_support::{ChildGuard, read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 const FULL_CLEAR_MARKER: &str = "\u{1b}[2J";
@@ -53,17 +53,19 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["vault", "tui", "--home"])
-        .arg(&home)
-        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
-        .env("JIG_VAULT_NEW_PASSPHRASE", "must-be-cleared-before-worker")
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["vault", "tui", "--home"])
+            .arg(&home)
+            .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+            .env("JIG_VAULT_NEW_PASSPHRASE", "must-be-cleared-before-worker")
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -265,16 +267,18 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
-        .args(["vault", "tui", "--home"])
-        .arg(&home)
-        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
-        .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_jig"))
+            .args(["vault", "tui", "--home"])
+            .arg(&home)
+            .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+            .env("TERM", "xterm-256color")
+            .stdin(Stdio::from(stdin))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .unwrap(),
+    );
     set_nonblocking(&master);
 
     let mut output = Vec::new();
