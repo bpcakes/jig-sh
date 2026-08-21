@@ -1062,7 +1062,7 @@ fn select_legacy(app: &mut App) {
 }
 
 #[test]
-fn create_field_form_separates_metadata_kind_and_protected_value() {
+fn create_field_form_shows_text_input_without_exposing_it_in_debug_or_actions() {
     let mut app = browsing_app();
     app.begin_add();
     assert!(matches!(
@@ -1088,9 +1088,8 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("bytes"), "{rendered}");
     assert!(
-        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
         "{rendered}"
     );
     let action = submit_key(&mut app);
@@ -1116,6 +1115,52 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
         }
         other => panic!("unexpected action: {other:?}"),
     }
+}
+
+#[test]
+fn create_field_form_keeps_concealed_input_masked() {
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "NEW_SECRET");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("bytes"), "{rendered}");
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn text_field_form_windows_maximum_input_and_keeps_controls_visible() {
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "LONG_TEXT");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let suffix = "\nvisible-tail";
+    let mut value = "x".repeat(MAX_SECRET_VALUE_LEN - suffix.len());
+    value.push_str(suffix);
+    handle_paste(&mut app, &value);
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("…"), "{rendered}");
+    assert!(rendered.contains("visible-tail"), "{rendered}");
+    assert!(rendered.contains("Value file"), "{rendered}");
+    assert!(rendered.contains("Enter save"), "{rendered}");
 }
 
 #[test]
@@ -1431,6 +1476,12 @@ fn non_empty_text_replacement_does_not_require_clear_confirmation() {
     app.focus = Focus::Fields;
     app.begin_replace();
     handle_paste(&mut app, "replacement value");
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("replacement value"), "{rendered}");
 
     match submit_key(&mut app) {
         VaultAction::Mutate {

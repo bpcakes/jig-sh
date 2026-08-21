@@ -22,7 +22,7 @@
 
 ## Invariants
 
-- Never place plaintext vault values or passphrases in model strings, Ratatui buffers, errors, logs, debug output, or action results.
+- Never place concealed vault values or passphrases in model strings, Ratatui buffers, errors, logs, debug output, or action results. An interactively entered `text` field value is intentionally visible in its form, but remains redacted from debug output and actions.
 - Keep exact `VaultReference` and legacy-name identities separate from sanitized display text.
 - Protected inputs use `SecretInput`; they are neither cloned nor formatted as plaintext.
 - Protected file input accepts only a bounded, non-symlink regular file and preserves exact bytes without routing them through text metadata buffers.

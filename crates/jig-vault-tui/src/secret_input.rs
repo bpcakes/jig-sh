@@ -95,6 +95,13 @@ impl SecretInput {
         )
     }
 
+    /// Borrows interactively entered UTF-8 for an explicitly visible text
+    /// field. Callers must keep concealed values and passphrases on the masked
+    /// rendering path.
+    pub(crate) fn visible_text(&self) -> Option<&str> {
+        std::str::from_utf8(self.bytes.as_slice()).ok()
+    }
+
     /// Loads exact bytes from a bounded regular file without growing the
     /// protected allocation. Symlinks and non-regular files are rejected.
     pub(crate) fn from_regular_file(path: &Path) -> Result<Self, SecretInputFileError> {
