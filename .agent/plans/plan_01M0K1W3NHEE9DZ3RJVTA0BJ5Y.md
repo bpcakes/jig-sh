@@ -16,7 +16,7 @@ After this work, termination reasons and output policies remain typed through or
 - [x] (2026-08-21 21:14Z) Slice 2b: preserved pre-start and in-flight cancellation through command orchestration so collect-all checks stop, started commands retain receipts, and unstarted commands do not manufacture child receipts.
 - [x] (2026-08-21 21:20Z) Slice 3: bounded status-provider concurrency at four, balanced panic and cancellation lifecycle events, preserved configured order, made missing batch entries explicit, and removed superseded gate wrappers.
 - [x] (2026-08-21 21:22Z) Slice 4: reconciled resource, progress, cancellation, receipt, and bounded-status documentation and repaired the earlier progress plan's stale living sections.
-- [ ] Build the development binary, run configured format, Clippy, contract, and full test gates, inspect receipts, and finish structured work.
+- [x] (2026-08-21 21:41Z) Built the final development binary; passed configured format, Clippy, contract, and the complete two-stage test gate; verified both required plan gates are fresh with no receipt diff.
 
 ## Surprises & Discoveries
 
@@ -57,7 +57,11 @@ After this work, termination reasons and output policies remain typed through or
 
 ## Outcomes & Retrospective
 
-Implementation is pending. The intended outcome is a smaller execution bug surface: one operation finalizer for progress and signal ordering, one typed process termination model, one explicit output policy, and one bounded provider scheduler with balanced phase events.
+The reviewed issues were manifestations of one structural boundary failure, not a handful of unrelated omissions: control-plane facts were repeatedly collapsed into presentation values before orchestration had finished making policy decisions. The completed implementation keeps progress finalization ordered before signal redelivery, distinguishes fatal authoritative overflow from permitted diagnostic truncation, preserves pre-start and in-flight cancellation through work-check collection, and gives status provider lifecycle one bounded scheduler-owned boundary.
+
+The changes landed as separately reviewable commits for progress finalization, output policy, cancellation orchestration, status scheduling, documentation, and the representation cleanup found by final Clippy. Regression coverage proves prompt overflow termination and descendant cleanup, schema-backed transcript truncation, collect-all cancellation stopping queued checks, four-provider concurrency, configured ordering, cancellation of queued providers, and balanced panic phases.
+
+Final verification used a freshly built `target/debug/jig`. Configured format passed (`receipt_01M0K39EK94JAZCPNE1R8RT3AQ`), final Clippy passed (`receipt_01M0K3D6P750XH84PMN8D9FXVF`) after two append-only failed receipts exposed and guided scheduler representation fixes, and the plan-linked contract plus complete two-stage test suite passed in batch receipt `receipt_01M0K49N3NS0HKZ2RNAARN36AW`. The test stage started 2,188 tests across 24 binaries and completed its separate vault stage; both required gates report fresh with no receipt diff and no unresolved gates.
 
 ## Context and Orientation
 
@@ -141,3 +145,5 @@ Plan revision note (2026-08-21 21:20Z): Completed Milestone 3 with scheduler-lev
 Plan revision note (2026-08-21 21:22Z): Completed Milestone 4; documentation now distinguishes authoritative output from diagnostic transcripts and pre-spawn cancellation from interruption of a started command.
 
 Plan revision note (2026-08-21 21:23Z): Recorded and corrected the two scheduler representation lints exposed by the first final Clippy gate; the failed receipt remains in append-only evidence.
+
+Plan revision note (2026-08-21 21:41Z): Recorded final gate receipts and completed the retrospective after both required gates reported fresh with no unresolved evidence.
