@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::command::{WorkRefineRequest, WorkReviewRequest};
 use crate::context::{RepoContext, WorkGate, WorkRefinementConfig, WorkReviewGate};
-use crate::execution::{ExecutionEvent, ExecutionObserver};
+use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
@@ -25,7 +25,7 @@ use prompt::{refine_prompt, review_output_schema, review_prompt};
 pub(super) fn review_with_observer(
     ctx: &RepoContext,
     opts: WorkReviewRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     let gates = selected_review_gates(ctx, &opts.gates)?;
@@ -35,7 +35,7 @@ pub(super) fn review_with_observer(
 pub(super) fn refine_with_observer(
     ctx: &RepoContext,
     opts: WorkRefineRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     if opts.max_iterations == 0 {
@@ -53,8 +53,8 @@ pub(super) fn refine_with_observer(
         let iteration_label = format!("refinement iteration {iteration}");
         observer.event(ExecutionEvent::PhaseStarted {
             label: &iteration_label,
-            current: iteration,
-            total: opts.max_iterations,
+            position: PhasePosition::new(iteration, opts.max_iterations)
+                .expect("review iteration is within the configured nonzero maximum"),
         });
         let findings = actionable_findings(&review_result)?;
         if findings.is_empty() {
@@ -134,15 +134,15 @@ pub(super) fn run_review_gates_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     gates: &[WorkReviewGate],
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let mut reviews = Vec::with_capacity(gates.len());
     let mut failed = Vec::new();
     for (index, gate) in gates.iter().enumerate() {
         observer.event(ExecutionEvent::PhaseStarted {
             label: &gate.id,
-            current: index + 1,
-            total: gates.len(),
+            position: PhasePosition::new(index + 1, gates.len())
+                .expect("review gates are enumerated within a nonempty list"),
         });
         let review = run_review_gate(ctx, plan_id, gate, observer)?;
         if review["status"].as_str() != Some("passed") {
@@ -165,7 +165,7 @@ fn run_review_gate(
     ctx: &RepoContext,
     plan_id: &str,
     gate: &WorkReviewGate,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let skill = gate.skill.as_str();
     let threshold = gate.threshold;
@@ -407,7 +407,7 @@ fn run_fixer(
     gates: &[WorkReviewGate],
     refinement: Option<&WorkRefinementConfig>,
     findings: &[Value],
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);

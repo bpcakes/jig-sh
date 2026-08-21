@@ -3,7 +3,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::execution::{ExecutionEvent, ExecutionObserver};
+use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
 /// Command-scoped terminal progress output.
 ///
@@ -236,11 +236,11 @@ impl CliExecutionObserver {
 impl ExecutionObserver for CliExecutionObserver {
     fn event(&mut self, event: ExecutionEvent<'_>) {
         match event {
-            ExecutionEvent::PhaseStarted {
-                label,
-                current,
-                total,
-            } => self.line(format!("[..] {label} ({current}/{total})")),
+            ExecutionEvent::PhaseStarted { label, position } => self.line(format!(
+                "[..] {label} ({}/{})",
+                position.current(),
+                position.total()
+            )),
             ExecutionEvent::Output { stream, bytes } => {
                 let _ = stream;
                 self.write(bytes);
@@ -261,7 +261,9 @@ impl ExecutionObserver for CliExecutionObserver {
             )),
         }
     }
+}
 
+impl ExecutionCancellation for CliExecutionObserver {
     fn cancelled(&self) -> bool {
         self.write_failed || (self.cancellation)()
     }

@@ -8,7 +8,7 @@ use crate::command::{
     WorkStartRequest,
 };
 use crate::context::RepoContext;
-use crate::execution::ExecutionObserver;
+use crate::execution::ExecutionControl;
 use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
     SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
@@ -78,7 +78,7 @@ impl From<&WorkFinishRequest> for PlanCloseRequest {
 pub(super) fn dispatch_with_observer(
     ctx: &RepoContext,
     command: WorkCommand,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     match command {
         WorkCommand::Goal(opts) => goal::goal(ctx, opts),
@@ -176,7 +176,7 @@ pub(super) fn append_from_args(ctx: &RepoContext, args: Value) -> Result<Value> 
 pub(super) fn check_from_args_with_observer(
     ctx: &RepoContext,
     args: Value,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let request: WorkCheckRequest = request_from_args(args)?;
     checks::check_with_observer(ctx, request, observer)
@@ -195,7 +195,7 @@ pub(super) fn evidence_from_args(ctx: &RepoContext, args: Value) -> Result<Value
 pub(super) fn review_from_args_with_observer(
     ctx: &RepoContext,
     args: Value,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let request: WorkReviewRequest = request_from_args(args)?;
     review::review_with_observer(ctx, request, observer)
@@ -204,7 +204,7 @@ pub(super) fn review_from_args_with_observer(
 pub(super) fn refine_from_args_with_observer(
     ctx: &RepoContext,
     args: Value,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let request: WorkRefineRequest = request_from_args(args)?;
     review::refine_with_observer(ctx, request, observer)

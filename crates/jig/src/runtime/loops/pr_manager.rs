@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
-use crate::execution::ExecutionObserver;
+use crate::execution::ExecutionControl;
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
 };
@@ -24,7 +24,7 @@ pub(super) fn pr_manager_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let codex_home = workflow
         .codex_home_configured
@@ -88,7 +88,7 @@ enum PrCandidate {
 
 struct PrManagerExecution<'a> {
     codex_home: Option<&'a Path>,
-    observer: &'a mut dyn ExecutionObserver,
+    observer: &'a mut dyn ExecutionControl,
 }
 
 struct PrWorkItem {
@@ -444,7 +444,7 @@ fn run_pr_repair(
     pull_request: &Value,
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let worktree = prepare_worktree(ctx, workflow, item)?;
     let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;

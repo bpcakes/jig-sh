@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
-use crate::execution::{ExecutionEvent, ExecutionObserver};
+use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
@@ -13,7 +13,7 @@ use super::tools::{selected_tools, validate_check_tool};
 pub(super) fn check_with_observer(
     ctx: &RepoContext,
     opts: WorkCheckRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
@@ -30,7 +30,7 @@ pub(super) fn check_tools_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     tools: Vec<String>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     check_tools_with_failure_mode(ctx, plan_id, tools, true, observer)
 }
@@ -39,7 +39,7 @@ pub(super) fn check_tools_collect_failures_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     tools: Vec<String>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     // Used by review refinement so failed verification checks are reported in
     // the refine result instead of aborting before all receipts are recorded.
@@ -51,7 +51,7 @@ fn check_tools_with_failure_mode(
     plan_id: &str,
     tools: Vec<String>,
     fail_on_tool_error: bool,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
@@ -64,8 +64,8 @@ fn check_tools_with_failure_mode(
     for (index, name) in tools.iter().enumerate() {
         observer.event(ExecutionEvent::PhaseStarted {
             label: name,
-            current: index + 1,
-            total: tools.len(),
+            position: PhasePosition::new(index + 1, tools.len())
+                .expect("work checks are enumerated within a nonempty tool list"),
         });
         let result =
             match super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(

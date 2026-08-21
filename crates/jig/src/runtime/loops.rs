@@ -15,7 +15,7 @@ use crate::command::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
-use crate::execution::{ExecutionEvent, ExecutionObserver};
+use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
 use crate::state::{ReceiptInput, now_ms, open_plan_summaries, record_receipt};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
@@ -32,7 +32,7 @@ const WORKFLOW_LEASE_PREFIX: &str = "workflow:";
 pub(super) fn dispatch_with_observer(
     ctx: &RepoContext,
     command: LoopCommand,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     match command {
         LoopCommand::Tick(request) => tick_with_observer(ctx, request, observer),
@@ -45,7 +45,7 @@ pub(super) fn dispatch_with_observer(
 fn tick_with_observer(
     ctx: &RepoContext,
     request: LoopTickRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let workflow = resolve_workflow(
@@ -261,7 +261,7 @@ fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
 fn run_until_with_observer(
     ctx: &RepoContext,
     request: LoopRunRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if request.until != "idle" {
         bail!(
@@ -278,8 +278,8 @@ fn run_until_with_observer(
     for index in 0..request.max_ticks {
         observer.event(ExecutionEvent::PhaseStarted {
             label: "loop tick",
-            current: (index + 1) as usize,
-            total: request.max_ticks as usize,
+            position: PhasePosition::new((index + 1) as usize, request.max_ticks as usize)
+                .expect("loop tick progress is within the configured nonzero maximum"),
         });
         let tick = tick_with_observer(
             ctx,
@@ -322,7 +322,7 @@ fn run_workflow_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     match workflow.kind.as_str() {
         GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx),

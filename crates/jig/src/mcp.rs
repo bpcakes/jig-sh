@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
-use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream};
+use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver, ExecutionStream};
 use crate::runtime::call_tool_with_observer;
 use crate::tool_defs;
 
@@ -179,11 +179,11 @@ impl<'a> McpProgressObserver<'a> {
 impl ExecutionObserver for McpProgressObserver<'_> {
     fn event(&mut self, event: ExecutionEvent<'_>) {
         let message = match event {
-            ExecutionEvent::PhaseStarted {
-                label,
-                current,
-                total,
-            } => format!("{label} started ({current}/{total})"),
+            ExecutionEvent::PhaseStarted { label, position } => format!(
+                "{label} started ({}/{})",
+                position.current(),
+                position.total()
+            ),
             ExecutionEvent::Output { stream, bytes } => {
                 let stream = match stream {
                     ExecutionStream::Stdout => "stdout",
@@ -207,7 +207,9 @@ impl ExecutionObserver for McpProgressObserver<'_> {
         };
         self.notify(message);
     }
+}
 
+impl ExecutionCancellation for McpProgressObserver<'_> {
     fn cancelled(&self) -> bool {
         self.write_error.is_some()
     }

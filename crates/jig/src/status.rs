@@ -21,7 +21,7 @@ use crate::cancellation::{
 };
 use crate::context::{RepoContext, StatusProviderConfig};
 use crate::execution::{
-    ExecutionEvent, ExecutionObserver, HEARTBEAT_INTERVAL, NoopExecutionObserver,
+    ExecutionEvent, ExecutionObserver, HeartbeatSchedule, NoopExecutionObserver, PhasePosition,
 };
 use crate::runtime::{
     loop_status_snapshot_with_cancellation, open_plan_gate_snapshots_with_cancellation,
@@ -122,7 +122,7 @@ fn run_providers_concurrently(
 
     let shared_cancelled = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
-    let mut next_heartbeat = HEARTBEAT_INTERVAL;
+    let mut heartbeat = HeartbeatSchedule::new();
     let mut ordered = (0..providers.len())
         .map(|_| None)
         .collect::<Vec<Option<ProviderRun>>>();
@@ -132,8 +132,8 @@ fn run_providers_concurrently(
         for (index, provider) in providers.iter().enumerate() {
             observer.event(ExecutionEvent::PhaseStarted {
                 label: &provider.id,
-                current: index + 1,
-                total: providers.len(),
+                position: PhasePosition::new(index + 1, providers.len())
+                    .expect("status providers are enumerated within a nonempty list"),
             });
             let sender = sender.clone();
             let shared_cancelled = Arc::clone(&shared_cancelled);
@@ -151,16 +151,11 @@ fn run_providers_concurrently(
                 shared_cancelled.store(true, Ordering::SeqCst);
             }
             let elapsed = started.elapsed();
-            if elapsed >= next_heartbeat {
+            if heartbeat.due(elapsed) {
                 observer.event(ExecutionEvent::Heartbeat {
                     label: "status providers",
                     elapsed,
                 });
-                while next_heartbeat <= elapsed {
-                    next_heartbeat = next_heartbeat
-                        .checked_add(HEARTBEAT_INTERVAL)
-                        .unwrap_or(Duration::MAX);
-                }
             }
             match receiver.recv_timeout(Duration::from_millis(25)) {
                 Ok((index, run)) => {

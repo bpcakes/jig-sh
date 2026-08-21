@@ -1,5 +1,4 @@
 use std::process::{Command, Stdio};
-use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
@@ -12,7 +11,7 @@ use serde_json::Value;
 use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
-use crate::execution::{ExecutionEvent, ExecutionObserver, ProcessExecutionObserver};
+use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
 use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
@@ -22,7 +21,7 @@ pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     tool_name: &str,
     args: Value,
     request: crate::command::ToolRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let (plan_id, record_receipt) = request.into_parts();
     execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
@@ -32,7 +31,7 @@ pub(in crate::runtime) fn call_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool: &ManifestTool,
     args_obj: &JsonObject,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let plan_id = string_arg(args_obj, args::PLAN_ID);
     let args = tool_defs::execution_tool_args(tool, args_obj)?;
@@ -48,7 +47,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_observer(
     args: Value,
     plan_id: Option<String>,
     record_receipt: bool,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     execute_manifest_tool_with_options(
         ctx,
@@ -82,7 +81,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
     tool_name: &str,
     args: Value,
     plan_id: Option<String>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     execute_manifest_tool_with_options(
         ctx,
@@ -181,7 +180,7 @@ fn execute_manifest_tool_with_options(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let tool = ctx
         .tool_spec(tool_name)
@@ -343,7 +342,7 @@ fn execute_command_tool(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let output = run_configured_command(
@@ -446,7 +445,7 @@ fn run_configured_command(
     tool_name: &str,
     command_text: &str,
     args: &Value,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
     let mut command = Command::new("bash");
     command
@@ -465,12 +464,7 @@ fn run_configured_command(
         command.env("NAME", name);
     }
 
-    let started = Instant::now();
-    observer.event(ExecutionEvent::PhaseStarted {
-        label: tool_name,
-        current: 1,
-        total: 1,
-    });
+    let phase = ExecutionPhase::start(observer, tool_name, PhasePosition::single());
     let result = run_owned_process_tree_with_output_limits_and_observer(
         &mut command,
         ctx.command_timeout().duration(),
@@ -486,11 +480,10 @@ fn run_configured_command(
             ctx.command_timeout().as_secs()
         )
     });
-    observer.event(ExecutionEvent::PhaseFinished {
-        label: tool_name,
-        success: result.as_ref().is_ok_and(|output| output.status.success()),
-        elapsed: started.elapsed(),
-    });
+    phase.finish(
+        observer,
+        result.as_ref().is_ok_and(|output| output.status.success()),
+    );
     result
 }
 

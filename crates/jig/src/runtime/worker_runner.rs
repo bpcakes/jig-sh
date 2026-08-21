@@ -14,7 +14,10 @@ use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
-use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, HEARTBEAT_INTERVAL};
+use crate::execution::{
+    ExecutionControl, ExecutionEvent, ExecutionPhase, ExecutionStream, HeartbeatSchedule,
+    PhasePosition,
+};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
@@ -90,22 +93,16 @@ pub(crate) struct CodexExecOutput {
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
     request: CodexExecRequest<'_>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<CodexExecOutput> {
-    let phase_started = Instant::now();
-    observer.event(ExecutionEvent::PhaseStarted {
-        label: request.receipt.purpose,
-        current: 1,
-        total: 1,
-    });
+    let phase = ExecutionPhase::start(observer, request.receipt.purpose, PhasePosition::single());
     let started = now_ms();
     let result = run_codex_exec_inner(ctx, &request, observer);
     let ended = now_ms();
-    observer.event(ExecutionEvent::PhaseFinished {
-        label: request.receipt.purpose,
-        success: result.as_ref().is_ok_and(|run| run.output.status.success()),
-        elapsed: phase_started.elapsed(),
-    });
+    phase.finish(
+        observer,
+        result.as_ref().is_ok_and(|run| run.output.status.success()),
+    );
 
     match result {
         Ok(run) => {
@@ -156,7 +153,7 @@ struct CodexRunOutput {
 fn run_codex_exec_inner(
     ctx: &RepoContext,
     request: &CodexExecRequest<'_>,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<CodexRunOutput> {
     let schema_file = if let Some(schema) = request.output_schema {
         let schema_file = NamedTempFile::new().context("Failed to create Codex schema file")?;
@@ -261,7 +258,7 @@ fn run_worker_command(
     stdin_prompt: Option<String>,
     timeout: CommandTimeout,
     label: &str,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Output> {
     let stdout_file = NamedTempFile::new().context("Failed to create worker stdout file")?;
     let stderr_file = NamedTempFile::new().context("Failed to create worker stderr file")?;
@@ -287,7 +284,7 @@ fn run_worker_command(
 
     let started = Instant::now();
     let deadline = timeout.deadline_from(started);
-    let mut next_heartbeat = HEARTBEAT_INTERVAL;
+    let mut heartbeat = HeartbeatSchedule::new();
     let mut stdout_offset = 0;
     let mut stderr_offset = 0;
     let status = loop {
@@ -308,13 +305,8 @@ fn run_worker_command(
             bail!("Worker process was cancelled");
         }
         let elapsed = started.elapsed();
-        if elapsed >= next_heartbeat {
+        if heartbeat.due(elapsed) {
             observer.event(ExecutionEvent::Heartbeat { label, elapsed });
-            while next_heartbeat <= elapsed {
-                next_heartbeat = next_heartbeat
-                    .checked_add(HEARTBEAT_INTERVAL)
-                    .unwrap_or(Duration::MAX);
-            }
         }
         if Instant::now() >= deadline {
             process.terminate_and_reap();
@@ -424,7 +416,7 @@ fn emit_worker_output(
     path: &Path,
     offset: &mut u64,
     stream: ExecutionStream,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<()> {
     let mut file = fs::File::open(path).context("Failed to read live worker output")?;
     file.seek(SeekFrom::Start(*offset))?;

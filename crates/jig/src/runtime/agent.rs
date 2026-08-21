@@ -2,7 +2,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jig_owned_process::{
@@ -13,7 +13,7 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
-use crate::execution::{ExecutionEvent, ExecutionObserver, ProcessExecutionObserver};
+use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
@@ -23,7 +23,7 @@ const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) fn dispatch_with_observer(
     ctx: &RepoContext,
     command: AgentCommand,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<JsonValue> {
     // Agent tooling commands describe or mutate local client setup, not repo
     // work evidence, so they intentionally do not record receipts.
@@ -184,7 +184,7 @@ fn doctor_with_progress(
 fn bootstrap(
     ctx: &RepoContext,
     opts: AgentBootstrapRequest,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<JsonValue> {
     let progress = CliProgress::new("agent bootstrap");
     progress.info("repo", ctx.root().display());
@@ -205,12 +205,7 @@ fn bootstrap(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let label = "codex marketplace registration";
-    let started = Instant::now();
-    observer.event(ExecutionEvent::PhaseStarted {
-        label,
-        current: 1,
-        total: 1,
-    });
+    let phase = ExecutionPhase::start(observer, label, PhasePosition::single());
     let command_output = run_owned_process_tree_with_output_limits_and_observer(
         &mut command,
         ctx.command_timeout().duration(),
@@ -226,13 +221,12 @@ fn bootstrap(
             ctx.command_timeout().as_secs()
         )
     });
-    observer.event(ExecutionEvent::PhaseFinished {
-        label,
-        success: command_output
+    phase.finish(
+        observer,
+        command_output
             .as_ref()
             .is_ok_and(|output| output.status.success()),
-        elapsed: started.elapsed(),
-    });
+    );
     let output = progress.log_blocked_on_err(command_output)?;
     let output = Output {
         status: output.status,

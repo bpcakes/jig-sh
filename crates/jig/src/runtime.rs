@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
 use crate::context::RepoContext;
-use crate::execution::{ExecutionObserver, NoopExecutionObserver};
+use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     RustFileLocInput, SqlxTodoInput,
@@ -59,7 +59,7 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
 pub(crate) fn dispatch_with_observer(
     ctx: &RepoContext,
     command: RuntimeCommand,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     match command {
         RuntimeCommand::Bootstrap(opts) => {
@@ -245,7 +245,7 @@ pub(crate) fn vault_options_for_context(
 fn dispatch_check_with_observer(
     ctx: &RepoContext,
     command: CheckCommand,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     match command {
         CheckCommand::Fmt(opts) => tool_execution::execute_manifest_tool_request_with_observer(
@@ -374,7 +374,7 @@ pub(crate) fn call_tool_with_observer(
     ctx: &RepoContext,
     name: &str,
     args: Value,
-    observer: &mut dyn ExecutionObserver,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
 

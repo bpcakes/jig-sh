@@ -327,6 +327,8 @@ fn command_tool_streams_both_outputs_through_execution_observer() {
         }
     }
 
+    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
         .config(
