@@ -13,7 +13,10 @@ use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
 use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
-use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
+use crate::execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
+    ProcessExecutionObserver,
+};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
@@ -186,13 +189,8 @@ fn run_codex_exec_inner(
     let mut output = output;
 
     if let Some(output_file) = output_file {
-        let output_metadata = output_file
-            .path()
-            .metadata()
-            .context("Failed to inspect Codex output file")?;
-        if output_metadata.len() > 0 {
-            output.stdout =
-                fs::read(output_file.path()).context("Failed to read Codex output file")?;
+        if let Some(structured_output) = read_worker_output_file(output_file.path())? {
+            output.stdout = structured_output;
         }
     }
 
@@ -201,6 +199,23 @@ fn run_codex_exec_inner(
         provider_stdout,
         provider_stderr,
     })
+}
+
+fn read_worker_output_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    let output_metadata = path
+        .metadata()
+        .context("Failed to inspect Codex output file")?;
+    if output_metadata.len() == 0 {
+        return Ok(None);
+    }
+    if output_metadata.len() > EXECUTION_OUTPUT_CAPTURE_LIMIT as u64 {
+        bail!(
+            "Codex structured output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+        );
+    }
+    fs::read(path)
+        .map(Some)
+        .context("Failed to read Codex output file")
 }
 
 fn build_codex_command(
@@ -272,8 +287,8 @@ fn run_worker_command(
         command,
         timeout.duration(),
         ProcessOutputLimits {
-            stdout: usize::MAX,
-            stderr: usize::MAX,
+            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
         &mut ProcessExecutionObserver::new(observer, label),
     )
@@ -288,6 +303,9 @@ fn run_worker_command(
 
 fn complete_worker_output(output: Option<BoundedProcessOutput>, stream: &str) -> Result<Vec<u8>> {
     let output = output.with_context(|| format!("Failed to capture worker {stream}"))?;
+    if output.truncated {
+        bail!("Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit");
+    }
     if !output.complete {
         bail!("Failed to capture complete worker {stream}");
     }
@@ -511,6 +529,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn structured_worker_output_file_is_size_bounded() {
+        let output = NamedTempFile::new().unwrap();
+        output
+            .as_file()
+            .set_len((EXECUTION_OUTPUT_CAPTURE_LIMIT + 1) as u64)
+            .unwrap();
+
+        let error = read_worker_output_file(output.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_supervision_delivers_stdin_and_observes_output() {
@@ -530,6 +568,33 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"prompt through a file");
         assert_eq!(control.output, b"prompt through a file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_supervision_rejects_output_beyond_the_capture_limit() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!("head -c {} /dev/zero", EXECUTION_OUTPUT_CAPTURE_LIMIT + 1),
+        ]);
+
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
+        );
     }
 
     #[cfg(unix)]

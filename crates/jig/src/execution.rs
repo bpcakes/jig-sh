@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use jig_owned_process::{OwnedProcessObserver, OwnedProcessOutputStream};
 
 pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
+pub(crate) const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PhasePosition {

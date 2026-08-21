@@ -11,7 +11,10 @@ use serde_json::Value;
 use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
-use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
+use crate::execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
+    ProcessExecutionObserver,
+};
 use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
@@ -469,8 +472,8 @@ fn run_configured_command(
         &mut command,
         ctx.command_timeout().duration(),
         ProcessOutputLimits {
-            stdout: usize::MAX,
-            stderr: usize::MAX,
+            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
         &mut ProcessExecutionObserver::new(observer, tool_name),
     )
@@ -479,12 +482,33 @@ fn run_configured_command(
             "Configured command for {tool_name} failed under process supervision (timeout: {}s): {error}",
             ctx.command_timeout().as_secs()
         )
-    });
+    })
+    .and_then(|output| require_complete_command_output(output, tool_name));
     phase.finish(
         observer,
         result.as_ref().is_ok_and(|output| output.status.success()),
     );
     result
+}
+
+fn require_complete_command_output(
+    output: jig_owned_process::OwnedProcessTreeOutput,
+    tool_name: &str,
+) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
+    for (stream, capture) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+        let capture = capture.as_ref().with_context(|| {
+            format!("Configured command for {tool_name} did not capture {stream}")
+        })?;
+        if capture.truncated {
+            bail!(
+                "Configured command for {tool_name} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
+            );
+        }
+        if !capture.complete {
+            bail!("Configured command for {tool_name} did not finish capturing {stream}");
+        }
+    }
+    Ok(output)
 }
 
 #[derive(Serialize)]

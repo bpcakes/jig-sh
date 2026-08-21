@@ -13,7 +13,10 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
-use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
+use crate::execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
+    ProcessExecutionObserver,
+};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
@@ -225,8 +228,8 @@ fn bootstrap(
         &mut command,
         ctx.command_timeout().duration(),
         ProcessOutputLimits {
-            stdout: usize::MAX,
-            stderr: usize::MAX,
+            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
         &mut ProcessExecutionObserver::new(observer, label),
     )
@@ -235,7 +238,8 @@ fn bootstrap(
             "Failed to run {codex_bin_display} plugin marketplace add {marketplace_source} under process supervision (timeout: {}s): {error}",
             ctx.command_timeout().as_secs()
         )
-    });
+    })
+    .and_then(require_complete_marketplace_output);
     phase.finish(
         observer,
         command_output
@@ -267,6 +271,25 @@ fn bootstrap(
         "stdout": String::from_utf8_lossy(&output.stdout),
         "stderr": String::from_utf8_lossy(&output.stderr)
     }))
+}
+
+fn require_complete_marketplace_output(
+    output: jig_owned_process::OwnedProcessTreeOutput,
+) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
+    for (stream, capture) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+        let capture = capture
+            .as_ref()
+            .with_context(|| format!("Codex marketplace registration did not capture {stream}"))?;
+        if capture.truncated {
+            bail!(
+                "Codex marketplace registration exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
+            );
+        }
+        if !capture.complete {
+            bail!("Codex marketplace registration did not finish capturing {stream}");
+        }
+    }
+    Ok(output)
 }
 
 fn marketplace_requirement_message(count: usize) -> String {
