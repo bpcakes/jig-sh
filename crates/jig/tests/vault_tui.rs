@@ -134,7 +134,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         cleared_offset,
-        "Value hidden.",
+        "Controlled preview cleared after",
         PTY_EVENT_TIMEOUT,
     );
     assert!(

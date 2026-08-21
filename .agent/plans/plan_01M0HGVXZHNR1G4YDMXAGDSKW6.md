@@ -99,6 +99,10 @@ Each independently useful change is committed separately. The complete repositor
   Rationale: The browser does not guarantee a fresh `Value hidden.` feedback redraw when the activity modal closes. Repeated Enter proved the first close succeeded by opening the action palette on the second press. Validating the next observable state tests ordered input processing without relying on an incidental redraw marker or injecting duplicate non-idempotent input.
   Date/Author: 2026-08-21 / Codex
 
+- Decision: After controlled Peek, await its explicit `Controlled preview cleared after` acknowledgement rather than generic hidden-value text.
+  Rationale: The captured terminal frame showed the preview was cleared successfully and reported its source-byte count, while the test timed out waiting for a different browser message. Assertions should follow the owning operation's completion signal so adjacent UI copy cannot create false failures.
+  Date/Author: 2026-08-21 / Codex
+
 ## Outcomes & Retrospective
 
 Implementation is in progress. Record the final commit IDs, test receipts, remaining risks, and whether each classified root cause was removed here before closing the plan.
