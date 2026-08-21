@@ -18,7 +18,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [x] (2026-08-21 21:07Z) Slice 3: replaced unbounded configured-command, marketplace, worker-stream, and structured worker-file capture with a shared 4 MiB-per-output limit and explicit incomplete/truncated-output errors.
 - [x] (2026-08-21 21:34Z) Slice 4: made phase label/position explicit inputs to tool and worker execution, removed orphan aggregate starts, suppressed nested worker phases inside loop ticks, and added exact sequence tests for checks, review gates, and loop ticks.
 - [x] (2026-08-21 21:51Z) Slice 5: converted configured-command supervision errors into failed receipt outcomes, retained fail-fast behavior with receipt IDs, and linked child failure receipts plus diagnostics from work-check batch receipts.
-- [ ] Update documentation and remove dead compatibility helpers exposed by the refactor where their removal reduces the bug surface.
+- [x] (2026-08-21 22:31Z) Updated configuration and public-contract documentation for deferred bounded progress, 4 MiB execution capture, and supervised-failure receipt evidence; removed superseded blocking lifecycle helpers.
 - [ ] Build the development binary, run focused tests after every slice, commit every slice separately, then run the full configured gates and finish structured work.
 
 ## Surprises & Discoveries
@@ -162,3 +162,5 @@ Plan revision note (2026-08-21 21:34Z): Recorded explicit phase-scope ownership.
 Plan revision note (2026-08-21 21:51Z): Recorded supervised failures as ordinary evidence-producing failed outcomes. A timeout regression now asserts both child and batch receipts contain the reason and that the batch references the child ID.
 
 Plan revision note (2026-08-21 22:17Z): Completed the remaining cancellation slice. A production binary setup test now interrupts a live bootstrap and proves its delayed descendant marker is never written.
+
+Plan revision note (2026-08-21 22:31Z): Documented the new resource, progress-delivery, cancellation, and receipt contracts before final repository-wide verification.
