@@ -111,7 +111,7 @@ fn doctor_reports_unified_readiness_checks() {
     write_doctor_fixture(temp.path());
     let _cwd = CurrentDirGuard::set(temp.path());
 
-    let output = run().unwrap();
+    let output = run_with_cancellation(&|| false).unwrap();
 
     assert_eq!(output["command"], "doctor");
     assert_eq!(output["repo"]["name"], "demo");

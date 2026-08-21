@@ -28,7 +28,7 @@ pub(super) fn dispatch_with_observer(
     // Agent tooling commands describe or mutate local client setup, not repo
     // work evidence, so they intentionally do not record receipts.
     match command {
-        AgentCommand::Doctor => Ok(doctor(ctx)),
+        AgentCommand::Doctor => Ok(doctor_with_cancellation(ctx, &|| observer.cancelled())),
         AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts, observer),
     }
 }
@@ -58,6 +58,21 @@ pub(super) fn doctor_with_codex_support_probe(
     doctor_with_progress(
         ctx,
         probe,
+        CliProgress::new("agent doctor"),
+        "agent doctor complete",
+    )
+}
+
+fn doctor_with_cancellation(ctx: &RepoContext, cancelled: &dyn Fn() -> bool) -> JsonValue {
+    doctor_with_progress(
+        ctx,
+        |codex_bin| {
+            codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+                codex_bin,
+                CODEX_SUPPORT_PROBE_TIMEOUT,
+                cancelled,
+            )
+        },
         CliProgress::new("agent doctor"),
         "agent doctor complete",
     )

@@ -191,6 +191,7 @@ pub(crate) struct CliExecutionObserver {
 }
 
 impl CliExecutionObserver {
+    #[cfg(any(not(unix), test))]
     pub(crate) fn for_human_output(json_output: bool) -> Self {
         Self {
             enabled: !json_output,

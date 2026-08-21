@@ -12,12 +12,37 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;
     let progress = crate::progress::CliProgress::for_human_output("setup", json_output);
     progress.header("prepare repository and agent tooling");
+    #[cfg(all(unix, not(test)))]
+    let signal_session = doctor::DoctorSignalSession::start().map_err(|_| {
+        anyhow::anyhow!("Setup was not started because signal supervision is unavailable")
+    })?;
+    #[cfg(all(unix, not(test)))]
+    let cancellation = signal_session.cancellation();
+    #[cfg(all(unix, not(test)))]
+    let mut observer =
+        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+            cancellation.cancelled()
+        });
+    #[cfg(any(not(unix), test))]
     let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
-    let output = run_setup_with_progress(
-        doctor::run,
+    let outcome = run_setup_with_progress(
+        || {
+            #[cfg(all(unix, not(test)))]
+            return doctor::run_with_cancellation(&|| cancellation.cancelled());
+            #[cfg(any(not(unix), test))]
+            doctor::run()
+        },
         |command| runtime::dispatch_with_observer(&ctx, command, &mut observer),
         |current, total, label| progress.step(label, format!("phase {current}/{total}")),
+    );
+    #[cfg(all(unix, not(test)))]
+    let output = crate::codex::finish_signal_supervised(
+        outcome,
+        signal_session.finish(),
+        "Setup signal supervision could not retire safely",
     )?;
+    #[cfg(any(not(unix), test))]
+    let output = outcome?;
     progress.done("setup complete");
     emit(json_output, HumanOutput::Setup, &output)?;
     require_json_ok(true, &output)

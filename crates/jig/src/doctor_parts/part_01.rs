@@ -1,4 +1,12 @@
 pub(crate) fn run() -> Result<Value> {
+    run_with_optional_cancellation(None)
+}
+
+pub(crate) fn run_with_cancellation(cancelled: &dyn Fn() -> bool) -> Result<Value> {
+    run_with_optional_cancellation(Some(cancelled))
+}
+
+fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Result<Value> {
     let cwd = env::current_dir().context("Failed to resolve current directory")?;
     // Doctor is capability-only so it can diagnose an invalid generated
     // launcher contract. Its explicit JIG_REPO_ROOT target therefore remains
@@ -77,7 +85,10 @@ pub(crate) fn run() -> Result<Value> {
     match &ctx_result {
         Ok(ctx) => {
             checks.push(contract_check(ctx));
-            let context_checks = doctor_context_checks(ctx);
+            let context_checks = match cancelled {
+                Some(cancelled) => doctor_context_checks_with_cancellation(ctx, cancelled),
+                None => doctor_context_checks(ctx),
+            };
             checks.push(context_checks.required_tools);
             if let Some(rust_runtime) = context_checks.rust_runtime {
                 checks.push(rust_runtime);
@@ -593,6 +604,21 @@ fn doctor_context_checks(ctx: &RepoContext) -> DoctorContextChecks {
             DoctorProcessControl::allowed_without_signal_session(),
         )
     }
+}
+
+fn doctor_context_checks_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> DoctorContextChecks {
+    let environment = DoctorEnvironment::capture();
+    doctor_context_checks_with_process_control(
+        ctx,
+        &environment,
+        DoctorProcessControl {
+            cancellation: Some(cancelled),
+            unavailable_reason: None,
+        },
+    )
 }
 
 fn doctor_context_checks_with_process_control(

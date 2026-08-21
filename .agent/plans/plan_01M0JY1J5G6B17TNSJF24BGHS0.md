@@ -12,7 +12,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
 
 - [x] (2026-08-21 19:51Z) Reproduced the Unix `agent doctor` nested signal-session deadlock with a freshly built binary.
 - [x] (2026-08-21 19:51Z) Opened structured work as `plan_01M0JY1J5G6B17TNSJF24BGHS0` and recorded this execution plan.
-- [ ] Slice 1: centralize signal ownership and cancellation propagation; add Unix CLI regression tests for doctor, setup interruption, and non-process cancellation.
+- [x] (2026-08-21 20:25Z) Slice 1a: centralized signal ownership for runtime agent doctor and setup, passed caller cancellation into nested doctor probes, and added a production-binary regression for the former nested-lock deadlock.
+- [ ] Slice 1b: propagate cancellation through long non-process operations and add setup interruption and non-process cancellation regressions.
 - [ ] Slice 2: separate supervision from progress transport using bounded/coalesced delivery; cap MCP progress volume and test backpressure.
 - [ ] Slice 3: make output capture resource-bounded while preserving complete normal worker results.
 - [ ] Slice 4: give orchestration phases balanced scope ownership and test exact event sequences.
@@ -28,6 +29,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: `process/output.rs::OutputDrain::poll` calls `observer.output`, and only after the drain returns does `process.rs::wait_for_owned_process` call `observer.poll`, `observer.cancelled`, and inspect the deadline.
 - Observation: The existing focused timeout tests deliberately use `--no-receipt`, so they do not cover the durable-evidence path that currently returns before receipt creation.
   Evidence: `runtime::tests::command_tool_honors_repository_timeout` sets `no_receipt: true`.
+- Observation: Unit tests cannot validate the nested signal-session failure because production signal ownership is intentionally excluded under `cfg(test)`.
+  Evidence: The new `cli_agent_doctor_reuses_outer_signal_session` integration test invokes `CARGO_BIN_EXE_jig`, bounds the wait to five seconds, and exercises the production Unix configuration that previously hung.
 
 ## Decision Log
 
@@ -137,3 +140,5 @@ Use `ExecutionPhase` for balanced start/finish publication. It may be extended t
 Preserve receipt JSON compatibility. New evidence fields may be additive, but existing fields and append-only record ordering must remain readable by older records and current gate evaluators.
 
 Plan revision note (2026-08-21 19:51Z): Created the initial self-contained plan from the merged Claude and Codex review, the reproduced deadlock, repository guidance, and the user's requirement for separately committed implementation slices and full-suite validation.
+
+Plan revision note (2026-08-21 20:25Z): Recorded the first signal-ownership cut separately from broader in-process cancellation so its deadlock regression and commit remain narrowly reviewable.
