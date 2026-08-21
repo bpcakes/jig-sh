@@ -15,7 +15,7 @@ After this work, termination reasons and output policies remain typed through or
 - [x] (2026-08-21 21:09Z) Slice 2a: added explicit fatal/truncating capture policy, prompt fatal termination on authoritative overflow, and nonfatal schema-backed worker transcript truncation with receipt flags.
 - [x] (2026-08-21 21:14Z) Slice 2b: preserved pre-start and in-flight cancellation through command orchestration so collect-all checks stop, started commands retain receipts, and unstarted commands do not manufacture child receipts.
 - [x] (2026-08-21 21:20Z) Slice 3: bounded status-provider concurrency at four, balanced panic and cancellation lifecycle events, preserved configured order, made missing batch entries explicit, and removed superseded gate wrappers.
-- [ ] Slice 4: reconcile durable plans and documentation with the final behavior.
+- [x] (2026-08-21 21:22Z) Slice 4: reconciled resource, progress, cancellation, receipt, and bounded-status documentation and repaired the earlier progress plan's stale living sections.
 - [ ] Build the development binary, run configured format, Clippy, contract, and full test gates, inspect receipts, and finish structured work.
 
 ## Surprises & Discoveries
@@ -133,3 +133,5 @@ Plan revision note (2026-08-21 21:09Z): Split Milestone 2 at its natural API bou
 Plan revision note (2026-08-21 21:14Z): Completed the cancellation half of Milestone 2 and verified the entire work-test module plus the owned-process crate.
 
 Plan revision note (2026-08-21 21:20Z): Completed Milestone 3 with scheduler-level concurrency, cancellation, order, and panic-balance tests plus the full status test module.
+
+Plan revision note (2026-08-21 21:22Z): Completed Milestone 4; documentation now distinguishes authoritative output from diagnostic transcripts and pre-spawn cancellation from interruption of a started command.
