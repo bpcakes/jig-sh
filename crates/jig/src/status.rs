@@ -668,6 +668,13 @@ fn process_failure(
             "cancelled",
             format!("Status provider '{}' was cancelled", provider.id),
         ),
+        OwnedProcessTreeError::OutputLimitExceeded(stream) => (
+            "output_limit_exceeded",
+            format!(
+                "Status provider '{}' exceeded its {stream} output limit",
+                provider.id
+            ),
+        ),
         OwnedProcessTreeError::Await => (
             "await_failed",
             format!("Status provider '{}' could not be awaited", provider.id),

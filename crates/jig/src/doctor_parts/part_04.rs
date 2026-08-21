@@ -547,6 +547,9 @@ const fn driver_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
         OwnedProcessTreeError::Start(_) => "the driver probe could not start",
         OwnedProcessTreeError::TimedOut => "the driver probe timed out",
         OwnedProcessTreeError::Cancelled => "the driver probe was cancelled",
+        OwnedProcessTreeError::OutputLimitExceeded(_) => {
+            "the driver probe output exceeded the diagnostic capture limit"
+        }
         OwnedProcessTreeError::Await => "the driver probe could not be awaited",
         OwnedProcessTreeError::Cleanup => {
             "the driver probe process tree could not be cleaned up safely"

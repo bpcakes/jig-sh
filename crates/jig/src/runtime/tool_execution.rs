@@ -3,7 +3,8 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
 use jig_owned_process::{
-    ProcessOutputLimits, run_owned_process_tree_with_output_limits_and_observer,
+    ProcessOutputLimits, ProcessOutputOverflowPolicy,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -537,13 +538,14 @@ fn run_configured_command(
     }
 
     let phase = ExecutionPhase::start(observer, tool_name, position);
-    let result = run_owned_process_tree_with_output_limits_and_observer(
+    let result = run_owned_process_tree_with_output_policy_and_observer(
         &mut command,
         ctx.command_timeout().duration(),
         ProcessOutputLimits {
             stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
             stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
+        ProcessOutputOverflowPolicy::Error,
         &mut ProcessExecutionObserver::new(observer, tool_name),
     )
     .map_err(|error| {

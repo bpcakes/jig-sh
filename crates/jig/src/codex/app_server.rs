@@ -485,6 +485,9 @@ fn app_server_error(error: &OwnedProcessTreeInteractionError, timeout: Duration)
         OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Cancelled) => {
             APP_SERVER_INSPECTION_CANCELLED.into()
         }
+        OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::OutputLimitExceeded(
+            stream,
+        )) => format!("Codex app-server exceeded its {stream} output limit"),
         OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Await) => {
             "Codex app-server could not be awaited".into()
         }

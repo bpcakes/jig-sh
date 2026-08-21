@@ -523,6 +523,9 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
             }
             .into());
         }
+        Err(jig_owned_process::OwnedProcessTreeError::OutputLimitExceeded(stream)) => bail!(
+            "Frontend dependency readiness check exceeded its {stream} output limit for {app_dir}"
+        ),
         Err(jig_owned_process::OwnedProcessTreeError::Await) => {
             bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
         }

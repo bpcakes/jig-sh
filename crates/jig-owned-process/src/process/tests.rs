@@ -76,6 +76,59 @@ fn owned_process_output_capture_is_bounded_and_lossy_safe() {
     assert_eq!(stderr.bytes.len(), OWNED_PROCESS_OUTPUT_LIMIT);
 }
 
+#[cfg(unix)]
+#[test]
+fn fatal_output_overflow_terminates_the_owned_tree_immediately() {
+    struct NoopObserver;
+    impl OwnedProcessObserver for NoopObserver {}
+
+    let temp = tempdir().unwrap();
+    let marker = temp.path().join("overflow-descendant-survived");
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "(sleep 1; printf survived > \"$1\") & head -c 8192 /dev/zero; wait",
+            "sh",
+        ])
+        .arg(&marker)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let started = Instant::now();
+    let error = match run_owned_process_tree_with_output_policy_and_observer(
+        &mut command,
+        Duration::from_secs(5),
+        ProcessOutputLimits {
+            stdout: 1024,
+            stderr: 1024,
+        },
+        ProcessOutputOverflowPolicy::Error,
+        &mut NoopObserver,
+    ) {
+        Ok(_) => panic!("fatal output overflow unexpectedly succeeded"),
+        Err(error) => error,
+    };
+
+    assert!(
+        matches!(
+            error,
+            OwnedProcessTreeError::OutputLimitExceeded(OwnedProcessOutputStream::Stdout)
+        ),
+        "unexpected overflow result: {error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "fatal overflow waited for the configured timeout"
+    );
+    std::thread::sleep(Duration::from_millis(1_250));
+    assert!(
+        !marker.exists(),
+        "fatal overflow left an owned descendant running"
+    );
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
 fn owned_process_timeout_overflow_remains_unbounded() {

@@ -129,6 +129,23 @@ pub enum OwnedProcessOutputStream {
     Stderr,
 }
 
+impl std::fmt::Display for OwnedProcessOutputStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessOutputOverflowPolicy {
+    /// Retain at most the configured limit while continuing to drain the pipe.
+    Truncate,
+    /// Terminate the owned process tree as soon as either stream exceeds its limit.
+    Error,
+}
+
 /// Receives process activity while an owned process tree is supervised.
 /// Callbacks run on the supervision thread and should return quickly.
 pub trait OwnedProcessObserver {
@@ -158,6 +175,7 @@ pub enum OwnedProcessTreeError {
     Start(std::io::Error),
     TimedOut,
     Cancelled,
+    OutputLimitExceeded(OwnedProcessOutputStream),
     Await,
     Cleanup,
 }
@@ -168,6 +186,12 @@ impl std::fmt::Display for OwnedProcessTreeError {
             Self::Start(error) => write!(formatter, "the process tree could not start: {error}"),
             Self::TimedOut => formatter.write_str("the process tree timed out"),
             Self::Cancelled => formatter.write_str("the process tree was cancelled"),
+            Self::OutputLimitExceeded(stream) => {
+                write!(
+                    formatter,
+                    "the process tree exceeded its {stream} output limit"
+                )
+            }
             Self::Await => formatter.write_str("the process tree could not be awaited"),
             Self::Cleanup => formatter.write_str("the process tree could not be cleaned up safely"),
         }
@@ -238,6 +262,22 @@ pub fn run_owned_process_tree_with_output_limits_and_observer(
     limits: ProcessOutputLimits,
     observer: &mut dyn OwnedProcessObserver,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
+    run_owned_process_tree_with_output_policy_and_observer(
+        command,
+        timeout,
+        limits,
+        ProcessOutputOverflowPolicy::Truncate,
+        observer,
+    )
+}
+
+pub fn run_owned_process_tree_with_output_policy_and_observer(
+    command: &mut Command,
+    timeout: Duration,
+    limits: ProcessOutputLimits,
+    overflow_policy: ProcessOutputOverflowPolicy,
+    observer: &mut dyn OwnedProcessObserver,
+) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
     if observer.cancelled() {
         return Err(OwnedProcessTreeError::Cancelled);
     }
@@ -248,7 +288,13 @@ pub fn run_owned_process_tree_with_output_limits_and_observer(
             Err(_) => Err(OwnedProcessTreeError::Cleanup),
         };
     };
-    let wait_result = wait_for_owned_process(&mut process, timeout, observer, &mut drains);
+    let wait_result = wait_for_owned_process(
+        &mut process,
+        timeout,
+        overflow_policy,
+        observer,
+        &mut drains,
+    );
     let status = finish_owned_process_wait(&mut process, wait_result);
     let (stdout, stderr) = drains.finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer);
     status.map(|status| OwnedProcessTreeOutput {
@@ -531,6 +577,7 @@ enum OwnedProcessWait {
     ExitedReaped(ExitStatus),
     TimedOut,
     Cancelled,
+    OutputLimitExceeded(OwnedProcessOutputStream),
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -544,13 +591,19 @@ enum OwnedProcessObservation {
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
     timeout: Duration,
+    overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
     let deadline = ProcessDeadline::after(timeout);
     loop {
-        let made_output_progress = drains.poll(observer);
+        let output_poll = drains.poll(observer);
+        if overflow_policy == ProcessOutputOverflowPolicy::Error
+            && let Some(stream) = output_poll.overflow
+        {
+            return Ok(OwnedProcessWait::OutputLimitExceeded(stream));
+        }
         observer.poll(started.elapsed());
         if observer.cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
@@ -561,14 +614,14 @@ fn wait_for_owned_process(
 
         match deadline.remaining() {
             ProcessDeadlineRemaining::Time(remaining) => {
-                if made_output_progress {
+                if output_poll.made_progress {
                     std::thread::sleep(remaining.min(drains.active_poll_interval()));
                 } else {
                     std::thread::sleep(remaining.min(Duration::from_millis(10)));
                 }
             }
             ProcessDeadlineRemaining::Elapsed => return Ok(OwnedProcessWait::TimedOut),
-            ProcessDeadlineRemaining::Unbounded if made_output_progress => {
+            ProcessDeadlineRemaining::Unbounded if output_poll.made_progress => {
                 std::thread::sleep(drains.active_poll_interval());
             }
             ProcessDeadlineRemaining::Unbounded => {
@@ -631,13 +684,19 @@ fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Res
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
     timeout: Duration,
+    overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
     let deadline = ProcessDeadline::after(timeout);
     loop {
-        drains.poll(observer);
+        let output_poll = drains.poll(observer);
+        if overflow_policy == ProcessOutputOverflowPolicy::Error
+            && let Some(stream) = output_poll.overflow
+        {
+            return Ok(OwnedProcessWait::OutputLimitExceeded(stream));
+        }
         observer.poll(started.elapsed());
         if observer.cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
@@ -660,6 +719,7 @@ fn wait_for_owned_process(
 fn wait_for_owned_process(
     _process: &mut OwnedProcess,
     _timeout: Duration,
+    _overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
@@ -694,6 +754,9 @@ fn finish_owned_process_wait(
         Ok(OwnedProcessWait::ExitedReaped(status)) => Some(Ok(status)),
         Ok(OwnedProcessWait::TimedOut) => Some(Err(OwnedProcessTreeError::TimedOut)),
         Ok(OwnedProcessWait::Cancelled) => Some(Err(OwnedProcessTreeError::Cancelled)),
+        Ok(OwnedProcessWait::OutputLimitExceeded(stream)) => {
+            Some(Err(OwnedProcessTreeError::OutputLimitExceeded(stream)))
+        }
         Err(_) => Some(Err(OwnedProcessTreeError::Await)),
     };
     // A owned process leader can exit while a background descendant keeps running.

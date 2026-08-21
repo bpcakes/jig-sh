@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jig_owned_process::{
-    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
-    run_owned_process_tree_with_output, run_owned_process_tree_with_output_limits_and_observer,
+    OwnedProcessTreeError, ProcessOutputLimits, ProcessOutputOverflowPolicy, format_exit_status,
+    require_success, run_owned_process_tree_with_output,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
 use serde_json::{Value as JsonValue, json};
 
@@ -224,13 +225,14 @@ fn bootstrap(
         .stderr(Stdio::piped());
     let label = "codex marketplace registration";
     let phase = ExecutionPhase::start(observer, label, PhasePosition::single());
-    let command_output = run_owned_process_tree_with_output_limits_and_observer(
+    let command_output = run_owned_process_tree_with_output_policy_and_observer(
         &mut command,
         ctx.command_timeout().duration(),
         ProcessOutputLimits {
             stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
             stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
+        ProcessOutputOverflowPolicy::Error,
         &mut ProcessExecutionObserver::new(observer, label),
     )
     .map_err(|error| {

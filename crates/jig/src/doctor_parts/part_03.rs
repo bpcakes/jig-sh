@@ -616,6 +616,9 @@ const fn version_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
         OwnedProcessTreeError::Start(_) => "the version probe could not start",
         OwnedProcessTreeError::TimedOut => "the version probe timed out",
         OwnedProcessTreeError::Cancelled => "the version probe was cancelled",
+        OwnedProcessTreeError::OutputLimitExceeded(_) => {
+            "the version probe output exceeded the diagnostic capture limit"
+        }
         OwnedProcessTreeError::Await => "the version probe could not be awaited",
         OwnedProcessTreeError::Cleanup => {
             "the version probe process tree could not be cleaned up safely"

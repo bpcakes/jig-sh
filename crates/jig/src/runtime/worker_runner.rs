@@ -6,8 +6,8 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_owned_process::{
-    BoundedProcessOutput, OwnedProcessTreeError, ProcessOutputLimits,
-    run_owned_process_tree_with_output_limits_and_observer,
+    BoundedProcessOutput, OwnedProcessTreeError, ProcessOutputLimits, ProcessOutputOverflowPolicy,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
@@ -126,6 +126,8 @@ pub(crate) fn run_codex_exec(
                     exit_status,
                     stdout: &run.provider_stdout,
                     stderr: &run.provider_stderr,
+                    stdout_truncated: run.provider_stdout_truncated,
+                    stderr_truncated: run.provider_stderr_truncated,
                     error: None,
                 },
             )?;
@@ -146,6 +148,8 @@ pub(crate) fn run_codex_exec(
                     exit_status: 1,
                     stdout: "",
                     stderr: &message,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
                     error: Some(&message),
                 },
             )?;
@@ -158,6 +162,8 @@ struct CodexRunOutput {
     output: Output,
     provider_stdout: String,
     provider_stderr: String,
+    provider_stdout_truncated: bool,
+    provider_stderr_truncated: bool,
 }
 
 fn run_codex_exec_inner(
@@ -193,11 +199,14 @@ fn run_codex_exec_inner(
         request.prompt.stdin_prompt(),
         codex_timeout(ctx)?,
         request.receipt.purpose,
+        request.output_schema.is_some(),
         observer,
     )?;
-    let provider_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let provider_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let mut output = output;
+    let provider_stdout = String::from_utf8_lossy(&output.output.stdout).into_owned();
+    let provider_stderr = String::from_utf8_lossy(&output.output.stderr).into_owned();
+    let provider_stdout_truncated = output.stdout_truncated;
+    let provider_stderr_truncated = output.stderr_truncated;
+    let mut output = output.output;
 
     if let Some(output_file) = output_file {
         if let Some(structured_output) = read_worker_output_file(output_file.path())? {
@@ -209,6 +218,8 @@ fn run_codex_exec_inner(
         output,
         provider_stdout,
         provider_stderr,
+        provider_stdout_truncated,
+        provider_stderr_truncated,
     })
 }
 
@@ -280,8 +291,9 @@ fn run_worker_command(
     stdin_prompt: Option<&str>,
     timeout: CommandTimeout,
     label: &str,
+    allow_transcript_truncation: bool,
     observer: &mut dyn ExecutionControl,
-) -> Result<Output> {
+) -> Result<WorkerCommandOutput> {
     let prompt_file = stdin_prompt
         .map(|prompt| -> Result<NamedTempFile> {
             let file = NamedTempFile::new().context("Failed to create worker stdin file")?;
@@ -294,33 +306,59 @@ fn run_worker_command(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    let output = run_owned_process_tree_with_output_limits_and_observer(
+    let output = run_owned_process_tree_with_output_policy_and_observer(
         command,
         timeout.duration(),
         ProcessOutputLimits {
             stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
             stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
+        if allow_transcript_truncation {
+            ProcessOutputOverflowPolicy::Truncate
+        } else {
+            ProcessOutputOverflowPolicy::Error
+        },
         &mut ProcessExecutionObserver::new(observer, label),
     )
     .map_err(|error| worker_process_error(error, timeout))?;
 
-    Ok(Output {
-        status: output.status,
-        stdout: complete_worker_output(output.stdout, "stdout")?,
-        stderr: complete_worker_output(output.stderr, "stderr")?,
+    let stdout = complete_worker_output(output.stdout, "stdout")?;
+    let stderr = complete_worker_output(output.stderr, "stderr")?;
+    Ok(WorkerCommandOutput {
+        output: Output {
+            status: output.status,
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+        },
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
     })
 }
 
-fn complete_worker_output(output: Option<BoundedProcessOutput>, stream: &str) -> Result<Vec<u8>> {
+#[derive(Debug)]
+struct WorkerCommandOutput {
+    output: Output,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+struct CapturedWorkerOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn complete_worker_output(
+    output: Option<BoundedProcessOutput>,
+    stream: &str,
+) -> Result<CapturedWorkerOutput> {
     let output = output.with_context(|| format!("Failed to capture worker {stream}"))?;
-    if output.truncated {
-        bail!("Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit");
-    }
     if !output.complete {
         bail!("Failed to capture complete worker {stream}");
     }
-    Ok(output.bytes)
+    Ok(CapturedWorkerOutput {
+        bytes: output.bytes,
+        truncated: output.truncated,
+    })
 }
 
 fn worker_process_error(error: OwnedProcessTreeError, timeout: CommandTimeout) -> anyhow::Error {
@@ -333,6 +371,9 @@ fn worker_process_error(error: OwnedProcessTreeError, timeout: CommandTimeout) -
             timeout.as_secs()
         ),
         OwnedProcessTreeError::Cancelled => anyhow!("Worker process was cancelled"),
+        OwnedProcessTreeError::OutputLimitExceeded(stream) => anyhow!(
+            "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+        ),
         OwnedProcessTreeError::Await => anyhow!("Failed to wait for worker process"),
         OwnedProcessTreeError::Cleanup => {
             anyhow!("Worker process tree could not be cleaned up safely")
@@ -346,6 +387,8 @@ struct WorkerReceiptOutcome<'a> {
     exit_status: i32,
     stdout: &'a str,
     stderr: &'a str,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
     error: Option<&'a str>,
 }
 
@@ -387,6 +430,8 @@ fn record_worker_receipt(
         "workflow_id": request.receipt.workflow_id,
         "item_key": request.receipt.item_key,
         "error": outcome.error,
+        "stdout_truncated": outcome.stdout_truncated,
+        "stderr_truncated": outcome.stderr_truncated,
     });
     record_receipt(
         ctx,
@@ -576,12 +621,13 @@ mod tests {
             Some("prompt through a file"),
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
+            false,
             &mut control,
         )
         .unwrap();
 
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"prompt through a file");
+        assert!(output.output.status.success());
+        assert_eq!(output.output.stdout, b"prompt through a file");
         assert_eq!(control.output, b"prompt through a file");
     }
 
@@ -599,6 +645,7 @@ mod tests {
             None,
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
+            false,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()
@@ -610,6 +657,31 @@ mod tests {
             )),
             "{error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn schema_backed_worker_allows_truncated_provider_transcript() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!("head -c {} /dev/zero", EXECUTION_OUTPUT_CAPTURE_LIMIT + 1),
+        ]);
+
+        let output = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            true,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert!(output.output.status.success());
+        assert_eq!(output.output.stdout.len(), EXECUTION_OUTPUT_CAPTURE_LIMIT);
+        assert!(output.stdout_truncated);
+        assert!(!output.stderr_truncated);
     }
 
     #[cfg(unix)]
@@ -642,6 +714,7 @@ wait
             None,
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
+            false,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()

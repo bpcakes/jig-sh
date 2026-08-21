@@ -12,6 +12,7 @@ After this work, termination reasons and output policies remain typed through or
 
 - [x] (2026-08-21 20:58Z) Reviewed the merged Claude and Codex findings, traced the affected callers, and opened structured work.
 - [x] (2026-08-21 21:04Z) Slice 1: made CLI progress finalization precede signal retirement, made deferred heartbeat wording historical, and covered interruption output in the production CLI.
+- [x] (2026-08-21 21:09Z) Slice 2a: added explicit fatal/truncating capture policy, prompt fatal termination on authoritative overflow, and nonfatal schema-backed worker transcript truncation with receipt flags.
 - [ ] Slice 2: preserve typed cancellation and output-overflow policy through owned-process and work-check orchestration.
 - [ ] Slice 3: bound status-provider concurrency, balance failure phases, and remove superseded gate helper surface.
 - [ ] Slice 4: reconcile durable plans and documentation with the final behavior.
@@ -27,6 +28,8 @@ After this work, termination reasons and output policies remain typed through or
   Evidence: `evaluate_gate` constructs gate states from indexed receipts and only calls the shared cancellation guard. The review's all-or-nothing concern is therefore primarily a future bug-surface issue; this work will make missing map entries explicit without inventing a per-plan error type that current behavior cannot produce.
 - Observation: The interruption regression must exercise human output mode because JSON mode deliberately disables buffered progress.
   Evidence: The first focused run used `--json` and correctly produced no progress transcript; switching the production CLI fixture to human mode made the child sentinel observable and the regression pass.
+- Observation: Worker stdout has two different meanings depending on invocation shape.
+  Evidence: Schema-backed review and refinement use the separately bounded `-o` file as authoritative output, so their provider stdout/stderr may truncate; schema-less worker invocations still use stdout as their result and therefore retain fatal capture overflow.
 
 ## Decision Log
 
@@ -122,3 +125,5 @@ The status scheduler must use scoped standard-library threads, atomics or a sync
 Plan revision note (2026-08-21 20:58Z): Created the initial self-contained plan from the merged review, repository guidance, and the user's requirement for separately committed implementation slices and full-suite validation.
 
 Plan revision note (2026-08-21 21:04Z): Completed Milestone 1 and recorded the JSON-versus-human progress test constraint discovered during focused validation.
+
+Plan revision note (2026-08-21 21:09Z): Split Milestone 2 at its natural API boundary so output-policy hardening and cancellation orchestration remain independently reviewable commits.
