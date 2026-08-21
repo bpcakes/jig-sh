@@ -20,7 +20,7 @@ mod work;
 pub(crate) use agent::{AgentBootstrapRequest, AgentCommand};
 pub(crate) use check::{
     AgentMapCommand, AgentMapRequest, CheckCommand, MigrationImmutabilityRequest,
-    RustFileLocRequest, SqlxTodoRequest,
+    RepositoryCheckRequest, RustFileLocRequest, SqlxTodoRequest,
 };
 pub(crate) use loops::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,

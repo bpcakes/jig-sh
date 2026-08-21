@@ -52,7 +52,6 @@ mod mcp;
 mod policy;
 mod progress;
 mod prompt_registry;
-#[allow(dead_code)]
 mod repository;
 mod root_commands;
 mod runtime;

@@ -1,18 +1,20 @@
+use anyhow::{Result, bail};
+
 use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts, DevStatusOpts,
-    DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts,
-    LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand,
-    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
-    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
-    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
-    ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
-    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
-    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
-    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
-    WorkStartOpts,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts,
+    DevStatusOpts, DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
+    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
+    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
+    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
+    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
+    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
+    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
+    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
+    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
+    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 mod vault;
@@ -39,30 +41,181 @@ impl From<AgentMapOpts> for command::AgentMapRequest {
     }
 }
 
-impl From<CheckCommand> for command::CheckCommand {
-    fn from(command: CheckCommand) -> Self {
+impl TryFrom<CheckOpts> for command::CheckCommand {
+    type Error = anyhow::Error;
+
+    fn try_from(opts: CheckOpts) -> Result<Self> {
+        let CheckOpts {
+            tool,
+            profile,
+            affected,
+            explain,
+            fail_fast,
+            command,
+        } = opts;
+        let selection_requested = profile.is_some() || affected.is_some() || explain || fail_fast;
+
         match command {
-            CheckCommand::Fmt(opts) => Self::Fmt(opts.into()),
-            CheckCommand::Lint(opts) => Self::Lint(opts.into()),
-            CheckCommand::Clippy(opts) => Self::Clippy(opts.into()),
-            CheckCommand::Test(opts) => Self::Test(opts.into()),
-            CheckCommand::TestLocked(opts) => Self::TestLocked(opts.into()),
-            CheckCommand::TypeScriptLint(opts) => Self::TypeScriptLint(opts.into()),
-            CheckCommand::TypeScriptTypecheck(opts) => Self::TypeScriptTypecheck(opts.into()),
-            CheckCommand::TypeScriptBuild(opts) => Self::TypeScriptBuild(opts.into()),
-            CheckCommand::TypeScriptCoverage(opts) => Self::TypeScriptCoverage(opts.into()),
-            CheckCommand::Sqlx(opts) => Self::Sqlx(opts.into()),
-            CheckCommand::Sqlc(opts) => Self::Sqlc(opts.into()),
-            CheckCommand::Schema(opts) => Self::Schema(opts.into()),
-            CheckCommand::Contract(opts) => Self::Contract(opts.into()),
-            CheckCommand::AgentMap(opts) => Self::AgentMap(opts.into()),
-            CheckCommand::AgentGuides => Self::AgentGuides,
-            CheckCommand::RustFileLoc(opts) => Self::RustFileLoc(opts.into()),
-            CheckCommand::NoModRs => Self::NoModRs,
-            CheckCommand::MigrationImmutability(opts) => Self::MigrationImmutability(opts.into()),
-            CheckCommand::SqlxUncheckedNonTest => Self::SqlxUncheckedNonTest,
+            None => Ok(Self::Repository(command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile,
+                affected_base: affected,
+                explain,
+                fail_fast,
+                tool: tool.into(),
+            })),
+            Some(CheckCommand::Selectors(selectors)) => {
+                Ok(Self::Repository(command::RepositoryCheckRequest {
+                    selectors,
+                    profile,
+                    affected_base: affected,
+                    explain,
+                    fail_fast,
+                    tool: tool.into(),
+                }))
+            }
+            Some(command) if selection_requested => {
+                let (selector, child_tool) = repository_selector(command)?;
+                Ok(Self::Repository(command::RepositoryCheckRequest {
+                    selectors: vec![selector.into()],
+                    profile,
+                    affected_base: affected,
+                    explain,
+                    fail_fast,
+                    tool: merge_tool_opts(tool, child_tool)?.into(),
+                }))
+            }
+            Some(command) => direct_check_command(command, tool),
         }
     }
+}
+
+fn direct_check_command(
+    command: CheckCommand,
+    parent_tool: ToolOpts,
+) -> Result<command::CheckCommand> {
+    let command = match command {
+        CheckCommand::Fmt(opts) => {
+            command::CheckCommand::Fmt(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Lint(opts) => {
+            command::CheckCommand::Lint(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Clippy(opts) => {
+            command::CheckCommand::Clippy(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Test(opts) => {
+            command::CheckCommand::Test(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::TestLocked(opts) => {
+            command::CheckCommand::TestLocked(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::TypeScriptLint(opts) => {
+            command::CheckCommand::TypeScriptLint(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::TypeScriptTypecheck(opts) => {
+            command::CheckCommand::TypeScriptTypecheck(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::TypeScriptBuild(opts) => {
+            command::CheckCommand::TypeScriptBuild(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::TypeScriptCoverage(opts) => {
+            command::CheckCommand::TypeScriptCoverage(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Sqlx(opts) => {
+            command::CheckCommand::Sqlx(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Sqlc(opts) => {
+            command::CheckCommand::Sqlc(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Schema(opts) => {
+            command::CheckCommand::Schema(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::Contract(opts) => {
+            command::CheckCommand::Contract(merge_tool_opts(parent_tool, opts)?.into())
+        }
+        CheckCommand::AgentMap(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::AgentMap(opts.into())
+        }
+        CheckCommand::AgentGuides => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::AgentGuides
+        }
+        CheckCommand::RustFileLoc(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::RustFileLoc(opts.into())
+        }
+        CheckCommand::NoModRs => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::NoModRs
+        }
+        CheckCommand::MigrationImmutability(opts) => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::MigrationImmutability(opts.into())
+        }
+        CheckCommand::SqlxUncheckedNonTest => {
+            reject_repository_options(&parent_tool)?;
+            command::CheckCommand::SqlxUncheckedNonTest
+        }
+        CheckCommand::Selectors(_) => {
+            unreachable!("external selectors are handled before direct commands")
+        }
+    };
+    Ok(command)
+}
+
+fn repository_selector(command: CheckCommand) -> Result<(&'static str, ToolOpts)> {
+    match command {
+        CheckCommand::Fmt(opts) => Ok(("fmt", opts)),
+        CheckCommand::Lint(opts) => Ok(("lint", opts)),
+        CheckCommand::Clippy(opts) => Ok(("clippy", opts)),
+        CheckCommand::Test(opts) => Ok(("test", opts)),
+        CheckCommand::TestLocked(opts) => Ok(("test-locked", opts)),
+        CheckCommand::TypeScriptLint(opts) => Ok(("typescript-lint", opts)),
+        CheckCommand::TypeScriptTypecheck(opts) => Ok(("typescript-typecheck", opts)),
+        CheckCommand::TypeScriptBuild(opts) => Ok(("typescript-build", opts)),
+        CheckCommand::TypeScriptCoverage(opts) => Ok(("typescript-coverage", opts)),
+        CheckCommand::Sqlx(opts) => Ok(("sqlx", opts)),
+        CheckCommand::Sqlc(opts) => Ok(("sqlc", opts)),
+        CheckCommand::Schema(opts) => Ok(("schema", opts)),
+        CheckCommand::Contract(opts) => Ok(("contract", opts)),
+        CheckCommand::AgentMap(_)
+        | CheckCommand::AgentGuides
+        | CheckCommand::RustFileLoc(_)
+        | CheckCommand::NoModRs
+        | CheckCommand::MigrationImmutability(_)
+        | CheckCommand::SqlxUncheckedNonTest => {
+            bail!(
+                "profiles, affected selection, --explain, and --fail-fast apply to repository targets, not Jig-owned policy subcommands"
+            )
+        }
+        CheckCommand::Selectors(_) => unreachable!("external selectors are handled separately"),
+    }
+}
+
+fn merge_tool_opts(parent: ToolOpts, child: ToolOpts) -> Result<ToolOpts> {
+    if parent.plan_id.is_some() && child.plan_id.is_some() {
+        bail!("--plan-id may be supplied before or after the check name, not both");
+    }
+    let plan_id = parent.plan_id.or(child.plan_id);
+    let no_receipt = parent.no_receipt || child.no_receipt;
+    if plan_id.is_some() && no_receipt {
+        bail!("--plan-id cannot be combined with --no-receipt");
+    }
+    Ok(ToolOpts {
+        plan_id,
+        no_receipt,
+    })
+}
+
+fn reject_repository_options(tool: &ToolOpts) -> Result<()> {
+    if tool.plan_id.is_some() || tool.no_receipt {
+        bail!(
+            "--plan-id and --no-receipt apply to repository target checks, not Jig-owned policy subcommands"
+        );
+    }
+    Ok(())
 }
 
 impl From<CheckRustFileLocOpts> for command::RustFileLocRequest {

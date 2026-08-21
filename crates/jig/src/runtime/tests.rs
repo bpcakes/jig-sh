@@ -179,7 +179,7 @@ fn dispatch(ctx: &RepoContext, command: CommandKind) -> Result<Value> {
 fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
     match command {
         CommandKind::Bootstrap(opts) => RuntimeCommand::Bootstrap(opts.into()),
-        CommandKind::Check(command) => RuntimeCommand::Check(command.into()),
+        CommandKind::Check(command) => RuntimeCommand::Check(command.try_into().unwrap()),
         CommandKind::Migration(MigrationCommand::Add(opts)) => {
             RuntimeCommand::MigrationAdd(opts.into())
         }
@@ -300,16 +300,145 @@ rust_test_command = "printf 'command tool ran\n'"
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let output = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: true,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: true,
+            }),
+        )),
     )
     .unwrap();
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["receipt_id"], serde_json::Value::Null);
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[test]
+fn repository_check_explains_and_executes_the_legacy_default_profile() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+[commands]
+fmt_command = "printf 'fmt ran\n'"
+test_command = "printf 'test ran\n'"
+
+[work]
+checks = ["jig.fmt_check", "jig.test"]
+"#,
+        )
+        .required_commands(["fmt_command", "test_command"])
+        .tool(json!({
+            "name": "jig.fmt_check",
+            "kind": "command",
+            "description": "Run formatting.",
+            "command": "fmt_command"
+        }))
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run tests.",
+            "command": "test_command"
+        }))
+        .write();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let explained = super::dispatch(
+        &ctx,
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: true,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        )),
+    )
+    .unwrap();
+    assert_eq!(explained["executed"], false);
+    assert_eq!(explained["plan"]["profile"], "verify");
+    assert_eq!(explained["plan"]["targets"].as_array().unwrap().len(), 2);
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
+
+    let executed = super::dispatch(
+        &ctx,
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        )),
+    )
+    .unwrap();
+    assert_eq!(executed["ok"], true);
+    assert_eq!(executed["executed"], true);
+    assert_eq!(executed["results"].as_array().unwrap().len(), 2);
+    assert_eq!(executed["results"][0]["target"]["component"], "repo");
+}
+
+#[test]
+fn repository_check_collects_failures_unless_fail_fast_is_explicit() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+[commands]
+failing_command = "printf 'failed\n' >&2; exit 7"
+later_command = "printf 'later\n' > later-ran.txt"
+
+[work]
+checks = ["jig.a_fail", "jig.z_later"]
+"#,
+        )
+        .required_commands(["failing_command", "later_command"])
+        .tool(json!({
+            "name": "jig.a_fail",
+            "kind": "command",
+            "description": "Fail first.",
+            "command": "failing_command"
+        }))
+        .tool(json!({
+            "name": "jig.z_later",
+            "kind": "command",
+            "description": "Run later.",
+            "command": "later_command"
+        }))
+        .write();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let request = |fail_fast| {
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        ))
+    };
+
+    let collected = super::dispatch(&ctx, request(false)).unwrap();
+    assert_eq!(collected["ok"], false);
+    assert_eq!(collected["results"].as_array().unwrap().len(), 2);
+    assert!(temp.path().join("later-ran.txt").exists());
+
+    fs::remove_file(temp.path().join("later-ran.txt")).unwrap();
+    let stopped = super::dispatch(&ctx, request(true)).unwrap();
+    assert_eq!(stopped["ok"], false);
+    assert_eq!(stopped["results"].as_array().unwrap().len(), 1);
+    assert!(!temp.path().join("later-ran.txt").exists());
 }
 
 #[test]
@@ -347,10 +476,12 @@ rust_test_locked_command = "printf 'test locked\n'"
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let output = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Contract(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: true,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Contract(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: true,
+            }),
+        )),
     )
     .unwrap();
 
@@ -388,10 +519,12 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();

@@ -6,6 +6,7 @@ use super::ToolRequest;
 
 #[derive(Debug)]
 pub(crate) enum CheckCommand {
+    Repository(RepositoryCheckRequest),
     Fmt(ToolRequest),
     Lint(ToolRequest),
     Clippy(ToolRequest),
@@ -25,6 +26,16 @@ pub(crate) enum CheckCommand {
     NoModRs,
     MigrationImmutability(MigrationImmutabilityRequest),
     SqlxUncheckedNonTest,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RepositoryCheckRequest {
+    pub(crate) selectors: Vec<String>,
+    pub(crate) profile: Option<String>,
+    pub(crate) affected_base: Option<String>,
+    pub(crate) explain: bool,
+    pub(crate) fail_fast: bool,
+    pub(crate) tool: ToolRequest,
 }
 
 // Top-level `jig agent-map generate` and `jig check agent-map` share the same

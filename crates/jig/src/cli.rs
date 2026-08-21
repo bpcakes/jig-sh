@@ -27,7 +27,9 @@ mod vault;
 mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
-pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
+pub(crate) use check::{
+    CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts,
+};
 pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{
     LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
@@ -154,6 +156,8 @@ Human-readable output is the default. Pass --json for structured automation outp
 Examples:
   jig info
   jig info --json
+  jig info components
+  jig info target api:test --json
   jig info --commands
   jig info --commands --json  # also works before adoption
   jig explain --json";
@@ -289,10 +293,9 @@ pub(crate) enum CommandKind {
     #[command(
         name = root_commands::CHECK.name,
         display_order = root_commands::CHECK.display_order,
-        subcommand,
         after_help = check::CHECK_AFTER_HELP
     )]
-    Check(CheckCommand),
+    Check(CheckOpts),
     /// Aggregate local repo, work, loop, and configured status-provider observations.
     #[command(
         name = root_commands::STATUS.name,
@@ -477,6 +480,26 @@ pub(crate) struct InfoOpts {
         help = "Show root commands with repository-specific availability and remediation"
     )]
     pub(crate) commands: bool,
+    #[command(subcommand)]
+    pub(crate) subject: Option<InfoCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum InfoCommand {
+    /// Inspect the normalized workspace catalog.
+    Workspace,
+    /// List addressable repository components.
+    Components,
+    /// Inspect one component and its targets.
+    Component { id: String },
+    /// List executable component/action targets.
+    Targets,
+    /// Inspect one target by its component:action address.
+    Target { id: String },
+    /// List checked-in target profiles.
+    Profiles,
+    /// Inspect one checked-in profile.
+    Profile { id: String },
 }
 
 #[derive(Args, Debug)]

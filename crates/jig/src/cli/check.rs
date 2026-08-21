@@ -8,9 +8,75 @@ pub(super) const CHECK_AFTER_HELP: &str = "\
 Run configured project checks or Jig-owned repository policy checks.
 
 Examples:
+  jig check
   jig check fmt
+  jig check test
+  jig check api:test
+  jig check 'web:*'
+  jig check --profile ci --explain
   jig check contract
   jig check rust-file-loc --changed-against origin/main";
+
+#[derive(Args, Debug, Default)]
+pub(crate) struct CheckOpts {
+    #[command(flatten)]
+    pub(crate) tool: ToolOpts,
+    #[arg(
+        long,
+        global = true,
+        value_name = "PROFILE",
+        help = "Select a checked-in target profile"
+    )]
+    pub(crate) profile: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "GIT_REF",
+        help = "Select targets affected since a Git ref"
+    )]
+    pub(crate) affected: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        help = "Resolve and print the immutable run plan without executing it"
+    )]
+    pub(crate) explain: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Stop scheduling checks after the first failed target"
+    )]
+    pub(crate) fail_fast: bool,
+    #[command(subcommand)]
+    pub(crate) command: Option<CheckCommand>,
+}
+
+impl CheckOpts {
+    #[cfg(test)]
+    pub(crate) fn with_command(command: CheckCommand) -> Self {
+        Self {
+            command: Some(command),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn is_contract_only(&self) -> bool {
+        matches!(self.command, Some(CheckCommand::Contract(_)))
+            && self.profile.is_none()
+            && self.affected.is_none()
+            && !self.explain
+            && !self.fail_fast
+    }
+
+    pub(crate) fn uses_repository_plan(&self) -> bool {
+        self.command.is_none()
+            || matches!(self.command, Some(CheckCommand::Selectors(_)))
+            || self.profile.is_some()
+            || self.affected.is_some()
+            || self.explain
+            || self.fail_fast
+    }
+}
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum CheckCommand {
@@ -71,6 +137,9 @@ pub(crate) enum CheckCommand {
     /// Verify non-test SQLx queries use compile-time checked macros.
     #[command(name = tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST)]
     SqlxUncheckedNonTest,
+    /// Select one or more component actions using target syntax.
+    #[command(external_subcommand)]
+    Selectors(Vec<String>),
 }
 
 #[derive(Args, Debug)]

@@ -222,60 +222,35 @@ pub(crate) fn vault_options_for_context(
 
 fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
     match command {
-        CheckCommand::Fmt(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::FMT_CHECK, json!({}), opts)
-        }
-        CheckCommand::Lint(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::LINT, json!({}), opts)
-        }
-        CheckCommand::Clippy(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::CLIPPY, json!({}), opts)
-        }
-        CheckCommand::Test(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::TEST, json!({}), opts)
-        }
+        CheckCommand::Repository(request) => dispatch_repository_check(ctx, request),
+        CheckCommand::Fmt(opts) => dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, opts),
+        CheckCommand::Lint(opts) => dispatch_named_check(ctx, "lint", tool::LINT, opts),
+        CheckCommand::Clippy(opts) => dispatch_named_check(ctx, "clippy", tool::CLIPPY, opts),
+        CheckCommand::Test(opts) => dispatch_named_check(ctx, "test", tool::TEST, opts),
         CheckCommand::TestLocked(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::TEST_LOCKED, json!({}), opts)
+            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, opts)
         }
-        CheckCommand::TypeScriptLint(opts) => tool_execution::execute_manifest_tool_request(
+        CheckCommand::TypeScriptLint(opts) => {
+            dispatch_named_check(ctx, "typescript-lint", tool::TYPESCRIPT_LINT, opts)
+        }
+        CheckCommand::TypeScriptTypecheck(opts) => dispatch_named_check(
             ctx,
-            tool::TYPESCRIPT_LINT,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::TypeScriptTypecheck(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
+            "typescript-typecheck",
             tool::TYPESCRIPT_TYPECHECK,
-            json!({}),
             opts,
         ),
-        CheckCommand::TypeScriptBuild(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_BUILD,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::TypeScriptCoverage(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_COVERAGE,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::Sqlx(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SQLX_CHECK, json!({}), opts)
+        CheckCommand::TypeScriptBuild(opts) => {
+            dispatch_named_check(ctx, "typescript-build", tool::TYPESCRIPT_BUILD, opts)
         }
-        CheckCommand::Sqlc(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SQLC_CHECK, json!({}), opts)
+        CheckCommand::TypeScriptCoverage(opts) => {
+            dispatch_named_check(ctx, "typescript-coverage", tool::TYPESCRIPT_COVERAGE, opts)
         }
-        CheckCommand::Schema(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SCHEMA_CHECK, json!({}), opts)
+        CheckCommand::Sqlx(opts) => dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, opts),
+        CheckCommand::Sqlc(opts) => dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, opts),
+        CheckCommand::Schema(opts) => dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, opts),
+        CheckCommand::Contract(opts) => {
+            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, opts)
         }
-        CheckCommand::Contract(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::CONTRACT_CHECK,
-            json!({}),
-            opts,
-        ),
         CheckCommand::AgentMap(opts) => crate::policy::run_check(
             ctx,
             PolicyCheckCommand::AgentMap(AgentMapInput {
@@ -302,6 +277,98 @@ fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
             crate::policy::run_check(ctx, PolicyCheckCommand::SqlxUncheckedNonTest)
         }
     }
+}
+
+fn dispatch_named_check(
+    ctx: &RepoContext,
+    selector: &str,
+    legacy_tool: &str,
+    tool: crate::command::ToolRequest,
+) -> Result<Value> {
+    if ctx.contract_version() >= 6 {
+        dispatch_repository_check(
+            ctx,
+            crate::command::RepositoryCheckRequest {
+                selectors: vec![selector.into()],
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool,
+            },
+        )
+    } else {
+        tool_execution::execute_manifest_tool_request(ctx, legacy_tool, json!({}), tool)
+    }
+}
+
+fn dispatch_repository_check(
+    ctx: &RepoContext,
+    request: crate::command::RepositoryCheckRequest,
+) -> Result<Value> {
+    let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+    let plan = crate::repository::plan_run(
+        ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: request.selectors,
+            profile: request.profile,
+            affected_base: request.affected_base,
+        },
+    )?;
+    if request.explain {
+        return Ok(json!({
+            "ok": true,
+            "command": "check plan",
+            "executed": false,
+            "plan": plan,
+        }));
+    }
+
+    let mut results = Vec::new();
+    let mut failed_targets = Vec::new();
+    for layer in &plan.execution_layers {
+        for target in layer {
+            let alias = catalog
+                .aliases_for_target(target)
+                .first()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "target '{target}' has no legacy execution alias; native target execution is not available yet"
+                    )
+                })?;
+            let response = tool_execution::execute_manifest_tool_result_request(
+                ctx,
+                alias,
+                json!({}),
+                request.tool.clone(),
+            )?;
+            let failed = tool_execution::manifest_tool_result_failure(&response)?.is_some();
+            results.push(json!({
+                "target": target,
+                "tool": alias,
+                "response": response,
+            }));
+            if failed {
+                failed_targets.push(target.clone());
+                if request.fail_fast {
+                    break;
+                }
+            }
+        }
+        if request.fail_fast && !failed_targets.is_empty() {
+            break;
+        }
+    }
+
+    Ok(json!({
+        "ok": failed_targets.is_empty(),
+        "command": "check",
+        "executed": true,
+        "plan": plan,
+        "results": results,
+        "failed_targets": failed_targets,
+    }))
 }
 
 pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Value> {

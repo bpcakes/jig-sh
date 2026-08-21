@@ -3,6 +3,66 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn check_plan_summary_lists_targets_without_implying_execution() {
+    let summary = format_check_summary(&json!({
+        "ok": true,
+        "executed": false,
+        "plan": {
+            "id": "run-plan_sha256:abc",
+            "targets": [{
+                "target": {"component": "api", "action": "test"},
+                "reasons": [{"kind": "explicit", "selector": "api:test"}]
+            }]
+        }
+    }));
+
+    assert!(summary.contains("Check plan: run-plan_sha256:abc"));
+    assert!(summary.contains("api:test: explicit"));
+    assert!(summary.contains("No commands executed (--explain)."));
+}
+
+#[test]
+fn check_execution_summary_collects_target_failures() {
+    let summary = format_check_summary(&json!({
+        "ok": false,
+        "executed": true,
+        "plan": {
+            "id": "run-plan_sha256:abc",
+            "targets": [
+                {"target": {"component": "api", "action": "test"}},
+                {"target": {"component": "web", "action": "test"}}
+            ]
+        },
+        "results": [
+            {"target": {"component": "api", "action": "test"}, "response": {"result": {"exit_status": 0}}},
+            {"target": {"component": "web", "action": "test"}, "response": {"result": {"exit_status": 7}}}
+        ]
+    }));
+
+    assert!(summary.contains("Jig check: failed"));
+    assert!(summary.contains("api:test: passed (exit 0)"));
+    assert!(summary.contains("web:test: failed (exit 7)"));
+}
+
+#[test]
+fn repository_info_summary_renders_structured_target_addresses() {
+    let summary = format_info_summary(&json!({
+        "ok": true,
+        "command": "info targets",
+        "workspace": {
+            "name": "ExampleProject",
+            "contract_version": 6
+        },
+        "targets": [{
+            "id": {"component": "api", "action": "test"}
+        }]
+    }));
+
+    assert!(summary.contains("Jig targets: ExampleProject (contract v6)"));
+    assert!(summary.contains("api:test"));
+}
+
+#[test]
 fn setup_summary_reports_orchestration_and_next_step() {
     let summary = format_setup_summary(&json!({
         "ok": true,

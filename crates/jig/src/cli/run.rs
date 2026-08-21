@@ -127,7 +127,7 @@ impl LauncherCommandDescriptor {
 }
 
 impl CommandKind {
-    const fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
+    fn launcher_descriptor(&self) -> LauncherCommandDescriptor {
         use LauncherCommandScope::{CapabilityOnly, Repository};
 
         let (name, scope) = match self {
@@ -140,7 +140,7 @@ impl CommandKind {
             Self::Doctor => (tool_defs::cli_command::DOCTOR, CapabilityOnly),
             Self::Info(_) => (tool_defs::cli_command::INFO, Repository),
             Self::Dev(_) => (tool_defs::cli_command::DEV, Repository),
-            Self::Check(CheckCommand::Contract(_)) => {
+            Self::Check(opts) if opts.is_contract_only() => {
                 (tool_defs::cli_command::CHECK, CapabilityOnly)
             }
             Self::Check(_) => (tool_defs::cli_command::CHECK, Repository),
@@ -216,7 +216,20 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
-            let output = info::run(opts.commands, json_output)?;
+            let request = opts.subject.map(|subject| match subject {
+                super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
+                super::InfoCommand::Components => crate::repository::InspectRequest::Components,
+                super::InfoCommand::Component { id } => {
+                    crate::repository::InspectRequest::Component(id)
+                }
+                super::InfoCommand::Targets => crate::repository::InspectRequest::Targets,
+                super::InfoCommand::Target { id } => crate::repository::InspectRequest::Target(id),
+                super::InfoCommand::Profiles => crate::repository::InspectRequest::Profiles,
+                super::InfoCommand::Profile { id } => {
+                    crate::repository::InspectRequest::Profile(id)
+                }
+            });
+            let output = info::run(opts.commands, json_output, request)?;
             emit(json_output, HumanOutput::Info, &output)?;
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
@@ -283,10 +296,15 @@ fn run_command(cli: Cli) -> Result<()> {
         ),
         CommandKind::Setup => run_setup_command(json_output),
         CommandKind::Check(command) => {
+            let human_output = if command.uses_repository_plan() {
+                HumanOutput::Check
+            } else {
+                HumanOutput::ToolExecution
+            };
+            let command: crate::command::CheckCommand = command.try_into()?;
             let require_ok = check_command_reports_failure_with_ok(&command);
-            let human_output = check_human_output(&command);
             dispatch_runtime_command(
-                crate::command::RuntimeCommand::Check(command.into()),
+                crate::command::RuntimeCommand::Check(command),
                 require_ok,
                 json_output,
                 human_output,
@@ -583,7 +601,7 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
         CommandKind::Doctor | CommandKind::Dev(_) | CommandKind::Proxy(_) => true,
         CommandKind::Vault(command) => matches!(command, VaultCommand::Run(_)),
         CommandKind::Agent(command) => agent_command_reports_failure_with_ok(command),
-        CommandKind::Check(command) => check_command_reports_failure_with_ok(command),
+        CommandKind::Check(_) => true,
         _ => false,
     }
 }
@@ -592,20 +610,17 @@ const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
     matches!(command, AgentCommand::Doctor)
 }
 
-const fn check_command_reports_failure_with_ok(command: &CheckCommand) -> bool {
+const fn check_command_reports_failure_with_ok(command: &crate::command::CheckCommand) -> bool {
     matches!(
         command,
-        CheckCommand::AgentMap(_)
-            | CheckCommand::AgentGuides
-            | CheckCommand::RustFileLoc(_)
-            | CheckCommand::NoModRs
-            | CheckCommand::MigrationImmutability(_)
-            | CheckCommand::SqlxUncheckedNonTest,
+        crate::command::CheckCommand::Repository(_)
+            | crate::command::CheckCommand::AgentMap(_)
+            | crate::command::CheckCommand::AgentGuides
+            | crate::command::CheckCommand::RustFileLoc(_)
+            | crate::command::CheckCommand::NoModRs
+            | crate::command::CheckCommand::MigrationImmutability(_)
+            | crate::command::CheckCommand::SqlxUncheckedNonTest,
     )
-}
-
-const fn check_human_output(_command: &CheckCommand) -> HumanOutput {
-    HumanOutput::ToolExecution
 }
 
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {

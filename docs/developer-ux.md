@@ -122,6 +122,47 @@ The daily developer loop is built around a few stable verbs:
 
 This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
 
+### Repository targets and check plans
+
+Jig also presents the repository as components with actions. Their executable
+address is a target such as `api:test`. Contracts through version 5 are adapted
+without changing their files: Jig exposes one synthetic `repo` component and
+maps each declared tool to a `repo:*` target while retaining the original
+`jig.*` name as an alias. Component-native contract records can therefore use
+the same inspection and planning core as existing repositories.
+
+Use the static info views to discover the model without running commands:
+
+```sh
+scripts/jig info workspace
+scripts/jig info components
+scripts/jig info component repo
+scripts/jig info targets
+scripts/jig info target repo:test
+scripts/jig info profiles
+```
+
+Bare `scripts/jig check` resolves the default verification profile. For a
+legacy contract that profile comes from configured work checks, falling back to
+its read-only check tools while omitting the duplicate locked-test action. An
+unqualified action selects that action across components, an exact
+`component:action` selects one target, and `*` can replace either side:
+
+```sh
+scripts/jig check
+scripts/jig check test
+scripts/jig check repo:test
+scripts/jig check 'repo:*'
+scripts/jig check --profile verify --explain
+```
+
+`--explain` is read-only: it prints the immutable plan, target reasons,
+dependency layers, effects, configuration digest, source identity, and input
+digests, and executes no command or receipt write. Selectors are normalized and
+targets are sorted before the plan id is derived, so equivalent requests
+against the same repository state have the same plan id. The existing named
+check forms and their receipt controls remain compatible.
+
 ## State Health And Retention
 
 Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze legacy recursive session summaries and receipt payload growth. `state compact sessions --dry-run` validates and previews the repair. Apply mode creates an exact compressed backup under ignored `.agent/.cache/` before replacing the session stream, and `state restore --backup <path>` verifies that backup before restoring it.

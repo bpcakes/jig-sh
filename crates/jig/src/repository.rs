@@ -9,6 +9,12 @@ use sha2::{Digest, Sha256};
 
 use crate::context::RepoContext;
 
+mod inspect;
+mod planner;
+
+pub(crate) use inspect::{InspectRequest, inspect_repository};
+pub(crate) use planner::{PlanRunRequest, plan_run};
+
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 
 /// The one version-neutral repository view consumed by planning and inspection.
@@ -438,17 +444,17 @@ fn unique_legacy_action_id(tool_name: &str, occupied: &BTreeSet<ActionId>) -> Re
 
 fn known_legacy_action_id(tool_name: &str) -> Option<&'static str> {
     match tool_name {
-        tool::FMT_CHECK => Some("format-check"),
+        tool::FMT_CHECK => Some("fmt"),
         tool::CONTRACT_CHECK => Some("contract"),
         tool::TEST_LOCKED => Some("test-locked"),
         tool::TYPESCRIPT_BUILD => Some("typescript-build"),
         tool::TYPESCRIPT_COVERAGE => Some("typescript-coverage"),
         tool::TYPESCRIPT_LINT => Some("typescript-lint"),
         tool::TYPESCRIPT_TYPECHECK => Some("typescript-typecheck"),
-        tool::SCHEMA_CHECK => Some("schema-check"),
+        tool::SCHEMA_CHECK => Some("schema"),
         tool::SCHEMA_DUMP => Some("schema-dump"),
-        tool::SQLX_CHECK => Some("sqlx-check"),
-        tool::SQLC_CHECK => Some("sqlc-check"),
+        tool::SQLX_CHECK => Some("sqlx"),
+        tool::SQLC_CHECK => Some("sqlc"),
         tool::MIGRATION_ADD => Some("migration-add"),
         tool::AGENT_DOCTOR => Some("agent-doctor"),
         tool::BOOTSTRAP => Some("bootstrap"),

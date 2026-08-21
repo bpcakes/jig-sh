@@ -15,7 +15,14 @@ const DEFAULT_MCP_COMMAND: &str = "scripts/jig mcp";
 
 mod commands;
 
-pub(crate) fn run(commands: bool, json_output: bool) -> Result<Value> {
+pub(crate) fn run(
+    commands: bool,
+    json_output: bool,
+    request: Option<crate::repository::InspectRequest>,
+) -> Result<Value> {
+    if commands && request.is_some() {
+        anyhow::bail!("--commands cannot be combined with an info subject");
+    }
     if commands {
         let ctx = match RepoContext::load_optional_strict() {
             Ok(Some(ctx)) => ctx,
@@ -68,7 +75,10 @@ pub(crate) fn run(commands: bool, json_output: bool) -> Result<Value> {
         return Ok(commands::info_with_capabilities(&ctx, vault, &agent));
     }
     let ctx = RepoContext::load()?;
-    Ok(repo_info(&ctx))
+    match request {
+        Some(request) => crate::repository::inspect_repository(&ctx, request),
+        None => Ok(repo_info(&ctx)),
+    }
 }
 
 pub(crate) fn format_commands_summary(value: &Value) -> String {

@@ -159,6 +159,44 @@ Make-backed tools return:
 
 Command-backed tools return the same common fields plus `command_key`, which identifies the `.jig.toml` command key that was executed.
 
+## Repository Catalog And Check Plans
+
+The runtime exposes one normalized repository catalog independently of the
+persisted contract epoch. For contracts 2 through 5, every declared manifest
+tool is projected as an action on a synthetic component whose structured id is
+`repo`; the original tool name remains a compatibility alias. Known action ids
+match the CLI vocabulary, for example `jig.test` becomes `repo:test` and
+`jig.fmt_check` becomes `repo:fmt`. Alias collisions from custom legacy names
+receive deterministic digest suffixes.
+
+The following read-only info commands return `schema_version: 1` plus structured
+component, target, or profile records:
+
+- `jig info workspace`
+- `jig info components` and `jig info component COMPONENT_ID`
+- `jig info targets` and `jig info target COMPONENT_ID:ACTION_ID`
+- `jig info profiles` and `jig info profile PROFILE_ID`
+
+Target identity is always an object with separate `component` and `action`
+fields in JSON. Human output renders its canonical `component:action` text.
+
+`jig check --explain` returns `command: "check plan"`, `executed: false`, and a
+`plan` object without running a command or writing a receipt. A plan includes
+its derived `id`, schema version, configuration digest, source identity,
+normalized selectors or profile, sorted targets, selection reasons, declared
+effects, input digests, and dependency execution layers. Bare `jig check` uses
+the default verification profile. An action selector such as `test` matches
+that action across components; a target selector such as `api:test` is exact;
+and `*` is the only wildcard and occupies a whole component or action segment.
+Profiles and explicit selectors are mutually exclusive.
+
+Executing a planned selection on a legacy contract returns an aggregate check
+response with `command: "check"`, `executed: true`, the exact plan, per-target
+legacy tool responses, and structured `failed_targets`. Existing named v2–v5
+check commands without planning flags retain their prior single-tool response.
+`--fail-fast` is explicit; aggregate selection otherwise collects every target
+failure it can execute.
+
 ## Runtime State
 
 `.agent/state/*.jsonl` is runtime-owned append-only memory during normal operation. Generated repos may back up, inspect, or remove these files intentionally, but application code should not edit individual records in place. Runtime-owned maintenance commands may perform validated whole-stream rewrites with recovery artifacts. Generated `.gitattributes` marks those JSONL files with `merge=union` to reduce avoidable merge conflicts between independent append-only records.

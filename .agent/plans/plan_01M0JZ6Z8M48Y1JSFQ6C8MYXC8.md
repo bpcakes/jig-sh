@@ -35,7 +35,7 @@ and, over MCP:
 - [x] (2026-08-21) Opened structured work as `plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8` and wrote this executable migration plan.
 - [x] (2026-08-21 20:24Z) Slice 1: added validated repository identities, component/action/profile records, immutable plan records, separate run status/conclusion, normalized findings/results, generated JSON Schema support, and a legacy manifest serialization regression.
 - [x] (2026-08-21 20:29Z) Slice 2: added one validated repository catalog, raw authored/resolved configuration digests, v6 component/action/profile inputs, and deterministic v2–v5 `repo` target projection with bidirectional aliases and a synthesized default profile.
-- [ ] Slice 3: add inspection, selector/profile resolution, plan explanation, and useful bare `jig check`; commit independently.
+- [x] (2026-08-21 20:44Z) Slice 3: added component/target/profile inspection, one deterministic selector and dependency planner, read-only plan explanation, legacy-profile execution, and a useful bare `jig check` while preserving unmodified named legacy check responses.
 - [ ] Slice 4: add durable run state and target-aware receipt fields with old-record compatibility; commit independently.
 - [ ] Slice 5: turn Rust, Go, and TypeScript feature metadata into adapter contributions and make v6 templates component-native; commit independently.
 - [ ] Slice 6: add target/profile evidence gates while retaining tool gates; commit independently.
@@ -61,6 +61,9 @@ and, over MCP:
 - Observation: receipts and work-check aggregate receipts are append-only and keyed by legacy tool names; gates rely on both the tool name and a worktree fingerprint.
   Evidence: `crates/jig/src/state/records.rs`, `state/receipts.rs`, and `runtime/work/gates.rs`.
 
+- Observation: making the existing Clap check subcommand optional preserves every established policy flag while an external-subcommand fallback accepts stack-neutral `component:action` selectors.
+  Evidence: focused parser tests cover bare check, named checks, exact/multiple target selectors, profile explanation, and existing policy subcommands; the launcher/Clap allowlist test remains green.
+
 ## Decision Log
 
 - Decision: Introduce the v6 DTOs first, without replacing legacy manifest DTOs or changing generated contract version in that slice.
@@ -73,6 +76,10 @@ and, over MCP:
 
 - Decision: Keep stable legacy `jig.*` names as aliases to targets, not as the primary identity of v6 actions.
   Rationale: old scripts and gates remain valid while new repositories can have multiple `test` targets without collision.
+  Date/Author: 2026-08-21 / Codex.
+
+- Decision: Existing named v2–v5 checks without planning flags retain their single-tool execution response; bare check, target selectors, profiles, and `--explain` use the new planner.
+  Rationale: scripts keep their stable JSON while users and agents can adopt the new repository vocabulary immediately, before a v6 template cutover.
   Date/Author: 2026-08-21 / Codex.
 
 - Decision: Keep `.jig.toml` human-authored and `.agent/jig-contract.json` resolved. v6 runtime does not rediscover project files.

@@ -10,10 +10,12 @@ fn cli_dispatch_requires_manifest_tool_declaration() {
 
     let error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Fmt(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Fmt(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();
@@ -29,10 +31,12 @@ fn unavailable_schema_check_explains_disabled_config() {
 
     let error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();
@@ -50,10 +54,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
 
     let lint_error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Lint(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Lint(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();
@@ -62,10 +68,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
 
     let sqlc_error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();
@@ -79,10 +87,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
     let ctx = RepoContext::load_from(go.path()).unwrap();
     let error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
-            plan_id: None,
-            no_receipt: false,
-        })),
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
     )
     .unwrap_err()
     .to_string();
@@ -107,11 +117,11 @@ coverage_threshold = 80
 
     let error = dispatch(
         &ctx,
-        CommandKind::Check(crate::cli::CheckCommand::TypeScriptLint(
-            crate::cli::ToolOpts {
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::TypeScriptLint(crate::cli::ToolOpts {
                 plan_id: None,
                 no_receipt: false,
-            },
+            }),
         )),
     )
     .unwrap_err()
