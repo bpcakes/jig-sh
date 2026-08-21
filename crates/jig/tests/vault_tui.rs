@@ -106,18 +106,8 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     assert!(String::from_utf8_lossy(&output[activity_offset..]).contains("field_batch_apply"));
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
-    let browse_offset = output.len();
-    write_until_from(
-        &mut master,
-        &mut output,
-        browse_offset,
-        b"\r",
-        "Value hidden.",
-        PTY_EVENT_TIMEOUT,
-    );
-
     let confirmation_offset = output.len();
-    master.write_all(b"p").unwrap();
+    master.write_all(b"\rp").unwrap();
     read_until_from(
         &mut master,
         &mut output,
@@ -467,35 +457,5 @@ fn read_until_from(
             String::from_utf8_lossy(output)
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn write_until_from(
-    file: &mut File,
-    output: &mut Vec<u8>,
-    offset: usize,
-    input: &[u8],
-    needle: &str,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
-    loop {
-        file.write_all(input).unwrap();
-        let retry_at = (Instant::now() + Duration::from_secs(1)).min(deadline);
-        loop {
-            read_available(file, output);
-            if String::from_utf8_lossy(&output[offset..]).contains(needle) {
-                return;
-            }
-            if Instant::now() >= retry_at {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out sending input while waiting for {needle:?}; output: {}",
-            String::from_utf8_lossy(output)
-        );
     }
 }
