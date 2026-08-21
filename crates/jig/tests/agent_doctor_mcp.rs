@@ -149,6 +149,7 @@ printf x >> "$JIG_CODEX_PROBE_COUNT"
         fs::write(
             &bootstrap,
             r#"#!/bin/sh
+printf 'setup child progress sentinel\n'
 printf started > "$JIG_SETUP_CHILD_STARTED"
 (sleep 1; printf leaked > "$JIG_SETUP_DELAYED_MARKER") &
 wait
@@ -221,7 +222,7 @@ fn interrupted_setup_reaps_its_owned_bootstrap_tree() {
     let mut command = fixture.command();
     command.env_remove("BASH_ENV");
     let mut child = command
-        .args(["--json", "setup"])
+        .arg("setup")
         .env("JIG_SETUP_CHILD_STARTED", &started)
         .env("JIG_SETUP_DELAYED_MARKER", &delayed)
         .stdout(Stdio::piped())
@@ -265,6 +266,11 @@ fn interrupted_setup_reaps_its_owned_bootstrap_tree() {
         "interrupted setup unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("setup child progress sentinel"),
+        "interrupted setup discarded buffered child progress\nstderr:\n{stderr}"
     );
     std::thread::sleep(Duration::from_millis(1_250));
     assert!(

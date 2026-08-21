@@ -237,9 +237,23 @@ impl CliExecutionObserver {
         self.queue(format!("{line}\n").as_bytes());
     }
 
-    pub(crate) fn finish(&mut self) -> io::Result<()> {
+    pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
         let stderr = io::stderr();
-        self.finish_to(&mut stderr.lock())
+        self.finish_to_with(outcome, &mut stderr.lock())
+    }
+
+    fn finish_to_with<T>(
+        &mut self,
+        outcome: anyhow::Result<T>,
+        writer: &mut dyn Write,
+    ) -> anyhow::Result<T> {
+        match (outcome, self.finish_to(writer)) {
+            (outcome, Ok(())) => outcome,
+            (Ok(_), Err(error)) => Err(error.into()),
+            (Err(error), Err(flush_error)) => Err(error.context(format!(
+                "Execution progress also failed to flush: {flush_error}"
+            ))),
+        }
     }
 
     fn finish_to(&mut self, writer: &mut dyn Write) -> io::Result<()> {
@@ -270,10 +284,9 @@ impl ExecutionObserver for CliExecutionObserver {
                 self.queue(bytes);
                 self.output_needs_newline = bytes.last().is_some_and(|byte| *byte != b'\n');
             }
-            ExecutionEvent::Heartbeat { label, elapsed } => self.line(format!(
-                "[..] {label} still running ({})",
-                format_duration(elapsed)
-            )),
+            ExecutionEvent::Heartbeat { label, elapsed } => {
+                self.line(format!("[..] {label} reached {}", format_duration(elapsed)))
+            }
             ExecutionEvent::PhaseFinished {
                 label,
                 success,
@@ -295,6 +308,7 @@ impl ExecutionCancellation for CliExecutionObserver {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
     use std::time::Duration;
 
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
@@ -356,6 +370,33 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&rendered)
         );
+    }
+
+    #[test]
+    fn progress_flush_reports_both_operation_and_flush_errors() {
+        struct FailingWriter;
+
+        impl Write for FailingWriter {
+            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("fixture sink failed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut observer = CliExecutionObserver::for_human_output(false);
+        observer.queue(b"pending progress");
+        let operation: anyhow::Result<()> = Err(anyhow::anyhow!("fixture operation failed"));
+        let error = observer
+            .finish_to_with(operation, &mut FailingWriter)
+            .unwrap_err();
+
+        let rendered = format!("{error:#}");
+        assert!(rendered.starts_with("Execution progress also failed to flush"));
+        assert!(rendered.contains("fixture operation failed"));
+        assert!(rendered.contains("fixture sink failed"));
     }
 
     #[test]

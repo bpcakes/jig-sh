@@ -245,6 +245,8 @@ fn run_command(cli: Cli) -> Result<()> {
                 &mut observer,
             );
             #[cfg(all(unix, not(test)))]
+            let outcome = observer.finish_with(outcome);
+            #[cfg(all(unix, not(test)))]
             let outcome = crate::codex::finish_signal_supervised(
                 outcome,
                 signal_session.finish(),
@@ -252,8 +254,6 @@ fn run_command(cli: Cli) -> Result<()> {
             );
             #[cfg(any(not(unix), test))]
             let outcome = status::snapshot(&ctx);
-            #[cfg(all(unix, not(test)))]
-            observer.finish()?;
             let output = outcome?;
             emit(json_output, HumanOutput::Status, &output)
         }
@@ -694,13 +694,13 @@ fn dispatch_runtime_command(
     #[cfg(any(not(unix), test))]
     let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
     let outcome = runtime::dispatch_with_observer(&ctx, command, &mut observer);
+    let outcome = observer.finish_with(outcome);
     #[cfg(all(unix, not(test)))]
     let outcome = crate::codex::finish_signal_supervised(
         outcome,
         signal_session.finish(),
         "Command signal supervision could not retire safely",
     );
-    observer.finish()?;
     let output = outcome?;
     emit(json_output, human_output, &output)?;
     finish_after_json_output(require_json_ok(require_ok, &output), json_output)

@@ -250,7 +250,7 @@ impl ExecutionObserver for McpProgressObserver<'_> {
                 return;
             }
             ExecutionEvent::Heartbeat { label, elapsed } => {
-                format!("{label} still running ({}s)", elapsed.as_secs())
+                format!("{label} reached {}s", elapsed.as_secs())
             }
             ExecutionEvent::PhaseFinished {
                 label,
@@ -498,7 +498,7 @@ mod tests {
             notification["params"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("still running")
+                .contains("reached 25s")
         );
     }
 
