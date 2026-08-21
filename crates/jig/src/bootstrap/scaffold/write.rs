@@ -111,14 +111,14 @@ impl ScaffoldReport {
 
     pub(super) fn into_json(self, plan: &InitScaffoldPlan) -> Value {
         json!({
-            "preset": match plan.preset {
+            "preset": match plan.backend.preset() {
                 ScaffoldPreset::RustReact => "rust-react",
                 ScaffoldPreset::GoReact => "go-react",
                 ScaffoldPreset::HarnessOnly => unreachable!("harness-only has no scaffold report"),
             },
             "repo_name": &plan.repo_name,
             "repo_name_sanitized_from": (plan.requested_repo_name != plan.repo_name).then_some(&plan.requested_repo_name),
-            "db": match plan.db {
+            "db": match plan.backend.database() {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
                 ScaffoldDb::Sqlite => "sqlite",

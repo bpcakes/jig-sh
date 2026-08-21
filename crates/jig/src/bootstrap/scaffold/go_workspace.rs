@@ -9,7 +9,7 @@ use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
 use super::write::{ScaffoldFile, scaffold_file};
-use super::{InitScaffoldPlan, ScaffoldDb};
+use super::{GoScaffoldPlan, InitScaffoldPlan};
 
 const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
@@ -98,13 +98,16 @@ const GO_POSTGRES_TEMPLATES: &[ScaffoldTemplateFile] = &[
 ];
 
 impl InitScaffoldPlan {
-    pub(super) fn render_go_workspace_files(&self) -> Result<Vec<ScaffoldFile>> {
+    pub(super) fn render_go_workspace_files(
+        &self,
+        backend: &GoScaffoldPlan,
+    ) -> Result<Vec<ScaffoldFile>> {
         ensure_scaffold_template_paths(GO_WORKSPACE_TEMPLATES)?;
-        if self.db == ScaffoldDb::Postgres {
+        if backend.database.is_postgres() {
             ensure_scaffold_template_paths(GO_POSTGRES_TEMPLATES)?;
         }
-        let context = self.go_workspace_template_context();
-        self.go_workspace_template_files()
+        let context = self.go_workspace_template_context(backend);
+        self.go_workspace_template_files(backend)
             .map(|file| {
                 Ok(scaffold_file(
                     file.output,
@@ -114,18 +117,18 @@ impl InitScaffoldPlan {
             .collect()
     }
 
-    pub(super) fn go_workspace_relative_paths(&self) -> Vec<PathBuf> {
-        self.go_workspace_template_files()
+    pub(super) fn go_workspace_relative_paths(&self, backend: &GoScaffoldPlan) -> Vec<PathBuf> {
+        self.go_workspace_template_files(backend)
             .map(|file| PathBuf::from(file.output))
             .collect()
     }
 
-    pub(super) fn go_scaffold_bootstrap_command(&self) -> String {
+    pub(super) fn go_scaffold_bootstrap_command(&self, backend: &GoScaffoldPlan) -> String {
         let mut commands = vec!["go mod tidy".to_string()];
         if !self.frontends.is_empty() {
             commands.push("scripts/check-webapps.sh bootstrap".into());
         }
-        if self.db == ScaffoldDb::Postgres {
+        if backend.database.is_postgres() {
             commands.push(DATABASE_CONFIG_GUARD.into());
             commands.push("go tool sqlc generate".into());
             commands.push("go run ./cmd/api --bootstrap-database".into());
@@ -136,8 +139,11 @@ impl InitScaffoldPlan {
         commands.join(" && ")
     }
 
-    fn go_workspace_template_files(&self) -> impl Iterator<Item = &'static ScaffoldTemplateFile> {
-        let postgres_templates = if self.db == ScaffoldDb::Postgres {
+    fn go_workspace_template_files(
+        &self,
+        backend: &GoScaffoldPlan,
+    ) -> impl Iterator<Item = &'static ScaffoldTemplateFile> {
+        let postgres_templates = if backend.database.is_postgres() {
             GO_POSTGRES_TEMPLATES
         } else {
             &[]
@@ -145,15 +151,15 @@ impl InitScaffoldPlan {
         GO_WORKSPACE_TEMPLATES.iter().chain(postgres_templates)
     }
 
-    fn go_workspace_template_context(&self) -> serde_json::Value {
+    fn go_workspace_template_context(&self, backend: &GoScaffoldPlan) -> serde_json::Value {
         let database_name = bounded_postgres_identifier(&format!("{}_dev", self.module_name));
         let postgres_test_database_name =
             bounded_postgres_identifier(&format!("test_{}", self.module_name));
         json!({
             "repo_name": self.repo_name,
             "package_name": self.package_name,
-            "go_module": self.go_module,
-            "db_enabled": self.db == ScaffoldDb::Postgres,
+            "go_module": backend.module,
+            "db_enabled": backend.database.is_postgres(),
             "database_url_example": format!(
                 "postgres://postgres:postgres@localhost:5432/{database_name}?sslmode=disable"
             ),

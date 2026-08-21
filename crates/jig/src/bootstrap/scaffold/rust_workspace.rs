@@ -8,7 +8,7 @@ use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
 use super::write::{ScaffoldFile, scaffold_file};
-use super::{InitScaffoldPlan, ScaffoldDb};
+use super::{InitScaffoldPlan, RustScaffoldPlan, ScaffoldDb};
 
 const RUST_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
@@ -178,20 +178,23 @@ const RUST_POSTGRES_TEMPLATES: &[ScaffoldTemplateFile] = &[
 const DB_CRATE_TO_REPO_ROOT: &str = "../..";
 
 impl InitScaffoldPlan {
-    pub(super) fn render_rust_workspace_files(&self) -> Result<Vec<ScaffoldFile>> {
+    pub(super) fn render_rust_workspace_files(
+        &self,
+        backend: &RustScaffoldPlan,
+    ) -> Result<Vec<ScaffoldFile>> {
         ensure_scaffold_template_paths(RUST_WORKSPACE_TEMPLATES)?;
-        if self.db != ScaffoldDb::None {
+        if backend.database != ScaffoldDb::None {
             ensure_scaffold_template_paths(RUST_DB_TEMPLATES)?;
         }
-        if self.db == ScaffoldDb::Postgres {
+        if backend.database == ScaffoldDb::Postgres {
             ensure_scaffold_template_paths(RUST_POSTGRES_TEMPLATES)?;
         }
         if self.has_admin_frontend() {
             ensure_scaffold_template_paths(RUST_ADMIN_API_TEMPLATES)?;
         }
-        let context = self.rust_workspace_template_context();
+        let context = self.rust_workspace_template_context(backend);
         let mut files = self
-            .rust_workspace_template_files()
+            .rust_workspace_template_files(backend)
             .map(|file| {
                 Ok(scaffold_file(
                     self.template_output_path(file),
@@ -199,28 +202,31 @@ impl InitScaffoldPlan {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        if self.db != ScaffoldDb::None {
+        if backend.database != ScaffoldDb::None {
             files.push(scaffold_file(
-                format!("{}/.gitkeep", self.migration_dir),
+                format!("{}/.gitkeep", backend.migration_dir),
                 String::new(),
             ));
         }
         Ok(files)
     }
 
-    pub(super) fn rust_workspace_relative_paths(&self) -> Vec<PathBuf> {
+    pub(super) fn rust_workspace_relative_paths(&self, backend: &RustScaffoldPlan) -> Vec<PathBuf> {
         let mut paths = self
-            .rust_workspace_template_files()
+            .rust_workspace_template_files(backend)
             .map(|file| PathBuf::from(self.template_output_path(file)))
             .collect::<Vec<_>>();
-        if self.db != ScaffoldDb::None {
-            paths.push(PathBuf::from(format!("{}/.gitkeep", self.migration_dir)));
+        if backend.database != ScaffoldDb::None {
+            paths.push(PathBuf::from(format!("{}/.gitkeep", backend.migration_dir)));
         }
         paths
     }
 
-    fn rust_workspace_template_files(&self) -> impl Iterator<Item = &'static ScaffoldTemplateFile> {
-        let db_templates = if self.db != ScaffoldDb::None {
+    fn rust_workspace_template_files(
+        &self,
+        backend: &RustScaffoldPlan,
+    ) -> impl Iterator<Item = &'static ScaffoldTemplateFile> {
+        let db_templates = if backend.database != ScaffoldDb::None {
             RUST_DB_TEMPLATES
         } else {
             &[]
@@ -230,7 +236,7 @@ impl InitScaffoldPlan {
         } else {
             &[]
         };
-        let postgres_templates = if self.db == ScaffoldDb::Postgres {
+        let postgres_templates = if backend.database == ScaffoldDb::Postgres {
             RUST_POSTGRES_TEMPLATES
         } else {
             &[]
@@ -246,8 +252,8 @@ impl InitScaffoldPlan {
         file.output.replace("{package}", &self.package_name)
     }
 
-    fn rust_workspace_template_context(&self) -> Value {
-        let database_url_example = match self.db {
+    fn rust_workspace_template_context(&self, backend: &RustScaffoldPlan) -> Value {
+        let database_url_example = match backend.database {
             ScaffoldDb::None => String::new(),
             ScaffoldDb::Postgres => {
                 let database_name =
@@ -263,23 +269,23 @@ impl InitScaffoldPlan {
             "package_name": self.package_name,
             "module_name": self.module_name,
             "repo_name": self.repo_name,
-            "db_enabled": self.db != ScaffoldDb::None,
-            "sqlx_driver": match self.db {
+            "db_enabled": backend.database != ScaffoldDb::None,
+            "sqlx_driver": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "postgres",
                 ScaffoldDb::Sqlite => "sqlite",
             },
-            "db_pool": match self.db {
+            "db_pool": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "PgPool",
                 ScaffoldDb::Sqlite => "SqlitePool",
             },
-            "db_database": match self.db {
+            "db_database": match backend.database {
                 ScaffoldDb::None => "",
                 ScaffoldDb::Postgres => "Postgres",
                 ScaffoldDb::Sqlite => "Sqlite",
             },
-            "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", self.migration_dir),
+            "migration_path": format!("{DB_CRATE_TO_REPO_ROOT}/{}", backend.migration_dir),
             "database_url_example": database_url_example,
             "postgres_test_database_name": postgres_test_database_name,
             "admin_api_enabled": self.has_admin_frontend(),
