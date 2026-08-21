@@ -100,9 +100,10 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         activity_offset,
-        "field_batch_apply",
+        "Enter/Esc close",
         PTY_EVENT_TIMEOUT,
     );
+    assert!(String::from_utf8_lossy(&output[activity_offset..]).contains("field_batch_apply"));
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
     let browse_offset = output.len();
