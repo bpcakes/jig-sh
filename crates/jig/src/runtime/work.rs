@@ -13,7 +13,7 @@ use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
     SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
     plans_open_prepared, prepare_plan_open, receipts_list, session_end, session_start,
-    state_summary,
+    state_summary_with_cancellation,
 };
 
 mod checks;
@@ -85,17 +85,23 @@ pub(super) fn dispatch_with_observer(
         WorkCommand::Start(opts) => start(ctx, opts.into()),
         WorkCommand::Append(opts) => plans_append(ctx, opts.into()),
         WorkCommand::Check(opts) => checks::check_with_observer(ctx, opts, observer),
-        WorkCommand::Gates(opts) => gates::gates(ctx, opts),
-        WorkCommand::Evidence(opts) => gates::evidence(ctx, opts),
+        WorkCommand::Gates(opts) => {
+            gates::snapshot_with_cancellation(ctx, opts.plan_id, &|| observer.cancelled())
+        }
+        WorkCommand::Evidence(opts) => {
+            gates::evidence_with_cancellation(ctx, opts, &|| observer.cancelled())
+        }
         WorkCommand::Review(opts) => review::review_with_observer(ctx, opts, observer),
         WorkCommand::Refine(opts) => review::refine_with_observer(ctx, opts, observer),
         WorkCommand::Decide(opts) => decisions_add(ctx, opts.into()),
         WorkCommand::Receipts(opts) => receipts_list(ctx, opts.into()),
-        WorkCommand::Status => state_summary(ctx).map(|mut value| {
-            value["command"] = json!("work status");
-            value
-        }),
-        WorkCommand::Finish(opts) => finish(ctx, opts),
+        WorkCommand::Status => {
+            state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(|mut value| {
+                value["command"] = json!("work status");
+                value
+            })
+        }
+        WorkCommand::Finish(opts) => finish_with_cancellation(ctx, opts, &|| observer.cancelled()),
     }
 }
 
@@ -137,11 +143,19 @@ pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
 }
 
 pub(super) fn finish(ctx: &RepoContext, opts: WorkFinishRequest) -> Result<Value> {
+    finish_with_cancellation(ctx, opts, &|| false)
+}
+
+fn finish_with_cancellation(
+    ctx: &RepoContext,
+    opts: WorkFinishRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
     // Check before gate evaluation so unknown or already-closed plans report
     // plan-state errors instead of misleading gate failures. plans_close
     // rechecks after gates to preserve the state-layer invariant.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    gates::ensure_required_gates_passed(ctx, &opts.plan_id)?;
+    gates::ensure_required_gates_passed_with_cancellation(ctx, &opts.plan_id, cancelled)?;
 
     let plan = plans_close(ctx, (&opts).into())?;
     let session = match current_session(ctx)? {

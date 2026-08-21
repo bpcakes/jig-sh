@@ -61,7 +61,10 @@ pub(crate) fn dispatch_with_observer(
     command: RuntimeCommand,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    match command {
+    if observer.cancelled() {
+        bail!("Execution was cancelled");
+    }
+    let result = match command {
         RuntimeCommand::Bootstrap(opts) => {
             tool_execution::execute_manifest_tool_request_with_observer(
                 ctx,
@@ -90,16 +93,28 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::Work(command) => work::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
-        RuntimeCommand::State(command) => dispatch_state(ctx, command),
+        RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
+    };
+    if result.is_ok() && observer.cancelled() {
+        bail!("Execution was cancelled");
     }
+    result
 }
 
-fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
+fn dispatch_state(
+    ctx: &RepoContext,
+    command: StateCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
-        StateCommand::Summary => crate::state::state_summary(ctx).map(|mut value| {
-            value["command"] = json!("state summary");
-            value
-        }),
+        StateCommand::Summary => {
+            crate::state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
+                |mut value| {
+                    value["command"] = json!("state summary");
+                    value
+                },
+            )
+        }
         StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
         StateCommand::CompactSessions(request) => crate::state::compact_sessions(ctx, request),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),

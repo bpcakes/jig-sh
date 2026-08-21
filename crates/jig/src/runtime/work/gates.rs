@@ -450,7 +450,6 @@ pub(super) fn gates(ctx: &RepoContext, opts: WorkGatesRequest) -> Result<Value> 
     Ok(gate_report(ctx, &plan_id)?.to_value())
 }
 
-#[allow(dead_code)]
 pub(super) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     plan_id: Option<String>,
@@ -465,6 +464,22 @@ pub(super) fn snapshot_with_cancellation(
 pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
     let report = gate_report(ctx, &plan_id)?;
+    evidence_from_report(report)
+}
+
+pub(super) fn evidence_with_cancellation(
+    ctx: &RepoContext,
+    opts: WorkEvidenceRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_gate_collection_active(cancelled)?;
+    let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    let report = gate_report_with_cancellation(ctx, &plan_id, cancelled)?;
+    evidence_from_report(report)
+}
+
+fn evidence_from_report(report: GateReport) -> Result<Value> {
     let latest = latest_passing_gates(&report);
     let mut status = report.to_value();
     let object = status
@@ -475,8 +490,12 @@ pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<V
     Ok(status)
 }
 
-pub(super) fn ensure_required_gates_passed(ctx: &RepoContext, plan_id: &str) -> Result<()> {
-    let report = gate_report(ctx, plan_id)?;
+pub(super) fn ensure_required_gates_passed_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let report = gate_report_with_cancellation(ctx, plan_id, cancelled)?;
     if report.gates_ok() {
         return Ok(());
     }
@@ -511,7 +530,6 @@ fn gate_report(ctx: &RepoContext, plan_id: &str) -> Result<GateReport> {
     )
 }
 
-#[allow(dead_code)]
 fn gate_report_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,

@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use support::tempdir;
@@ -43,6 +43,7 @@ jig_version = "{}"
 
 [commands]
 custom_check_command = "printf 'fixture check\\n'"
+bootstrap_command = "scripts/setup-child.sh"
 
 [[work.gates]]
 id = "custom"
@@ -63,13 +64,21 @@ source = "example/test-skills"
                 "contract_version": 3,
                 "tool_namespace": "jig",
                 "jig_version": env!("CARGO_PKG_VERSION"),
-                "required_commands": ["custom_check_command"],
-                "tools": [{
-                    "name": "jig.custom_check",
-                    "kind": "command",
-                    "description": "Fixture check.",
-                    "command": "custom_check_command",
-                }],
+                "required_commands": ["custom_check_command", "bootstrap_command"],
+                "tools": [
+                    {
+                        "name": "jig.custom_check",
+                        "kind": "command",
+                        "description": "Fixture check.",
+                        "command": "custom_check_command",
+                    },
+                    {
+                        "name": "jig.bootstrap",
+                        "kind": "command",
+                        "description": "Fixture bootstrap.",
+                        "command": "bootstrap_command",
+                    },
+                ],
             }))
             .unwrap(),
         )
@@ -96,6 +105,10 @@ printf x >> "$JIG_CODEX_PROBE_COUNT"
         )
         .unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir_all(repo.path().join("scripts")).unwrap();
+        let bootstrap = repo.path().join("scripts/setup-child.sh");
+        fs::write(&bootstrap, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&bootstrap, fs::Permissions::from_mode(0o755)).unwrap();
 
         Self {
             repo,
@@ -127,6 +140,23 @@ printf x >> "$JIG_CODEX_PROBE_COUNT"
             !self.startup_marker.exists(),
             "Codex probe inherited and executed BASH_ENV"
         );
+    }
+
+    fn install_blocking_bootstrap(&self) -> (PathBuf, PathBuf) {
+        let started = self.repo.path().join("setup-child-started");
+        let delayed = self.repo.path().join("setup-child-delayed");
+        let bootstrap = self.repo.path().join("scripts/setup-child.sh");
+        fs::write(
+            &bootstrap,
+            r#"#!/bin/sh
+printf started > "$JIG_SETUP_CHILD_STARTED"
+(sleep 1; printf leaked > "$JIG_SETUP_DELAYED_MARKER") &
+wait
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&bootstrap, fs::Permissions::from_mode(0o755)).unwrap();
+        (started, delayed)
     }
 }
 
@@ -182,6 +212,65 @@ fn cli_agent_doctor_reuses_outer_signal_session() {
     assert_eq!(doctor["codex"]["available"], true, "{doctor:#}");
     assert!(doctor["codex"]["probe_error"].is_null(), "{doctor:#}");
     fixture.assert_probe_count("x");
+}
+
+#[test]
+fn interrupted_setup_reaps_its_owned_bootstrap_tree() {
+    let fixture = AgentDoctorFixture::new();
+    let (started, delayed) = fixture.install_blocking_bootstrap();
+    let mut command = fixture.command();
+    command.env_remove("BASH_ENV");
+    let mut child = command
+        .args(["--json", "setup"])
+        .env("JIG_SETUP_CHILD_STARTED", &started)
+        .env("JIG_SETUP_DELAYED_MARKER", &delayed)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn production Jig setup binary");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !started.exists() {
+        if let Some(status) = child.try_wait().unwrap() {
+            let mut stdout = Vec::new();
+            child
+                .stdout
+                .take()
+                .unwrap()
+                .read_to_end(&mut stdout)
+                .unwrap();
+            let mut stderr = Vec::new();
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_end(&mut stderr)
+                .unwrap();
+            panic!(
+                "setup exited with {status} before its bootstrap child started\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        assert!(Instant::now() < deadline, "setup bootstrap did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // SAFETY: `child.id()` names the still-live process checked above, and
+    // SIGINT is the public interruption contract exercised by this test.
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+
+    let output = wait_for_output(child, Duration::from_secs(5));
+    assert!(
+        !output.status.success(),
+        "interrupted setup unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::thread::sleep(Duration::from_millis(1_250));
+    assert!(
+        !delayed.exists(),
+        "setup interruption left a bootstrap descendant running"
+    );
 }
 
 #[test]

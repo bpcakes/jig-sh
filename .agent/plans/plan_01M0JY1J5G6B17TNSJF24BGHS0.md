@@ -13,7 +13,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [x] (2026-08-21 19:51Z) Reproduced the Unix `agent doctor` nested signal-session deadlock with a freshly built binary.
 - [x] (2026-08-21 19:51Z) Opened structured work as `plan_01M0JY1J5G6B17TNSJF24BGHS0` and recorded this execution plan.
 - [x] (2026-08-21 20:25Z) Slice 1a: centralized signal ownership for runtime agent doctor and setup, passed caller cancellation into nested doctor probes, and added a production-binary regression for the former nested-lock deadlock.
-- [ ] Slice 1b: propagate cancellation through long non-process operations and add setup interruption and non-process cancellation regressions.
+- [x] (2026-08-21 22:17Z) Slice 1b: propagated operation cancellation through state summaries, work gate/evidence/finish scans, and loop status; added production setup interruption and in-process collection regressions; removed superseded blocking-only lifecycle helpers.
 - [x] (2026-08-21 20:49Z) Slice 2: separated supervision from transport writes with a bounded 64 KiB CLI event buffer and coalesced 4 KiB-per-stream MCP previews; transport flushes now occur only after supervised work returns.
 - [x] (2026-08-21 21:07Z) Slice 3: replaced unbounded configured-command, marketplace, worker-stream, and structured worker-file capture with a shared 4 MiB-per-output limit and explicit incomplete/truncated-output errors.
 - [x] (2026-08-21 21:34Z) Slice 4: made phase label/position explicit inputs to tool and worker execution, removed orphan aggregate starts, suppressed nested worker phases inside loop ticks, and added exact sequence tests for checks, review gates, and loop ticks.
@@ -39,6 +39,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: `WorkerPhase` carries label and position together as an optional typed scope; loop-owned workers pass `None`, while review/refine workers receive the caller's exact phase identity.
 - Observation: Work-check already had a collect-result mode, so supervision failures did not need a parallel receipt subsystem.
   Evidence: Modeling timeout/cancellation/await/cleanup/capture errors as a synthetic failed tool result lets the existing child receipt, `receipt_ids`, batch verdict, and gate indexing paths remain authoritative.
+- Observation: Most long read-only scans already had cancellation-aware implementations for status aggregation, but runtime command dispatch selected their blocking wrappers.
+  Evidence: Runtime dispatch now passes `ExecutionControl::cancelled` into state summary, work gate/evidence/finish, and loop status paths; a test that cancels after the dispatch boundary fails inside state collection, not only before or after it.
 
 ## Decision Log
 
@@ -158,3 +160,5 @@ Plan revision note (2026-08-21 21:07Z): Recorded the shared 4 MiB capture policy
 Plan revision note (2026-08-21 21:34Z): Recorded explicit phase-scope ownership. Exact observer tests now reject duplicate `1/1` starts, missing finishes, and lost aggregate positions.
 
 Plan revision note (2026-08-21 21:51Z): Recorded supervised failures as ordinary evidence-producing failed outcomes. A timeout regression now asserts both child and batch receipts contain the reason and that the batch references the child ID.
+
+Plan revision note (2026-08-21 22:17Z): Completed the remaining cancellation slice. A production binary setup test now interrupts a live bootstrap and proves its delayed descendant marker is never written.

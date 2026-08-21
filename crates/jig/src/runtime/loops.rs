@@ -36,7 +36,9 @@ pub(super) fn dispatch_with_observer(
 ) -> Result<Value> {
     match command {
         LoopCommand::Tick(request) => tick_with_observer(ctx, request, observer),
-        LoopCommand::Status(request) => status(ctx, request),
+        LoopCommand::Status(request) => {
+            status_with_cancellation(ctx, request, &|| observer.cancelled())
+        }
         LoopCommand::Run(request) => run_until_with_observer(ctx, request, observer),
         LoopCommand::ClearAttempt(request) => clear_attempt(ctx, request),
     }
@@ -201,10 +203,6 @@ fn tick_with_observer(
         "needs_attention": evidence["needs_attention"],
         "release_warning": release_warning,
     }))
-}
-
-fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
-    status_with_cancellation(ctx, request, &|| false)
 }
 
 pub(super) fn status_with_cancellation(

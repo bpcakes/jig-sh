@@ -240,6 +240,36 @@ fn dispatch_distinguishes_work_status_from_state_summary() {
     assert_eq!(output["command"], "work status");
 }
 
+#[test]
+fn runtime_state_summary_polls_operation_cancellation_during_collection() {
+    struct CancelAfterBoundary(std::cell::Cell<usize>);
+
+    impl crate::execution::ExecutionObserver for CancelAfterBoundary {}
+
+    impl crate::execution::ExecutionCancellation for CancelAfterBoundary {
+        fn cancelled(&self) -> bool {
+            let polls = self.0.get() + 1;
+            self.0.set(polls);
+            polls > 1
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterBoundary(std::cell::Cell::new(0));
+
+    let error = dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::State(crate::command::StateCommand::Summary),
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(error, "status collection was cancelled");
+}
+
 #[cfg(feature = "dev-proxy")]
 #[test]
 fn dispatch_routes_proxy_list_through_dev_proxy_feature() {
