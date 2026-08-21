@@ -46,7 +46,7 @@ pub(crate) use work_config::{
     parse_review_scope_arg,
 };
 
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 5;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 6;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
@@ -141,6 +141,8 @@ struct RepoConfig {
     #[serde(default)]
     frontend_apps: Vec<FrontendAppConfig>,
     #[serde(default)]
+    repository: Option<AuthoredRepositoryConfig>,
+    #[serde(default)]
     vault: VaultConfig,
     #[serde(default)]
     dev: DevConfig,
@@ -152,6 +154,15 @@ struct RepoConfig {
     status: StatusConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredRepositoryConfig {
+    default_check_profile: ProfileId,
+    components: Vec<ComponentSpec>,
+    actions: Vec<ActionSpec>,
+    profiles: Vec<ProfileSpec>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -350,10 +361,11 @@ impl RepoContext {
         if manifest.tool_namespace != "jig" {
             bail!("Unsupported tool namespace: {}", manifest.tool_namespace);
         }
-        // Supported contract epochs share the command-backed manifest schema.
-        // A contract bump can also cover runtime-owned behavior that is not
-        // represented as an individual manifest field.
-        if manifest.required_commands.is_empty() {
+        validate_repository_source(&config, &manifest)?;
+        // Legacy contracts are command-backed. A native-only v6 repository is
+        // valid because action runners, rather than a global command list,
+        // define its executable surface.
+        if manifest.contract_version <= 5 && manifest.required_commands.is_empty() {
             bail!("jig contract manifest does not declare required commands");
         }
         if manifest.contract_version <= LAST_VERSION_LOCKED_CONTRACT_VERSION {
@@ -454,8 +466,12 @@ impl RepoContext {
         &self.config.default_branch
     }
 
-    pub(crate) const fn is_go_backend(&self) -> bool {
-        self.config.backend_language.is_go()
+    pub(crate) fn is_go_backend(&self) -> bool {
+        if self.contract_version() >= 6 {
+            self.has_component_adapter("go")
+        } else {
+            self.config.backend_language.is_go()
+        }
     }
 
     pub(crate) fn legacy_jig_version(&self) -> Option<&str> {
@@ -466,8 +482,12 @@ impl RepoContext {
         self.config.harness_footprint == HarnessFootprintConfig::Minimal
     }
 
-    pub(crate) const fn sqlx_enabled(&self) -> bool {
-        self.config.sqlx_enabled
+    pub(crate) fn sqlx_enabled(&self) -> bool {
+        if self.contract_version() >= 6 {
+            self.has_component_adapter("sqlx")
+        } else {
+            self.config.sqlx_enabled
+        }
     }
 
     pub(crate) const fn schema_dump_enabled(&self) -> bool {
@@ -495,7 +515,11 @@ impl RepoContext {
     }
 
     pub(crate) fn migration_policy_enabled(&self) -> bool {
-        self.sqlx_enabled() || (self.is_go_backend() && self.config.go_database.is_postgres())
+        if self.contract_version() >= 6 {
+            self.has_component_adapter("sqlx") || self.has_component_adapter("go-postgres")
+        } else {
+            self.sqlx_enabled() || (self.is_go_backend() && self.config.go_database.is_postgres())
+        }
     }
 
     pub(crate) fn schema_dump_command(&self) -> &str {
@@ -508,6 +532,15 @@ impl RepoContext {
 
     pub(crate) fn source_path(&self) -> &str {
         &self.config.src_path
+    }
+
+    fn has_component_adapter(&self, adapter: &str) -> bool {
+        self.manifest.components.iter().any(|component| {
+            component
+                .adapters
+                .iter()
+                .any(|candidate| candidate == adapter)
+        })
     }
 
     pub(crate) fn template_mode(&self) -> &str {
@@ -675,8 +708,39 @@ impl FeatureContext for RepoContext {
     }
 
     fn go_postgres_enabled(&self) -> bool {
-        self.is_go_backend() && self.config.go_database.is_postgres()
+        if self.contract_version() >= 6 {
+            self.has_component_adapter("go-postgres")
+        } else {
+            self.is_go_backend() && self.config.go_database.is_postgres()
+        }
     }
+}
+
+fn validate_repository_source(config: &RepoConfig, manifest: &ContractManifest) -> Result<()> {
+    if manifest.contract_version < 6 {
+        if config.repository.is_some() {
+            bail!("[repository] requires jig contract version 6 or later");
+        }
+        return Ok(());
+    }
+    let source = config.repository.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("jig contract version 6 requires [repository] in .jig.toml")
+    })?;
+    if source.components != manifest.components {
+        bail!("repository components differ between .jig.toml and .agent/jig-contract.json");
+    }
+    if source.actions != manifest.actions {
+        bail!("repository actions differ between .jig.toml and .agent/jig-contract.json");
+    }
+    if source.profiles != manifest.profiles {
+        bail!("repository profiles differ between .jig.toml and .agent/jig-contract.json");
+    }
+    if Some(&source.default_check_profile) != manifest.default_check_profile.as_ref() {
+        bail!(
+            "repository default_check_profile differs between .jig.toml and .agent/jig-contract.json"
+        );
+    }
+    Ok(())
 }
 
 fn non_empty_command<'a>(key: &str, command: &'a str) -> Result<&'a str> {

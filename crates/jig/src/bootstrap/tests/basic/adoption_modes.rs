@@ -361,7 +361,7 @@ rust_test_command = "cargo nextest run"
     assert_eq!(config["default_branch"].as_str(), Some("file-branch"));
     assert_eq!(config["ci_github_runner"].as_str(), Some("ubuntu-24.04"));
     assert_eq!(
-        config["rust_test_command"].as_str(),
+        config["commands"]["api_test_command"].as_str(),
         Some("cargo nextest run")
     );
     assert_eq!(config["harness_footprint"].as_str(), Some("full"));
@@ -401,6 +401,13 @@ fn full_to_minimal_seeds_existing_answers_before_cli_overrides() {
         proxy: true,
     }];
     run_adopt(full).unwrap();
+    let initial_config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
+            .unwrap();
+    assert_eq!(
+        initial_config["commands"]["api_test_command"].as_str(),
+        Some("cargo nextest run")
+    );
     add_project_runtime_tables(&repo);
     let config_path = repo.join(".jig.toml");
     let mut config =
@@ -418,7 +425,7 @@ fn full_to_minimal_seeds_existing_answers_before_cli_overrides() {
     assert_eq!(config["default_branch"].as_str(), Some("release"));
     assert_eq!(config["ci_github_runner"].as_str(), Some("ubuntu-24.04"));
     assert_eq!(
-        config["rust_test_command"].as_str(),
+        config["commands"]["api_test_command"].as_str(),
         Some("cargo nextest run")
     );
     assert_eq!(config["dev"]["apps"][0]["name"].as_str(), Some("api"));

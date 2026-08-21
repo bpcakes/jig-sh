@@ -70,6 +70,11 @@ pub(super) fn render_and_copy_bootstrap_template(
     mut request: BootstrapCopyRequest<'_>,
 ) -> Result<BootstrapCopyResult> {
     request.progress.step("resolve answers", ANSWERS_DETAIL);
+    let preferred_rendered_commands = request
+        .answer_input
+        .as_ref()
+        .map(|input| input.preferred_rendered_command_keys(request.answers))
+        .unwrap_or_default();
     let answer_resolution = request
         .progress
         .log_blocked_on_err(match request.answer_input {
@@ -103,6 +108,7 @@ pub(super) fn render_and_copy_bootstrap_template(
         seed_repo_path: request.seed_repo_path,
         prior_managed_paths: request.prior_managed_paths,
         reconcile_runtime_config: request.reconcile_runtime_config,
+        preferred_rendered_commands,
         contract_version: None,
         progress: request.progress,
     })?;

@@ -1,11 +1,12 @@
 // agentic-loc-exception: legacy answer normalization remains centralized during contract-v5 rollout.
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use super::repository_model::AuthoredRepositoryModel;
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
@@ -43,6 +44,10 @@ impl HarnessFootprint {
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RenderAnswers {
+    #[serde(skip)]
+    authored_repository: Option<AuthoredRepositoryModel>,
+    #[serde(skip)]
+    authored_repository_commands: BTreeMap<String, String>,
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
@@ -77,6 +82,7 @@ pub(super) struct RenderAnswers {
     go_lint_command: String,
     go_test_command: String,
     go_test_locked_command: String,
+    sqlc_check_command: String,
     web_package_manager: String,
     web_package_manager_spec: String,
     web_package_manager_version: String,
@@ -160,6 +166,7 @@ impl AnswerInput {
         let mut raw = value
             .try_into::<RawAnswers>()
             .with_context(|| format!("Failed to parse {}", path.display()))?;
+        raw.normalize_repository_model(&table);
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
         Ok(Self {
@@ -170,6 +177,77 @@ impl AnswerInput {
 
     pub(super) const fn shape(&self) -> &AnswerInputShape {
         &self.shape
+    }
+
+    pub(super) fn preferred_rendered_command_keys(&self, cli: &AnswerOpts) -> BTreeSet<String> {
+        let mut keys = BTreeSet::new();
+        for (answer_key, command_key, cli_supplied) in [
+            (
+                "bootstrap_command",
+                "repo_bootstrap_command",
+                cli.bootstrap_command.is_some(),
+            ),
+            (
+                "rust_fmt_check_command",
+                "api_fmt_command",
+                cli.rust_fmt_check_command.is_some(),
+            ),
+            (
+                "rust_clippy_command",
+                "api_clippy_command",
+                cli.rust_clippy_command.is_some(),
+            ),
+            (
+                "rust_test_command",
+                "api_test_command",
+                cli.rust_test_command.is_some(),
+            ),
+            (
+                "rust_test_locked_command",
+                "api_test_locked_command",
+                cli.rust_test_locked_command.is_some(),
+            ),
+            (
+                "sqlx_check_command",
+                "api_sqlx_command",
+                cli.sqlx_check_command.is_some(),
+            ),
+            (
+                "schema_dump_command",
+                "api_schema_dump_command",
+                cli.schema_dump_command.is_some(),
+            ),
+            ("go_fmt_check_command", "api_fmt_command", false),
+            ("go_lint_command", "api_lint_command", false),
+            ("go_test_command", "api_test_command", false),
+            ("go_test_locked_command", "api_test_locked_command", false),
+            ("sqlc_check_command", "api_sqlc_command", false),
+            (
+                "typescript_lint_command",
+                "repo_compat_typescript_lint_command",
+                false,
+            ),
+            (
+                "typescript_typecheck_command",
+                "repo_compat_typescript_typecheck_command",
+                false,
+            ),
+            (
+                "typescript_build_command",
+                "repo_compat_typescript_build_command",
+                false,
+            ),
+            (
+                "typescript_coverage_command",
+                "repo_compat_typescript_coverage_command",
+                false,
+            ),
+        ] {
+            if cli_supplied || self.shape.contains_key(answer_key) {
+                keys.insert(command_key.to_owned());
+            }
+        }
+        keys
     }
 
     pub(super) fn effective_opts(&self, cli: &AnswerOpts) -> Result<AnswerOpts> {
@@ -183,6 +261,73 @@ impl AnswerInput {
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
         let mut keys = table.keys().cloned().collect::<BTreeSet<_>>();
+        if let Some(repository) = table.get("repository").and_then(toml::Value::as_table) {
+            keys.insert("backend_language".into());
+            let has_adapter = |expected: &str| {
+                repository
+                    .get("components")
+                    .and_then(toml::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(toml::Value::as_table)
+                    .filter_map(|component| component.get("adapters"))
+                    .filter_map(toml::Value::as_array)
+                    .flatten()
+                    .filter_map(toml::Value::as_str)
+                    .any(|adapter| adapter == expected)
+            };
+            if has_adapter("go-postgres") {
+                keys.insert("go_database".into());
+            }
+            if let Some(commands) = table.get("commands").and_then(toml::Value::as_table) {
+                let represented: &[(&str, &str)] = if has_adapter("go") {
+                    &[
+                        ("api_fmt_command", "go_fmt_check_command"),
+                        ("api_lint_command", "go_lint_command"),
+                        ("api_test_command", "go_test_command"),
+                        ("api_test_locked_command", "go_test_locked_command"),
+                    ]
+                } else {
+                    &[
+                        ("api_fmt_command", "rust_fmt_check_command"),
+                        ("api_clippy_command", "rust_clippy_command"),
+                        ("api_test_command", "rust_test_command"),
+                        ("api_test_locked_command", "rust_test_locked_command"),
+                    ]
+                };
+                for (command_key, answer_key) in represented {
+                    if commands.contains_key(*command_key) {
+                        keys.insert((*answer_key).into());
+                    }
+                }
+                for (command_key, answer_key) in [
+                    ("repo_bootstrap_command", "bootstrap_command"),
+                    ("api_sqlx_command", "sqlx_check_command"),
+                    ("api_schema_dump_command", "schema_dump_command"),
+                    ("api_sqlc_command", "sqlc_check_command"),
+                    (
+                        "repo_compat_typescript_lint_command",
+                        "typescript_lint_command",
+                    ),
+                    (
+                        "repo_compat_typescript_typecheck_command",
+                        "typescript_typecheck_command",
+                    ),
+                    (
+                        "repo_compat_typescript_build_command",
+                        "typescript_build_command",
+                    ),
+                    (
+                        "repo_compat_typescript_coverage_command",
+                        "typescript_coverage_command",
+                    ),
+                ] {
+                    if commands.contains_key(command_key) {
+                        keys.insert(answer_key.into());
+                    }
+                }
+            }
+        }
         for migration_key in ["migration_dir", "rust_migration_dir"] {
             if table.get(migration_key).and_then(toml::Value::as_str) == Some("") {
                 keys.remove(migration_key);
@@ -270,10 +415,31 @@ impl AnswerResolution {
 
 impl RenderAnswers {
     pub(super) fn from_answers_file(path: &Path) -> Result<Self> {
+        let authored_repository_commands = authored_repository_commands(path)?;
         let mut raw = RawAnswers::from_file(path)?;
+        let authored_repository = raw.repository.take();
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
-        raw.resolve(None)
+        let mut answers = raw.resolve(None)?;
+        if let Some(authored_repository_commands) = authored_repository_commands
+            && authored_repository.as_ref().is_some_and(|repository| {
+                !repository.components.is_empty()
+                    && !repository.actions.is_empty()
+                    && !repository.profiles.is_empty()
+            })
+        {
+            answers.authored_repository = authored_repository;
+            answers.authored_repository_commands = authored_repository_commands;
+        }
+        Ok(answers)
+    }
+
+    pub(super) const fn authored_repository(&self) -> Option<&AuthoredRepositoryModel> {
+        self.authored_repository.as_ref()
+    }
+
+    pub(super) const fn authored_repository_commands(&self) -> &BTreeMap<String, String> {
+        &self.authored_repository_commands
     }
 
     pub(super) fn default_branch(&self) -> &str {
@@ -294,6 +460,10 @@ impl RenderAnswers {
 
     pub(super) const fn backend_language(&self) -> BackendLanguage {
         self.backend_language
+    }
+
+    pub(super) const fn go_database(&self) -> GoDatabase {
+        self.go_database
     }
 
     pub(super) fn is_minimal_footprint(&self) -> bool {
@@ -324,6 +494,28 @@ impl RenderAnswers {
         !self.bootstrap_command.trim().is_empty()
     }
 
+    pub(super) fn repository_command(&self, legacy_key: &str) -> Option<&str> {
+        match legacy_key {
+            "bootstrap_command" => Some(&self.bootstrap_command),
+            "rust_fmt_check_command" => Some(&self.rust_fmt_check_command),
+            "rust_clippy_command" => Some(&self.rust_clippy_command),
+            "rust_test_command" => Some(&self.rust_test_command),
+            "rust_test_locked_command" => Some(&self.rust_test_locked_command),
+            "go_fmt_check_command" => Some(&self.go_fmt_check_command),
+            "go_lint_command" => Some(&self.go_lint_command),
+            "go_test_command" => Some(&self.go_test_command),
+            "go_test_locked_command" => Some(&self.go_test_locked_command),
+            "sqlc_check_command" => Some(&self.sqlc_check_command),
+            "typescript_lint_command" => Some(&self.typescript_lint_command),
+            "typescript_typecheck_command" => Some(&self.typescript_typecheck_command),
+            "typescript_build_command" => Some(&self.typescript_build_command),
+            "typescript_coverage_command" => Some(&self.typescript_coverage_command),
+            "sqlx_check_command" => Some(&self.sqlx_check_command),
+            "schema_dump_command" => Some(&self.schema_dump_command),
+            _ => None,
+        }
+    }
+
     pub(super) const fn has_legacy_dev_command(&self) -> bool {
         self.legacy_dev_command.is_some()
     }
@@ -331,6 +523,7 @@ impl RenderAnswers {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct RawAnswers {
+    repository: Option<AuthoredRepositoryModel>,
     repo_name: Option<String>,
     go_module: Option<String>,
     default_branch: Option<String>,
@@ -358,6 +551,15 @@ struct RawAnswers {
     rust_clippy_command: Option<String>,
     rust_test_command: Option<String>,
     rust_test_locked_command: Option<String>,
+    go_fmt_check_command: Option<String>,
+    go_lint_command: Option<String>,
+    go_test_command: Option<String>,
+    go_test_locked_command: Option<String>,
+    sqlc_check_command: Option<String>,
+    typescript_lint_command: Option<String>,
+    typescript_typecheck_command: Option<String>,
+    typescript_build_command: Option<String>,
+    typescript_coverage_command: Option<String>,
     web_package_manager: Option<String>,
     frontend_apps: Option<Vec<FrontendApp>>,
     dev: Option<dev::RawDevAnswers>,
@@ -395,6 +597,100 @@ struct CodexMarketplaceAnswers {
 }
 
 impl RawAnswers {
+    fn normalize_repository_model(&mut self, table: &toml::Table) {
+        let Some(repository) = table.get("repository").and_then(toml::Value::as_table) else {
+            return;
+        };
+        let has_adapter = |expected: &str| {
+            repository
+                .get("components")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_table)
+                .filter_map(|component| component.get("adapters"))
+                .filter_map(toml::Value::as_array)
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|adapter| adapter == expected)
+        };
+        if self.backend_language.is_none() {
+            self.backend_language = Some(if has_adapter("go") {
+                BackendLanguage::Go
+            } else {
+                BackendLanguage::Rust
+            });
+        }
+        if self.go_database.is_none() && has_adapter("go-postgres") {
+            self.go_database = Some(GoDatabase::Postgres);
+        }
+        if self.sqlx_enabled.is_none() {
+            self.sqlx_enabled = Some(has_adapter("sqlx"));
+        }
+        let Some(commands) = table.get("commands").and_then(toml::Value::as_table) else {
+            return;
+        };
+        inherit_repository_command(
+            &mut self.bootstrap_command,
+            commands,
+            "repo_bootstrap_command",
+        );
+        if self.backend_language == Some(BackendLanguage::Rust) {
+            inherit_repository_command(
+                &mut self.rust_fmt_check_command,
+                commands,
+                "api_fmt_command",
+            );
+            inherit_repository_command(
+                &mut self.rust_clippy_command,
+                commands,
+                "api_clippy_command",
+            );
+            inherit_repository_command(&mut self.rust_test_command, commands, "api_test_command");
+            inherit_repository_command(
+                &mut self.rust_test_locked_command,
+                commands,
+                "api_test_locked_command",
+            );
+        } else {
+            inherit_repository_command(&mut self.go_fmt_check_command, commands, "api_fmt_command");
+            inherit_repository_command(&mut self.go_lint_command, commands, "api_lint_command");
+            inherit_repository_command(&mut self.go_test_command, commands, "api_test_command");
+            inherit_repository_command(
+                &mut self.go_test_locked_command,
+                commands,
+                "api_test_locked_command",
+            );
+        }
+        inherit_repository_command(&mut self.sqlx_check_command, commands, "api_sqlx_command");
+        inherit_repository_command(
+            &mut self.schema_dump_command,
+            commands,
+            "api_schema_dump_command",
+        );
+        inherit_repository_command(&mut self.sqlc_check_command, commands, "api_sqlc_command");
+        inherit_repository_command(
+            &mut self.typescript_lint_command,
+            commands,
+            "repo_compat_typescript_lint_command",
+        );
+        inherit_repository_command(
+            &mut self.typescript_typecheck_command,
+            commands,
+            "repo_compat_typescript_typecheck_command",
+        );
+        inherit_repository_command(
+            &mut self.typescript_build_command,
+            commands,
+            "repo_compat_typescript_build_command",
+        );
+        inherit_repository_command(
+            &mut self.typescript_coverage_command,
+            commands,
+            "repo_compat_typescript_coverage_command",
+        );
+    }
+
     fn from_file(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -407,6 +703,7 @@ impl RawAnswers {
         let mut raw = value
             .try_into::<Self>()
             .with_context(|| format!("Failed to parse {}", path.display()))?;
+        raw.normalize_repository_model(&table);
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
         Ok(raw)
@@ -729,6 +1026,8 @@ impl RawAnswers {
         };
 
         Ok(RenderAnswers {
+            authored_repository: None,
+            authored_repository_commands: BTreeMap::new(),
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),
             ci_github_runner: self
@@ -777,20 +1076,37 @@ impl RawAnswers {
             rust_test_locked_command: self.rust_test_locked_command.unwrap_or_else(|| {
                 optional_cargo_command("cargo test --workspace --locked", "test-locked")
             }),
-            go_fmt_check_command: "set -o pipefail; files=$(git ls-files --cached --others --exclude-standard -z -- '*.go' | while IFS= read -r -d '' file; do if [ -f \"$file\" ]; then printf '%s\\0' \"$file\"; fi; done | xargs -0 gofmt -l --) || exit $?; test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into(),
-            go_lint_command: "go vet ./...".into(),
-            go_test_command: "go test ./...".into(),
-            go_test_locked_command: "go mod verify && go test -mod=readonly ./...".into(),
+            go_fmt_check_command: self.go_fmt_check_command.unwrap_or_else(|| "set -o pipefail; files=$(git ls-files --cached --others --exclude-standard -z -- '*.go' | while IFS= read -r -d '' file; do if [ -f \"$file\" ]; then printf '%s\\0' \"$file\"; fi; done | xargs -0 gofmt -l --) || exit $?; test -z \"$files\" || { printf '%s\\n' \"$files\"; exit 1; }".into()),
+            go_lint_command: self
+                .go_lint_command
+                .unwrap_or_else(|| "go vet ./...".into()),
+            go_test_command: self
+                .go_test_command
+                .unwrap_or_else(|| "go test ./...".into()),
+            go_test_locked_command: self.go_test_locked_command.unwrap_or_else(|| {
+                "go mod verify && go test -mod=readonly ./...".into()
+            }),
+            sqlc_check_command: self
+                .sqlc_check_command
+                .unwrap_or_else(|| "go tool sqlc vet && go tool sqlc diff".into()),
             web_package_manager,
             web_package_manager_spec,
             web_package_manager_version,
             node_version: GENERATED_NODE_VERSION.into(),
             web_install_command,
             web_run_command,
-            typescript_lint_command: "scripts/check-webapps.sh lint".into(),
-            typescript_typecheck_command: "scripts/check-webapps.sh typecheck".into(),
-            typescript_build_command: "scripts/check-webapps.sh build".into(),
-            typescript_coverage_command: "scripts/check-webapps.sh coverage".into(),
+            typescript_lint_command: self
+                .typescript_lint_command
+                .unwrap_or_else(|| "scripts/check-webapps.sh lint".into()),
+            typescript_typecheck_command: self
+                .typescript_typecheck_command
+                .unwrap_or_else(|| "scripts/check-webapps.sh typecheck".into()),
+            typescript_build_command: self
+                .typescript_build_command
+                .unwrap_or_else(|| "scripts/check-webapps.sh build".into()),
+            typescript_coverage_command: self
+                .typescript_coverage_command
+                .unwrap_or_else(|| "scripts/check-webapps.sh coverage".into()),
             dev_apps,
             generated_frontend_dev_apps,
             frontend_apps,
@@ -799,6 +1115,32 @@ impl RawAnswers {
             agent_tooling: self.agent_tooling.unwrap_or_default(),
         })
     }
+}
+
+fn inherit_repository_command(destination: &mut Option<String>, commands: &toml::Table, key: &str) {
+    if destination.is_none() {
+        *destination = commands
+            .get(key)
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned);
+    }
+}
+
+fn authored_repository_commands(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let value = toml::from_str::<toml::Value>(&text)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+    let Some(commands) = value.get("commands") else {
+        return Ok(Some(BTreeMap::new()));
+    };
+    let Some(commands) = commands.as_table() else {
+        return Ok(None);
+    };
+    Ok(commands
+        .iter()
+        .map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
+        .collect())
 }
 
 fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {

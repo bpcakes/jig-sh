@@ -175,6 +175,37 @@ pub(crate) fn validate_contract(
             errors.push(error.to_string());
         }
     }
+    if ctx.contract_version() >= 6 {
+        if let Err(error) = crate::repository::RepositoryCatalog::from_context(ctx) {
+            errors.push(format!("Invalid repository model: {error}."));
+        }
+        for action in ctx.action_specs() {
+            match &action.runner {
+                jig_contract::ActionRunner::Command { command, .. } => {
+                    if !ctx
+                        .required_commands()
+                        .iter()
+                        .any(|required| required == command)
+                    {
+                        errors.push(format!(
+                            "Target {} references command {command}, but it is not declared in required_commands.",
+                            action.target
+                        ));
+                    } else if let Err(error) = ctx.command_for_key(command) {
+                        errors.push(format!("Target {}: {error}.", action.target));
+                    }
+                }
+                jig_contract::ActionRunner::Native { operation } => {
+                    if !jig_features::is_supported_native_tool(operation) {
+                        errors.push(format!(
+                            "Target {} references unsupported native operation {operation}.",
+                            action.target
+                        ));
+                    }
+                }
+            }
+        }
+    }
 
     let tool_names = ctx
         .tool_specs()

@@ -7,7 +7,7 @@ default_branch = "<<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\
 ci_github_runner = "<<[ ci_github_runner | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 template_source_url = "<<[ template_source_url | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 harness_footprint = "<<[ harness_footprint | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
-[% if backend_language == "go" %]
+[% if _jig.contract_version < 6 and backend_language == "go" %]
 backend_language = "go"
 go_database = "<<[ go_database | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
@@ -31,16 +31,20 @@ sqlx_check_command = "<<[ sqlx_check_command | replace("\\", "\\\\") | replace("
 # no manifests are found; with nested manifests they run each one in turn.[% endif %]
 # Review them against this repo's workspace layout and replace them when custom
 # orchestration is needed.
+[% if _jig.contract_version < 6 %]
 bootstrap_command = "<<[ bootstrap_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
 [% if legacy_dev_command %]
 # Deprecated and ignored by generated commands; preserved only so you can migrate it into [dev] / [[dev.apps]].
 dev_command = "<<[ legacy_dev_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
+[% if _jig.contract_version < 6 %]
 [% if backend_language == "rust" %]
 rust_fmt_check_command = "<<[ rust_fmt_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_clippy_command = "<<[ rust_clippy_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_test_command = "<<[ rust_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 rust_test_locked_command = "<<[ rust_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+[% endif %]
 [% endif %]
 web_package_manager = "<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if frontend_apps | length == 0 %]
@@ -56,12 +60,18 @@ role = "<<[ app.role | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endfor %]
 [% endif %]
 
+[% if _jig.contract_version >= 6 %]
+<<[ repository_toml ]>>
+[% endif %]
+
 [vault]
 scope = "<<[ vault.scope | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 scope_id = "<<[ vault.scope_id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 allow_global = [% if vault.allow_global %]true[% else %]false[% endif %]
 
-[% if frontend_harness_enabled or backend_language == "go" %]
+[% if _jig.contract_version >= 6 %]
+<<[ repository_commands_toml ]>>
+[% elif frontend_harness_enabled or backend_language == "go" %]
 # Extra command keys must use *_command names so contract required_commands
 # stay distinct from tool names and gate ids. Entries here override same-named
 # legacy top-level command fields.

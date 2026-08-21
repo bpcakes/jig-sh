@@ -914,25 +914,17 @@ fn minimal_adoption_staging_still_rejects_invalid_commands_and_tools() {
     let template = materialize_template_worktree();
     let config_template = template.path().join("templates/project/.jig.toml.jinja");
     let config = fs::read_to_string(&config_template).unwrap();
-    let config = config
-        .lines()
-        .map(|line| {
-            if line.starts_with("rust_test_command = ") {
-                "rust_test_command = \"  \""
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let config = config.replace(
+        "<<[ repository_commands_toml ]>>",
+        "<<[ repository_commands_toml | replace(bootstrap_command, \"  \") ]>>",
+    );
     fs::write(&config_template, format!("{config}\n")).unwrap();
     let contract_template = template
         .path()
         .join("templates/project/.agent/jig-contract.json.jinja");
-    let contract = fs::read_to_string(&contract_template).unwrap().replacen(
-        "\"name\": \"jig.contract_check\"",
-        "\"name\": \"jig.unsupported\"",
-        1,
+    let contract = fs::read_to_string(&contract_template).unwrap().replace(
+        "\"tools\": <<[ repository.tools | tojson(indent=2) ]>>",
+        "\"tools\": [{\"name\":\"jig.unsupported\",\"kind\":\"native\",\"description\":\"unsupported test tool\"}]",
     );
     fs::write(&contract_template, contract).unwrap();
     let repo = temp.path().join("repo");
@@ -942,7 +934,7 @@ fn minimal_adoption_staging_still_rejects_invalid_commands_and_tools() {
     let error = format!("{error:#}");
 
     assert!(
-        error.contains("Command key rust_test_command is empty"),
+        error.contains("Command key repo_bootstrap_command is empty"),
         "{error}"
     );
     assert!(
@@ -1025,7 +1017,8 @@ fn invalid_runtime_config_is_not_preserved_by_readoption_or_update() {
         let repaired =
             toml::from_str::<toml::Value>(&fs::read_to_string(repo.join(".jig.toml")).unwrap())
                 .unwrap();
-        assert!(repaired.get("commands").is_none());
+        assert!(repaired["commands"].as_table().is_some());
+        assert!(repaired["commands"]["api_test_command"].as_str().is_some());
         crate::context::RepoContext::load_from(&repo).unwrap();
     }
 }
@@ -1139,23 +1132,23 @@ fn minimal_expansion_adds_generated_frontend_commands_around_project_overrides()
         Some("just release")
     );
     assert_eq!(
-        config["commands"]["typescript_lint_command"].as_str(),
+        config["commands"]["repo_compat_typescript_lint_command"].as_str(),
         Some("npm run project-lint")
     );
     assert_eq!(
-        config["commands"]["typescript_typecheck_command"].as_str(),
+        config["commands"]["repo_compat_typescript_typecheck_command"].as_str(),
         Some("scripts/check-webapps.sh typecheck")
     );
     assert_eq!(
-        config["commands"]["typescript_build_command"].as_str(),
+        config["commands"]["repo_compat_typescript_build_command"].as_str(),
         Some("scripts/check-webapps.sh build")
     );
     assert!(config["commands"].get("rust_test_command").is_none());
     for key in [
-        "typescript_lint_command",
-        "typescript_typecheck_command",
-        "typescript_build_command",
-        "typescript_coverage_command",
+        "web_lint_command",
+        "web_typecheck_command",
+        "web_build_command",
+        "web_test_command",
     ] {
         assert!(config["commands"][key].as_str().is_some(), "missing {key}");
     }

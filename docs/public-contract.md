@@ -78,7 +78,7 @@ Runtime-owned `.jig.toml` sections are intentionally strict: unknown keys are re
 
 - `contract_version`: version of the generated tool manifest and command surface
 
-Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors; v4 remains readable, but only v5 and later repositories may require those keys. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
+Version `2` is the legacy root-check command-backed contract. Version `3` groups checks under `scripts/jig check ...`. Both legacy epochs require matching `jig_version` fields in `.jig.toml` and the manifest as an internal consistency check, but a compatible runtime does not compare its own product release with that value. Version `4` removes generated product-version fields and makes `contract_version` the whole-harness compatibility epoch. Version `5` adds the strict `backend_language`, `go_database`, and backend-neutral `migration_dir` configuration selectors. Version `6` replaces the singular runtime stack identity with explicit components, actions, profiles, and adapter provenance. Its generated `.jig.toml` records the authored model under `[repository]`, while `.agent/jig-contract.json` records the matching resolved model. Rust, Go, SQLx, Go/PostgreSQL, and TypeScript capabilities are adapter contributions; command keys are component-scoped, such as `api_test_command` and `web_test_command`. Versions 2 through 5 remain readable through the legacy catalog projection. An unmigrated v2/v3 wrapper remains runtime-readable but intentionally fails Doctor's required launcher-shape check; Doctor recommends a full `update --force` first when the repository has intact ownership metadata, with `update --launcher-only --force` reserved as the narrow recovery step when the legacy wrapper cannot start or full ownership is not yet established. That narrow repair leaves the repository on its supported legacy epoch and seeds the proven repair runtime; afterward Doctor exposes migration to the current contract as optional follow-up because the legacy recorded source may not be able to recreate that seed. A compatible change may add optional manifest data, tools, commands, or runtime behavior that older readers in the same epoch can ignore. Strict generated configuration additions and other breaking changes must increment `contract_version` before generated repositories depend on them.
 
 Breaking `contract_version` changes include:
 
@@ -95,8 +95,9 @@ Generated repos and MCP clients may rely on these top-level fields in `.agent/ji
 
 - `contract_version`
 - `tool_namespace`
-- `required_commands` for command-backed contract versions `2` through `5`
+- `required_commands`
 - `tools`
+- `components`, `actions`, `profiles`, and `default_check_profile` for version `6`
 
 Each tool entry has these stable fields:
 
@@ -105,7 +106,7 @@ Each tool entry has these stable fields:
 - `description`
 - `command` for `kind: "command"` tools
 
-For `kind: "command"` tools, `command` is the top-level `.jig.toml` command key the runtime executes from the repo root.
+For `kind: "command"` tools, `command` is the `.jig.toml` `[commands]` key the runtime executes from the repo root. In version 6 these tools are compatibility aliases over component actions rather than the primary execution model.
 
 Command-backed contract versions intentionally have no `optional_commands` field. A command-backed tool is valid only when its command key is listed in `required_commands`; optional capability is represented by omitting the tool entirely when the rendered repo profile does not support it.
 
@@ -168,6 +169,14 @@ tool is projected as an action on a synthetic component whose structured id is
 match the CLI vocabulary, for example `jig.test` becomes `repo:test` and
 `jig.fmt_check` becomes `repo:fmt`. Alias collisions from custom legacy names
 receive deterministic digest suffixes.
+
+Contract 6 reads the resolved records directly. A component declares its root,
+adapters, dependency/affected policy, guidance, and field provenance. An action
+declares a structured target, intent, effects, configured or native runner,
+inputs, execution dependencies, timeout, result parser, compatibility aliases,
+and provenance. Profiles contain exact structured targets. Runtime loading
+rejects drift between the authored `[repository]` records and the resolved
+manifest; it does not rediscover stacks or files during execution.
 
 The following read-only info commands return `schema_version: 1` plus structured
 component, target, or profile records:

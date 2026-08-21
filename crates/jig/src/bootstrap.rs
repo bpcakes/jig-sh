@@ -87,6 +87,7 @@ pub(crate) mod path;
 mod presets;
 mod preview_seed;
 mod renderer;
+mod repository_model;
 mod runtime_config;
 mod scaffold;
 pub(crate) use scaffold::{default_go_module, validate_go_module};

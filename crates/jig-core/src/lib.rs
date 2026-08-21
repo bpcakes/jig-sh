@@ -1,4 +1,7 @@
-use jig_contract::{FeatureContext, FeatureDescriptor, NativeToolDescriptor, NativeToolKind, tool};
+use jig_contract::{
+    ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
+    FeatureDescriptor, NativeToolDescriptor, NativeToolKind, RepositoryAdapterDescriptor, tool,
+};
 
 const BOOTSTRAP_COMMAND: &str = "bootstrap_command";
 const COMMAND_KEYS: &[&str] = &[BOOTSTRAP_COMMAND, "contract_check_command"];
@@ -6,10 +9,39 @@ const NATIVE_TOOLS: &[NativeToolDescriptor] = &[
     NativeToolDescriptor::new(tool::CONTRACT_CHECK, false, NativeToolKind::ContractCheck),
     NativeToolDescriptor::new(tool::MIGRATION_ADD, true, NativeToolKind::MigrationAdd),
 ];
+const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+const OPERATE_EFFECTS: &[ActionEffect] = &[
+    ActionEffect::Worktree,
+    ActionEffect::Process,
+    ActionEffect::External,
+];
+const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
+    AdapterActionDescriptor::new(
+        "contract",
+        "Validate the checked-in Jig repository contract.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Native(tool::CONTRACT_CHECK),
+        &[".jig.toml", ".agent/jig-contract.json", "scripts/jig"],
+        Some(tool::CONTRACT_CHECK),
+    ),
+    AdapterActionDescriptor::new(
+        "bootstrap",
+        "Prepare repository dependencies and local tooling.",
+        ActionIntent::Operate,
+        OPERATE_EFFECTS,
+        AdapterRunnerDescriptor::Command(BOOTSTRAP_COMMAND),
+        &[],
+        Some(tool::BOOTSTRAP),
+    ),
+];
+const REPOSITORY_ADAPTERS: &[RepositoryAdapterDescriptor] =
+    &[RepositoryAdapterDescriptor::new("jig", ADAPTER_ACTIONS)];
 
 pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
     COMMAND_KEYS,
     NATIVE_TOOLS,
+    REPOSITORY_ADAPTERS,
     required_tools,
     no_unavailable_tool_message,
 );

@@ -73,14 +73,14 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `rust_migration_dir`: SQL migration directory
 - `rust_sqlx_metadata_dir`: committed SQLx metadata directory
 
-When `backend_language = "go"` and `go_database = "postgres"`, `migration_dir` is required. Go backend identity cannot be combined with `sqlx_enabled = true`: generated Go repositories use Goose/sqlc, while SQLx remains owned by the Rust backend.
+For contracts through version 5, `backend_language = "go"` with `go_database = "postgres"` requires `migration_dir`, and Go backend identity cannot be combined with `sqlx_enabled = true`. Contract 6 does not persist that singular backend identity: the `api` component carries `go` and, when applicable, `go-postgres` adapters.
 
 The root `go.mod` is the Go toolchain authority for both adopted and generated repositories. Doctor reads its required `go` directive and honors a newer optional `toolchain` directive; generated GitHub Actions pass the same file to `actions/setup-go`. Jig does not generate a second `.go-version` authority.
 
 ## Optional Keys
 
-- `backend_language`: generated application backend identity; accepted values are `rust` and `go`. Omitted configurations default to `rust`, while `go-react` persists `go`.
-- `go_database`: database identity for a generated Go backend; accepted values are `none` and `postgres`, and omission defaults to `none`. `postgres` requires `backend_language = "go"`.
+- `backend_language`: legacy contract-v5 application backend identity; accepted values are `rust` and `go`. Contract-v6 renders omit it and derive capability from component adapters.
+- `go_database`: legacy contract-v5 Go database identity. Contract-v6 renders use the composable `go-postgres` adapter instead.
 - `migration_dir`: backend-neutral migration policy directory. It takes precedence over the legacy Rust-specific `rust_migration_dir`; generated Go/PostgreSQL repositories use `internal/database/migrations`.
 - `schema_dump_enabled`: when `true` and `sqlx_enabled` is also `true`, the template renders schema dump and schema freshness commands; when SQLx is disabled, this is rendered as `false`. New init/adopt answers reject explicitly setting this to `true` while SQLx is disabled; `jig update --recopy` normalizes legacy SQLx-disabled configs back to `false`.
 - `schema_dump_command`: command behind `scripts/jig sqlx schema dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
@@ -100,7 +100,17 @@ The root `go.mod` is the Go toolchain authority for both adopted and generated r
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+Configured command values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Contract 6 writes them under `[commands]` with component-scoped keys such as `api_test_command` and `web_test_command`; action runners refer to those keys, never to agent-supplied shell text. Treat changes to these values like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+
+## Contract-v6 Repository Model
+
+`[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
+
+- `[[repository.components]]` declares `id`, `root`, optional description/tags/dependencies, affected propagation, adapter ids, guidance, and per-field provenance.
+- `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, input globs, target dependencies, timeout, result parser, compatibility aliases, and provenance.
+- `[[repository.profiles]]` declares a stable id and exact structured targets. `repository.default_check_profile` selects the profile used by bare `jig check`.
+
+Generated frontend commands use `scripts/check-webapps.sh check-one` so `web:test` validates only the `web` component while preserving dependency setup and coverage enforcement. Aggregate `jig.typescript_*` tools remain compatibility actions and are not members of the default profile.
 
 Contracts that declare `"kind": "native"` tools require a runtime that supports the repository contract epoch. Use `scripts/jig`; it probes the repository, required tools, and requested build profile before selecting any development, cached, PATH, or newly installed binary.
 
@@ -108,11 +118,15 @@ Contracts that declare `"kind": "native"` tools require a runtime that supports 
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `commands`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `backend_language`, `go_database`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `repository`, `commands`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 and later renders omit and ignore it. `backend_language`, `go_database`, and the language-shaped command fields remain accepted for v5 migration but are omitted from v6 renders. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
 
 Nested accepted keys are:
 
 - `[commands]`: command names made from lowercase ASCII letters, numbers, and underscores; names must start with a letter and end in `_command`
+- `[repository]`: `default_check_profile`, `components`, `actions`, `profiles`
+- `[[repository.components]]`: `id`, `root`, `description`, `tags`, `depends_on`, `propagate_affected_to_dependents`, `adapters`, `guidance`, `provenance`
+- `[[repository.actions]]`: `target`, `description`, `intent`, `effects`, `runner`, `inputs`, `depends_on`, `timeout_seconds`, `result_parser`, `legacy_aliases`, `provenance`
+- `[[repository.profiles]]`: `id`, `description`, `targets`, `provenance`
 - `[[frontend_apps]]`: `name`, `dir`, `coverage_threshold`, `kind`, `role`
 - `[vault]`: `scope`, `scope_id`, `allow_global`
 - `[dev]`: `proxy_port`, `https_port`, `https`, `http2`, `lan`, `tld`, `workspace_discovery`, `apps`

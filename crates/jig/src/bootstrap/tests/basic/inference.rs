@@ -522,10 +522,10 @@ test-locked:
         assert!(web_tools.contains(&expected), "missing {expected}");
     }
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("rust_fmt_check_command = \"just fmt-check\""));
-    assert!(answers.contains("rust_clippy_command = \"just clippy\""));
-    assert!(answers.contains("rust_test_command = \"just test\""));
-    assert!(answers.contains("rust_test_locked_command = \"just test-locked\""));
+    assert!(answers.contains("api_fmt_command = \"just fmt-check\""));
+    assert!(answers.contains("api_clippy_command = \"just clippy\""));
+    assert!(answers.contains("api_test_command = \"just test\""));
+    assert!(answers.contains("api_test_locked_command = \"just test-locked\""));
 }
 
 #[test]
@@ -599,10 +599,10 @@ test-locked:
             .any(|warning| warning.as_str().unwrap().contains("multiple files"))
     );
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("rust_fmt_check_command = \"make fmt-check\""));
-    assert!(answers.contains("rust_clippy_command = \"just clippy\""));
-    assert!(answers.contains("rust_test_command = \"make test\""));
-    assert!(answers.contains("rust_test_locked_command = \"make test-locked\""));
+    assert!(answers.contains("api_fmt_command = \"make fmt-check\""));
+    assert!(answers.contains("api_clippy_command = \"just clippy\""));
+    assert!(answers.contains("api_test_command = \"make test\""));
+    assert!(answers.contains("api_test_locked_command = \"make test-locked\""));
 }
 
 #[test]
@@ -794,7 +794,7 @@ edition = "2024"
         ".config/nextest.toml"
     );
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
-    assert!(answers.contains("rust_test_command = \"cargo nextest run --workspace\""));
+    assert!(answers.contains("api_test_command = \"cargo nextest run --workspace\""));
 }
 
 #[test]
@@ -892,7 +892,7 @@ frontend_apps = []
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(answers.contains("repo_name = \"from-cli\""));
     assert!(answers.contains("web_package_manager = \"yarn\""));
-    assert!(answers.contains("rust_test_command = \"cargo test --workspace\""));
+    assert!(answers.contains("api_test_command = \"cargo test --workspace\""));
     assert!(answers.contains("frontend_apps = []"));
     assert!(!answers.contains("[[frontend_apps]]"));
 }

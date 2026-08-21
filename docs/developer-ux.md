@@ -131,6 +131,13 @@ maps each declared tool to a `repo:*` target while retaining the original
 `jig.*` name as an alias. Component-native contract records can therefore use
 the same inspection and planning core as existing repositories.
 
+Contract 6 generates component-native records directly. A typical application
+has an `api` component plus one component per configured frontend, so `test`
+selects `api:test`, `web:test`, and any sibling test targets without conflating
+their commands. Stack integrations appear as composable adapters on components;
+the runtime no longer uses one persisted backend-language switch to decide what
+the workspace can do.
+
 Use the static info views to discover the model without running commands:
 
 ```sh

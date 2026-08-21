@@ -1,6 +1,14 @@
 {
   "contract_version": <<[ _jig.contract_version ]>>,
   "tool_namespace": "jig",
+[% if _jig.contract_version >= 6 %]
+  "required_commands": <<[ repository.required_commands | tojson(indent=2) ]>>,
+  "tools": <<[ repository.tools | tojson(indent=2) ]>>,
+  "components": <<[ repository.components | tojson(indent=2) ]>>,
+  "actions": <<[ repository.actions | tojson(indent=2) ]>>,
+  "profiles": <<[ repository.profiles | tojson(indent=2) ]>>,
+  "default_check_profile": <<[ repository.default_check_profile | tojson ]>>
+[% else %]
   "required_commands": [
     "bootstrap_command",
 [% if backend_language == "rust" %]    "rust_fmt_check_command",
@@ -126,4 +134,5 @@
       "description": "Run the native Jig contract check."
     }
   ]
+[% endif %]
 }

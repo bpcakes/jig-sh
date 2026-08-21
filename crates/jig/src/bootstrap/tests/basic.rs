@@ -135,12 +135,14 @@ fn add_project_runtime_tables(repo: &Path) {
     let mut config = toml::from_str::<toml::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
     let root = config.as_table_mut().unwrap();
 
-    let mut commands = toml::Table::new();
-    commands.insert(
-        "release_command".into(),
-        toml::Value::String("just release".into()),
-    );
-    root.insert("commands".into(), toml::Value::Table(commands));
+    root.entry("commands")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .unwrap()
+        .insert(
+            "release_command".into(),
+            toml::Value::String("just release".into()),
+        );
 
     root.get_mut("work")
         .unwrap()

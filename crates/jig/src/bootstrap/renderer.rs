@@ -17,6 +17,7 @@ use super::path::{
     validate_no_reserved_git_metadata_components, validate_portable_planned_file_collisions,
 };
 use super::preview_seed::seed_preview_workspace;
+use super::repository_model::RepositoryRenderModel;
 use super::staged_render::StagedRender;
 use super::template_source::{PreparedTemplateSource, TemplateRenderSource};
 use crate::progress::CliProgress;
@@ -30,6 +31,7 @@ pub(super) struct RenderStageRequest<'a> {
     pub(super) seed_repo_path: Option<&'a Path>,
     pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
     pub(super) reconcile_runtime_config: bool,
+    pub(super) preferred_rendered_commands: BTreeSet<String>,
     pub(super) contract_version: Option<u32>,
     pub(super) progress: CliProgress,
 }
@@ -88,7 +90,11 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         )?;
     }
     if request.reconcile_runtime_config {
-        super::runtime_config::reconcile_runtime_config(request.seed_repo_path, &destination)?;
+        super::runtime_config::reconcile_runtime_config(
+            request.seed_repo_path,
+            &destination,
+            &request.preferred_rendered_commands,
+        )?;
     }
 
     active_paths.insert(PathBuf::from(managed_paths::MANIFEST_PATH));
@@ -604,6 +610,9 @@ fn render_context(
     answers: &RenderAnswers,
     contract_version: Option<u32>,
 ) -> Result<JsonValue> {
+    let repository = RepositoryRenderModel::from_answers(answers)?;
+    let repository_toml = repository.authored_toml()?;
+    let repository_commands_toml = repository.commands_toml()?;
     let mut context = serde_json::to_value(answers)?
         .as_object()
         .cloned()
@@ -611,6 +620,12 @@ fn render_context(
     context.insert(
         "frontend_harness_enabled".into(),
         JsonValue::Bool(answers.frontend_harness_enabled()),
+    );
+    context.insert("repository".into(), serde_json::to_value(repository)?);
+    context.insert("repository_toml".into(), repository_toml.into());
+    context.insert(
+        "repository_commands_toml".into(),
+        repository_commands_toml.into(),
     );
     context.insert(
         "_jig".into(),

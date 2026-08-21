@@ -1,4 +1,7 @@
-use jig_contract::{FeatureContext, FeatureDescriptor, tool};
+use jig_contract::{
+    ActionEffect, ActionIntent, AdapterActionDescriptor, AdapterRunnerDescriptor, FeatureContext,
+    FeatureDescriptor, RepositoryAdapterDescriptor, tool,
+};
 
 const FMT_CHECK_COMMAND: &str = "go_fmt_check_command";
 const LINT_COMMAND: &str = "go_lint_command";
@@ -19,9 +22,77 @@ const COMMAND_TOOLS: &[(&str, &str)] = &[
     (TEST_COMMAND, tool::TEST),
     (TEST_LOCKED_COMMAND, tool::TEST_LOCKED),
 ];
+const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
+    AdapterActionDescriptor::new(
+        "fmt",
+        "Check Go formatting.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(FMT_CHECK_COMMAND),
+        &["go.mod", "go.sum", "**/*.go"],
+        Some(tool::FMT_CHECK),
+    ),
+    AdapterActionDescriptor::new(
+        "lint",
+        "Run Go static analysis.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(LINT_COMMAND),
+        &["go.mod", "go.sum", "**/*.go"],
+        Some(tool::LINT),
+    ),
+    AdapterActionDescriptor::new(
+        "test",
+        "Run Go tests.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(TEST_COMMAND),
+        &["go.mod", "go.sum", "**/*.go"],
+        Some(tool::TEST),
+    ),
+    AdapterActionDescriptor::new(
+        "test-locked",
+        "Verify Go modules and run tests without dependency updates.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(TEST_LOCKED_COMMAND),
+        &["go.mod", "go.sum", "**/*.go"],
+        Some(tool::TEST_LOCKED),
+    ),
+];
+const GO_POSTGRES_ACTIONS: &[AdapterActionDescriptor] = &[
+    AdapterActionDescriptor::new(
+        "sqlc",
+        "Check sqlc queries and generated-code drift.",
+        ActionIntent::Check,
+        CHECK_EFFECTS,
+        AdapterRunnerDescriptor::Command(SQLC_CHECK_COMMAND),
+        &["sqlc.yaml", "**/*.sql"],
+        Some(tool::SQLC_CHECK),
+    ),
+    AdapterActionDescriptor::new(
+        "migration-add",
+        "Add a timestamped Goose SQL migration.",
+        ActionIntent::Generate,
+        &[ActionEffect::Worktree, ActionEffect::Process],
+        AdapterRunnerDescriptor::Native(tool::MIGRATION_ADD),
+        &["internal/database/migrations/**/*.sql"],
+        Some(tool::MIGRATION_ADD),
+    ),
+];
+const REPOSITORY_ADAPTERS: &[RepositoryAdapterDescriptor] = &[
+    RepositoryAdapterDescriptor::new("go", ADAPTER_ACTIONS),
+    RepositoryAdapterDescriptor::new("go-postgres", GO_POSTGRES_ACTIONS),
+];
 
-pub const FEATURE: FeatureDescriptor =
-    FeatureDescriptor::new(COMMAND_KEYS, &[], required_tools, unavailable_tool_message);
+pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
+    COMMAND_KEYS,
+    &[],
+    REPOSITORY_ADAPTERS,
+    required_tools,
+    unavailable_tool_message,
+);
 
 fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     COMMAND_TOOLS

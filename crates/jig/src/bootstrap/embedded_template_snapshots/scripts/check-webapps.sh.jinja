@@ -13,7 +13,7 @@ recovery_claim_token=""
 dependency_stamp_dir=".agent/tmp/web-dependencies"
 
 usage() {
-  echo "Usage: scripts/check-webapps.sh bootstrap|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
+  echo "Usage: scripts/check-webapps.sh bootstrap|check-one <app-dir> <coverage-threshold> <script>|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
 }
 
 
@@ -2095,7 +2095,7 @@ run_check() {
   install_dependencies "$app_dir"
   run_package_script "$app_dir" "$script_name"
 
-  if [ "$mode" = "coverage" ]; then
+  if [ "$script_name" = "test:coverage" ]; then
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
       "$node_bin" scripts/enforce-coverage.cjs
   fi
@@ -2140,6 +2140,19 @@ case "$mode" in
       exit 2
     fi
     run_public_package_script "$2" "$3"
+    ;;
+  check-one)
+    if [ "$#" -ne 4 ]; then
+      usage
+      exit 2
+    fi
+    run_check "$2" "$3" "$4"
+    if [ "$4" = "typecheck" ] && [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs check
+    fi
+    if [ "$4" = "build:bundle" ] && [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs public-check
+    fi
     ;;
   node-version-file)
     if [ "$#" -ne 2 ]; then

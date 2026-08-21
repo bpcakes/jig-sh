@@ -102,6 +102,63 @@ pub struct NativeToolDescriptor {
     pub kind: NativeToolKind,
 }
 
+/// The checked-in runner shape contributed by a repository adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AdapterRunnerDescriptor {
+    Command(&'static str),
+    Native(&'static str),
+}
+
+/// One conventional action contributed by a repository adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct AdapterActionDescriptor {
+    pub id: &'static str,
+    pub description: &'static str,
+    pub intent: ActionIntent,
+    pub effects: &'static [ActionEffect],
+    pub runner: AdapterRunnerDescriptor,
+    pub inputs: &'static [&'static str],
+    pub legacy_alias: Option<&'static str>,
+}
+
+impl AdapterActionDescriptor {
+    pub const fn new(
+        id: &'static str,
+        description: &'static str,
+        intent: ActionIntent,
+        effects: &'static [ActionEffect],
+        runner: AdapterRunnerDescriptor,
+        inputs: &'static [&'static str],
+        legacy_alias: Option<&'static str>,
+    ) -> Self {
+        Self {
+            id,
+            description,
+            intent,
+            effects,
+            runner,
+            inputs,
+            legacy_alias,
+        }
+    }
+}
+
+/// Metadata contributed by a stack adapter without coupling it to runtime execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct RepositoryAdapterDescriptor {
+    pub id: &'static str,
+    pub actions: &'static [AdapterActionDescriptor],
+}
+
+impl RepositoryAdapterDescriptor {
+    pub const fn new(id: &'static str, actions: &'static [AdapterActionDescriptor]) -> Self {
+        Self { id, actions }
+    }
+}
+
 impl NativeToolDescriptor {
     pub const fn new(name: &'static str, requires_name: bool, kind: NativeToolKind) -> Self {
         Self {
@@ -116,6 +173,7 @@ impl NativeToolDescriptor {
 pub struct FeatureDescriptor {
     pub command_keys: &'static [&'static str],
     pub native_tools: &'static [NativeToolDescriptor],
+    pub repository_adapters: &'static [RepositoryAdapterDescriptor],
     pub required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
     pub unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
 }
@@ -124,12 +182,14 @@ impl FeatureDescriptor {
     pub const fn new(
         command_keys: &'static [&'static str],
         native_tools: &'static [NativeToolDescriptor],
+        repository_adapters: &'static [RepositoryAdapterDescriptor],
         required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
         unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
     ) -> Self {
         Self {
             command_keys,
             native_tools,
+            repository_adapters,
             required_tools,
             unavailable_tool_message,
         }

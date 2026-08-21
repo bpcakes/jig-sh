@@ -405,6 +405,8 @@ pub struct ProfileSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub targets: Vec<TargetId>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provenance: BTreeMap<String, FieldProvenance>,
 }
 
 impl ProfileSpec {
@@ -414,6 +416,7 @@ impl ProfileSpec {
             id,
             description: None,
             targets,
+            provenance: BTreeMap::new(),
         }
     }
 }

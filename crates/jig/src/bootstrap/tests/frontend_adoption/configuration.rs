@@ -601,7 +601,10 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(answers.contains("web_package_manager = \"npm\""));
     assert!(answers.contains("[[frontend_apps]]"));
     assert!(answers.contains("[commands]"));
-    assert!(answers.contains("typescript_lint_command = \"scripts/check-webapps.sh lint\""));
+    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
+    assert!(
+        answers.contains("repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"")
+    );
     assert!(answers.contains("tool = \"jig.typescript_lint\""));
     assert!(answers.contains("tool = \"jig.typescript_typecheck\""));
     assert!(answers.contains("tool = \"jig.typescript_build\""));
@@ -632,7 +635,7 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(web_check.contains("scripts/web-node.cjs"));
     assert!(!web_check.contains("--jig-workspace-metadata \"$operation\" \"$@\" <<'NODE'"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("\"typescript_lint_command\""));
+    assert!(contract.contains("\"web_lint_command\""));
     assert!(contract.contains(r#""name": "jig.typescript_lint""#));
     assert!(contract.contains(r#""name": "jig.typescript_typecheck""#));
     assert!(contract.contains(r#""name": "jig.typescript_build""#));
@@ -836,11 +839,11 @@ fn adopt_with_project_owned_makefile_keeps_file_and_emits_direct_typescript_gate
     assert!(!answers.contains("makefile_enabled"));
     assert!(answers.contains("[[frontend_apps]]"));
     assert!(answers.contains("[commands]"));
-    assert!(answers.contains("typescript_lint_command = \"scripts/check-webapps.sh lint\""));
+    assert!(answers.contains("web_lint_command = \"scripts/check-webapps.sh check-one"));
     assert!(answers.contains("jig.typescript_lint"));
 
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains("typescript_lint_command"));
+    assert!(contract.contains("web_lint_command"));
     assert!(contract.contains("jig.typescript_lint"));
 
     let agent_guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();

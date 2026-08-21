@@ -24,6 +24,7 @@ const GENERATED_FRONTEND_COMMAND_DEFAULTS: &[(&str, &str)] = &[
 pub(super) fn reconcile_runtime_config(
     seed_repo_path: Option<&Path>,
     destination: &Path,
+    preferred_rendered_commands: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(seed_repo_path) = seed_repo_path else {
         return Ok(());
@@ -58,6 +59,7 @@ pub(super) fn reconcile_runtime_config(
         rendered_table,
         &staged_context,
         &existing_path,
+        preferred_rendered_commands,
     )?;
     reconcile_work(existing_table, rendered_table, &staged_context)?;
     if let Some(existing_loop) = existing_table.get("loop") {
@@ -78,6 +80,7 @@ fn reconcile_commands(
     rendered: &mut toml::Table,
     staged_context: &RepoContext,
     existing_path: &Path,
+    preferred_rendered_commands: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(existing_commands) = existing.get("commands") else {
         return Ok(());
@@ -93,13 +96,49 @@ fn reconcile_commands(
         .or_insert_with(|| toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("Rendered [commands] is not a TOML table"))?;
+    let retired_repository_commands = existing_repository_command_keys(existing);
 
     for (key, value) in existing_commands {
-        if GENERATED_FRONTEND_COMMAND_DEFAULTS
-            .iter()
-            .any(|(generated_key, generated_value)| {
-                key == generated_key && value.as_str() == Some(generated_value)
-            })
+        if preferred_rendered_commands.contains(key) && rendered_commands.contains_key(key) {
+            continue;
+        }
+        if staged_context.contract_version() >= 6 {
+            if let Some(replacement) = v6_command_replacement(key) {
+                if preferred_rendered_commands.contains(replacement)
+                    && rendered_commands.contains_key(replacement)
+                {
+                    continue;
+                }
+                let replacement_is_required = staged_context
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == replacement);
+                if replacement_is_required
+                    && value
+                        .as_str()
+                        .is_some_and(|command| !command.trim().is_empty())
+                {
+                    rendered_commands.insert(replacement.into(), value.clone());
+                } else if !replacement_is_required
+                    && value
+                        .as_str()
+                        .is_some_and(|command| !command.trim().is_empty())
+                    && !is_generated_frontend_default(key, value)
+                {
+                    rendered_commands.insert(key.clone(), value.clone());
+                }
+                continue;
+            }
+            if retired_repository_commands.contains(key)
+                && !staged_context
+                    .required_commands()
+                    .iter()
+                    .any(|required| required == key)
+            {
+                continue;
+            }
+        }
+        if is_generated_frontend_default(key, value)
             && !staged_context
                 .required_commands()
                 .iter()
@@ -121,6 +160,50 @@ fn reconcile_commands(
         rendered_commands.insert(key.clone(), value.clone());
     }
     Ok(())
+}
+
+fn existing_repository_command_keys(existing: &toml::Table) -> BTreeSet<String> {
+    existing
+        .get("repository")
+        .and_then(toml::Value::as_table)
+        .and_then(|repository| repository.get("actions"))
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+        .filter_map(|action| action.get("runner"))
+        .filter_map(toml::Value::as_table)
+        .filter(|runner| runner.get("kind").and_then(toml::Value::as_str) == Some("command"))
+        .filter_map(|runner| runner.get("command"))
+        .filter_map(toml::Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn v6_command_replacement(legacy: &str) -> Option<&'static str> {
+    match legacy {
+        "rust_fmt_check_command" | "go_fmt_check_command" => Some("api_fmt_command"),
+        "rust_clippy_command" => Some("api_clippy_command"),
+        "go_lint_command" => Some("api_lint_command"),
+        "rust_test_command" | "go_test_command" => Some("api_test_command"),
+        "rust_test_locked_command" | "go_test_locked_command" => Some("api_test_locked_command"),
+        "sqlx_check_command" => Some("api_sqlx_command"),
+        "schema_dump_command" => Some("api_schema_dump_command"),
+        "sqlc_check_command" => Some("api_sqlc_command"),
+        "typescript_lint_command" => Some("repo_compat_typescript_lint_command"),
+        "typescript_typecheck_command" => Some("repo_compat_typescript_typecheck_command"),
+        "typescript_build_command" => Some("repo_compat_typescript_build_command"),
+        "typescript_coverage_command" => Some("repo_compat_typescript_coverage_command"),
+        _ => None,
+    }
+}
+
+fn is_generated_frontend_default(key: &str, value: &toml::Value) -> bool {
+    GENERATED_FRONTEND_COMMAND_DEFAULTS
+        .iter()
+        .any(|(generated_key, generated_value)| {
+            key == *generated_key && value.as_str() == Some(generated_value)
+        })
 }
 
 fn reconcile_work(

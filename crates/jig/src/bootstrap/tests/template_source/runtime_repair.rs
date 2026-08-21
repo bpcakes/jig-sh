@@ -64,19 +64,25 @@ fn recopy_renders_committed_pre_v4_template_with_legacy_jig_version() {
     write_test_crate_guide(&repo);
 
     let answers_template = template.path().join("templates/project/.jig.toml.jinja");
-    let answers = fs::read_to_string(&answers_template).unwrap().replace(
-        "repo_name =",
-        "jig_version = \"<<[ jig_version ]>>\"\nrepo_name =",
-    );
+    let answers = fs::read_to_string(&answers_template)
+        .unwrap()
+        .replace(
+            "repo_name =",
+            "jig_version = \"<<[ jig_version ]>>\"\nrepo_name =",
+        )
+        .replace("_jig.contract_version", "3");
     fs::write(&answers_template, answers).unwrap();
 
     let contract_template = template
         .path()
         .join("templates/project/.agent/jig-contract.json.jinja");
-    let contract = fs::read_to_string(&contract_template).unwrap().replace(
-        "\"contract_version\": <<[ _jig.contract_version ]>>,",
-        "\"contract_version\": 3,\n  \"jig_version\": \"<<[ jig_version ]>>\",",
-    );
+    let contract = fs::read_to_string(&contract_template)
+        .unwrap()
+        .replace(
+            "\"contract_version\": <<[ _jig.contract_version ]>>,",
+            "\"contract_version\": 3,\n  \"jig_version\": \"<<[ jig_version ]>>\",",
+        )
+        .replace("_jig.contract_version", "3");
     fs::write(&contract_template, contract).unwrap();
 
     let launcher_template = template.path().join("templates/project/scripts/jig.jinja");

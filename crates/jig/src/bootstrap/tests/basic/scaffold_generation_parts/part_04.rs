@@ -365,9 +365,24 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
     assert!(!config.contains("rust_migration_dir ="));
-    let contract =
-        fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
+    assert!(!config.contains("backend_language ="));
+    assert!(!config.contains("go_database ="));
+    assert!(config.contains("[repository]"));
+    assert!(config.contains("api_test_command = \"go test ./...\""));
+    assert!(config.contains("web_test_command = \"scripts/check-webapps.sh check-one"));
+    let contract = fs::read_to_string(destination.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains(r#""name": "jig.migration_add""#));
+    let contract_value = serde_json::from_str::<serde_json::Value>(&contract).unwrap();
+    assert_eq!(contract_value["default_check_profile"], "verify");
+    for component in ["api", "web"] {
+        assert!(contract_value["components"].as_array().unwrap().iter().any(
+            |candidate| candidate["id"] == component
+        ));
+        assert!(contract_value["actions"].as_array().unwrap().iter().any(
+            |action| action["target"]["component"] == component
+                && action["target"]["action"] == "test"
+        ));
+    }
     let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();
     assert!(root_guide.contains("business logic in the owning package"));
     assert!(!root_guide.contains("business logic in the owning crate"));

@@ -37,7 +37,7 @@ and, over MCP:
 - [x] (2026-08-21 20:29Z) Slice 2: added one validated repository catalog, raw authored/resolved configuration digests, v6 component/action/profile inputs, and deterministic v2–v5 `repo` target projection with bidirectional aliases and a synthesized default profile.
 - [x] (2026-08-21 20:44Z) Slice 3: added component/target/profile inspection, one deterministic selector and dependency planner, read-only plan explanation, legacy-profile execution, and a useful bare `jig check` while preserving unmodified named legacy check responses.
 - [x] (2026-08-21 21:21Z) Slice 4: added stale-plan validation, owned target execution, append-only run lifecycle folding, target-aware compatible receipts, terminal cancellation/fail-fast results, and `jig status run RUN_ID` lookup.
-- [ ] Slice 5: turn Rust, Go, and TypeScript feature metadata into adapter contributions and make v6 templates component-native; commit independently.
+- [x] (2026-08-21 22:19Z) Slice 5: added feature-owned adapter contributions, explicit v6 components/actions/profiles and provenance, component-scoped commands, adapter-derived runtime capability checks, per-frontend execution, authored multi-stack recopy preservation, and v2–v5 template compatibility.
 - [ ] Slice 6: add target/profile evidence gates while retaining tool gates; commit independently.
 - [ ] Slice 7: expose bounded MCP inspect/plan/execute/cancel operations with strict input/output schemas and durable lookup; commit independently.
 - [ ] Slice 8: add deterministic, explainable affected selection without artifact caching; commit independently.
@@ -66,6 +66,12 @@ and, over MCP:
 
 - Observation: Clap's external-subcommand fallback retains options written after an unknown target as raw selector tokens, unlike known legacy check subcommands.
   Evidence: dogfooding `check repo:contract --no-receipt` initially treated `--no-receipt` as an action id; conversion now normalizes the closed repository-check option set on either side of selectors and has a regression test.
+
+- Observation: moving generated action commands under `[commands]` made command ownership ambiguous during adoption reconciliation; an existing generated default could overwrite an explicit answers-file override, while indiscriminately preferring the render could erase a project override.
+  Evidence: full-to-minimal and minimal-to-full adoption regressions now cover both directions; reconciliation receives the exact rendered command keys made authoritative by answers-file or CLI input and otherwise preserves compatible project values.
+
+- Observation: deriving a v6 model from legacy singular render answers during `jig update` would collapse an authored Go-plus-Rust workspace even though runtime identity was already component-native.
+  Evidence: `RenderAnswers::from_answers_file` now retains a complete authored repository model and its referenced commands for recopy, and a regression round-trips distinct `api:test` and `worker:test` targets unchanged.
 
 ## Decision Log
 
@@ -107,6 +113,10 @@ and, over MCP:
 
 - Decision: Do not implement artifact caching or infer action dependencies from component dependencies.
   Rationale: delegated build systems own caches, and the architecture graph and execution graph express different facts.
+  Date/Author: 2026-08-21 / Codex.
+
+- Decision: Adapter defaults generate new or deliberately re-adopted v6 models, while a complete checked-in v6 repository model remains authoritative during recopy/update; malformed runtime tables fall back to repair generation.
+  Rationale: stack-agnostic authored monorepos must not be projected back through a singular backend answer, but update must retain its established ability to repair invalid runtime configuration.
   Date/Author: 2026-08-21 / Codex.
 
 ## Outcomes & Retrospective
@@ -155,7 +165,7 @@ Finally, add an end-to-end v6 fixture with a Go `api` and TypeScript `web`, both
 
 ## Concrete Steps
 
-Work from `/home/aa/.herdr/worktrees/jig-sh/feat-codex-resume`. Keep `plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8` active and update this file after each slice.
+Work from the repository root. Keep `plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8` active and update this file after each slice.
 
 1. Implement slice 1 in `jig-contract`, run its focused tests and workspace format check, inspect the diff, and commit with a `contract`-scoped message.
 
@@ -265,6 +275,23 @@ Compatibility baseline before implementation:
     MCP execution discovery:        one tool per manifest tool
 
 This section will gain the final acceptance command outputs and any intentionally retained legacy limitations as evidence is collected.
+
+Slice 5 validation evidence:
+
+    cargo test -p jig-contract -p jig-features -p jig-core -p jig-go -p jig-rust -p jig-sqlx -p jig-typescript
+    # all passed
+
+    JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
+    # refreshed both deterministic embedded snapshots
+
+    cargo test -p jig-sh bootstrap --no-fail-fast
+    # 566 passed; 0 failed; 1 ignored
+
+    cargo test -p jig-sh update --no-fail-fast
+    # 42 passed; 0 failed
+
+    cargo clippy -p jig-contract -p jig-features -p jig-core -p jig-go -p jig-rust -p jig-sqlx -p jig-typescript -p jig-sh --all-targets -- -D warnings
+    # passed
 
 ## Interfaces and Dependencies
 
