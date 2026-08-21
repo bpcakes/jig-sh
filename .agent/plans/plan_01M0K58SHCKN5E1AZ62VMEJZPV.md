@@ -7,12 +7,13 @@ This work hardens two control-plane guarantees introduced by execution supervisi
 - [x] Reviewed both findings and identified their ownership boundaries.
 - [x] Centralized owned-process cancellation classification and updated both Git adapters with pre-spawn regressions.
 - [x] Made fatal overflow authoritative over final capture state and added a post-wait regression while preserving truncating capture.
-- [ ] Run focused crate checks and all configured repository gates.
+- [x] Ran focused crate checks and all configured repository gates.
 
 ## Surprises & Discoveries
 
 - The missed cancellation variants compiled because two adapters used catch-all error arms. Later sticky cancellation checks mask many CLI cases, but the repository explicitly tests non-sticky typed cancellation, so the lower-level classification contract still matters.
 - Fatal overflow is currently observed only while waiting. The same drain can first cross its limit during post-exit completion, but that phase discards its `OutputPoll::overflow` value.
+- A forced outer PTY changes terminal-diff behavior in a Vault TUI test, while the repository's normal piped test invocation passes. One earlier full run also encountered a one-shot generated-web lock timing failure whose exact rerun passed. Both failed attempts remain recorded in append-only receipts; the final normal invocation passed every required gate.
 
 ## Decision Log
 
@@ -23,7 +24,11 @@ This work hardens two control-plane guarantees introduced by execution supervisi
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+Cancellation is now classified exhaustively by the owned-process error boundary, so both Git adapters inherit the same meaning and adding a future error variant requires an explicit owner-side decision. Pre-spawn cancellation regressions cover status probing and non-sticky worktree fingerprinting.
+
+Fatal output overflow is now checked against the durable final capture state after cleanup and draining. Successful processes cannot evade `ProcessOutputOverflowPolicy::Error` merely by crossing the limit between the last active poll and EOF, while `Truncate` continues to return bounded output.
+
+Focused tests and scoped Clippy passed for both slices. The development Jig binary then recorded passing format, Clippy, and contract checks, followed by a final non-PTY `scripts/jig work check` with fresh passing contract and full-test gates.
 
 ## Context and orientation
 
