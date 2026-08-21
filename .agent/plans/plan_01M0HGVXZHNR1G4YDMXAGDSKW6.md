@@ -19,6 +19,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Extracted backend-neutral package normalization, confined Rust keyword/identifier prefixing to Rust-react, reused the neutral stem for default Go modules and frontend packages, and proved `loop` remains unchanged in a generated Go workspace.
 - [x] (2026-08-21) Added defaulted Go capability queries to the feature boundary and backend/database/stale-manifest diagnostics for lint and sqlc, with feature-unit and end-to-end dispatch coverage.
 - [x] (2026-08-21) Added client-only staged regeneration from committed OpenAPI documents, ran it after each generated web build, corrected the workflow-boundary documentation, and proved it neither invokes Go nor mutates the generated repository.
+- [x] (2026-08-21) Isolated interactive vault PTY tests from CPU-heavy vault crypto tests after two full-suite runs exposed the same load-dependent failure; the exact 438-test vault partition then passed 438/438.
 - [ ] Rebuild the development runtime, pass focused tests after each slice, pass the complete repository gates, update outcomes, and close structured work.
 
 ## Surprises & Discoveries
@@ -44,6 +45,9 @@ Each independently useful change is committed separately. The complete repositor
 - Observation: `actions/setup-go` and the Go toolchain already share the needed authority semantics: setup-go reads `go.mod` and selects its `toolchain` directive when present, otherwise its `go` directive.
   Evidence: official `actions/setup-go` advanced-usage documentation and the Go Modules Reference describe the same precedence; the local parser tests cover newer, default, duplicate, malformed, bounded, and symlinked authorities.
 
+- Observation: the same vault PTY browser test failed twice in the four-thread full vault group after about five seconds, while all other tests passed and the PTY test passed in isolation in 8.1 seconds.
+  Evidence: full-suite Nextest runs `1a8b5c78-1069-45d6-962a-1b9e11ab7ed6` and `f37c4675-cda0-4dfe-bec8-6a94723da698` both failed only `browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit`; the exact isolated Cargo test passed unchanged.
+
 ## Decision Log
 
 - Decision: Make contract v5 the first epoch that generated repositories may depend on the backend selector fields, while continuing to load v2-v4 repositories.
@@ -68,6 +72,10 @@ Each independently useful change is committed separately. The complete repositor
 
 - Decision: Divide contract drift verification by artifact boundary rather than installing every backend toolchain in every frontend matrix job.
   Rationale: Backend tests already regenerate and compare committed OpenAPI documents. A new client-only mode can regenerate TypeScript clients from those committed documents in web CI. Together the workflows prove backend-to-document and document-to-client drift without duplicating Go or Cargo setup in frontend jobs.
+  Date/Author: 2026-08-21 / Codex
+
+- Decision: Give each vault PTY integration test all four slots in the existing vault Nextest group.
+  Rationale: The browser test intentionally uses bounded UI-event deadlines and also performs password hashing. Competing crypto tests make those deadlines measure scheduler contention. Group-wide reservation preserves useful production-facing deadlines, serializes only the two interactive PTY cases, and avoids globally slowing the vault suite.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective

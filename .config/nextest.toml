@@ -32,5 +32,13 @@ filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | b
 test-group = 'process-signals'
 
 [[profile.default.overrides]]
+# PTY browser tests exercise crypto-backed actions through interactive redraw
+# deadlines. Reserve the full vault group so those deadlines measure the TUI
+# rather than contention with parallel password hashing.
+filter = 'package(jig-sh) & binary(vault_tui)'
+test-group = 'vault-crypto'
+threads-required = 4
+
+[[profile.default.overrides]]
 filter = 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 test-group = 'vault-crypto'
