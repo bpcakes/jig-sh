@@ -20,7 +20,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Added defaulted Go capability queries to the feature boundary and backend/database/stale-manifest diagnostics for lint and sqlc, with feature-unit and end-to-end dispatch coverage.
 - [x] (2026-08-21) Added client-only staged regeneration from committed OpenAPI documents, ran it after each generated web build, corrected the workflow-boundary documentation, and proved it neither invokes Go nor mutates the generated repository.
 - [x] (2026-08-21) Isolated interactive vault PTY tests from CPU-heavy vault crypto tests after repeated full-suite runs exposed a load-dependent failure, then centralized the harness-only PTY watchdog deadlines so host contention cannot masquerade as a product failure.
-- [ ] Rebuild the development runtime, pass focused tests after each slice, pass the complete repository gates, update outcomes, and close structured work.
+- [x] (2026-08-21) Rebuilt the development runtime, passed focused tests after every slice, passed all three configured full-suite partitions (2,170 + 436 + 2 tests), verified no PTY child remained, and prepared the final format, Clippy, contract, and structured-work evidence.
 
 ## Surprises & Discoveries
 
@@ -105,7 +105,11 @@ Each independently useful change is committed separately. The complete repositor
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. Record the final commit IDs, test receipts, remaining risks, and whether each classified root cause was removed here before closing the plan.
+The five review findings were removed at their owning boundaries rather than patched at individual symptoms. Contract epoch and backend identity are now explicit (`d2a3624`); `go.mod` is the single Go toolchain authority (`6d061db`); shared lexical normalization no longer embeds Rust policy (`bcdea65`); unavailable Go checks are capability-aware (`3b304f2`); and generated CI proves the document-to-client edge without installing a backend toolchain (`01ea39f`).
+
+Full-suite work exposed a separate structural flaw in the test harness: PTY resources were cleaned up only on the success path, and test actions synchronized on incidental display text rather than the state that owned input readiness. Commits `1501bf2` through `e4587a6` give PTY tests an isolated phase, central watchdog, kill-and-reap ownership, and state-specific acknowledgements. Repeated browser stress runs passed, and the final exact configured partitions passed as Nextest runs `fc5402f2-b066-4f03-a826-519ef626c306` (2,170/2,170), `840ccf97-e399-4165-a140-2499d51adf11` (436/436), and `50f81e38-8f10-47ab-b42c-1c8b957300f5` (2/2), with no orphaned terminal child.
+
+The earlier one-process aggregate attempts exposed intermittent host/package-cache contention and produced no reproducible product assertion after phase isolation. The remaining risk is runtime cost: several fixture-heavy tests exceed Nextest's slow threshold on a loaded host. They complete successfully when run in the same configured sequence, so this is an observability/capacity concern rather than an unresolved correctness failure.
 
 ## Context and Orientation
 
