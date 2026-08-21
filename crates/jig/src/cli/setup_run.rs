@@ -36,12 +36,12 @@ pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
         |current, total, label| progress.step(label, format!("phase {current}/{total}")),
     );
     #[cfg(all(unix, not(test)))]
-    let output = crate::codex::finish_signal_supervised(
+    let outcome = crate::codex::finish_signal_supervised(
         outcome,
         signal_session.finish(),
         "Setup signal supervision could not retire safely",
-    )?;
-    #[cfg(any(not(unix), test))]
+    );
+    observer.finish()?;
     let output = outcome?;
     progress.done("setup complete");
     emit(json_output, HumanOutput::Setup, &output)?;

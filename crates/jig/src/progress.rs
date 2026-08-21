@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
+const CLI_PROGRESS_BUFFER_LIMIT: usize = 64 * 1024;
+
 /// Command-scoped terminal progress output.
 ///
 /// Kept `Copy` so one progress value can be passed through request structs while
@@ -185,7 +187,8 @@ fn color_enabled() -> bool {
 
 pub(crate) struct CliExecutionObserver {
     enabled: bool,
-    write_failed: bool,
+    pending: Vec<u8>,
+    truncated: bool,
     output_needs_newline: bool,
     cancellation: Box<dyn Fn() -> bool>,
 }
@@ -195,7 +198,8 @@ impl CliExecutionObserver {
     pub(crate) fn for_human_output(json_output: bool) -> Self {
         Self {
             enabled: !json_output,
-            write_failed: false,
+            pending: Vec::new(),
+            truncated: false,
             output_needs_newline: false,
             cancellation: Box::new(|| false),
         }
@@ -208,29 +212,48 @@ impl CliExecutionObserver {
     ) -> Self {
         Self {
             enabled: !json_output,
-            write_failed: false,
+            pending: Vec::new(),
+            truncated: false,
             output_needs_newline: false,
             cancellation: Box::new(cancellation),
         }
     }
 
-    fn write(&mut self, bytes: &[u8]) {
-        if !self.enabled || self.write_failed {
+    fn queue(&mut self, bytes: &[u8]) {
+        if !self.enabled {
             return;
         }
-        let mut stderr = io::stderr().lock();
-        self.write_failed = stderr
-            .write_all(bytes)
-            .and_then(|()| stderr.flush())
-            .is_err();
+        let remaining = CLI_PROGRESS_BUFFER_LIMIT.saturating_sub(self.pending.len());
+        let retained = remaining.min(bytes.len());
+        self.pending.extend_from_slice(&bytes[..retained]);
+        self.truncated |= retained < bytes.len();
     }
 
     fn line(&mut self, line: String) {
         if self.output_needs_newline {
-            self.write(b"\n");
+            self.queue(b"\n");
             self.output_needs_newline = false;
         }
-        self.write(format!("{line}\n").as_bytes());
+        self.queue(format!("{line}\n").as_bytes());
+    }
+
+    pub(crate) fn finish(&mut self) -> io::Result<()> {
+        let stderr = io::stderr();
+        self.finish_to(&mut stderr.lock())
+    }
+
+    fn finish_to(&mut self, writer: &mut dyn Write) -> io::Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        writer.write_all(&self.pending)?;
+        if self.truncated {
+            if self.pending.last().is_some_and(|byte| *byte != b'\n') {
+                writer.write_all(b"\n")?;
+            }
+            writer.write_all(b"[..] progress preview truncated after 64 KiB\n")?;
+        }
+        writer.flush()
     }
 }
 
@@ -244,7 +267,7 @@ impl ExecutionObserver for CliExecutionObserver {
             )),
             ExecutionEvent::Output { stream, bytes } => {
                 let _ = stream;
-                self.write(bytes);
+                self.queue(bytes);
                 self.output_needs_newline = bytes.last().is_some_and(|byte| *byte != b'\n');
             }
             ExecutionEvent::Heartbeat { label, elapsed } => self.line(format!(
@@ -266,7 +289,7 @@ impl ExecutionObserver for CliExecutionObserver {
 
 impl ExecutionCancellation for CliExecutionObserver {
     fn cancelled(&self) -> bool {
-        self.write_failed || (self.cancellation)()
+        (self.cancellation)()
     }
 }
 
@@ -274,7 +297,11 @@ impl ExecutionCancellation for CliExecutionObserver {
 mod tests {
     use std::time::Duration;
 
-    use super::{CliExecutionObserver, CliProgress, format_duration, leader};
+    use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
+
+    use super::{
+        CLI_PROGRESS_BUFFER_LIMIT, CliExecutionObserver, CliProgress, format_duration, leader,
+    };
 
     #[test]
     fn disabled_progress_never_enables_output_or_color() {
@@ -300,6 +327,35 @@ mod tests {
 
         assert!(!progress.enabled);
         assert!(!observer.enabled);
+    }
+
+    #[test]
+    fn execution_progress_is_bounded_and_flushed_after_collection() {
+        let mut observer = CliExecutionObserver::for_human_output(false);
+        observer.event(ExecutionEvent::PhaseStarted {
+            label: "fixture",
+            position: PhasePosition::single(),
+        });
+        observer.event(ExecutionEvent::Output {
+            stream: ExecutionStream::Stdout,
+            bytes: &vec![b'x'; CLI_PROGRESS_BUFFER_LIMIT * 2],
+        });
+        observer.event(ExecutionEvent::PhaseFinished {
+            label: "fixture",
+            success: true,
+            elapsed: Duration::from_millis(1),
+        });
+
+        assert_eq!(observer.pending.len(), CLI_PROGRESS_BUFFER_LIMIT);
+        assert!(observer.truncated);
+        let mut rendered = Vec::new();
+        observer.finish_to(&mut rendered).unwrap();
+        assert!(rendered.starts_with(b"[..] fixture (1/1)\n"));
+        assert!(
+            rendered.ends_with(b"\n[..] progress preview truncated after 64 KiB\n"),
+            "{}",
+            String::from_utf8_lossy(&rendered)
+        );
     }
 
     #[test]

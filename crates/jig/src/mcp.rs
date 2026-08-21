@@ -8,6 +8,9 @@ use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver,
 use crate::runtime::call_tool_with_observer;
 use crate::tool_defs;
 
+const MCP_PROGRESS_EVENT_LIMIT: usize = 64;
+const MCP_OUTPUT_PREVIEW_LIMIT: usize = 4 * 1024;
+
 pub fn serve(ctx: &RepoContext) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -95,8 +98,9 @@ fn handle_tool_call(
             .filter(|token| token.is_string() || token.is_number())
             .cloned();
         let mut observer = McpProgressObserver::new(writer, framing, progress_token);
-        let tool_result = call_tool_with_observer(ctx, name, args, &mut observer)?;
-        observer.require_healthy()?;
+        let tool_result = call_tool_with_observer(ctx, name, args, &mut observer);
+        observer.flush()?;
+        let tool_result = tool_result?;
         Ok(json!({
             "content": [
                 {
@@ -131,7 +135,38 @@ struct McpProgressObserver<'a> {
     framing: MessageFraming,
     progress_token: Option<Value>,
     progress: u64,
-    write_error: Option<String>,
+    messages: Vec<String>,
+    messages_truncated: bool,
+    stdout: OutputPreview,
+    stderr: OutputPreview,
+}
+
+#[derive(Default)]
+struct OutputPreview {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl OutputPreview {
+    fn push(&mut self, bytes: &[u8]) {
+        let remaining = MCP_OUTPUT_PREVIEW_LIMIT.saturating_sub(self.bytes.len());
+        let retained = remaining.min(bytes.len());
+        self.bytes.extend_from_slice(&bytes[..retained]);
+        self.truncated |= retained < bytes.len();
+    }
+
+    fn message(&self, stream: &str) -> Option<String> {
+        if self.bytes.is_empty() && !self.truncated {
+            return None;
+        }
+        let preview = String::from_utf8_lossy(&self.bytes);
+        let suffix = if self.truncated {
+            " [preview truncated]"
+        } else {
+            ""
+        };
+        Some(format!("{stream}: {}{suffix}", preview.trim_end()))
+    }
 }
 
 impl<'a> McpProgressObserver<'a> {
@@ -145,13 +180,27 @@ impl<'a> McpProgressObserver<'a> {
             framing,
             progress_token,
             progress: 0,
-            write_error: None,
+            messages: Vec::new(),
+            messages_truncated: false,
+            stdout: OutputPreview::default(),
+            stderr: OutputPreview::default(),
         }
     }
 
-    fn notify(&mut self, message: String) {
-        let Some(progress_token) = self.progress_token.clone() else {
+    fn queue(&mut self, message: String) {
+        if self.progress_token.is_none() {
             return;
+        }
+        if self.messages.len() == MCP_PROGRESS_EVENT_LIMIT {
+            self.messages_truncated = true;
+            return;
+        }
+        self.messages.push(message);
+    }
+
+    fn notify(&mut self, message: &str) -> Result<()> {
+        let Some(progress_token) = self.progress_token.clone() else {
+            return Ok(());
         };
         self.progress = self.progress.saturating_add(1);
         let notification = json!({
@@ -163,16 +212,25 @@ impl<'a> McpProgressObserver<'a> {
                 "message": message,
             }
         });
-        if let Err(error) = write_message(self.writer, &notification, self.framing) {
-            self.write_error = Some(error.to_string());
-        }
+        write_message(self.writer, &notification, self.framing)
     }
 
-    fn require_healthy(&self) -> Result<()> {
-        match &self.write_error {
-            Some(error) => Err(anyhow!("Failed to send MCP progress notification: {error}")),
-            None => Ok(()),
+    fn flush(&mut self) -> Result<()> {
+        let mut messages = std::mem::take(&mut self.messages);
+        if let Some(message) = self.stdout.message("stdout") {
+            messages.push(message);
         }
+        if let Some(message) = self.stderr.message("stderr") {
+            messages.push(message);
+        }
+        if self.messages_truncated {
+            messages.push("additional progress events omitted".to_string());
+        }
+        for message in messages {
+            self.notify(&message)
+                .map_err(|error| anyhow!("Failed to send MCP progress notification: {error}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -185,12 +243,11 @@ impl ExecutionObserver for McpProgressObserver<'_> {
                 position.total()
             ),
             ExecutionEvent::Output { stream, bytes } => {
-                let stream = match stream {
-                    ExecutionStream::Stdout => "stdout",
-                    ExecutionStream::Stderr => "stderr",
-                };
-                let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(4_096)]);
-                format!("{stream}: {}", preview.trim_end())
+                match stream {
+                    ExecutionStream::Stdout => self.stdout.push(bytes),
+                    ExecutionStream::Stderr => self.stderr.push(bytes),
+                }
+                return;
             }
             ExecutionEvent::Heartbeat { label, elapsed } => {
                 format!("{label} still running ({}s)", elapsed.as_secs())
@@ -205,13 +262,13 @@ impl ExecutionObserver for McpProgressObserver<'_> {
                 elapsed.as_secs()
             ),
         };
-        self.notify(message);
+        self.queue(message);
     }
 }
 
 impl ExecutionCancellation for McpProgressObserver<'_> {
     fn cancelled(&self) -> bool {
-        self.write_error.is_some()
+        false
     }
 }
 
@@ -300,7 +357,7 @@ mod tests {
     use serde_json::json;
 
     use super::{McpProgressObserver, MessageFraming, read_message, write_message};
-    use crate::execution::{ExecutionEvent, ExecutionObserver};
+    use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 
     #[test]
     fn read_message_accepts_json_line() {
@@ -425,7 +482,11 @@ mod tests {
                 label: "jig.test",
                 elapsed: Duration::from_secs(25),
             });
-            observer.require_healthy().unwrap();
+            assert_eq!(
+                observer.progress, 0,
+                "progress must stay buffered during work"
+            );
+            observer.flush().unwrap();
         }
 
         let notification: serde_json::Value =
@@ -449,6 +510,52 @@ mod tests {
             label: "jig.test",
             elapsed: Duration::from_secs(25),
         });
+        observer.flush().unwrap();
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn progress_observer_coalesces_noisy_output_into_one_bounded_preview() {
+        let mut output = Vec::new();
+        {
+            let mut observer =
+                McpProgressObserver::new(&mut output, MessageFraming::JsonLine, Some(json!(7)));
+            observer.event(ExecutionEvent::PhaseStarted {
+                label: "fixture",
+                position: PhasePosition::single(),
+            });
+            for _ in 0..100 {
+                observer.event(ExecutionEvent::Output {
+                    stream: ExecutionStream::Stdout,
+                    bytes: &[b'x'; 4_096],
+                });
+            }
+            observer.event(ExecutionEvent::PhaseFinished {
+                label: "fixture",
+                success: true,
+                elapsed: Duration::from_secs(1),
+            });
+            assert_eq!(observer.progress, 0, "progress must not write during work");
+            observer.flush().unwrap();
+        }
+
+        let notifications = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(notifications.len(), 3);
+        assert_eq!(
+            notifications[0]["params"]["message"],
+            "fixture started (1/1)"
+        );
+        assert_eq!(
+            notifications[1]["params"]["message"],
+            "fixture finished (1s)"
+        );
+        let output_message = notifications[2]["params"]["message"].as_str().unwrap();
+        assert!(output_message.starts_with("stdout: "));
+        assert!(output_message.ends_with(" [preview truncated]"));
+        assert!(output_message.len() < 4_200);
     }
 }

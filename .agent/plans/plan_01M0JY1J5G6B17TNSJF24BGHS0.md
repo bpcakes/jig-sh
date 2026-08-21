@@ -14,7 +14,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [x] (2026-08-21 19:51Z) Opened structured work as `plan_01M0JY1J5G6B17TNSJF24BGHS0` and recorded this execution plan.
 - [x] (2026-08-21 20:25Z) Slice 1a: centralized signal ownership for runtime agent doctor and setup, passed caller cancellation into nested doctor probes, and added a production-binary regression for the former nested-lock deadlock.
 - [ ] Slice 1b: propagate cancellation through long non-process operations and add setup interruption and non-process cancellation regressions.
-- [ ] Slice 2: separate supervision from progress transport using bounded/coalesced delivery; cap MCP progress volume and test backpressure.
+- [x] (2026-08-21 20:49Z) Slice 2: separated supervision from transport writes with a bounded 64 KiB CLI event buffer and coalesced 4 KiB-per-stream MCP previews; transport flushes now occur only after supervised work returns.
 - [ ] Slice 3: make output capture resource-bounded while preserving complete normal worker results.
 - [ ] Slice 4: give orchestration phases balanced scope ownership and test exact event sequences.
 - [ ] Slice 5: record configured-command supervision failures and their diagnostic reason in direct and work-check receipts.
@@ -31,6 +31,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: `runtime::tests::command_tool_honors_repository_timeout` sets `no_receipt: true`.
 - Observation: Unit tests cannot validate the nested signal-session failure because production signal ownership is intentionally excluded under `cfg(test)`.
   Evidence: The new `cli_agent_doctor_reuses_outer_signal_session` integration test invokes `CARGO_BIN_EXE_jig`, bounds the wait to five seconds, and exercises the production Unix configuration that previously hung.
+- Observation: The simplest reliable nonblocking transport boundary does not require a background runtime or writer thread.
+  Evidence: CLI and MCP observers now retain bounded event previews during execution and flush only after dispatch returns; noisy MCP output is coalesced to one notification per stream, so the supervision thread performs no transport I/O.
 
 ## Decision Log
 
@@ -142,3 +144,5 @@ Preserve receipt JSON compatibility. New evidence fields may be additive, but ex
 Plan revision note (2026-08-21 19:51Z): Created the initial self-contained plan from the merged Claude and Codex review, the reproduced deadlock, repository guidance, and the user's requirement for separately committed implementation slices and full-suite validation.
 
 Plan revision note (2026-08-21 20:25Z): Recorded the first signal-ownership cut separately from broader in-process cancellation so its deadlock regression and commit remain narrowly reviewable.
+
+Plan revision note (2026-08-21 20:49Z): Recorded bounded deferred transport delivery as the second slice. This deliberately trades live byte-for-byte progress for a fixed resource ceiling and supervision guarantees; complete command results remain part of the normal tool response and receipts.
