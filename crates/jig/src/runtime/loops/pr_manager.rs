@@ -476,6 +476,7 @@ fn run_pr_repair(
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
             },
+            phase: None,
         },
         observer,
     )?;

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::command::{WorkRefineRequest, WorkReviewRequest};
 use crate::context::{RepoContext, WorkGate, WorkRefinementConfig, WorkReviewGate};
-use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
+use crate::execution::{ExecutionControl, PhasePosition};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
@@ -50,12 +50,6 @@ pub(super) fn refine_with_observer(
     let mut refinement_required = false;
 
     for iteration in 1..=opts.max_iterations {
-        let iteration_label = format!("refinement iteration {iteration}");
-        observer.event(ExecutionEvent::PhaseStarted {
-            label: &iteration_label,
-            position: PhasePosition::new(iteration, opts.max_iterations)
-                .expect("review iteration is within the configured nonzero maximum"),
-        });
         let findings = actionable_findings(&review_result)?;
         if findings.is_empty() {
             break;
@@ -72,6 +66,8 @@ pub(super) fn refine_with_observer(
             &gates,
             Some(refinement),
             &findings,
+            PhasePosition::new(iteration, opts.max_iterations)
+                .expect("review iteration is within the configured nonzero maximum"),
             observer,
         )?;
         fixer_failed = refine_receipt["status"].as_str() == Some("failed");
@@ -139,12 +135,9 @@ pub(super) fn run_review_gates_with_observer(
     let mut reviews = Vec::with_capacity(gates.len());
     let mut failed = Vec::new();
     for (index, gate) in gates.iter().enumerate() {
-        observer.event(ExecutionEvent::PhaseStarted {
-            label: &gate.id,
-            position: PhasePosition::new(index + 1, gates.len())
-                .expect("review gates are enumerated within a nonempty list"),
-        });
-        let review = run_review_gate(ctx, plan_id, gate, observer)?;
+        let position = PhasePosition::new(index + 1, gates.len())
+            .expect("review gates are enumerated within a nonempty list");
+        let review = run_review_gate(ctx, plan_id, gate, position, observer)?;
         if review["status"].as_str() != Some("passed") {
             failed.push(gate.id.clone());
         }
@@ -165,6 +158,7 @@ fn run_review_gate(
     ctx: &RepoContext,
     plan_id: &str,
     gate: &WorkReviewGate,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let skill = gate.skill.as_str();
@@ -175,7 +169,8 @@ fn run_review_gate(
     let prompt_hash = hash_text(&prompt);
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
-    let command_output = run_codex_review(ctx, plan_id, gate, &prompt, &schema, observer)?;
+    let command_output =
+        run_codex_review(ctx, plan_id, gate, &prompt, &schema, position, observer)?;
     let output = command_output.output;
     let ended = now_ms();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -407,10 +402,12 @@ fn run_fixer(
     gates: &[WorkReviewGate],
     refinement: Option<&WorkRefinementConfig>,
     findings: &[Value],
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);
+    let phase_label = format!("refinement iteration {iteration}");
     let before_fingerprint = current_worktree_fingerprint(ctx);
     let command_output = run_codex_refine(
         ctx,
@@ -419,6 +416,8 @@ fn run_fixer(
         refinement
             .and_then(|refinement| refinement.model.as_deref())
             .or_else(|| gates.first().and_then(|gate| gate.model.as_deref())),
+        &phase_label,
+        position,
         observer,
     )
     .context("Failed to run Codex refinement")?;

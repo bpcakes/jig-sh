@@ -69,6 +69,12 @@ pub(crate) struct WorkerReceiptRequest<'a> {
     pub(crate) collect_worktree_fingerprint: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkerPhase<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) position: PhasePosition,
+}
+
 pub(crate) struct CodexExecRequest<'a> {
     pub(crate) root: &'a Path,
     pub(crate) codex_home: Option<&'a Path>,
@@ -81,6 +87,7 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) output_schema: Option<&'a Value>,
     pub(crate) prompt: CodexPrompt<'a>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
+    pub(crate) phase: Option<WorkerPhase<'a>>,
 }
 
 pub(crate) struct CodexExecOutput {
@@ -94,14 +101,18 @@ pub(crate) fn run_codex_exec(
     request: CodexExecRequest<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CodexExecOutput> {
-    let phase = ExecutionPhase::start(observer, request.receipt.purpose, PhasePosition::single());
+    let phase = request
+        .phase
+        .map(|phase| ExecutionPhase::start(observer, phase.label, phase.position));
     let started = now_ms();
     let result = run_codex_exec_inner(ctx, &request, observer);
     let ended = now_ms();
-    phase.finish(
-        observer,
-        result.as_ref().is_ok_and(|run| run.output.status.success()),
-    );
+    if let Some(phase) = phase {
+        phase.finish(
+            observer,
+            result.as_ref().is_ok_and(|run| run.output.status.success()),
+        );
+    }
 
     match result {
         Ok(run) => {
@@ -477,6 +488,10 @@ mod tests {
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
+            phase: Some(WorkerPhase {
+                label: "test worker",
+                position: PhasePosition::single(),
+            }),
         };
         let command = build_codex_command("codex", &request, None, None);
         let args = command

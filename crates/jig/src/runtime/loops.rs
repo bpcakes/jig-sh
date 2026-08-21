@@ -15,7 +15,7 @@ use crate::command::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
-use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
+use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition};
 use crate::state::{ReceiptInput, now_ms, open_plan_summaries, record_receipt};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
@@ -276,11 +276,9 @@ fn run_until_with_observer(
     let mut ticks = Vec::new();
     let mut status = "max_ticks_reached".to_string();
     for index in 0..request.max_ticks {
-        observer.event(ExecutionEvent::PhaseStarted {
-            label: "loop tick",
-            position: PhasePosition::new((index + 1) as usize, request.max_ticks as usize)
-                .expect("loop tick progress is within the configured nonzero maximum"),
-        });
+        let position = PhasePosition::new((index + 1) as usize, request.max_ticks as usize)
+            .expect("loop tick progress is within the configured nonzero maximum");
+        let phase = ExecutionPhase::start(observer, "loop tick", position);
         let tick = tick_with_observer(
             ctx,
             LoopTickRequest {
@@ -290,7 +288,9 @@ fn run_until_with_observer(
                 backoff_seconds: request.backoff_seconds,
             },
             observer,
-        )?;
+        );
+        phase.finish(observer, tick.is_ok());
+        let tick = tick?;
         let tick_status = tick["status"].as_str().unwrap_or("unknown").to_string();
         let idle = tick["idle"].as_bool().unwrap_or(false);
         ticks.push(tick);

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
-use crate::execution::{ExecutionControl, ExecutionEvent, PhasePosition};
+use crate::execution::{ExecutionControl, PhasePosition};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
@@ -62,17 +62,15 @@ fn check_tools_with_failure_mode(
     let mut results = Vec::with_capacity(tools.len());
     let mut check_failure = None;
     for (index, name) in tools.iter().enumerate() {
-        observer.event(ExecutionEvent::PhaseStarted {
-            label: name,
-            position: PhasePosition::new(index + 1, tools.len())
-                .expect("work checks are enumerated within a nonempty tool list"),
-        });
+        let position = PhasePosition::new(index + 1, tools.len())
+            .expect("work checks are enumerated within a nonempty tool list");
         let result =
             match super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
                 ctx,
                 name,
                 json!({}),
                 Some(plan_id.to_string()),
+                position,
                 observer,
             ) {
                 Ok(result) => result,

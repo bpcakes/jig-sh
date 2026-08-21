@@ -58,6 +58,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_observer(
         args,
         plan_id,
         ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
+        PhasePosition::single(),
         observer,
     )
 }
@@ -75,6 +76,7 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result(true, false, false),
+        PhasePosition::single(),
         &mut NoopExecutionObserver,
     )
 }
@@ -84,6 +86,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
     tool_name: &str,
     args: Value,
     plan_id: Option<String>,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     execute_manifest_tool_with_options(
@@ -92,6 +95,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result(true, false, false),
+        position,
         observer,
     )
 }
@@ -183,13 +187,16 @@ fn execute_manifest_tool_with_options(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let tool = ctx
         .tool_spec(tool_name)
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
     match tool.kind.as_str() {
-        kind::NATIVE => execute_native_tool(ctx, &tool.name, args, plan_id, options),
+        kind::NATIVE => {
+            execute_native_tool(ctx, &tool.name, args, plan_id, options, position, observer)
+        }
         kind::COMMAND => {
             let command_key = tool
                 .command
@@ -206,6 +213,7 @@ fn execute_manifest_tool_with_options(
                 args,
                 plan_id,
                 options,
+                position,
                 observer,
             )
         }
@@ -240,9 +248,17 @@ fn execute_native_tool(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
-    let output = run_native_tool(ctx, tool_name, &args)?;
+    let phase = ExecutionPhase::start(observer, tool_name, position);
+    let output = run_native_tool(ctx, tool_name, &args);
+    phase.finish(
+        observer,
+        output.as_ref().is_ok_and(|output| output.exit_status == 0),
+    );
+    let output = output?;
     let ended = now_ms();
 
     let receipt_result = maybe_record_receipt(
@@ -345,6 +361,7 @@ fn execute_command_tool(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
@@ -353,6 +370,7 @@ fn execute_command_tool(
         invocation.tool_name,
         invocation.command_text,
         &args,
+        position,
         observer,
     )?;
     let ended = now_ms();
@@ -448,6 +466,7 @@ fn run_configured_command(
     tool_name: &str,
     command_text: &str,
     args: &Value,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
     let mut command = Command::new("bash");
@@ -467,7 +486,7 @@ fn run_configured_command(
         command.env("NAME", name);
     }
 
-    let phase = ExecutionPhase::start(observer, tool_name, PhasePosition::single());
+    let phase = ExecutionPhase::start(observer, tool_name, position);
     let result = run_owned_process_tree_with_output_limits_and_observer(
         &mut command,
         ctx.command_timeout().duration(),

@@ -152,11 +152,35 @@ fn loop_tick_rejects_zero_backoff_override() {
 
 #[test]
 fn loop_run_until_idle_stops_after_one_noop_tick() {
+    #[derive(Default)]
+    struct PhaseObserver(Vec<(String, usize, usize)>);
+
+    impl crate::execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, position } => {
+                    self.0.push((
+                        format!("started:{label}"),
+                        position.current(),
+                        position.total(),
+                    ))
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.0.push((format!("finished:{label}"), 0, 0));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = PhaseObserver::default();
 
-    let output = crate::runtime::dispatch(
+    let output = crate::runtime::dispatch_with_observer(
         &ctx,
         RuntimeCommand::Loop(LoopCommand::Run(LoopRunRequest {
             workflow: Some("noop-status".into()),
@@ -166,6 +190,7 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
             max_attempts: None,
             backoff_seconds: None,
         })),
+        &mut observer,
     )
     .unwrap();
 
@@ -174,6 +199,13 @@ fn loop_run_until_idle_stops_after_one_noop_tick() {
     assert_eq!(output["status"], "idle");
     assert_eq!(output["tick_count"], 1);
     assert_eq!(output["ticks"][0]["status"], "idle");
+    assert_eq!(
+        observer.0,
+        [
+            ("started:loop tick".into(), 1, 5),
+            ("finished:loop tick".into(), 0, 0)
+        ]
+    );
 }
 
 #[test]

@@ -16,7 +16,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [ ] Slice 1b: propagate cancellation through long non-process operations and add setup interruption and non-process cancellation regressions.
 - [x] (2026-08-21 20:49Z) Slice 2: separated supervision from transport writes with a bounded 64 KiB CLI event buffer and coalesced 4 KiB-per-stream MCP previews; transport flushes now occur only after supervised work returns.
 - [x] (2026-08-21 21:07Z) Slice 3: replaced unbounded configured-command, marketplace, worker-stream, and structured worker-file capture with a shared 4 MiB-per-output limit and explicit incomplete/truncated-output errors.
-- [ ] Slice 4: give orchestration phases balanced scope ownership and test exact event sequences.
+- [x] (2026-08-21 21:34Z) Slice 4: made phase label/position explicit inputs to tool and worker execution, removed orphan aggregate starts, suppressed nested worker phases inside loop ticks, and added exact sequence tests for checks, review gates, and loop ticks.
 - [ ] Slice 5: record configured-command supervision failures and their diagnostic reason in direct and work-check receipts.
 - [ ] Update documentation and remove dead compatibility helpers exposed by the refactor where their removal reduces the bug surface.
 - [ ] Build the development binary, run focused tests after every slice, commit every slice separately, then run the full configured gates and finish structured work.
@@ -35,6 +35,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: CLI and MCP observers now retain bounded event previews during execution and flush only after dispatch returns; noisy MCP output is coalesced to one notification per stream, so the supervision thread performs no transport I/O.
 - Observation: Limiting only child pipes would leave the Codex structured `-o` file as a second unbounded allocation path.
   Evidence: `run_codex_exec_inner` previously called `fs::read` after checking only that the file was nonempty; it now rejects metadata lengths above the shared execution limit before allocating.
+- Observation: A position alone is insufficient phase context for workers because review gates and refinement iterations need caller-owned labels as well as aggregate numbering.
+  Evidence: `WorkerPhase` carries label and position together as an optional typed scope; loop-owned workers pass `None`, while review/refine workers receive the caller's exact phase identity.
 
 ## Decision Log
 
@@ -150,3 +152,5 @@ Plan revision note (2026-08-21 20:25Z): Recorded the first signal-ownership cut 
 Plan revision note (2026-08-21 20:49Z): Recorded bounded deferred transport delivery as the second slice. This deliberately trades live byte-for-byte progress for a fixed resource ceiling and supervision guarantees; complete command results remain part of the normal tool response and receipts.
 
 Plan revision note (2026-08-21 21:07Z): Recorded the shared 4 MiB capture policy and its worker-stream and structured-file regressions. Capture overflow is an explicit execution failure rather than a partial successful result.
+
+Plan revision note (2026-08-21 21:34Z): Recorded explicit phase-scope ownership. Exact observer tests now reject duplicate `1/1` starts, missing finishes, and lost aggregate positions.

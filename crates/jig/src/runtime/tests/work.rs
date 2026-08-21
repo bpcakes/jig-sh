@@ -389,6 +389,60 @@ fn work_check_runs_configured_tools() {
 }
 
 #[test]
+fn work_check_emits_one_balanced_phase_per_tool_with_aggregate_positions() {
+    #[derive(Default)]
+    struct PhaseObserver(Vec<(String, String, usize, usize)>);
+
+    impl crate::execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, position } => {
+                    self.0.push((
+                        "started".into(),
+                        label.into(),
+                        position.current(),
+                        position.total(),
+                    ))
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.0.push(("finished".into(), label.into(), 0, 0));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+
+    let temp = tempdir().unwrap();
+    write_mutating_check_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = PhaseObserver::default();
+
+    crate::runtime::dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Work(crate::command::WorkCommand::Check(
+            crate::command::WorkCheckRequest {
+                plan_id: "plan_1".into(),
+                tools: Vec::new(),
+            },
+        )),
+        &mut observer,
+    )
+    .unwrap();
+
+    assert_eq!(
+        observer.0,
+        [
+            ("started".into(), "jig.first_check".into(), 1, 2),
+            ("finished".into(), "jig.first_check".into(), 0, 0),
+            ("started".into(), "jig.mutating_check".into(), 2, 2),
+            ("finished".into(), "jig.mutating_check".into(), 0, 0),
+        ]
+    );
+}
+
+#[test]
 fn work_check_rejects_unknown_plan_before_running_tools() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -1104,6 +1158,30 @@ kind = "unsupported-kind"
 
 #[test]
 fn work_review_records_structured_codex_review_findings() {
+    #[derive(Default)]
+    struct PhaseObserver(Vec<(String, String, usize, usize)>);
+
+    impl crate::execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, position } => {
+                    self.0.push((
+                        "started".into(),
+                        label.into(),
+                        position.current(),
+                        position.total(),
+                    ))
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.0.push(("finished".into(), label.into(), 0, 0));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_review_fixture_repo(temp.path());
@@ -1113,15 +1191,17 @@ fn work_review_records_structured_codex_review_findings() {
     write_review_codex_stub(&codex_path);
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = PhaseObserver::default();
 
-    let output = dispatch(
+    let output = crate::runtime::dispatch_with_observer(
         &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Review(
-            crate::cli::WorkReviewOpts {
+        RuntimeCommand::Work(crate::command::WorkCommand::Review(
+            crate::command::WorkReviewRequest {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
             },
         )),
+        &mut observer,
     )
     .unwrap();
 
@@ -1159,6 +1239,13 @@ fn work_review_records_structured_codex_review_findings() {
     assert_eq!(worker_receipt["evidence"]["provider"], "codex");
     assert_eq!(worker_receipt["evidence"]["runner"], "codex_exec");
     assert_eq!(worker_receipt["evidence"]["mode"], "review");
+    assert_eq!(
+        observer.0,
+        [
+            ("started".into(), "rust-error-handling".into(), 1, 1),
+            ("finished".into(), "rust-error-handling".into(), 0, 0),
+        ]
+    );
 }
 
 #[test]

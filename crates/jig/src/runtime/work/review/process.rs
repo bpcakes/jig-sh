@@ -5,9 +5,9 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::context::{RepoContext, ReviewScopeArg, WorkReviewGate, parse_review_scope_arg};
-use crate::execution::ExecutionControl;
+use crate::execution::{ExecutionControl, PhasePosition};
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
+    CodexExecMode, CodexExecRequest, CodexPrompt, WorkerPhase, WorkerReceiptRequest, run_codex_exec,
 };
 
 pub(super) struct CodexReviewCommandOutput {
@@ -22,6 +22,7 @@ pub(super) fn run_codex_review(
     gate: &WorkReviewGate,
     prompt: &str,
     schema: &Value,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CodexReviewCommandOutput> {
     let output = run_codex_exec(
@@ -45,6 +46,10 @@ pub(super) fn run_codex_review(
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
+            phase: Some(WorkerPhase {
+                label: &gate.id,
+                position,
+            }),
         },
         observer,
     )?;
@@ -60,6 +65,8 @@ pub(super) fn run_codex_refine(
     plan_id: &str,
     prompt: &str,
     model: Option<&str>,
+    phase_label: &str,
+    position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CodexRefineCommandOutput> {
     let output = run_codex_exec(
@@ -83,6 +90,10 @@ pub(super) fn run_codex_refine(
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
+            phase: Some(WorkerPhase {
+                label: phase_label,
+                position,
+            }),
         },
         observer,
     )?;
