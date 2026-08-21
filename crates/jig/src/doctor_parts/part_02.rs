@@ -570,61 +570,75 @@ fn parse_numeric_version_component(value: &str) -> Option<u64> {
     value.parse().ok()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthorityReadError {
+    Inspect,
+    NotRegular,
+    EmptyOrOversized,
+    Read,
+    InvalidUtf8,
+}
+
+fn read_bounded_authority(
+    path: &Path,
+    max_bytes: u64,
+) -> std::result::Result<Option<String>, AuthorityReadError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(AuthorityReadError::Inspect),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(AuthorityReadError::NotRegular);
+    }
+    if metadata.len() == 0 || metadata.len() > max_bytes {
+        return Err(AuthorityReadError::EmptyOrOversized);
+    }
+    let file = fs::File::open(path).map_err(|_| AuthorityReadError::Read)?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| AuthorityReadError::Read)?;
+    if bytes.is_empty() || bytes.len() as u64 > max_bytes {
+        return Err(AuthorityReadError::EmptyOrOversized);
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|_| AuthorityReadError::InvalidUtf8)
+}
+
 fn numeric_version_authority(
     path: &Path,
     product: &str,
     allow_missing_patch: bool,
     example: &str,
 ) -> std::result::Result<Option<NumericVersion>, String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => {
-            return Err(format!(
+    let contents = read_bounded_authority(path, VERSION_AUTHORITY_MAX_BYTES)
+        .map_err(|error| match error {
+            AuthorityReadError::Inspect => format!(
                 "Could not inspect the {product} version authority at {}",
                 path.display()
-            ));
-        }
-    };
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "{product} version authority {} must be a real regular file",
-            path.display()
-        ));
-    }
-    if metadata.len() == 0 || metadata.len() > VERSION_AUTHORITY_MAX_BYTES {
-        return Err(format!(
-            "{product} version authority {} must contain exactly one bounded version token",
-            path.display()
-        ));
-    }
-    let file = fs::File::open(path).map_err(|_| {
-        format!(
-            "Could not read the {product} version authority at {}",
-            path.display()
-        )
-    })?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(VERSION_AUTHORITY_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| {
-            format!(
+            ),
+            AuthorityReadError::NotRegular => format!(
+                "{product} version authority {} must be a real regular file",
+                path.display()
+            ),
+            AuthorityReadError::EmptyOrOversized => format!(
+                "{product} version authority {} must contain exactly one bounded version token",
+                path.display()
+            ),
+            AuthorityReadError::Read => format!(
                 "Could not read the {product} version authority at {}",
                 path.display()
-            )
+            ),
+            AuthorityReadError::InvalidUtf8 => format!(
+                "{product} version authority {} must contain valid UTF-8",
+                path.display()
+            ),
         })?;
-    if bytes.is_empty() || bytes.len() as u64 > VERSION_AUTHORITY_MAX_BYTES {
-        return Err(format!(
-            "{product} version authority {} must contain exactly one bounded version token",
-            path.display()
-        ));
-    }
-    let contents = std::str::from_utf8(&bytes).map_err(|_| {
-        format!(
-            "{product} version authority {} must contain valid UTF-8",
-            path.display()
-        )
-    })?;
+    let Some(contents) = contents else {
+        return Ok(None);
+    };
     let mut tokens = contents.split_ascii_whitespace();
     let Some(token) = tokens.next() else {
         return Err(format!(
@@ -651,41 +665,30 @@ fn numeric_version_authority(
 fn go_module_version_authority(
     path: &Path,
 ) -> std::result::Result<Option<NumericVersion>, String> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(format!("Could not inspect Go module {}", path.display())),
+    let contents = read_bounded_authority(path, GO_MODULE_AUTHORITY_MAX_BYTES)
+        .map_err(|error| match error {
+            AuthorityReadError::Inspect => {
+                format!("Could not inspect Go module {}", path.display())
+            }
+            AuthorityReadError::NotRegular => format!(
+                "Go module authority {} must be a real regular file",
+                path.display()
+            ),
+            AuthorityReadError::EmptyOrOversized => format!(
+                "Go module authority {} must be a non-empty bounded go.mod file",
+                path.display()
+            ),
+            AuthorityReadError::Read => {
+                format!("Could not read Go module authority at {}", path.display())
+            }
+            AuthorityReadError::InvalidUtf8 => format!(
+                "Go module authority {} must contain valid UTF-8",
+                path.display()
+            ),
+        })?;
+    let Some(contents) = contents else {
+        return Ok(None);
     };
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "Go module authority {} must be a real regular file",
-            path.display()
-        ));
-    }
-    if metadata.len() == 0 || metadata.len() > GO_MODULE_AUTHORITY_MAX_BYTES {
-        return Err(format!(
-            "Go module authority {} must be a non-empty bounded go.mod file",
-            path.display()
-        ));
-    }
-    let file = fs::File::open(path)
-        .map_err(|_| format!("Could not read Go module authority at {}", path.display()))?;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(GO_MODULE_AUTHORITY_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| format!("Could not read Go module authority at {}", path.display()))?;
-    if bytes.is_empty() || bytes.len() as u64 > GO_MODULE_AUTHORITY_MAX_BYTES {
-        return Err(format!(
-            "Go module authority {} must be a non-empty bounded go.mod file",
-            path.display()
-        ));
-    }
-    let contents = std::str::from_utf8(&bytes).map_err(|_| {
-        format!(
-            "Go module authority {} must contain valid UTF-8",
-            path.display()
-        )
-    })?;
 
     let mut go_version = None;
     let mut toolchain_version = None;
