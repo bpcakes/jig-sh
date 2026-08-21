@@ -18,11 +18,11 @@ pub(super) struct InitScaffoldPlan {
     preset: ScaffoldPreset,
     /// The repo name exactly as requested or inferred from the destination path.
     requested_repo_name: String,
-    /// The Rust-compatible repo name recorded in generated Jig answers.
+    /// The normalized repo name recorded in generated Jig answers.
     repo_name: String,
-    /// The kebab-case Cargo package stem used for generated workspace members.
+    /// The kebab-case package stem used for generated workspace members.
     package_name: String,
-    /// The underscore Rust module stem derived from `package_name`.
+    /// The underscore code/module stem derived from `package_name`.
     module_name: String,
     go_module: String,
     /// The DNS-safe repo label used by Jig's development proxy.
@@ -50,8 +50,8 @@ use frontend::{
     render_frontend_workspace_files_for_backend, scaffold_bootstrap_command,
 };
 use names::{
-    default_repo_name, normalize_rust_react_package_name, rust_react_repo_dns_label,
-    validate_scaffold_relative_path,
+    default_repo_name, normalize_package_name, normalize_rust_react_package_name,
+    rust_react_repo_dns_label, validate_scaffold_relative_path,
 };
 pub(super) use write::ScaffoldFile;
 use write::ScaffoldReport;
@@ -290,7 +290,7 @@ impl InitScaffoldPlan {
         let package_name = normalize_rust_react_package_name(&requested_repo_name)?;
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
-        // sanitize_package_name validates the underscore form before this replacement.
+        // Rust package normalization validates the underscore form before this replacement.
         let module_name = package_name.replace('-', "_");
         let db = opts.db.unwrap_or(ScaffoldDb::None);
         let package_manager = answers
@@ -386,7 +386,7 @@ impl InitScaffoldPlan {
             .repo_name
             .clone()
             .unwrap_or_else(|| default_repo_name(destination));
-        let package_name = names::sanitize_package_name(&requested_repo_name)?;
+        let package_name = normalize_package_name(&requested_repo_name)?;
         let repo_name = package_name.clone();
         let repo_dns_label = rust_react_repo_dns_label(&repo_name);
         let module_name = package_name.replace('-', "_");

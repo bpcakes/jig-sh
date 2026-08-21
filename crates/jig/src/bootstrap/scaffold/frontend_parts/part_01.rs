@@ -378,7 +378,7 @@ impl FrontendScaffold {
 
     pub(super) fn from_spec(spec: ScaffoldFrontend) -> Result<Self> {
         validate_scaffold_name("frontend name", &spec.name)?;
-        let package_name = sanitize_package_name(&spec.name)?;
+        let package_name = normalize_package_name(&spec.name)?;
         let (coverage_threshold, dev_kind) = scaffold_frontend_defaults(spec.kind);
         Ok(Self {
             dir: spec.name.clone(),
@@ -406,7 +406,7 @@ impl FrontendScaffold {
             kind,
             coverage_threshold: app.coverage_threshold,
             dev_kind: app.kind.clone(),
-            package_name: sanitize_package_name(&app.name)?,
+            package_name: normalize_package_name(&app.name)?,
         })
     }
 

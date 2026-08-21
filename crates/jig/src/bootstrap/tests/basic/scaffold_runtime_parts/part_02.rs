@@ -477,6 +477,32 @@ fn scaffold_prefixes_repo_names_that_are_invalid_rust_crate_identifiers() {
 }
 
 #[test]
+fn go_scaffold_keeps_names_that_are_only_rust_keywords() {
+    let temp = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            repo_name: Some("loop".into()),
+            go_module: Some("example.com/loop".into()),
+            ..AnswerOpts::default()
+        },
+        temp.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(plan.summary().contains("Go backend for loop"));
+    assert!(plan.sanitized_repo_name_note().is_none());
+    plan.write(temp.path(), false).unwrap();
+    let workspace = fs::read_to_string(temp.path().join("package.json")).unwrap();
+    assert!(workspace.contains(r#""name": "loop-workspace""#));
+}
+
+#[test]
 fn run_init_sqlite_scaffold_keeps_sanitized_database_names_and_ignores_aligned() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

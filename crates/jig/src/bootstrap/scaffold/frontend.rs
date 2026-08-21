@@ -9,7 +9,7 @@ use super::super::{
     generated_package_manager_version,
 };
 use super::embedded_templates::EMBEDDED_SCAFFOLD_TEMPLATE_FILES;
-use super::names::{bounded_postgres_identifier, sanitize_package_name, validate_scaffold_name};
+use super::names::{bounded_postgres_identifier, normalize_package_name, validate_scaffold_name};
 use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };

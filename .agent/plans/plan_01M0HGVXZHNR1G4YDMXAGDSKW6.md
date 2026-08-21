@@ -16,7 +16,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Classified the findings and selected long-term boundaries: contract v5, `go.mod` runtime authority, backend-neutral package normalization, explicit Go capabilities, and split backend/client drift proofs.
 - [x] (2026-08-21) Advanced the generated-harness epoch to contract v5, documented strict configuration additions as epoch-breaking, rejected mixed Go/SQLx identity at answer and load boundaries, and passed focused compatibility regressions.
 - [x] (2026-08-21) Made bounded root `go.mod` parsing the single Go toolchain authority, honored a newer `toolchain` directive, pointed Go and browser CI at `go.mod`, retired generated `.go-version`, refreshed snapshots, and passed focused Doctor/scaffold tests.
-- [ ] Separate backend-neutral package normalization from Rust crate-name validation.
+- [x] (2026-08-21) Extracted backend-neutral package normalization, confined Rust keyword/identifier prefixing to Rust-react, reused the neutral stem for default Go modules and frontend packages, and proved `loop` remains unchanged in a generated Go workspace.
 - [ ] Add backend-aware unavailable messages for Go lint and sqlc checks.
 - [ ] Add a client-only contract drift mode and run it from generated web CI.
 - [ ] Rebuild the development runtime, pass focused tests after each slice, pass the complete repository gates, update outcomes, and close structured work.

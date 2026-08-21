@@ -37,7 +37,7 @@ pub(super) fn default_repo_name(destination: &Path) -> String {
         .to_string()
 }
 
-pub(super) fn sanitize_package_name(value: &str) -> Result<String> {
+pub(super) fn normalize_package_name(value: &str) -> Result<String> {
     let mut package = String::new();
     let mut previous_dash = false;
     for ch in value.chars() {
@@ -56,18 +56,18 @@ pub(super) fn sanitize_package_name(value: &str) -> Result<String> {
         }
         package.push(mapped);
     }
-    let mut package = package.trim_matches('-').to_string();
+    let package = package.trim_matches('-').to_string();
     if package.is_empty() {
-        bail!("Could not derive a Rust package name from '{value}'");
-    }
-    if !is_valid_rust_crate_identifier(&package.replace('-', "_")) {
-        package = format!("app-{package}");
+        bail!("Could not derive a package name from '{value}'");
     }
     Ok(package)
 }
 
 pub(super) fn normalize_rust_react_package_name(value: &str) -> Result<String> {
-    let package = sanitize_package_name(value)?;
+    let mut package = normalize_package_name(value)?;
+    if !is_valid_rust_crate_identifier(&package.replace('-', "_")) {
+        package = format!("app-{package}");
+    }
     if package.len() > RUST_REACT_PACKAGE_STEM_LIMIT {
         bail!(
             "Rust-react repo name normalizes to a {}-byte Cargo package stem, but generated workspaces support at most {RUST_REACT_PACKAGE_STEM_LIMIT} bytes. Shorten --repo-name so Cargo can create the generated '<stem>-test-support' crate artifact (lib<stem>_test_support-<hash>.rmeta) within a filesystem component.",
@@ -78,26 +78,7 @@ pub(super) fn normalize_rust_react_package_name(value: &str) -> Result<String> {
 }
 
 pub(super) fn default_go_module(value: &str) -> String {
-    let mut stem = String::new();
-    let mut previous_dash = false;
-    for ch in value.chars() {
-        let mapped = if ch.is_ascii_alphanumeric() {
-            ch.to_ascii_lowercase()
-        } else {
-            '-'
-        };
-        if mapped == '-' {
-            if previous_dash {
-                continue;
-            }
-            previous_dash = true;
-        } else {
-            previous_dash = false;
-        }
-        stem.push(mapped);
-    }
-    let stem = stem.trim_matches('-');
-    let stem = if stem.is_empty() { "app" } else { stem };
+    let stem = normalize_package_name(value).unwrap_or_else(|_| "app".into());
     let mut module = format!("example.com/{stem}");
     if validate_go_module(&module).is_err() {
         module = format!("example.com/app-{stem}");
@@ -436,6 +417,21 @@ mod tests {
         assert!(error.contains("at most 216 bytes"));
         assert!(error.contains("<stem>-test-support"));
         assert!(error.contains("lib<stem>_test_support-<hash>.rmeta"));
+    }
+
+    #[test]
+    fn package_normalization_applies_rust_identifier_rules_only_to_rust() {
+        for name in ["loop", "123-project"] {
+            assert_eq!(normalize_package_name(name).unwrap(), name);
+            assert_eq!(
+                normalize_rust_react_package_name(name).unwrap(),
+                format!("app-{name}")
+            );
+        }
+        assert_eq!(
+            normalize_package_name("Example Project").unwrap(),
+            "example-project"
+        );
     }
 
     #[test]
