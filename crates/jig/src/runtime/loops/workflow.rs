@@ -5,6 +5,9 @@ use serde_json::{Value, json};
 
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
 
+use super::schedule::ScheduleSpec;
+
+pub(super) const CODEX_TASK_KIND: &str = "codex_task";
 pub(super) const DEFAULT_WORKFLOW_ID: &str = "noop-status";
 pub(super) const GITHUB_PR_STATUS_KIND: &str = "github_pr_status";
 pub(super) const NOOP_STATUS_KIND: &str = "noop_status";
@@ -33,6 +36,31 @@ pub(super) struct ResolvedWorkflow {
     pub(super) max_attempts: u32,
     pub(super) backoff_seconds: u64,
     pub(super) codex_home_configured: Option<PathBuf>,
+    pub(super) schedule: Option<ScheduleSpec>,
+    pub(super) codex_task: Option<CodexTaskSettings>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CodexTaskCheckout {
+    Repo,
+    Worktree,
+}
+
+impl CodexTaskCheckout {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Repo => "repo",
+            Self::Worktree => "worktree",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CodexTaskSettings {
+    pub(super) prompt_file: PathBuf,
+    pub(super) model: Option<String>,
+    pub(super) sandbox: String,
+    pub(super) checkout: CodexTaskCheckout,
 }
 
 impl ResolvedWorkflow {
@@ -53,6 +81,16 @@ impl ResolvedWorkflow {
                 .codex_home_configured
                 .as_ref()
                 .map(|home| home.display().to_string()),
+            "schedule": self.schedule.as_ref().map(|schedule| json!({
+                "cron": schedule.expression(),
+                "timezone": schedule.timezone_name(),
+            })),
+            "codex_task": self.codex_task.as_ref().map(|task| json!({
+                "prompt_file": task.prompt_file.display().to_string(),
+                "model": task.model,
+                "sandbox": task.sandbox,
+                "checkout": task.checkout.as_str(),
+            })),
         })
     }
 }
@@ -130,6 +168,8 @@ fn workflow_from_config(
         .unwrap_or(loop_config.backoff_seconds);
     validate_tuning(lease_ttl_seconds, max_attempts, backoff_seconds)?;
 
+    let schedule = config_schedule(workflow)?;
+    let codex_task = config_codex_task(workflow);
     Ok(ResolvedWorkflow {
         id: workflow.id.clone(),
         kind: workflow.kind.clone(),
@@ -139,6 +179,8 @@ fn workflow_from_config(
         max_attempts,
         backoff_seconds,
         codex_home_configured: workflow.codex_home.clone(),
+        schedule,
+        codex_task,
     })
 }
 
@@ -165,6 +207,35 @@ fn default_workflow(
         max_attempts,
         backoff_seconds,
         codex_home_configured: None,
+        schedule: None,
+        codex_task: None,
+    })
+}
+
+fn config_schedule(workflow: &LoopWorkflowConfig) -> Result<Option<ScheduleSpec>> {
+    workflow
+        .schedule
+        .as_deref()
+        .map(|schedule| ScheduleSpec::parse(schedule, workflow.timezone.as_deref()))
+        .transpose()
+}
+
+fn config_codex_task(workflow: &LoopWorkflowConfig) -> Option<CodexTaskSettings> {
+    (workflow.kind == CODEX_TASK_KIND).then(|| CodexTaskSettings {
+        prompt_file: workflow
+            .prompt_file
+            .clone()
+            .expect("validated codex_task config has a prompt_file"),
+        model: workflow.model.clone(),
+        sandbox: workflow
+            .sandbox
+            .clone()
+            .unwrap_or_else(|| "read-only".into()),
+        checkout: match workflow.checkout.as_deref().unwrap_or("worktree") {
+            "repo" => CodexTaskCheckout::Repo,
+            "worktree" => CodexTaskCheckout::Worktree,
+            _ => unreachable!("validated codex_task config has a supported checkout"),
+        },
     })
 }
 

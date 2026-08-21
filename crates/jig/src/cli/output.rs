@@ -9,8 +9,8 @@ use self::codex::{
 pub(super) use self::doctor::format_doctor_summary;
 pub(super) use self::info::format_info_summary;
 use self::loops::{
-    format_loop_clear_attempt_summary, format_loop_run_summary, format_loop_status_summary,
-    format_loop_tick_summary,
+    format_loop_clear_attempt_summary, format_loop_dispatch_summary, format_loop_run_summary,
+    format_loop_status_summary, format_loop_tick_summary,
 };
 pub(super) use self::prompt::{format_prompt_human_output, print_prompt_warnings};
 use self::state::{
@@ -67,6 +67,7 @@ pub(super) enum HumanOutput {
     AgentMapGenerate,
     MigrationAdd,
     LoopTick,
+    LoopDispatch,
     LoopStatus,
     LoopRun,
     LoopClearAttempt,
@@ -123,6 +124,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
         HumanOutput::MigrationAdd => format_migration_add_summary(value),
         HumanOutput::LoopTick => format_loop_tick_summary(value),
+        HumanOutput::LoopDispatch => format_loop_dispatch_summary(value),
         HumanOutput::LoopStatus => format_loop_status_summary(value),
         HumanOutput::LoopRun => format_loop_run_summary(value),
         HumanOutput::LoopClearAttempt => format_loop_clear_attempt_summary(value),

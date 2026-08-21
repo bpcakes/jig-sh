@@ -108,6 +108,83 @@ fn loop_status_accepts_noop_kind_alias() {
     assert_eq!(output["workflows"][0]["kind"], "noop_status");
 }
 
+#[cfg(unix)]
+#[test]
+fn codex_task_uses_safe_defaults_and_removes_clean_successful_worktree() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Review the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-review"
+kind = "codex_task"
+schedule = "* * * * *"
+timezone = "UTC"
+prompt_file = "tasks/nightly.md"
+"#
+        ),
+    )
+    .unwrap();
+    let invocation_log = temp.path().join("codex-task-invocation.log");
+    let prompt_log = temp.path().join("codex-task-prompt.log");
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+printf '%s\n%s\n' "$PWD" "$*" > "$JIG_TEST_TASK_INVOCATION_LOG"
+cat > "$JIG_TEST_TASK_PROMPT_LOG"
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _invocation = EnvVarGuard::set("JIG_TEST_TASK_INVOCATION_LOG", &invocation_log);
+    let _prompt = EnvVarGuard::set("JIG_TEST_TASK_PROMPT_LOG", &prompt_log);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("nightly-review".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+
+    assert_eq!(output["status"], "acted", "{output:#}");
+    assert_eq!(output["actions"][0]["status"], "succeeded");
+    assert_eq!(output["actions"][0]["checkout"]["mode"], "worktree");
+    assert_eq!(output["actions"][0]["checkout"]["retained"], false);
+    let worktree = output["actions"][0]["checkout"]["path"].as_str().unwrap();
+    assert!(!Path::new(worktree).exists());
+    let invocation = fs::read_to_string(invocation_log).unwrap();
+    assert!(
+        invocation.contains("--ask-for-approval never exec --sandbox read-only --ephemeral -"),
+        "{invocation}"
+    );
+    assert!(invocation.starts_with(worktree), "{invocation}");
+    assert_eq!(
+        fs::read_to_string(prompt_log).unwrap(),
+        "Review the repository.\n"
+    );
+}
+
 #[test]
 fn loop_tick_rejects_unknown_workflow() {
     let temp = tempdir().unwrap();

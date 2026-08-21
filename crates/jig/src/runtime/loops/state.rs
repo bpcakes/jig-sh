@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use fs4::fs_std::FileExt;
@@ -34,6 +37,7 @@ pub(super) enum LeaseAcquire {
     Held(LeaseRecord),
 }
 
+#[derive(Clone)]
 pub(super) struct LeaseStore {
     dir: PathBuf,
     path: PathBuf,
@@ -82,6 +86,15 @@ impl LeaseStore {
         })
     }
 
+    pub(super) fn renew(
+        &mut self,
+        key: &str,
+        owner: &str,
+        ttl_seconds: u64,
+    ) -> Result<LeaseRecord> {
+        self.renew_at(key, owner, ttl_seconds, now_ms())
+    }
+
     pub(super) fn active_leases(&mut self) -> Result<Vec<LeaseRecord>> {
         self.with_locked(|store| {
             store.prune_expired(now_ms());
@@ -101,6 +114,100 @@ impl LeaseStore {
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut LeaseFile) -> Result<T>) -> Result<T> {
         with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
+    }
+
+    fn renew_at(
+        &mut self,
+        key: &str,
+        owner: &str,
+        ttl_seconds: u64,
+        now: u64,
+    ) -> Result<LeaseRecord> {
+        self.with_locked(|store| {
+            let lease = store
+                .leases
+                .get_mut(key)
+                .ok_or_else(|| anyhow!("Loop lease is no longer held: {key}"))?;
+            if lease.owner != owner {
+                return Err(anyhow!("Loop lease '{key}' is owned by another worker"));
+            }
+            if lease.expires_at_ms <= now {
+                return Err(anyhow!("Loop lease expired before renewal: {key}"));
+            }
+            lease.expires_at_ms = now.saturating_add(ttl_seconds.saturating_mul(1_000));
+            Ok(lease.clone())
+        })
+    }
+}
+
+pub(super) struct LeaseGuard {
+    store: LeaseStore,
+    key: String,
+    owner: String,
+    stop: Option<Sender<()>>,
+    renewal: Option<JoinHandle<Result<()>>>,
+}
+
+impl LeaseGuard {
+    pub(super) fn start(
+        store: LeaseStore,
+        key: &str,
+        lease: &LeaseRecord,
+        ttl_seconds: u64,
+    ) -> Result<Self> {
+        let (stop, receiver) = mpsc::channel();
+        let mut renewal_store = store.clone();
+        let renewal_key = key.to_string();
+        let renewal_owner = lease.owner.clone();
+        let interval = Duration::from_secs((ttl_seconds / 3).max(1));
+        let renewal = thread::Builder::new()
+            .name(format!("jig-loop-lease-{}", lease.owner))
+            .spawn(move || {
+                loop {
+                    match receiver.recv_timeout(interval) {
+                        Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+                        Err(RecvTimeoutError::Timeout) => {
+                            renewal_store.renew(&renewal_key, &renewal_owner, ttl_seconds)?;
+                        }
+                    }
+                }
+            })
+            .context("Failed to start loop lease renewal thread")?;
+        Ok(Self {
+            store,
+            key: key.to_string(),
+            owner: lease.owner.clone(),
+            stop: Some(stop),
+            renewal: Some(renewal),
+        })
+    }
+
+    pub(super) fn finish(mut self) -> Result<()> {
+        self.shutdown()
+    }
+
+    fn shutdown(&mut self) -> Result<()> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let renewal_result = self
+            .renewal
+            .take()
+            .map(|renewal| {
+                renewal
+                    .join()
+                    .map_err(|_| anyhow!("Loop lease renewal thread panicked"))?
+            })
+            .transpose();
+        let release_result = self.store.release(&self.key, &self.owner);
+        renewal_result?;
+        release_result
+    }
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
     }
 }
 
@@ -269,7 +376,7 @@ impl AttemptStore {
     }
 }
 
-fn with_json_cache_lock<T, S>(
+pub(super) fn with_json_cache_lock<T, S>(
     dir: &Path,
     lock_path: &Path,
     data_path: &Path,
@@ -303,7 +410,10 @@ where
     read_json_or_default_with_cancellation(path, &|| false)
 }
 
-fn read_json_or_default_with_cancellation<T>(path: &Path, cancelled: &dyn Fn() -> bool) -> Result<T>
+pub(super) fn read_json_or_default_with_cancellation<T>(
+    path: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<T>
 where
     T: Default + DeserializeOwned,
 {
@@ -400,6 +510,8 @@ mod tests {
             max_attempts: 2,
             backoff_seconds: 1,
             codex_home_configured: None,
+            schedule: None,
+            codex_task: None,
         };
 
         let first = store
@@ -418,6 +530,61 @@ mod tests {
             .record_attempt_for_version(&workflow, "item-1", None, "passed")
             .unwrap();
         assert!(store.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
+    fn lease_guard_renews_until_finished_and_then_releases() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:slow", 3).unwrap() else {
+            panic!("expected lease acquisition");
+        };
+        let guard = LeaseGuard::start(store.clone(), "workflow:slow", &lease, 3).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(3_500));
+        let LeaseAcquire::Held(renewed) = store.acquire("workflow:slow", 3).unwrap() else {
+            panic!("renewed lease must still be held");
+        };
+        assert_eq!(renewed.owner, lease.owner);
+
+        guard.finish().unwrap();
+        assert!(matches!(
+            store.acquire("workflow:slow", 3).unwrap(),
+            LeaseAcquire::Acquired(_)
+        ));
+    }
+
+    #[test]
+    fn lease_renewal_is_owner_checked_and_cannot_revive_expired_lease() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:owner", 60).unwrap() else {
+            panic!("expected lease acquisition");
+        };
+
+        assert!(
+            store
+                .renew_at(
+                    "workflow:owner",
+                    "another-owner",
+                    60,
+                    lease.acquired_at_ms + 1
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("owned by another worker")
+        );
+        assert!(
+            store
+                .renew_at("workflow:owner", &lease.owner, 60, lease.expires_at_ms)
+                .unwrap_err()
+                .to_string()
+                .contains("expired before renewal")
+        );
     }
 
     fn write_loop_fixture_repo(root: &Path) {

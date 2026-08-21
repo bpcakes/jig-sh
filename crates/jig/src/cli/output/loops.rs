@@ -18,6 +18,22 @@ pub(super) fn format_loop_tick_summary(value: &serde_json::Value) -> String {
     lines.join("\n")
 }
 
+pub(super) fn format_loop_dispatch_summary(value: &serde_json::Value) -> String {
+    let status = value_str(value, "status").unwrap_or("unknown");
+    let due = value_u64(value, "due_count").unwrap_or(0);
+    let executed = value_u64(value, "executed_count").unwrap_or(0);
+    let failed = value_u64(value, "failed_count").unwrap_or(0);
+    let attention = value_u64(value, "needs_attention_count").unwrap_or(0);
+    [
+        format!("Loop dispatch: {status}"),
+        format!("  Due: {due}"),
+        format!("  Executed: {executed} ({failed} failed)"),
+        format!("  Needs attention: {attention}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
 pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
     let workflows = value["workflows"].as_array().map(Vec::len).unwrap_or(0);
     let leases = value["leases"].as_array().map(Vec::len).unwrap_or(0);
@@ -30,12 +46,21 @@ pub(super) fn format_loop_status_summary(value: &serde_json::Value) -> String {
         .as_array()
         .map(Vec::len)
         .unwrap_or(0);
+    let scheduled = value["scheduled_occurrences"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
+    let scheduled_attention = value["needs_attention"]["scheduled_occurrences"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or(0);
     [
         "Loop status:".into(),
         format!("  Workflows: {workflows}"),
         format!("  Leases: {leases}"),
         format!("  Attempts: {attempts} ({waiting} waiting)"),
-        format!("  Needs attention: {exhausted} exhausted"),
+        format!("  Scheduled runs: {scheduled}"),
+        format!("  Needs attention: {exhausted} exhausted, {scheduled_attention} scheduled"),
         "  full report: rerun with --json".into(),
     ]
     .join("\n")

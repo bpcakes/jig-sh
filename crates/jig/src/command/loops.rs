@@ -3,10 +3,14 @@ use serde::Deserialize;
 #[derive(Debug)]
 pub(crate) enum LoopCommand {
     Tick(LoopTickRequest),
+    Dispatch(LoopDispatchRequest),
     Status(LoopStatusRequest),
     Run(LoopRunRequest),
     ClearAttempt(LoopClearAttemptRequest),
 }
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LoopDispatchRequest {}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoopTickRequest {

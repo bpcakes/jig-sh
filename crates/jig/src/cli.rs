@@ -29,7 +29,7 @@ pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{CheckCommand, CheckMigrationImmutabilityOpts, CheckRustFileLocOpts};
 pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{
-    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
+    LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts,
 };
 pub(crate) use prompt::PromptCommand;
 pub(crate) use proxy::{

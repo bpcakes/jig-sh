@@ -3,6 +3,8 @@
 ## v0.2.0 - 2026-08-05
 
 ### Added
+- Add scheduled `codex_task` loop workflows, durable occurrence claims, and `jig loop dispatch`
+- Show loop schedules, recent occurrences, and retained worktrees in status and Jig UI
 - Add status-provider v1 protocol
 - Manage repo-scoped dev sessions
 - Run and aggregate status providers
@@ -16,6 +18,7 @@
 - Namespace SQLx project commands
 
 ### Fixed
+- Renew workflow and branch leases while long-running loop workers are active
 - Keep dev session cleanup signal-responsive
 - Keep stale missing Codex-home candidates from blocking a unique session resume
 - Recognize supported Codex app-server missing-thread response variants during resume lookup

@@ -105,7 +105,7 @@ Nested accepted keys are:
 - `[[work.gates]]`: `id`, `kind`, `tool`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
-- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`
+- `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`, `schedule`, `timezone`, `prompt_file`, `model`, `sandbox`, `checkout`
 - `[agent_tooling.codex]`: `marketplaces`
 - `[[agent_tooling.codex.marketplaces]]`: `id`, `source`, `plugins`
 
@@ -149,7 +149,25 @@ kind = "pr_manager"
 codex_home = "work"
 ```
 
-`codex_home` is optional and valid only for `pr_manager`. It accepts the same conventional home names and explicit path forms as `scripts/jig codex launch`: `work` resolves only as `~/.codex-work`, `codex` and `default` resolve only as `~/.codex`, and explicit relative paths such as `./.codex-automation` resolve from the repository root. Use an explicit path for a home outside those conventional locations. Configured bare names never fall back to ambient `CODEX_HOME`. A repository-relative home is repository-controlled and may load Codex configuration such as MCP servers and model providers from tracked content; use one only in a repository you trust. Jig validates and canonicalizes the configured directory once at the workflow boundary before inspecting pull requests, then sets `CODEX_HOME` explicitly for each `codex exec` worker. A missing or invalid home fails the tick without consuming a pull request's attempt budget. When `codex_home` is omitted, the worker preserves existing behavior by inheriting ambient `CODEX_HOME`.
+`codex_home` is optional and valid for `pr_manager` and `codex_task`. It accepts the same conventional home names and explicit path forms as `scripts/jig codex launch`: `work` resolves only as `~/.codex-work`, `codex` and `default` resolve only as `~/.codex`, and explicit relative paths such as `./.codex-automation` resolve from the repository root. Use an explicit path for a home outside those conventional locations. Configured bare names never fall back to ambient `CODEX_HOME`. A repository-relative home is repository-controlled and may load Codex configuration such as MCP servers and model providers from tracked content; use one only in a repository you trust. Jig validates and canonicalizes the configured directory once at the workflow boundary, then sets `CODEX_HOME` explicitly for each `codex exec` worker. A missing or invalid home fails the tick. When `codex_home` is omitted, the worker preserves existing behavior by inheriting ambient `CODEX_HOME`.
+
+Use the compiled `codex_task` kind to run a durable prompt on a five-field cron schedule:
+
+```toml
+[[loop.workflows]]
+id = "nightly-maintenance"
+kind = "codex_task"
+schedule = "0 2 * * *"
+timezone = "Europe/Prague"
+prompt_file = ".agent/tasks/nightly-maintenance.md"
+codex_home = "work"
+sandbox = "workspace-write"
+checkout = "worktree"
+```
+
+`schedule` uses minute, hour, day-of-month, month, and day-of-week fields; seconds and years are rejected. `timezone` is an IANA name and defaults to `UTC`. A nonexistent spring-forward wall time is skipped, while a repeated fall-back wall time runs once. A `codex_task` requires both `schedule` and a repository-relative `prompt_file`. Prompt symlinks must still resolve inside the repository and prompt files are limited to 1 MiB of UTF-8 text. `sandbox` defaults to `read-only` and permits only `read-only` or `workspace-write`; `checkout` defaults to an isolated detached `worktree` and may be explicitly set to `repo`. `model` is optional.
+
+Manually validate a configured task with `scripts/jig loop tick --workflow nightly-maintenance`. Run `scripts/jig loop dispatch` every minute from cron, systemd, launchd, or CI to execute due occurrences. Missed intervals coalesce to the most recent due occurrence. Durable claims prevent duplicate execution; an expired running claim becomes `needs_attention` and is not automatically retried because its side effects may be ambiguous. A clean successful worktree is removed, while a changed or failed worktree is retained and reported by `loop status` and `jig ui`. The external scheduler and machine must be running for local execution; Jig does not install or run a resident scheduler.
 
 Loop workflow JSON reports the original setting as `codex_home_configured`. PR-manager repair-attempt actions include the canonical directory selected for the worker as `codex_home_resolved`; actions that do not attempt a repair omit the field. Worker receipts written by this version include `codex_home_resolved`; older `schema_version: 1` receipts may omit this additive field, so readers must tolerate its absence. In repair-attempt actions and current worker receipts, a `null` value means the process inherits ambient `CODEX_HOME`.
 

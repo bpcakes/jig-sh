@@ -129,6 +129,8 @@ pub struct LoopsView {
     #[serde(default)]
     pub leases: Vec<LeaseView>,
     #[serde(default)]
+    pub scheduled_occurrences: Vec<ScheduledOccurrenceView>,
+    #[serde(default)]
     pub needs_attention: LoopAttentionView,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
@@ -138,8 +140,24 @@ pub struct WorkflowView {
     pub id: String,
     pub kind: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub schedule: Option<WorkflowScheduleView>,
+    #[serde(default)]
+    pub schedule_state: Option<WorkflowScheduleStateView>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowScheduleView {
+    pub cron: String,
+    pub timezone: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkflowScheduleStateView {
+    pub due_at_ms: Option<u64>,
+    pub next_at_ms: u64,
+    pub last_scheduled_at_ms: Option<u64>,
+    pub last_status: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LeaseView {
@@ -152,11 +170,26 @@ pub struct LeaseView {
 pub struct LoopAttentionView {
     #[serde(default)]
     pub exhausted_attempts: Vec<ExhaustedAttemptView>,
+    #[serde(default)]
+    pub scheduled_occurrences: Vec<ScheduledOccurrenceView>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExhaustedAttemptView {
     pub workflow: String,
     pub item: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScheduledOccurrenceView {
+    pub occurrence_id: String,
+    pub workflow_id: String,
+    pub scheduled_at_ms: u64,
+    pub status: String,
+    pub finished_at_ms: Option<u64>,
+    pub worker_receipt_id: Option<String>,
+    pub worktree: Option<String>,
+    pub error: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

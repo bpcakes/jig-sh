@@ -22,7 +22,8 @@ pub(crate) use check::{
     RustFileLocRequest, SqlxTodoRequest,
 };
 pub(crate) use loops::{
-    LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
+    LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest, LoopRunRequest, LoopStatusRequest,
+    LoopTickRequest,
 };
 pub(crate) use prompt::{
     PROMPT_BODY_KEY, PromptAddRequest, PromptCommand, PromptEditRequest, PromptExportRequest,

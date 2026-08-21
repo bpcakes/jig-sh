@@ -7,15 +7,56 @@ use crate::context::RepoContext;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
-use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseStore};
+use super::occurrence::OccurrenceStore;
+use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
-    GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND, ResolvedWorkflow, TuningOverrides,
-    WorkflowTick, list_workflows, resolve_workflow,
+    CODEX_TASK_KIND, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND, ResolvedWorkflow,
+    TuningOverrides, WorkflowTick, list_workflows, resolve_workflow,
 };
-use super::{github, noop, pr_manager};
+use super::{codex_task, github, noop, pr_manager};
+
+struct TickExecution {
+    item_key: String,
+}
 
 pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
     let started = now_ms();
+    tick_with_execution(
+        ctx,
+        request,
+        started,
+        TickExecution {
+            item_key: format!("manual-{started}"),
+        },
+    )
+}
+
+pub(super) fn tick_scheduled(
+    ctx: &RepoContext,
+    workflow_id: &str,
+    occurrence_id: &str,
+) -> Result<Value> {
+    tick_with_execution(
+        ctx,
+        LoopTickRequest {
+            workflow: Some(workflow_id.to_string()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        },
+        now_ms(),
+        TickExecution {
+            item_key: occurrence_id.to_string(),
+        },
+    )
+}
+
+fn tick_with_execution(
+    ctx: &RepoContext,
+    request: LoopTickRequest,
+    started: u64,
+    execution: TickExecution,
+) -> Result<Value> {
     let workflow = resolve_workflow(
         ctx,
         request.workflow.as_deref(),
@@ -31,6 +72,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
     let mut status = "idle";
     let mut idle = true;
     let mut lease = None;
+    let mut lease_acquired = false;
     let mut release_warning = None;
     let mut observed = Value::Null;
     let mut actions = Vec::new();
@@ -42,8 +84,21 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         let lease_key = workflow.lease_key();
         match lease_store.acquire(&lease_key, workflow.lease_ttl_seconds)? {
             LeaseAcquire::Acquired(acquired) => {
+                lease_acquired = true;
                 lease = Some(acquired.clone());
-                match run_workflow_tick(ctx, &workflow, &mut lease_store, &mut attempt_store) {
+                let lease_guard = LeaseGuard::start(
+                    lease_store.clone(),
+                    &lease_key,
+                    &acquired,
+                    workflow.lease_ttl_seconds,
+                )?;
+                match run_workflow_tick(
+                    ctx,
+                    &workflow,
+                    &execution,
+                    &mut lease_store,
+                    &mut attempt_store,
+                ) {
                     Ok(tick) => {
                         observed = tick.observed;
                         actions = tick.actions;
@@ -52,7 +107,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
                         tick_error = Some(format!("{error:#}"));
                     }
                 }
-                let released = lease_store.release(&lease_key, &acquired.owner);
+                let released = lease_guard.finish();
                 if let Err(error) = released {
                     release_warning = Some(format!("{error:#}"));
                 }
@@ -73,7 +128,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
 
     // Idleness is machine-global for now: `loop run --until idle` should not
     // claim quiescence while any workflow lease or attempt backoff is live.
-    if tick_error.is_some() {
+    if tick_error.is_some() || actions_include_failed(&actions) {
         idle = false;
         status = "failed";
     } else if !attempt_sections.needs_attention.is_empty() {
@@ -103,6 +158,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         "observed": observed,
         "actions": actions,
         "lease": lease,
+        "lease_acquired": lease_acquired,
         "live_leases": live_leases,
         "attempts": attempts,
         "waiting_attempts": attempt_sections.waiting,
@@ -111,6 +167,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         },
         "release_warning": release_warning,
         "error": tick_error,
+        "item_key": execution.item_key,
     });
     let receipt_id = record_receipt(
         ctx,
@@ -124,7 +181,11 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
             plan_id: None,
             started_at_ms: started,
             ended_at_ms: ended,
-            exit_status: if evidence["error"].is_null() { 0 } else { 1 },
+            exit_status: if evidence["error"].is_null() && status != "failed" {
+                0
+            } else {
+                1
+            },
             stdout: "",
             stderr: evidence["error"]
                 .as_str()
@@ -157,11 +218,13 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         "observed": evidence["observed"],
         "actions": evidence["actions"],
         "lease": evidence["lease"],
+        "lease_acquired": lease_acquired,
         "live_leases": evidence["live_leases"],
         "attempts": evidence["attempts"],
         "waiting_attempts": evidence["waiting_attempts"],
         "needs_attention": evidence["needs_attention"],
         "release_warning": release_warning,
+        "item_key": evidence["item_key"],
     }))
 }
 
@@ -175,24 +238,18 @@ pub(super) fn status_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     ensure_status_active(cancelled)?;
-    let workflows = if let Some(workflow) = request.workflow.as_deref() {
-        vec![
-            resolve_workflow(
-                ctx,
-                Some(workflow),
-                TuningOverrides {
-                    lease_ttl_seconds: None,
-                    max_attempts: None,
-                    backoff_seconds: None,
-                },
-            )?
-            .value(),
-        ]
+    let resolved_workflows = if let Some(workflow) = request.workflow.as_deref() {
+        vec![resolve_workflow(
+            ctx,
+            Some(workflow),
+            TuningOverrides {
+                lease_ttl_seconds: None,
+                max_attempts: None,
+                backoff_seconds: None,
+            },
+        )?]
     } else {
         list_workflows(ctx)?
-            .into_iter()
-            .map(|workflow| workflow.value())
-            .collect::<Vec<_>>()
     };
     ensure_status_active(cancelled)?;
 
@@ -202,6 +259,41 @@ pub(super) fn status_with_cancellation(
     ensure_status_active(cancelled)?;
     let leases = LeaseStore::new(ctx).active_leases_read_only_with_cancellation(cancelled)?;
     ensure_status_active(cancelled)?;
+    let mut occurrences =
+        OccurrenceStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
+    if let Some(workflow) = request.workflow.as_deref() {
+        occurrences.retain(|record| record.workflow_id == workflow);
+    }
+    ensure_status_active(cancelled)?;
+    let checked_at_ms = now_ms();
+    let workflows = resolved_workflows
+        .into_iter()
+        .map(|workflow| {
+            let mut value = workflow.value();
+            if let Some(schedule) = workflow.schedule.as_ref() {
+                let latest = OccurrenceStore::latest_for_workflow(&occurrences, &workflow.id);
+                let window = schedule.window(
+                    checked_at_ms,
+                    latest.as_ref().map(|record| record.scheduled_at_ms),
+                )?;
+                value["schedule_state"] = json!({
+                    "due_at_ms": window.due_at_ms,
+                    "next_at_ms": window.next_at_ms,
+                    "last_scheduled_at_ms": latest.as_ref().map(|record| record.scheduled_at_ms),
+                    "last_status": latest.as_ref().map(|record| record.status.as_str()),
+                });
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let scheduled_needs_attention = occurrences
+        .iter()
+        .filter(|record| {
+            record.status == "needs_attention"
+                || (record.status == "running" && record.claim_expires_at_ms <= checked_at_ms)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
 
     Ok(json!({
         "ok": true,
@@ -209,9 +301,11 @@ pub(super) fn status_with_cancellation(
         "workflows": workflows,
         "leases": leases,
         "attempts": attempts,
+        "scheduled_occurrences": occurrences,
         "waiting_attempts": attempt_sections.waiting,
         "needs_attention": {
             "exhausted_attempts": attempt_sections.needs_attention,
+            "scheduled_occurrences": scheduled_needs_attention,
         },
     }))
 }
@@ -223,18 +317,32 @@ fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
 fn run_workflow_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
+    execution: &TickExecution,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
 ) -> Result<WorkflowTick> {
     match workflow.kind.as_str() {
+        CODEX_TASK_KIND => codex_task::codex_task_tick(
+            ctx,
+            workflow,
+            codex_task::CodexTaskExecution {
+                item_key: &execution.item_key,
+            },
+        ),
         GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx),
         NOOP_STATUS_KIND => noop::noop_status_tick(ctx),
         PR_MANAGER_KIND => pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store),
         _ => bail!(
-            "Unsupported loop workflow kind '{}'. Supported kinds: {NOOP_STATUS_KIND}, {GITHUB_PR_STATUS_KIND}, {PR_MANAGER_KIND}.",
+            "Unsupported loop workflow kind '{}'. Supported kinds: {CODEX_TASK_KIND}, {NOOP_STATUS_KIND}, {GITHUB_PR_STATUS_KIND}, {PR_MANAGER_KIND}.",
             workflow.kind
         ),
     }
+}
+
+fn actions_include_failed(actions: &[Value]) -> bool {
+    actions
+        .iter()
+        .any(|action| matches!(action.get("status").and_then(Value::as_str), Some("failed")))
 }
 
 fn actions_include_work(actions: &[Value]) -> bool {

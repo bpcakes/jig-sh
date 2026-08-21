@@ -15,7 +15,9 @@ use crate::runtime::worker_runner::{
 use crate::state::now_ms;
 
 use super::github;
-use super::state::{AttemptRecord, AttemptStore, LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
+use super::state::{
+    AttemptRecord, AttemptStore, LOOP_CACHE_DIR, LeaseAcquire, LeaseGuard, LeaseStore,
+};
 use super::workflow::{ResolvedWorkflow, WorkflowTick};
 
 pub(super) fn pr_manager_tick(
@@ -328,9 +330,26 @@ fn handle_actionable_pr(
             }));
         }
     };
+    let lease_guard = LeaseGuard::start(
+        lease_store.clone(),
+        &branch_lease_key,
+        &lease,
+        workflow.lease_ttl_seconds,
+    )?;
 
     let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease, codex_home);
-    let _ = lease_store.release(&branch_lease_key, &lease.owner);
+    let release_result = lease_guard.finish();
+    let action_result = match release_result {
+        Ok(()) => action_result,
+        Err(release_error) => {
+            return match action_result {
+                Err(action_error) => Err(action_error.context(format!(
+                    "Branch lease renewal or release also failed: {release_error:#}"
+                ))),
+                Ok(_) => Err(release_error.context("Branch lease renewal or release failed")),
+            };
+        }
+    };
     match action_result {
         Ok(action) => {
             let item_version = action

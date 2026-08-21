@@ -372,6 +372,7 @@ const fn work_human_output(command: &WorkCommand) -> HumanOutput {
 const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
     match command {
         LoopCommand::Tick(_) => HumanOutput::LoopTick,
+        LoopCommand::Dispatch(_) => HumanOutput::LoopDispatch,
         LoopCommand::Status(_) => HumanOutput::LoopStatus,
         LoopCommand::Run(_) => HumanOutput::LoopRun,
         LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,

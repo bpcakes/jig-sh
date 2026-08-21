@@ -147,7 +147,7 @@ One page answers the daily questions:
 - **Recent failures.** The latest failed receipts with expandable stderr, so "why is this red" never requires `jq`.
 - **Recently finished work.** Closed plans with resolutions and how long they took.
 - **Check health.** Per-tool aggregates over recent receipts: runs, failures, last status, average duration.
-- **Loops.** Configured loop workflows, live leases, and exhausted attempt budgets that need a human, with the matching `loop clear-attempt` command.
+- **Loops.** Configured loop workflows, cron/timezone schedules, next and latest runs, live leases, retained task worktrees, and attempt or scheduled occurrences that need a human.
 - **Timeline.** Sessions, plan events, receipts, and decisions merged newest-first, filterable with `?show=receipts|failures|plans|sessions|decisions` and `?limit=N`. Failed receipts include a stderr preview inline.
 
 Every plan id links to a detail page under the server's per-run namespace, covering open and closed plans alike: the plan body, gate evidence as recorded, linked decisions, and the plan's receipts with expandable stdout/stderr and changed paths.

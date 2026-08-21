@@ -1,6 +1,9 @@
 use std::fmt::Write as _;
 
-use super::{escape, format_duration, format_ms, page_shell, plan_link, render_gates_table};
+use super::{
+    escape, format_duration, format_ms, page_shell, plan_link, render_gates_table,
+    status_badge_class,
+};
 use crate::{DashboardSnapshot, TimelineItem};
 
 pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) -> String {
@@ -121,15 +124,37 @@ pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) ->
         if loops.workflows.is_empty() {
             body.push_str("<div class=\"muted\">No loop workflows configured.</div>\n");
         } else {
-            body.push_str("<table><tr><th>workflow</th><th>kind</th><th>enabled</th></tr>");
+            body.push_str("<table><tr><th>workflow</th><th>kind</th><th>enabled</th><th>schedule</th><th>last run</th><th>next run</th></tr>");
             for w in &loops.workflows {
+                let schedule = w.schedule.as_ref().map_or_else(
+                    || "manual".into(),
+                    |schedule| format!("{} ({})", schedule.cron, schedule.timezone),
+                );
+                let last_run = w.schedule_state.as_ref().map_or_else(
+                    || "—".into(),
+                    |state| {
+                        state.last_status.as_ref().map_or_else(
+                            || "never".into(),
+                            |status| {
+                                format!("{} ({})", status, format_ms(state.last_scheduled_at_ms))
+                            },
+                        )
+                    },
+                );
+                let next_run = w
+                    .schedule_state
+                    .as_ref()
+                    .map_or_else(|| "—".into(), |state| format_ms(Some(state.next_at_ms)));
                 let _ = writeln!(
                     body,
-                    "<tr><td class=\"mono\">{}</td><td class=\"muted\">{}</td><td><span class=\"badge {}\">{}</span></td></tr>",
+                    "<tr><td class=\"mono\">{}</td><td class=\"muted\">{}</td><td><span class=\"badge {}\">{}</span></td><td class=\"mono muted\">{}</td><td>{}</td><td>{}</td></tr>",
                     escape(&w.id),
                     escape(&w.kind),
                     if w.enabled { "ok" } else { "idle" },
-                    if w.enabled { "enabled" } else { "disabled" }
+                    if w.enabled { "enabled" } else { "disabled" },
+                    escape(&schedule),
+                    escape(&last_run),
+                    escape(&next_run),
                 );
             }
             body.push_str("</table>\n");
@@ -142,12 +167,37 @@ pub(crate) fn render_dashboard(snapshot: &DashboardSnapshot, namespace: &str) ->
                 format_ms(lease.expires_at_ms)
             );
         }
+        if !loops.scheduled_occurrences.is_empty() {
+            body.push_str("<h3>Scheduled runs</h3><table><tr><th>workflow</th><th>scheduled</th><th>status</th><th>worker receipt</th><th>retained worktree</th></tr>");
+            for occurrence in loops.scheduled_occurrences.iter().rev() {
+                let _ = writeln!(
+                    body,
+                    "<tr><td class=\"mono\">{}</td><td>{}</td><td><span class=\"badge {}\">{}</span></td><td class=\"mono muted\">{}</td><td class=\"mono muted\">{}</td></tr>",
+                    escape(&occurrence.workflow_id),
+                    format_ms(Some(occurrence.scheduled_at_ms)),
+                    status_badge_class(&occurrence.status),
+                    escape(&occurrence.status),
+                    escape(occurrence.worker_receipt_id.as_deref().unwrap_or("—")),
+                    escape(occurrence.worktree.as_deref().unwrap_or("—")),
+                );
+            }
+            body.push_str("</table>\n");
+        }
         for a in &loops.needs_attention.exhausted_attempts {
             let _ = writeln!(
                 body,
                 "<div class=\"hint\">needs attention: <span class=\"mono\">{} / {}</span> exhausted its attempt budget.</div>",
                 escape(&a.workflow),
                 escape(&a.item)
+            );
+        }
+        for occurrence in &loops.needs_attention.scheduled_occurrences {
+            let detail = occurrence.error.as_deref().unwrap_or("claim expired");
+            let _ = writeln!(
+                body,
+                "<div class=\"hint\">scheduled run needs attention: <span class=\"mono\">{}</span> — {}</div>",
+                escape(&occurrence.occurrence_id),
+                escape(detail),
             );
         }
     }

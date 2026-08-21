@@ -9,6 +9,7 @@ graphs.
 
 Examples:
   jig loop tick --workflow noop-status
+  jig loop dispatch
   jig loop status --workflow noop-status
   jig loop run --workflow noop-status --until idle
   jig loop clear-attempt --workflow pr-status --item pr-123";
@@ -18,6 +19,14 @@ Run one idempotent reconcile pass for a workflow and record receipt evidence.
 
 Examples:
   jig loop tick --workflow noop-status";
+
+pub(super) const LOOP_DISPATCH_AFTER_HELP: &str = "\
+Run each configured workflow occurrence that is due now. Missed occurrences are
+coalesced to the most recent due time; durable claims prevent duplicate runs.
+Invoke this command periodically from cron, systemd, launchd, or CI.
+
+Examples:
+  jig loop dispatch";
 
 pub(super) const LOOP_RUN_AFTER_HELP: &str = "\
 Call tick until the workflow is idle, waiting, or max ticks is reached. This is
@@ -43,6 +52,12 @@ pub(crate) enum LoopCommand {
         after_help = LOOP_TICK_AFTER_HELP
     )]
     Tick(LoopTickOpts),
+    /// Run configured workflow occurrences that are due now.
+    #[command(
+        name = tool_defs::cli_command::LOOP_DISPATCH,
+        after_help = LOOP_DISPATCH_AFTER_HELP
+    )]
+    Dispatch(LoopDispatchOpts),
     /// Show configured loop workflows, live leases, and attempt state.
     #[command(name = tool_defs::cli_command::LOOP_STATUS)]
     Status(LoopStatusOpts),
@@ -56,6 +71,9 @@ pub(crate) enum LoopCommand {
     )]
     ClearAttempt(LoopClearAttemptOpts),
 }
+
+#[derive(Args, Debug)]
+pub(crate) struct LoopDispatchOpts {}
 
 #[derive(Args, Debug)]
 pub(crate) struct LoopTickOpts {

@@ -1,6 +1,10 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Component, Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
+use croner::parser::{CronParser, Seconds, Year};
 use serde::Deserialize;
 
 const DEFAULT_LEASE_TTL_SECONDS: u64 = 15 * 60;
@@ -46,6 +50,18 @@ pub(crate) struct LoopWorkflowConfig {
     pub(crate) backoff_seconds: Option<u64>,
     #[serde(default)]
     pub(crate) codex_home: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) schedule: Option<String>,
+    #[serde(default)]
+    pub(crate) timezone: Option<String>,
+    #[serde(default)]
+    pub(crate) prompt_file: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    #[serde(default)]
+    pub(crate) sandbox: Option<String>,
+    #[serde(default)]
+    pub(crate) checkout: Option<String>,
 }
 
 impl LoopConfig {
@@ -78,13 +94,15 @@ impl LoopConfig {
                         workflow.id
                     );
                 }
-                if workflow.kind != "pr_manager" {
+                if !matches!(workflow.kind.as_str(), "pr_manager" | "codex_task") {
                     bail!(
-                        "loop workflow '{}' can set codex_home only when kind = 'pr_manager'",
+                        "loop workflow '{}' can set codex_home only when kind is 'pr_manager' or 'codex_task'",
                         workflow.id
                     );
                 }
             }
+            validate_schedule_fields(workflow)?;
+            validate_codex_task_fields(workflow)?;
             if workflow.lease_ttl_seconds == Some(0) {
                 bail!(
                     "loop workflow '{}' lease_ttl_seconds must be greater than zero",
@@ -110,11 +128,124 @@ impl LoopConfig {
 
 pub(crate) fn validate_workflow_kind(kind: &str) -> Result<()> {
     match kind {
-        "noop_status" | "github_pr_status" | "pr_manager" => Ok(()),
+        "codex_task" | "noop_status" | "github_pr_status" | "pr_manager" => Ok(()),
         _ => bail!(
-            "Unsupported loop workflow kind '{kind}'. Supported kinds: noop_status, github_pr_status, pr_manager."
+            "Unsupported loop workflow kind '{kind}'. Supported kinds: codex_task, noop_status, github_pr_status, pr_manager."
         ),
     }
+}
+
+fn validate_schedule_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
+    let Some(schedule) = workflow.schedule.as_deref() else {
+        if workflow.timezone.is_some() {
+            bail!(
+                "loop workflow '{}' can set timezone only when schedule is configured",
+                workflow.id
+            );
+        }
+        return Ok(());
+    };
+    if schedule.trim().is_empty() {
+        bail!("loop workflow '{}' schedule must not be empty", workflow.id);
+    }
+    CronParser::builder()
+        .seconds(Seconds::Disallowed)
+        .year(Year::Disallowed)
+        .build()
+        .parse(schedule)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "loop workflow '{}' has invalid five-field cron schedule '{}': {error}",
+                workflow.id,
+                schedule
+            )
+        })?;
+    let timezone = workflow.timezone.as_deref().unwrap_or("UTC");
+    timezone.parse::<chrono_tz::Tz>().map_err(|_| {
+        anyhow::anyhow!(
+            "loop workflow '{}' has invalid IANA timezone '{}'",
+            workflow.id,
+            timezone
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_codex_task_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
+    if workflow.kind == "codex_task" {
+        if workflow.schedule.is_none() {
+            bail!(
+                "loop workflow '{}' kind 'codex_task' requires schedule",
+                workflow.id
+            );
+        }
+        let Some(prompt_file) = workflow.prompt_file.as_deref() else {
+            bail!(
+                "loop workflow '{}' kind 'codex_task' requires prompt_file",
+                workflow.id
+            );
+        };
+        validate_repo_relative_path("prompt_file", &workflow.id, prompt_file)?;
+        if workflow
+            .model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty() || model.chars().any(char::is_control))
+        {
+            bail!(
+                "loop workflow '{}' model must be non-empty and contain no control characters",
+                workflow.id
+            );
+        }
+        if let Some(sandbox) = workflow.sandbox.as_deref() {
+            if !matches!(sandbox, "read-only" | "workspace-write") {
+                bail!(
+                    "loop workflow '{}' sandbox must be 'read-only' or 'workspace-write'",
+                    workflow.id
+                );
+            }
+        }
+        if let Some(checkout) = workflow.checkout.as_deref() {
+            if !matches!(checkout, "repo" | "worktree") {
+                bail!(
+                    "loop workflow '{}' checkout must be 'repo' or 'worktree'",
+                    workflow.id
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    for (name, configured) in [
+        ("prompt_file", workflow.prompt_file.is_some()),
+        ("model", workflow.model.is_some()),
+        ("sandbox", workflow.sandbox.is_some()),
+        ("checkout", workflow.checkout.is_some()),
+    ] {
+        if configured {
+            bail!(
+                "loop workflow '{}' can set {name} only when kind = 'codex_task'",
+                workflow.id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_repo_relative_path(label: &str, workflow_id: &str, path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        bail!(
+            "loop workflow '{workflow_id}' {label} must be a non-empty repository-relative path without '..'"
+        );
+    }
+    Ok(())
 }
 
 fn validate_loop_token(label: &str, value: &str) -> Result<()> {
