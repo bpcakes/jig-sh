@@ -25,12 +25,6 @@ impl CommandTimeout {
     pub(crate) const fn as_secs(self) -> u64 {
         self.0.as_secs()
     }
-
-    pub(crate) fn deadline_from(self, started: std::time::Instant) -> std::time::Instant {
-        started
-            .checked_add(self.0)
-            .expect("a validated command timeout fits in Instant")
-    }
 }
 
 impl Serialize for CommandTimeout {

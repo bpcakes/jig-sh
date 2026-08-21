@@ -1,23 +1,19 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::{
+    BoundedProcessOutput, OwnedProcessTreeError, ProcessOutputLimits,
+    run_owned_process_tree_with_output_limits_and_observer,
+};
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
-use wait_timeout::ChildExt;
 
 use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
-use crate::execution::{
-    ExecutionControl, ExecutionEvent, ExecutionPhase, ExecutionStream, HeartbeatSchedule,
-    PhasePosition,
-};
+use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition, ProcessExecutionObserver};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
@@ -44,7 +40,7 @@ pub(crate) enum CodexPrompt<'a> {
     Stdin(&'a str),
 }
 
-impl CodexPrompt<'_> {
+impl<'a> CodexPrompt<'a> {
     const fn delivery(self) -> &'static str {
         match self {
             Self::Argument(_) => "argument",
@@ -52,10 +48,10 @@ impl CodexPrompt<'_> {
         }
     }
 
-    fn stdin_prompt(self) -> Option<String> {
+    fn stdin_prompt(self) -> Option<&'a str> {
         match self {
             Self::Argument(_) => None,
-            Self::Stdin(prompt) => Some(prompt.to_string()),
+            Self::Stdin(prompt) => Some(prompt),
         }
     }
 }
@@ -255,205 +251,64 @@ fn build_codex_command(
 
 fn run_worker_command(
     command: &mut Command,
-    stdin_prompt: Option<String>,
+    stdin_prompt: Option<&str>,
     timeout: CommandTimeout,
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Output> {
-    let stdout_file = NamedTempFile::new().context("Failed to create worker stdout file")?;
-    let stderr_file = NamedTempFile::new().context("Failed to create worker stderr file")?;
-    command
-        .stdout(
-            stdout_file
-                .reopen()
-                .context("Failed to open worker stdout file")?,
-        )
-        .stderr(
-            stderr_file
-                .reopen()
-                .context("Failed to open worker stderr file")?,
-        );
-    if stdin_prompt.is_some() {
-        command.stdin(Stdio::piped());
-    }
-    configure_worker_process(command);
+    let prompt_file = stdin_prompt
+        .map(|prompt| -> Result<NamedTempFile> {
+            let file = NamedTempFile::new().context("Failed to create worker stdin file")?;
+            fs::write(file.path(), prompt).context("Failed to write worker prompt")?;
+            command.stdin(file.reopen().context("Failed to open worker stdin file")?);
+            Ok(file)
+        })
+        .transpose()?;
+    let _prompt_file = prompt_file;
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
 
-    let mut process =
-        WorkerProcess::new(command.spawn().context("Failed to start worker process")?);
-    process.write_stdin(stdin_prompt)?;
-
-    let started = Instant::now();
-    let deadline = timeout.deadline_from(started);
-    let mut heartbeat = HeartbeatSchedule::new();
-    let mut stdout_offset = 0;
-    let mut stderr_offset = 0;
-    let status = loop {
-        emit_worker_output(
-            stdout_file.path(),
-            &mut stdout_offset,
-            ExecutionStream::Stdout,
-            observer,
-        )?;
-        emit_worker_output(
-            stderr_file.path(),
-            &mut stderr_offset,
-            ExecutionStream::Stderr,
-            observer,
-        )?;
-        if observer.cancelled() {
-            process.terminate_and_reap();
-            bail!("Worker process was cancelled");
-        }
-        let elapsed = started.elapsed();
-        if heartbeat.due(elapsed) {
-            observer.event(ExecutionEvent::Heartbeat { label, elapsed });
-        }
-        if Instant::now() >= deadline {
-            process.terminate_and_reap();
-            bail!(
-                "Worker process timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
-        if let Some(status) = process
-            .child_mut()
-            .wait_timeout(Duration::from_millis(50))
-            .context("Failed to wait for worker process")?
-        {
-            process.mark_reaped();
-            break status;
-        }
-    };
-
-    emit_worker_output(
-        stdout_file.path(),
-        &mut stdout_offset,
-        ExecutionStream::Stdout,
-        observer,
-    )?;
-    emit_worker_output(
-        stderr_file.path(),
-        &mut stderr_offset,
-        ExecutionStream::Stderr,
-        observer,
-    )?;
-
-    process.finish_writer()?;
+    let output = run_owned_process_tree_with_output_limits_and_observer(
+        command,
+        timeout.duration(),
+        ProcessOutputLimits {
+            stdout: usize::MAX,
+            stderr: usize::MAX,
+        },
+        &mut ProcessExecutionObserver::new(observer, label),
+    )
+    .map_err(|error| worker_process_error(error, timeout))?;
 
     Ok(Output {
-        status,
-        stdout: fs::read(stdout_file.path()).context("Failed to read worker stdout")?,
-        stderr: fs::read(stderr_file.path()).context("Failed to read worker stderr")?,
+        status: output.status,
+        stdout: complete_worker_output(output.stdout, "stdout")?,
+        stderr: complete_worker_output(output.stderr, "stderr")?,
     })
 }
 
-struct WorkerProcess {
-    child: Option<Child>,
-    writer: Option<JoinHandle<Result<()>>>,
+fn complete_worker_output(output: Option<BoundedProcessOutput>, stream: &str) -> Result<Vec<u8>> {
+    let output = output.with_context(|| format!("Failed to capture worker {stream}"))?;
+    if !output.complete {
+        bail!("Failed to capture complete worker {stream}");
+    }
+    Ok(output.bytes)
 }
 
-impl WorkerProcess {
-    fn new(child: Child) -> Self {
-        Self {
-            child: Some(child),
-            writer: None,
+fn worker_process_error(error: OwnedProcessTreeError, timeout: CommandTimeout) -> anyhow::Error {
+    match error {
+        OwnedProcessTreeError::Start(error) => {
+            anyhow!(error).context("Failed to start worker process")
+        }
+        OwnedProcessTreeError::TimedOut => anyhow!(
+            "Worker process timed out after {} seconds",
+            timeout.as_secs()
+        ),
+        OwnedProcessTreeError::Cancelled => anyhow!("Worker process was cancelled"),
+        OwnedProcessTreeError::Await => anyhow!("Failed to wait for worker process"),
+        OwnedProcessTreeError::Cleanup => {
+            anyhow!("Worker process tree could not be cleaned up safely")
         }
     }
-
-    fn child_mut(&mut self) -> &mut Child {
-        self.child
-            .as_mut()
-            .expect("worker child is available until it has been reaped")
-    }
-
-    fn write_stdin(&mut self, prompt: Option<String>) -> Result<()> {
-        let Some(prompt) = prompt else {
-            return Ok(());
-        };
-        let mut stdin = self
-            .child_mut()
-            .stdin
-            .take()
-            .context("Failed to open worker stdin")?;
-        self.writer = Some(thread::spawn(move || -> Result<()> {
-            stdin
-                .write_all(prompt.as_bytes())
-                .context("Failed to write worker prompt")?;
-            Ok(())
-        }));
-        Ok(())
-    }
-
-    fn mark_reaped(&mut self) {
-        self.child.take();
-    }
-
-    fn terminate_and_reap(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
-        }
-    }
-
-    fn finish_writer(&mut self) -> Result<()> {
-        if let Some(writer) = self.writer.take() {
-            writer
-                .join()
-                .map_err(|_| anyhow!("Worker stdin writer thread panicked"))??;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for WorkerProcess {
-    fn drop(&mut self) {
-        self.terminate_and_reap();
-        let _ = self.finish_writer();
-    }
-}
-
-fn emit_worker_output(
-    path: &Path,
-    offset: &mut u64,
-    stream: ExecutionStream,
-    observer: &mut dyn ExecutionControl,
-) -> Result<()> {
-    let mut file = fs::File::open(path).context("Failed to read live worker output")?;
-    file.seek(SeekFrom::Start(*offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    *offset = offset.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-    if !bytes.is_empty() {
-        observer.event(ExecutionEvent::Output {
-            stream,
-            bytes: &bytes,
-        });
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn configure_worker_process(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_worker_process(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn terminate_worker_process(child: &mut Child) {
-    let pgid = child.id() as libc::pid_t;
-    if pgid > 0 {
-        let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
-    }
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn terminate_worker_process(child: &mut Child) {
-    let _ = child.kill();
 }
 
 struct WorkerReceiptOutcome<'a> {
@@ -568,6 +423,21 @@ mod tests {
 
     use super::*;
 
+    #[derive(Default)]
+    struct RecordingControl {
+        output: Vec<u8>,
+    }
+
+    impl crate::execution::ExecutionObserver for RecordingControl {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            if let crate::execution::ExecutionEvent::Output { bytes, .. } = event {
+                self.output.extend_from_slice(bytes);
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for RecordingControl {}
+
     #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
         let mut request = CodexExecRequest {
@@ -643,6 +513,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn worker_supervision_delivers_stdin_and_observes_output() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "cat"]);
+        let mut control = RecordingControl::default();
+
+        let output = run_worker_command(
+            &mut command,
+            Some("prompt through a file"),
+            CommandTimeout::from_seconds(1).unwrap(),
+            "test worker",
+            &mut control,
+        )
+        .unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"prompt through a file");
+        assert_eq!(control.output, b"prompt through a file");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn worker_timeout_kills_process_group() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -681,40 +572,6 @@ wait
         assert!(
             !marker.exists(),
             "worker timeout killed the child process but left its process group running"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn worker_process_guard_drop_kills_process_group() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::tempdir().unwrap();
-        let marker = temp.path().join("escaped-grandchild");
-        let script = temp.path().join("worker.sh");
-        fs::write(
-            &script,
-            r#"#!/bin/sh
-marker="$1"
-(sh -c 'sleep 1; printf leaked > "$1"' sh "$marker") &
-wait
-"#,
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
-
-        let mut command = Command::new(&script);
-        command.arg(&marker);
-        configure_worker_process(&mut command);
-        let process = WorkerProcess::new(command.spawn().unwrap());
-        drop(process);
-
-        thread::sleep(Duration::from_millis(1500));
-        assert!(
-            !marker.exists(),
-            "dropping the worker guard left its process group running"
         );
     }
 }
