@@ -143,7 +143,7 @@ fn plan_run_with_source(
             target,
             action.intent,
             action.runner.clone(),
-            input_digest(action, &source.worktree_fingerprint),
+            action_input_digest(action, &source.worktree_fingerprint),
         );
         planned.effects.clone_from(&action.effects);
         planned.inputs.clone_from(&action.inputs);
@@ -339,7 +339,18 @@ fn execution_layers<'a>(
     Ok(layers)
 }
 
-fn input_digest(action: &jig_contract::ActionSpec, worktree_fingerprint: &str) -> String {
+pub(crate) fn target_input_digest(
+    catalog: &RepositoryCatalog,
+    target: &TargetId,
+    worktree_fingerprint: &str,
+) -> Result<String> {
+    let action = catalog
+        .action(target)
+        .ok_or_else(|| anyhow::anyhow!("target '{target}' is not defined"))?;
+    Ok(action_input_digest(action, worktree_fingerprint))
+}
+
+fn action_input_digest(action: &jig_contract::ActionSpec, worktree_fingerprint: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"jig-target-input-v1\0");
     hasher.update(action.target.to_string().as_bytes());

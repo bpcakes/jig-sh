@@ -6,8 +6,7 @@ use crate::context::{RepoContext, WorkGate, WorkRefinementConfig, WorkReviewGate
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
-use super::checks::check_tools_collect_failures;
-use super::tools::selected_tools;
+use super::checks::check_configured_collect_failures;
 
 mod evidence;
 mod process;
@@ -70,16 +69,16 @@ pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value
     }
 
     let remaining_findings = actionable_findings(&review_result)?;
-    let check_result = if ctx.work_check_tools().is_empty() {
+    let has_check_gates = ctx
+        .work_gates()
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Check(_) | WorkGate::Evidence(_)));
+    let check_result = if !has_check_gates {
         None
     } else {
         // Refinement verifies the full configured check gate set, even when the
         // review gate subset was narrowed with --gate.
-        Some(check_tools_collect_failures(
-            ctx,
-            &opts.plan_id,
-            selected_tools(ctx, &[])?,
-        )?)
+        Some(check_configured_collect_failures(ctx, &opts.plan_id)?)
     };
     let failed_review_gates = review_failed_gates(&review_result)?;
     let checks_ok = check_result
@@ -463,6 +462,7 @@ fn selected_review_gates(
         .into_iter()
         .filter_map(|gate| match gate {
             WorkGate::CodexReview(gate) => Some(gate),
+            WorkGate::Evidence(_) => None,
             _ => None,
         })
         .collect::<Vec<_>>();

@@ -1,11 +1,16 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Result, anyhow, bail};
+use jig_contract::RunConclusion;
 use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
-use crate::context::RepoContext;
+use crate::context::{RepoContext, WorkGate};
+use crate::repository::{PlanRunRequest, RepositoryCatalog, plan_run, resolve_evidence_targets};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
+use super::super::run_execution::{ExecuteCheckRunRequest, execute_check_run};
 use super::super::tool_execution::{
     execute_manifest_tool_result_without_worktree_fingerprint, manifest_tool_result_failure,
 };
@@ -15,21 +20,108 @@ pub(super) fn check(ctx: &RepoContext, opts: WorkCheckRequest) -> Result<Value> 
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    check_tools(ctx, &opts.plan_id, selected_tools(ctx, &opts.tools)?)
+    if opts.tools.is_empty() {
+        check_configured_with_failure_mode(ctx, &opts.plan_id, true)
+    } else {
+        check_tools(ctx, &opts.plan_id, selected_tools(ctx, &opts.tools)?)
+    }
 }
 
 pub(super) fn check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<Value> {
     check_tools_with_failure_mode(ctx, plan_id, tools, true)
 }
 
-pub(super) fn check_tools_collect_failures(
+pub(super) fn check_configured_collect_failures(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
+    check_configured_with_failure_mode(ctx, plan_id, false)
+}
+
+fn check_configured_with_failure_mode(
     ctx: &RepoContext,
     plan_id: &str,
-    tools: Vec<String>,
+    fail_on_check_error: bool,
 ) -> Result<Value> {
-    // Used by review refinement so failed verification checks are reported in
-    // the refine result instead of aborting before all receipts are recorded.
-    check_tools_with_failure_mode(ctx, plan_id, tools, false)
+    let tools = ctx.work_check_tools();
+    let catalog = RepositoryCatalog::from_context(ctx)?;
+    let targets = configured_evidence_targets(ctx, &catalog)?;
+    if tools.is_empty() && targets.is_empty() {
+        bail!(
+            "No work check gates configured. Add check or evidence work.gates to .jig.toml, or pass --tool."
+        );
+    }
+
+    let mut result = if tools.is_empty() {
+        json!({
+            "ok": true,
+            "plan_id": plan_id,
+            "checks": [],
+            "receipt_id": null,
+        })
+    } else {
+        check_tools_with_failure_mode(ctx, plan_id, tools, fail_on_check_error)?
+    };
+
+    if targets.is_empty() {
+        return Ok(result);
+    }
+    let plan = plan_run(
+        ctx,
+        &catalog,
+        PlanRunRequest {
+            selectors: targets.iter().map(ToString::to_string).collect(),
+            profile: None,
+            affected_base: None,
+        },
+    )?;
+    let execution = execute_check_run(
+        ctx,
+        &catalog,
+        plan.clone(),
+        ExecuteCheckRunRequest {
+            work_plan_id: Some(plan_id.to_owned()),
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| false,
+    )?;
+    let evidence_ok = execution.run.result.conclusion == Some(RunConclusion::Success);
+    let failed_target_labels = execution
+        .failed_targets
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let object = result
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
+    let legacy_ok = object["checks"].as_array().is_none_or(|checks| {
+        checks
+            .iter()
+            .all(|check| check["ok"].as_bool() != Some(false))
+    });
+    object.insert("ok".into(), json!(legacy_ok && evidence_ok));
+    object.insert("plan".into(), json!(plan));
+    object.insert("run".into(), json!(execution.run.result));
+    object.insert("results".into(), json!(execution.results));
+    object.insert("failed_targets".into(), json!(execution.failed_targets));
+
+    if fail_on_check_error && !evidence_ok {
+        bail!("Work evidence targets failed: [{failed_target_labels}]");
+    }
+    Ok(result)
+}
+
+fn configured_evidence_targets(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+) -> Result<BTreeSet<jig_contract::TargetId>> {
+    let mut targets = BTreeSet::new();
+    for gate in ctx.work_gates() {
+        let WorkGate::Evidence(gate) = gate else {
+            continue;
+        };
+        targets.extend(resolve_evidence_targets(catalog, &gate.selector)?);
+    }
+    Ok(targets)
 }
 
 fn check_tools_with_failure_mode(

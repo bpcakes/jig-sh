@@ -605,10 +605,9 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(
         answers.contains("repo_compat_typescript_lint_command = \"scripts/check-webapps.sh lint\"")
     );
-    assert!(answers.contains("tool = \"jig.typescript_lint\""));
-    assert!(answers.contains("tool = \"jig.typescript_typecheck\""));
-    assert!(answers.contains("tool = \"jig.typescript_build\""));
-    assert!(answers.contains("tool = \"jig.typescript_coverage\""));
+    assert!(answers.contains("kind = \"evidence\""));
+    assert!(answers.contains("profile = \"verify\""));
+    assert!(!answers.contains("tool = \"jig.typescript_lint\""));
     assert!(answers.contains("[[dev.apps]]"));
     assert!(answers.contains(
         "argv = [\"npm\", \"--prefix=.\", \"--workspace=.\", \"--workspaces=true\", \"--include-workspace-root=true\", \"--global=false\", \"--location=project\", \"--if-present=false\", \"--include=dev\", \"--include=optional\", \"--include=peer\", \"run\", \"dev\"]"

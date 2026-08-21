@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::cancellation::ensure_status_collection_active;
 use crate::command::{WorkEvidenceRequest, WorkGatesRequest};
 use crate::context::{RepoContext, WorkGate};
+use crate::repository::{RepositoryCatalog, resolve_evidence_targets};
 use crate::state::{
     PlanStatus, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptEvidence,
     WorkReviewReceiptStatus, current_worktree_fingerprint,
@@ -16,6 +17,10 @@ use crate::state::{
 };
 
 use super::tools::validate_check_tool;
+
+mod target_evidence;
+
+use target_evidence::EvidenceGateEvaluation;
 
 const MAX_GATE_CHANGED_PATHS: usize = 100;
 
@@ -125,7 +130,7 @@ struct EvaluatedReceipt {
     exit_status: Option<i32>,
     ended_at_ms: Option<u64>,
     freshness: GateFreshness,
-    freshness_reason: &'static str,
+    freshness_reason: String,
     changed_paths: Vec<String>,
     changed_path_count: usize,
     changed_paths_truncated: bool,
@@ -142,7 +147,25 @@ impl EvaluatedReceipt {
         current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
     ) -> Self {
         let freshness = gate_freshness(freshness_receipt, current_fingerprint);
-        let freshness_reason = freshness.reason(freshness_receipt, current_fingerprint);
+        let freshness_reason = freshness
+            .reason(freshness_receipt, current_fingerprint)
+            .to_owned();
+        Self::with_freshness(
+            receipt,
+            freshness_receipt,
+            current_fingerprint,
+            freshness,
+            freshness_reason,
+        )
+    }
+
+    fn with_freshness<T: GateReceiptView>(
+        receipt: Option<&T>,
+        freshness_receipt: Option<&T>,
+        current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
+        freshness: GateFreshness,
+        freshness_reason: String,
+    ) -> Self {
         let (changed_paths, changed_path_count, changed_paths_truncated, changed_paths_digest) =
             gate_changed_paths(freshness_receipt);
         Self {
@@ -194,6 +217,7 @@ struct UnsupportedGateEvaluation {
 #[derive(Clone, Debug)]
 enum GateEvaluation {
     Check(CheckGateEvaluation),
+    Evidence(EvidenceGateEvaluation),
     CodexReview(ReviewGateEvaluation),
     Unsupported(UnsupportedGateEvaluation),
 }
@@ -202,6 +226,7 @@ impl GateEvaluation {
     fn id(&self) -> &str {
         match self {
             Self::Check(gate) => &gate.id,
+            Self::Evidence(gate) => gate.id(),
             Self::CodexReview(gate) => &gate.id,
             Self::Unsupported(gate) => &gate.id,
         }
@@ -210,6 +235,7 @@ impl GateEvaluation {
     const fn required(&self) -> bool {
         match self {
             Self::Check(gate) => gate.required,
+            Self::Evidence(gate) => gate.required(),
             Self::CodexReview(gate) => gate.required,
             Self::Unsupported(gate) => gate.required,
         }
@@ -218,6 +244,7 @@ impl GateEvaluation {
     const fn outcome(&self) -> GateOutcome {
         match self {
             Self::Check(gate) => gate.outcome,
+            Self::Evidence(gate) => gate.outcome(),
             Self::CodexReview(gate) => gate.outcome,
             Self::Unsupported(_) => GateOutcome::Unsupported,
         }
@@ -233,6 +260,7 @@ impl GateEvaluation {
     fn receipt(&self) -> Option<&EvaluatedReceipt> {
         match self {
             Self::Check(gate) => Some(&gate.receipt),
+            Self::Evidence(gate) => gate.receipt(),
             Self::CodexReview(gate) => Some(&gate.receipt),
             Self::Unsupported(_) => None,
         }
@@ -241,6 +269,7 @@ impl GateEvaluation {
     fn evidence_key(&self) -> Option<String> {
         match self {
             Self::Check(gate) => Some(format!("tool:{}", gate.tool)),
+            Self::Evidence(gate) => Some(gate.evidence_key()),
             Self::CodexReview(gate) => Some(format!("gate:{}", gate.id)),
             Self::Unsupported(_) => None,
         }
@@ -271,6 +300,7 @@ impl GateEvaluation {
                     "current_worktree_fingerprint_error": receipt.current_worktree_fingerprint_error,
                 })
             }
+            Self::Evidence(gate) => gate.to_value(),
             Self::CodexReview(gate) => {
                 let receipt = &gate.receipt;
                 let evidence = gate.evidence.as_ref();
@@ -312,6 +342,10 @@ impl GateEvaluation {
     }
 
     fn to_latest_evidence(&self) -> Option<Value> {
+        if let Self::Evidence(gate) = self {
+            return gate.to_latest_evidence();
+        }
+
         let receipt = self.receipt()?;
         if receipt.exit_status != Some(0) {
             return None;
@@ -325,6 +359,7 @@ impl GateEvaluation {
             // Review gate JSON intentionally has no freshness_receipt_id field;
             // the legacy evidence projection therefore exposed null here.
             Self::CodexReview(gate) => (None, Some(gate.skill.as_str()), None),
+            Self::Evidence(_) => unreachable!("evidence gates return above"),
             Self::Unsupported(_) => return None,
         };
         Some(json!({
@@ -537,14 +572,29 @@ fn evaluate_gate_report(
 ) -> Result<GateReport> {
     collection.ensure_active()?;
     let work_gates = ctx.work_gates();
+    let repository = work_gates
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Evidence(_)))
+        .then(|| RepositoryCatalog::from_context(ctx))
+        .transpose()?;
     let mut check_tools = BTreeSet::new();
     let mut review_gate_ids = BTreeSet::new();
+    let mut evidence_targets = BTreeMap::new();
     for gate in &work_gates {
         collection.ensure_active()?;
         match gate {
             WorkGate::Check(gate) => {
                 validate_check_tool(ctx, &gate.tool, "Work gate")?;
                 check_tools.insert(gate.tool.clone());
+            }
+            WorkGate::Evidence(gate) => {
+                let catalog = repository
+                    .as_ref()
+                    .expect("evidence gates initialize the repository catalog");
+                evidence_targets.insert(
+                    gate.id.clone(),
+                    resolve_evidence_targets(catalog, &gate.selector)?,
+                );
             }
             WorkGate::CodexReview(gate) => {
                 review_gate_ids.insert(gate.id.clone());
@@ -554,14 +604,19 @@ fn evaluate_gate_report(
     }
     collection.ensure_active()?;
     let receipt_index = match collection {
-        GateCollection::Blocking => {
-            work_gate_receipt_index(ctx, plan_id, &check_tools, &review_gate_ids)?
-        }
+        GateCollection::Blocking => work_gate_receipt_index(
+            ctx,
+            plan_id,
+            &check_tools,
+            &review_gate_ids,
+            &evidence_targets,
+        )?,
         GateCollection::Cancellable(cancelled) => work_gate_receipt_index_with_cancellation(
             ctx,
             plan_id,
             &check_tools,
             &review_gate_ids,
+            &evidence_targets,
             cancelled,
         )?,
     };
@@ -572,7 +627,13 @@ fn evaluate_gate_report(
 
     for gate in work_gates {
         collection.ensure_active()?;
-        let status = evaluate_gate(&gate, &current_fingerprint, &receipt_index, collection)?;
+        let status = evaluate_gate(
+            &gate,
+            repository.as_ref(),
+            &current_fingerprint,
+            &receipt_index,
+            collection,
+        )?;
         collection.ensure_active()?;
         required_failures.observe(&status);
         gates.push(status);
@@ -686,6 +747,7 @@ fn latest_passing_gates(report: &GateReport) -> Vec<Value> {
 
 fn evaluate_gate(
     gate: &WorkGate,
+    repository: Option<&RepositoryCatalog>,
     current_fingerprint: &crate::state::CurrentWorktreeFingerprint,
     receipt_index: &WorkGateReceiptIndex,
     collection: GateCollection<'_>,
@@ -728,6 +790,17 @@ fn evaluate_gate(
                 outcome: outcome.with_freshness(evaluated_receipt.freshness),
                 receipt: evaluated_receipt,
             }))
+        }
+        WorkGate::Evidence(gate) => {
+            let catalog = repository
+                .ok_or_else(|| anyhow!("repository catalog was not loaded for an evidence gate"))?;
+            Ok(GateEvaluation::Evidence(EvidenceGateEvaluation::evaluate(
+                gate,
+                catalog,
+                current_fingerprint,
+                receipt_index,
+                collection,
+            )?))
         }
         WorkGate::CodexReview(gate) => {
             let skill = gate.skill.as_str();
@@ -917,97 +990,4 @@ fn concise_error(error: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        CheckGateEvaluation, EvaluatedReceipt, GateEvaluation, GateFreshness, GateOutcome,
-        GateReport, RequiredGateFailures, concise_error, latest_passing_gates,
-    };
-
-    fn passing_check(id: &str, receipt_id: &str) -> GateEvaluation {
-        GateEvaluation::Check(CheckGateEvaluation {
-            id: id.to_string(),
-            required: true,
-            tool: "jig.test".into(),
-            outcome: GateOutcome::Passed,
-            receipt: EvaluatedReceipt {
-                receipt_id: Some(receipt_id.to_string()),
-                freshness_receipt_id: Some(receipt_id.to_string()),
-                exit_status: Some(0),
-                ended_at_ms: Some(42),
-                freshness: GateFreshness::Fresh,
-                freshness_reason: "receipt matches current worktree fingerprint",
-                changed_paths: Vec::new(),
-                changed_path_count: 0,
-                changed_paths_truncated: false,
-                changed_paths_digest: None,
-                diff_summary: None,
-                receipt_worktree_fingerprint_error: None,
-                current_worktree_fingerprint_error: None,
-            },
-        })
-    }
-
-    #[test]
-    fn concise_error_reserves_room_for_ellipsis() {
-        let error = "x".repeat(300);
-        let concise = concise_error(&error);
-
-        assert_eq!(concise.chars().count(), 240);
-        assert!(concise.ends_with("..."));
-    }
-
-    #[test]
-    fn latest_passing_gates_uses_gate_id_tie_breaker() {
-        let report = GateReport {
-            plan_id: "plan-test".into(),
-            plan_state: "open",
-            current_worktree_fingerprint: Some("fingerprint".into()),
-            current_worktree_fingerprint_error: None,
-            gates: vec![
-                passing_check("alpha", "receipt-alpha"),
-                passing_check("zeta", "receipt-zeta"),
-            ],
-            required_failures: RequiredGateFailures::default(),
-        };
-
-        let latest = latest_passing_gates(&report);
-
-        assert_eq!(latest.len(), 1);
-        assert_eq!(latest[0]["gate_id"], "zeta");
-        assert_eq!(latest[0]["receipt_id"], "receipt-zeta");
-    }
-
-    #[test]
-    fn gate_outcome_uses_closed_freshness_mapping() {
-        assert_eq!(
-            GateOutcome::Passed
-                .with_freshness(GateFreshness::Fresh)
-                .as_str(),
-            "passed"
-        );
-        assert_eq!(
-            GateOutcome::Passed
-                .with_freshness(GateFreshness::Missing)
-                .as_str(),
-            "missing"
-        );
-        assert_eq!(
-            GateOutcome::Passed
-                .with_freshness(GateFreshness::Stale)
-                .as_str(),
-            "stale"
-        );
-        assert_eq!(
-            GateOutcome::Passed
-                .with_freshness(GateFreshness::Unknown)
-                .as_str(),
-            "unknown"
-        );
-        assert_eq!(
-            GateOutcome::Failed
-                .with_freshness(GateFreshness::Unknown)
-                .as_str(),
-            "failed"
-        );
-    }
-}
+mod tests;

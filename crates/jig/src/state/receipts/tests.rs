@@ -42,6 +42,24 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
     let check_gate_tools = BTreeSet::from([tool::TEST.to_string()]);
     let review_gate_ids = BTreeSet::from(["rust-review".to_string()]);
     let mut index = ReceiptProtectionIndex::default();
+    let mut target = test_receipt(
+        "receipt_target",
+        "plan_open",
+        "jig.target_run",
+        35,
+        json!({}),
+    );
+    target.run_id = Some("run_1".into());
+    target.target = Some("api:test".parse().unwrap());
+    let mut closed_target = test_receipt(
+        "receipt_closed_target",
+        "plan_closed",
+        "jig.target_run",
+        45,
+        json!({}),
+    );
+    closed_target.run_id = Some("run_2".into());
+    closed_target.target = Some("api:test".parse().unwrap());
     let receipts = [
         test_receipt("receipt_direct", "plan_open", tool::TEST, 10, json!({})),
         test_receipt(
@@ -62,6 +80,8 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
             json!({"gate_id": "rust-review"}),
         ),
         test_receipt("receipt_non_gate", "plan_open", tool::CLIPPY, 40, json!({})),
+        target,
+        closed_target,
         test_receipt("receipt_closed", "plan_closed", tool::TEST, 50, json!({})),
     ];
     for receipt in &receipts {
@@ -76,6 +96,7 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
             "receipt_batch".to_string(),
             "receipt_direct".to_string(),
             "receipt_review".to_string(),
+            "receipt_target".to_string(),
         ])
     );
 }

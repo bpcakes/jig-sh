@@ -113,14 +113,14 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig doctor` checks runtime, config, contract, required tools, agent skills, proxy status, vault status, and the next setup command. The launcher keeps `doctor` and `check contract` reachable through a capability-only final runtime probe against its rendered contract epoch, so a missing or malformed repository manifest can be reported instead of blocking its own diagnostic. Ordinary commands still require strict repository validation. Every external check—including SQLx capability probes, configured Codex marketplace support, and launcher-backed proxy/service diagnostics in either feature mode—runs inside a bounded owned process tree under one serialized signal owner. Clean handler retirement permits a later doctor call in the same host process; unsafe retirement permanently poisons reuse. Linux/macOS retain the exact child process-group identity until descendants are proven gone, Windows uses a private Job Object, cancellation prevents later check families from starting, and unsupported supervision fails the check closed before a child starts.
 - `scripts/jig info --commands` lists every root command's primary-workflow availability, stable machine-readable reason code, and next setup step; the installed `jig info --commands` form also works before adoption.
 - `scripts/jig check ...` runs configured repo checks and records receipts by default.
-- `scripts/jig work ...` opens work, runs configured check and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
+- `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
 - `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
 - `scripts/jig mcp` exposes the same command contract to MCP clients.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 
-This is where Jig is most agent-friendly: checks and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect what was run, which skill produced findings, against which worktree fingerprint, and whether the required gates are still fresh.
+This is where Jig is most agent-friendly: repository targets, verification profiles, legacy checks, and review skills become named gates with structured results and append-only evidence under `.agent/state/`. A reviewer can inspect the exact target and run, which skill produced findings, the contract and input digests, and whether the required evidence is still fresh.
 
 ### Repository targets and check plans
 
@@ -162,6 +162,14 @@ scripts/jig check repo:test
 scripts/jig check 'repo:*'
 scripts/jig check --profile verify --explain
 ```
+
+Contract-v6 work gates name the same target/profile vocabulary. A default
+`scripts/jig work check --plan-id ...` resolves all configured evidence gates
+and executes their target union once, allowing a profile gate to prove that all
+members succeeded in one compatible run. An exact target receipt cannot satisfy
+a different target, and separate partial runs cannot be combined into profile
+evidence. Legacy tool gates remain available for older contracts and explicit
+`work check --tool ...` compatibility.
 
 `--explain` is read-only: it prints the immutable plan, target reasons,
 dependency layers, effects, configuration digest, source identity, and input

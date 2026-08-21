@@ -42,8 +42,8 @@ pub(crate) use runtime::{
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
-    ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
-    parse_review_scope_arg,
+    ReviewScopeArg, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
+    WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg,
 };
 
 pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 6;

@@ -470,6 +470,7 @@ fn configured_gate_evidence_keys(ctx: &RepoContext) -> (BTreeSet<String>, BTreeS
             WorkGate::Check(gate) => {
                 check_tools.insert(gate.tool);
             }
+            WorkGate::Evidence(_) => {}
             WorkGate::CodexReview(gate) => {
                 review_gate_ids.insert(gate.id);
             }
@@ -502,6 +503,7 @@ struct ProtectedCheckReceipts {
 pub(super) struct ReceiptProtectionIndex {
     checks: BTreeMap<(String, String), ProtectedCheckReceipts>,
     latest_review_by_plan_gate: BTreeMap<(String, String), LatestReceipt>,
+    target_receipts: BTreeSet<String>,
 }
 
 impl ReceiptProtectionIndex {
@@ -519,6 +521,12 @@ impl ReceiptProtectionIndex {
         else {
             return;
         };
+        if receipt.target.is_some() && receipt.run_id.is_some() {
+            // Target receipts are the only durable proof for target/profile
+            // evidence gates. Preserve them while their work plan remains open;
+            // closing the plan makes them eligible for normal archival.
+            self.target_receipts.insert(receipt.id.clone());
+        }
         if check_gate_tools.contains(&receipt.tool_name) {
             self.checks.insert(
                 (plan_id.clone(), receipt.tool_name.clone()),
@@ -610,6 +618,7 @@ impl ReceiptProtectionIndex {
                 protected.insert(worker_receipt_id.clone());
             }
         }
+        protected.extend(self.target_receipts.iter().cloned());
         protected
     }
 }

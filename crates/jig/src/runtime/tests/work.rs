@@ -2,6 +2,8 @@ use super::*;
 use crate::tool_defs::WORKER_RUN_TOOL;
 use std::path::Path;
 
+mod evidence;
+
 #[test]
 fn cli_dispatch_requires_manifest_tool_declaration() {
     let temp = tempdir().unwrap();
@@ -81,7 +83,7 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
 
     let go = tempdir().unwrap();
     crate::test_env::TestRepoBuilder::new(go.path())
-        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .contract_version(5)
         .config("backend_language = \"go\"\ngo_database = \"none\"")
         .write();
     let ctx = RepoContext::load_from(go.path()).unwrap();

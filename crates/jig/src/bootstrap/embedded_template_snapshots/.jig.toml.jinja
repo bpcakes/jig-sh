@@ -145,6 +145,13 @@ timeout_seconds = <<[ provider.timeout_seconds ]>>
 [% endfor %]
 [% endif %]
 
+[% if _jig.contract_version >= 6 %]
+[[work.gates]]
+id = "verify"
+kind = "evidence"
+profile = "<<[ repository.default_check_profile | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+conclusion = "success"
+[% else %]
 [[work.gates]]
 id = "contract"
 kind = "check"
@@ -202,6 +209,7 @@ id = "schema-dump"
 kind = "check"
 tool = "jig.schema_dump"
 
+[% endif %]
 [% endif %]
 [% if agent_tooling.codex.marketplaces | length == 0 %]
 [agent_tooling.codex]

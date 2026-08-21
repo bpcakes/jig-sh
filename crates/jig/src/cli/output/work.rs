@@ -25,7 +25,11 @@ pub(super) fn format_work_status_summary(value: &serde_json::Value) -> String {
 pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
     let plan_id = value_str(value, "plan_id").unwrap_or("<unknown>");
     let checks = value["checks"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let status = work_check_summary_status(checks);
+    let targets = value["run"]["targets"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let status = work_check_summary_status(checks, targets);
     let skipped_checks = checks
         .iter()
         .filter(|check| {
@@ -50,6 +54,7 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             value_str(value, "receipt_id").unwrap_or("none")
         ),
         format!("  Checks: {}", checks.len()),
+        format!("  Targets: {}", targets.len()),
     ];
 
     for check in checks {
@@ -64,6 +69,14 @@ pub(super) fn format_work_check_summary(value: &serde_json::Value) -> String {
             .unwrap_or_default();
         lines.push(format!(
             "  - {tool}: exit {exit_status_label}, receipt {receipt}{output_note}"
+        ));
+    }
+    for target in targets {
+        let target_name = structured_target_label(&target["target"]);
+        let conclusion = value_str(target, "conclusion").unwrap_or("unknown");
+        let receipt = value_str(target, "receipt_id").unwrap_or("none");
+        lines.push(format!(
+            "  - {target_name}: {conclusion}, receipt {receipt}"
         ));
     }
 
@@ -142,8 +155,11 @@ impl WorkCheckSummaryStatus {
     }
 }
 
-fn work_check_summary_status(checks: &[serde_json::Value]) -> WorkCheckSummaryStatus {
-    if checks.is_empty() {
+fn work_check_summary_status(
+    checks: &[serde_json::Value],
+    targets: &[serde_json::Value],
+) -> WorkCheckSummaryStatus {
+    if checks.is_empty() && targets.is_empty() {
         return WorkCheckSummaryStatus::NoChecksConfigured;
     }
 
@@ -155,11 +171,25 @@ fn work_check_summary_status(checks: &[serde_json::Value]) -> WorkCheckSummarySt
             None => saw_unknown = true,
         }
     }
+    for target in targets {
+        match value_str(target, "conclusion") {
+            Some("success") => {}
+            Some(_) => return WorkCheckSummaryStatus::Failed,
+            None => saw_unknown = true,
+        }
+    }
 
     if saw_unknown {
         WorkCheckSummaryStatus::Unknown
     } else {
         WorkCheckSummaryStatus::Passed
+    }
+}
+
+fn structured_target_label(target: &serde_json::Value) -> String {
+    match (value_str(target, "component"), value_str(target, "action")) {
+        (Some(component), Some(action)) => format!("{component}:{action}"),
+        _ => "<unknown target>".into(),
     }
 }
 
@@ -182,6 +212,8 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
         let tool = value_str(gate, "tool")
             .map(|tool| format!(" ({tool})"))
             .or_else(|| value_str(gate, "skill").map(|skill| format!(" ({skill})")))
+            .or_else(|| value_str(gate, "target").map(|target| format!(" (target {target})")))
+            .or_else(|| value_str(gate, "profile").map(|profile| format!(" (profile {profile})")))
             .unwrap_or_default();
         let freshness = value_str(gate, "freshness")
             .map(|freshness| format!(", freshness {freshness}"))
@@ -258,7 +290,10 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         for gate in latest {
             let tool = value_str(gate, "tool")
                 .or_else(|| value_str(gate, "skill"))
-                .unwrap_or("<unknown>");
+                .map(str::to_string)
+                .or_else(|| value_str(gate, "target").map(|target| format!("target {target}")))
+                .or_else(|| value_str(gate, "profile").map(|profile| format!("profile {profile}")))
+                .unwrap_or_else(|| "<unknown>".into());
             let gate_id = value_str(gate, "gate_id").unwrap_or("<unknown>");
             let receipt = value_str(gate, "freshness_receipt_id")
                 .or_else(|| value_str(gate, "receipt_id"))

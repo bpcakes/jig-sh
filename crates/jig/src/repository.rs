@@ -7,15 +7,41 @@ use jig_contract::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::context::RepoContext;
+use crate::context::{RepoContext, WorkEvidenceSelector};
 
 mod inspect;
 mod planner;
 
 pub(crate) use inspect::{InspectRequest, inspect_repository};
-pub(crate) use planner::{PlanRunRequest, plan_run, validate_run_plan};
+pub(crate) use planner::{PlanRunRequest, plan_run, target_input_digest, validate_run_plan};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
+
+pub(crate) fn resolve_evidence_targets(
+    catalog: &RepositoryCatalog,
+    selector: &WorkEvidenceSelector,
+) -> Result<BTreeSet<TargetId>> {
+    match selector {
+        WorkEvidenceSelector::Target(target) => {
+            if catalog.action(target).is_none() {
+                bail!("work evidence gate references unknown target '{target}'");
+            }
+            Ok(BTreeSet::from([target.clone()]))
+        }
+        WorkEvidenceSelector::Profile(profile) => {
+            let profile = catalog.profile(profile).ok_or_else(|| {
+                anyhow::anyhow!("work evidence gate references unknown profile '{profile}'")
+            })?;
+            if profile.targets.is_empty() {
+                bail!(
+                    "work evidence gate profile '{}' contains no targets",
+                    profile.id
+                );
+            }
+            Ok(profile.targets.iter().cloned().collect())
+        }
+    }
+}
 
 /// The one version-neutral repository view consumed by planning and inspection.
 #[derive(Clone, Debug)]

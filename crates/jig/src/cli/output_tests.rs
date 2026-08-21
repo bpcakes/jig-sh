@@ -2,6 +2,9 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "output_tests/evidence.rs"]
+mod evidence;
+
 #[test]
 fn check_plan_summary_lists_targets_without_implying_execution() {
     let summary = format_check_summary(&json!({
@@ -693,21 +696,6 @@ fn work_check_summary_does_not_count_failed_prefix_output_as_skipped() {
     assert!(summary.contains("Work check: failed"));
     assert!(!summary.contains("passed (all skipped)"));
     assert!(!summary.contains("all configured Cargo checks skipped"));
-}
-
-#[test]
-fn work_check_summary_reports_empty_checks() {
-    let summary = format_work_check_summary(&json!({
-        "ok": true,
-        "plan_id": "plan_1",
-        "receipt_id": "receipt_batch",
-        "checks": []
-    }));
-
-    assert!(summary.contains("Work check: no checks configured"));
-    assert!(summary.contains("Checks: 0"));
-    assert!(summary.contains("configure work checks"));
-    assert!(summary.contains("--tool <tool>"));
 }
 
 #[test]

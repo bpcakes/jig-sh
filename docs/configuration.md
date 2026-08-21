@@ -134,7 +134,7 @@ Nested accepted keys are:
 - `[status]`: `providers`
 - `[[status.providers]]`: `id`, `argv`, `timeout_seconds`
 - `[work]`: `checks`, `gates`, `refinements`
-- `[[work.gates]]`: `id`, `kind`, `tool`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
+- `[[work.gates]]`: `id`, `kind`, `tool`, `target`, `profile`, `conclusion`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`
 - `[loop]`: `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `workflows`
 - `[[loop.workflows]]`: `id`, `kind`, `enabled`, `lease_ttl_seconds`, `max_attempts`, `backoff_seconds`, `codex_home`
@@ -253,27 +253,25 @@ The `work` block declares agent workflow defaults without adding repo-local laun
 
 ```toml
 [[work.gates]]
-id = "contract"
-kind = "check"
-tool = "jig.contract_check"
-
-[[work.gates]]
-id = "tests"
-kind = "check"
-tool = "jig.test"
+id = "verify"
+kind = "evidence"
+profile = "verify"
+conclusion = "success"
 ```
 
-`kind: check` gates must reference execution tool names declared in `.agent/jig-contract.json`. `scripts/jig work check --plan-id ...` runs configured check gates in order unless one or more `--tool` values are passed explicitly. Human-readable output is the default. Pass `--json` for structured automation output.
+An `evidence` gate names exactly one canonical `target = "api:test"` or checked-in `profile = "verify"`. `conclusion` currently accepts only `success` and defaults to it. A target gate requires a successful receipt for that exact target. A profile gate requires receipts for every current profile target from one compatible run; Jig never stitches individually successful targets from different runs into profile evidence.
 
-`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, whether the proving receipt matches the current worktree, changed paths covered by the receipt, and the exact stale or unknown freshness reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are bounded repo-relative previews from `git status --porcelain=v1 -z`; they exclude `.agent/**` but can include untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Check gate freshness is based on the non-`.agent/` worktree fingerprint from the latest check or check-batch receipt that proves the gate.
+Contract-v6 repositories generate a single gate for their default verification profile. `scripts/jig work check --plan-id ...` expands all configured evidence gates to exact targets, runs their union once, and records target receipts linked to the work plan. Legacy `kind: check` gates remain supported and must reference no-argument execution tools declared in `.agent/jig-contract.json`; they run in configured order. When both forms exist, default `work check` runs both. Passing one or more `--tool` values explicitly selects only those legacy tools. Human-readable output is the default. Pass `--json` for structured automation output.
+
+`scripts/jig work gates --plan-id ...` reports each configured gate as `passed`, `missing`, `failed`, `stale`, `unknown`, or `unsupported`. Pass `--json` when automation needs the full structured payload. `scripts/jig work evidence` is the higher-level human view: it shows the latest gate evidence per tool, target, or profile, whether it matches current inputs, changed paths covered by its receipts, and the exact stale or unknown reason. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; read `overall`, `gates_ok`, and each gate `status` to decide whether work is blocked. Receipt `changed_paths` are bounded repo-relative previews from `git status --porcelain=v1 -z`; they exclude `.agent/**` but can include untracked filenames, so do not treat receipt JSON as secret-free metadata if local filenames are sensitive. `scripts/jig work finish --plan-id ...` refuses to close work while required gates are missing, failed, stale, unknown, or unsupported. Legacy check freshness uses the non-`.agent/` worktree fingerprint from its latest check or check-batch receipt. Target evidence additionally requires the current contract digest and deterministic target input digest; receipts missing any of those metadata fields are `unknown`, not passing.
 
 Required check gates should not create or modify non-`.agent/` files during `work check`. Build outputs, generated metadata, and lockfiles should be committed when they are source-of-truth, ignored when they are disposable, or generated before running the fingerprinted check. If a check does intentionally settle generated files, rerun `scripts/jig work check --plan-id ...` after reviewing those changes so the gate evidence matches the final worktree.
 
-After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint`, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older successful check receipts deserialize correctly, but their freshness is `unknown` and required gates will block finish until fresh evidence exists.
+After upgrading an in-flight repo from a Jig version that recorded receipts without `worktree_fingerprint` or target digests, rerun `scripts/jig work check --plan-id ...` before `scripts/jig work finish --plan-id ...`. Older successful receipts deserialize correctly, but their freshness is `unknown` and required gates block finish until fresh evidence exists.
 
 For compatibility, older repos may still use `work.checks`; Jig backfills entries that are not already declared in `work.gates` as required `kind: check` gates with generated IDs. When a tool is declared in both places, the explicit `work.gates` entry is authoritative. New repos should use `work.gates`.
 
-Generated SQLx-enabled repos include a check gate for `jig.sqlx_check`. Repos with schema dumps enabled also include `jig.schema_check` and `jig.schema_dump`.
+Generated v6 profiles include applicable SQLx, sqlc, schema, language, frontend, and contract targets. Generated legacy repositories continue to emit the corresponding tool gates such as `jig.sqlx_check`, `jig.schema_check`, and `jig.schema_dump`.
 
 Review gates are intentionally separate from native check gates. A `codex_review` gate runs a configured Codex skill through `codex exec review --output-schema`, records a structured `jig.work_review` receipt, and is enforced by `work gates`, `work evidence`, and `work finish` like check evidence:
 

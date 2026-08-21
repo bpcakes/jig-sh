@@ -38,7 +38,7 @@ and, over MCP:
 - [x] (2026-08-21 20:44Z) Slice 3: added component/target/profile inspection, one deterministic selector and dependency planner, read-only plan explanation, legacy-profile execution, and a useful bare `jig check` while preserving unmodified named legacy check responses.
 - [x] (2026-08-21 21:21Z) Slice 4: added stale-plan validation, owned target execution, append-only run lifecycle folding, target-aware compatible receipts, terminal cancellation/fail-fast results, and `jig status run RUN_ID` lookup.
 - [x] (2026-08-21 22:19Z) Slice 5: added feature-owned adapter contributions, explicit v6 components/actions/profiles and provenance, component-scoped commands, adapter-derived runtime capability checks, per-frontend execution, authored multi-stack recopy preservation, and v2–v5 template compatibility.
-- [ ] Slice 6: add target/profile evidence gates while retaining tool gates; commit independently.
+- [x] (2026-08-21 23:26Z) Slice 6: added exact target/profile evidence gates, same-run profile proof, contract/input/worktree freshness, one-run configured work checks, strict selector validation, compatible legacy tool gates, and focused evidence/index modules.
 - [ ] Slice 7: expose bounded MCP inspect/plan/execute/cancel operations with strict input/output schemas and durable lookup; commit independently.
 - [ ] Slice 8: add deterministic, explainable affected selection without artifact caching; commit independently.
 - [ ] Run focused acceptance fixtures, full formatting, strict Clippy, workspace tests, generated-template checks, contract checks, and structured-work gates through a fresh development binary.
@@ -72,6 +72,12 @@ and, over MCP:
 
 - Observation: deriving a v6 model from legacy singular render answers during `jig update` would collapse an authored Go-plus-Rust workspace even though runtime identity was already component-native.
   Evidence: `RenderAnswers::from_answers_file` now retains a complete authored repository model and its referenced commands for recopy, and a regression round-trips distinct `api:test` and `worker:test` targets unchanged.
+
+- Observation: syntactically valid evidence selectors could still name a missing target or profile, so configuration parsing alone was insufficient to make `jig check contract` prove that work policy was executable.
+  Evidence: evidence-selector resolution now has one repository-level implementation used by contract validation, work-check planning, and gate evaluation; a v6 regression rejects an unknown profile during contract check.
+
+- Observation: exact profile proof requires correlating target receipts by run; choosing the latest receipt independently for each target would incorrectly allow partial runs to be stitched together.
+  Evidence: the receipt index groups required targets by `run_id`, selects the latest complete group, and returns a detailed partial group only when no complete group exists; focused tests run `api:test` and `web:test` separately and keep the profile blocked.
 
 ## Decision Log
 
@@ -117,6 +123,14 @@ and, over MCP:
 
 - Decision: Adapter defaults generate new or deliberately re-adopted v6 models, while a complete checked-in v6 repository model remains authoritative during recopy/update; malformed runtime tables fall back to repair generation.
   Rationale: stack-agnostic authored monorepos must not be projected back through a singular backend answer, but update must retain its established ability to repair invalid runtime configuration.
+  Date/Author: 2026-08-21 / Codex.
+
+- Decision: A profile evidence gate is satisfied only by one run containing successful current receipts for every current profile target; evidence from separate runs is never combined.
+  Rationale: a profile represents an atomic verification claim, and cross-run stitching can hide incompatible source/configuration states or a target that was never exercised alongside its peers.
+  Date/Author: 2026-08-21 / Codex.
+
+- Decision: Keep target evidence evaluation and target receipt correlation in focused submodules while the existing gate and receipt modules retain shared orchestration and compatibility logic.
+  Rationale: the new model has distinct freshness and grouping invariants; isolating them keeps the already-large legacy gate paths reviewable without duplicating shared receipt behavior.
   Date/Author: 2026-08-21 / Codex.
 
 ## Outcomes & Retrospective
@@ -291,6 +305,27 @@ Slice 5 validation evidence:
     # 42 passed; 0 failed
 
     cargo clippy -p jig-contract -p jig-features -p jig-core -p jig-go -p jig-rust -p jig-sqlx -p jig-typescript -p jig-sh --all-targets -- -D warnings
+    # passed
+
+Slice 6 validation evidence:
+
+    cargo test -p jig-sh gate --no-fail-fast
+    # 61 passed; 0 failed
+
+    cargo test -p jig-sh work_check --no-fail-fast
+    # 23 passed; 0 failed
+
+    cargo test -p jig-sh runtime::tests::work --no-fail-fast
+    # 54 passed; 0 failed
+
+    cargo test -p jig-sh bootstrap --no-fail-fast
+    # initial run: 565 passed; 2 stale expectations failed; 1 ignored
+    # both corrected v6 gate expectations then passed in focused reruns
+
+    cargo test -p jig-sh embedded_template_snapshot_matches_live_templates
+    # passed
+
+    cargo clippy -p jig-sh --all-targets --all-features -- -D warnings
     # passed
 
 ## Interfaces and Dependencies

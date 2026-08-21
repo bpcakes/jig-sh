@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use jig_owned_process::require_success;
 use serde_json::{Value, json};
 
-use crate::context::RepoContext;
+use crate::context::{RepoContext, WorkGate};
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -176,8 +176,20 @@ pub(crate) fn validate_contract(
         }
     }
     if ctx.contract_version() >= 6 {
-        if let Err(error) = crate::repository::RepositoryCatalog::from_context(ctx) {
-            errors.push(format!("Invalid repository model: {error}."));
+        match crate::repository::RepositoryCatalog::from_context(ctx) {
+            Ok(catalog) => {
+                for gate in ctx.work_gates() {
+                    let WorkGate::Evidence(gate) = gate else {
+                        continue;
+                    };
+                    if let Err(error) =
+                        crate::repository::resolve_evidence_targets(&catalog, &gate.selector)
+                    {
+                        errors.push(format!("Work gate '{}': {error}.", gate.id));
+                    }
+                }
+            }
+            Err(error) => errors.push(format!("Invalid repository model: {error}.")),
         }
         for action in ctx.action_specs() {
             match &action.runner {

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
+use jig_contract::{ProfileId, TargetId};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -32,6 +33,12 @@ struct WorkGateConfig {
     scope: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    conclusion: Option<String>,
     #[serde(default = "default_required")]
     required: bool,
 }
@@ -39,6 +46,7 @@ struct WorkGateConfig {
 #[derive(Clone, Debug)]
 pub(crate) enum WorkGate {
     Check(WorkCheckGate),
+    Evidence(WorkEvidenceGate),
     CodexReview(WorkReviewGate),
     Unsupported(UnsupportedWorkGate),
 }
@@ -47,6 +55,20 @@ pub(crate) enum WorkGate {
 pub(crate) struct WorkCheckGate {
     pub(crate) id: String,
     pub(crate) tool: String,
+    pub(crate) required: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WorkEvidenceSelector {
+    Target(TargetId),
+    Profile(ProfileId),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkEvidenceGate {
+    pub(crate) id: String,
+    pub(crate) selector: WorkEvidenceSelector,
+    pub(crate) conclusion: &'static str,
     pub(crate) required: bool,
 }
 
@@ -112,6 +134,9 @@ impl WorkConfig {
                 severity: None,
                 scope: None,
                 model: None,
+                target: None,
+                profile: None,
+                conclusion: None,
                 required: true,
             });
         }
@@ -150,17 +175,61 @@ impl WorkConfig {
                         || gate.severity.is_some()
                         || gate.scope.is_some()
                         || gate.model.is_some()
+                        || gate.target.is_some()
+                        || gate.profile.is_some()
+                        || gate.conclusion.is_some()
                     {
                         bail!(
-                            "work gate '{}' with kind 'check' only supports tool and required; review-only fields belong on kind 'codex_review'",
+                            "work gate '{}' with kind 'check' only supports tool and required",
                             gate.id
                         );
                     }
                 }
-                "codex_review" => {
-                    if gate.tool.is_some() {
+                "evidence" => {
+                    if gate.target.is_some() == gate.profile.is_some() {
                         bail!(
-                            "work gate '{}' with kind 'codex_review' uses skill, not tool",
+                            "work gate '{}' with kind 'evidence' requires exactly one of target or profile",
+                            gate.id
+                        );
+                    }
+                    if gate.tool.is_some()
+                        || gate.skill.is_some()
+                        || gate.fail_on.is_some()
+                        || gate.severity.is_some()
+                        || gate.scope.is_some()
+                        || gate.model.is_some()
+                    {
+                        bail!(
+                            "work gate '{}' with kind 'evidence' only supports target or profile, conclusion, and required",
+                            gate.id
+                        );
+                    }
+                    if let Some(target) = gate.target.as_deref() {
+                        target.parse::<TargetId>().map_err(|error| {
+                            anyhow::anyhow!("invalid target on work gate '{}': {error}", gate.id)
+                        })?;
+                    }
+                    if let Some(profile) = gate.profile.as_deref() {
+                        ProfileId::parse(profile).map_err(|error| {
+                            anyhow::anyhow!("invalid profile on work gate '{}': {error}", gate.id)
+                        })?;
+                    }
+                    if gate.conclusion.as_deref().unwrap_or("success") != "success" {
+                        bail!(
+                            "work gate '{}' has unsupported evidence conclusion '{}'. Only 'success' is currently supported.",
+                            gate.id,
+                            gate.conclusion.as_deref().unwrap_or_default()
+                        );
+                    }
+                }
+                "codex_review" => {
+                    if gate.tool.is_some()
+                        || gate.target.is_some()
+                        || gate.profile.is_some()
+                        || gate.conclusion.is_some()
+                    {
+                        bail!(
+                            "work gate '{}' with kind 'codex_review' uses skill and review fields, not tool, target, profile, or conclusion",
                             gate.id
                         );
                     }
@@ -188,7 +257,7 @@ impl WorkConfig {
                 }
                 other => {
                     bail!(
-                        "Unsupported work gate kind '{other}' for gate '{}'. Expected 'check' or 'codex_review'.",
+                        "Unsupported work gate kind '{other}' for gate '{}'. Expected 'check', 'evidence', or 'codex_review'.",
                         gate.id
                     );
                 }
@@ -234,6 +303,9 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
         severity,
         scope,
         model,
+        target,
+        profile,
+        conclusion,
         required,
     } = gate;
 
@@ -243,6 +315,28 @@ fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {
                 return unsupported_work_gate(id, kind, required);
             };
             WorkGate::Check(WorkCheckGate { id, tool, required })
+        }
+        "evidence" => {
+            let selector = match (target, profile) {
+                (Some(target), None) => match target.parse::<TargetId>() {
+                    Ok(target) => WorkEvidenceSelector::Target(target),
+                    Err(_) => return unsupported_work_gate(id, kind, required),
+                },
+                (None, Some(profile)) => match ProfileId::parse(profile) {
+                    Ok(profile) => WorkEvidenceSelector::Profile(profile),
+                    Err(_) => return unsupported_work_gate(id, kind, required),
+                },
+                _ => return unsupported_work_gate(id, kind, required),
+            };
+            if conclusion.as_deref().unwrap_or("success") != "success" {
+                return unsupported_work_gate(id, kind, required);
+            }
+            WorkGate::Evidence(WorkEvidenceGate {
+                id,
+                selector,
+                conclusion: "success",
+                required,
+            })
         }
         "codex_review" => {
             let Some(skill) = skill else {
@@ -381,4 +475,99 @@ fn unique_gate_id(base: String, existing_ids: &mut HashSet<String>) -> String {
 
 const fn default_required() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkConfig, WorkEvidenceSelector, WorkGate};
+
+    #[test]
+    fn evidence_gates_resolve_exact_target_and_profile_selectors() {
+        let config = toml::from_str::<WorkConfig>(
+            r#"
+[[gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+
+[[gates]]
+id = "verify"
+kind = "evidence"
+profile = "verify"
+conclusion = "success"
+required = false
+"#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        let gates = config.gates();
+        let WorkGate::Evidence(target) = &gates[0] else {
+            panic!("expected target evidence gate");
+        };
+        assert!(matches!(
+            &target.selector,
+            WorkEvidenceSelector::Target(target) if target.to_string() == "api:test"
+        ));
+        assert_eq!(target.conclusion, "success");
+        assert!(target.required);
+
+        let WorkGate::Evidence(profile) = &gates[1] else {
+            panic!("expected profile evidence gate");
+        };
+        assert!(matches!(
+            &profile.selector,
+            WorkEvidenceSelector::Profile(profile) if profile.as_str() == "verify"
+        ));
+        assert!(!profile.required);
+    }
+
+    #[test]
+    fn evidence_gate_requires_exactly_one_selector() {
+        for source in [
+            r#"
+[[gates]]
+id = "verify"
+kind = "evidence"
+"#,
+            r#"
+[[gates]]
+id = "verify"
+kind = "evidence"
+target = "api:test"
+profile = "verify"
+"#,
+        ] {
+            let config = toml::from_str::<WorkConfig>(source).unwrap();
+            assert!(
+                config
+                    .validate()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("requires exactly one of target or profile")
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_gate_rejects_unknown_conclusions() {
+        let config = toml::from_str::<WorkConfig>(
+            r#"
+[[gates]]
+id = "verify"
+kind = "evidence"
+profile = "verify"
+conclusion = "neutral"
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("Only 'success' is currently supported")
+        );
+    }
 }

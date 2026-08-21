@@ -38,15 +38,9 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
     let gates = work["gates"].as_array_mut().unwrap();
     for gate in gates.iter_mut() {
         let gate = gate.as_table_mut().unwrap();
-        match gate["id"].as_str().unwrap() {
-            "contract" => {
-                gate.insert("tool".into(), toml::Value::String("jig.fmt_check".into()));
-                gate.insert("required".into(), toml::Value::Boolean(false));
-            }
-            "tests" => {
-                gate.insert("required".into(), toml::Value::Boolean(false));
-            }
-            _ => {}
+        if gate["id"].as_str().unwrap() == "verify" {
+            gate.insert("profile".into(), toml::Value::String("outdated".into()));
+            gate.insert("required".into(), toml::Value::Boolean(false));
         }
     }
     gates.push(toml::Value::Table(toml::Table::from_iter([
@@ -104,20 +98,16 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
             .find(|gate| gate["id"].as_str() == Some(id))
             .unwrap()
     };
+    assert_eq!(gate("verify")["kind"].as_str(), Some("evidence"));
+    assert_eq!(gate("verify")["profile"].as_str(), Some("verify"));
     assert_eq!(
-        gate("contract")["tool"].as_str(),
-        Some("jig.contract_check")
-    );
-    assert_eq!(
-        gate("contract")
+        gate("verify")
             .as_table()
             .unwrap()
             .get("required")
             .and_then(toml::Value::as_bool),
         None
     );
-    assert_eq!(gate("tests")["tool"].as_str(), Some("jig.test"));
-    assert_eq!(gate("tests")["required"].as_bool(), Some(false));
     assert_eq!(gate("project-fmt")["tool"].as_str(), Some("jig.fmt_check"));
     assert_eq!(gate("project-fmt")["required"].as_bool(), Some(false));
     assert_eq!(
@@ -236,14 +226,14 @@ fn full_readoption_drops_argument_taking_tools_from_preserved_work_config() {
 }
 
 #[test]
-fn staging_rejects_generated_work_gate_that_requires_an_argument() {
+fn staging_rejects_generated_evidence_gate_with_conflicting_selectors() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     let config_template = template.path().join("templates/project/.jig.toml.jinja");
     let config = fs::read_to_string(&config_template).unwrap().replacen(
-        "tool = \"jig.contract_check\"",
-        "tool = \"jig.migration_add\"",
+        "profile = \"verify\"",
+        "profile = \"verify\"\ntarget = \"api:test\"",
         1,
     );
     fs::write(&config_template, config).unwrap();
@@ -256,8 +246,7 @@ fn staging_rejects_generated_work_gate_that_requires_an_argument() {
     let error = format!("{:#}", run_adopt(opts).unwrap_err());
 
     assert!(
-        error
-            .contains("Configured work check or gate tool requires an argument: jig.migration_add"),
+        error.contains("requires exactly one of target or profile"),
         "{error}"
     );
     assert!(!repo.join(".jig.toml").exists());

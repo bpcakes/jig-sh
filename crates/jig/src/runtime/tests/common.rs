@@ -95,6 +95,109 @@ tool = "jig.mutating_check"
     write_open_plan(root);
 }
 
+pub(super) fn write_v6_evidence_fixture_repo(root: &Path, gates: &str) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::create_dir_all(root.join("web")).unwrap();
+    fs::write(root.join("api/example.go"), "package example\n").unwrap();
+    fs::write(
+        root.join("web/example.ts"),
+        "export const example = true;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        format!(
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+api_test_command = "printf 'api tests passed\n'"
+web_test_command = "printf 'web tests passed\n'"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "web"
+root = "web"
+adapters = ["typescript"]
+
+[[repository.actions]]
+target = {{ component = "api", action = "test" }}
+intent = "check"
+effects = ["read_only", "process"]
+runner = {{ kind = "command", command = "api_test_command" }}
+inputs = ["api/**"]
+
+[[repository.actions]]
+target = {{ component = "web", action = "test" }}
+intent = "check"
+effects = ["read_only", "process"]
+runner = {{ kind = "command", command = "web_test_command" }}
+inputs = ["web/**"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  {{ component = "api", action = "test" }},
+  {{ component = "web", action = "test" }},
+]
+
+{gates}
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_string_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": ["api_test_command", "web_test_command"],
+            "tools": [],
+            "components": [
+                {"id": "api", "root": "api", "adapters": ["go"]},
+                {"id": "web", "root": "web", "adapters": ["typescript"]}
+            ],
+            "actions": [
+                {
+                    "target": {"component": "api", "action": "test"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "api_test_command"},
+                    "inputs": ["api/**"]
+                },
+                {
+                    "target": {"component": "web", "action": "test"},
+                    "intent": "check",
+                    "effects": ["read_only", "process"],
+                    "runner": {"kind": "command", "command": "web_test_command"},
+                    "inputs": ["web/**"]
+                }
+            ],
+            "profiles": [{
+                "id": "verify",
+                "targets": [
+                    {"component": "api", "action": "test"},
+                    {"component": "web", "action": "test"}
+                ]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_open_plan(root);
+}
+
 pub(super) fn write_failing_check_fixture_repo(root: &Path) {
     TestRepoBuilder::new(root)
         .config(

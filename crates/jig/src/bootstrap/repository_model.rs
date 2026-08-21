@@ -791,14 +791,14 @@ role = "spa"
         );
         worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
         let profile = ProfileSpec::new(
-            ProfileId::parse("verify").unwrap(),
+            ProfileId::parse("ci").unwrap(),
             vec![api_test.target.clone(), worker_test.target.clone()],
         );
         let authored = RepositoryRenderModel {
             components: vec![api, worker],
             actions: vec![api_test, worker_test],
             profiles: vec![profile],
-            default_check_profile: ProfileId::parse("verify").unwrap(),
+            default_check_profile: ProfileId::parse("ci").unwrap(),
             required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
             tools: Vec::new(),
             commands: BTreeMap::from([
@@ -844,5 +844,6 @@ role = "spa"
             rerendered.commands["worker_test_command"],
             "cargo test -p example-worker"
         );
+        assert_eq!(rerendered.default_check_profile.as_str(), "ci");
     }
 }

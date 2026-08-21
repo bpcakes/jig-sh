@@ -24,6 +24,10 @@ use super::sessions::current_session;
 use super::support::{ensure_state_layout, new_id, now_ms, truncate};
 
 mod archive;
+mod target_evidence;
+
+pub(crate) use target_evidence::TargetReceiptStatus;
+use target_evidence::{IndexedTargetReceipts, TargetReceiptGroup};
 
 use archive::refuse_unterminated_receipt_stream;
 #[cfg(test)]
@@ -147,12 +151,14 @@ struct IndexedCheckReceipts {
 }
 
 /// A request-scoped view of the receipts needed to evaluate configured work
-/// gates. Building it retains a bounded number of statuses per configured gate
-/// while scanning the receipt stream exactly once.
+/// gates. Building it scans the receipt stream exactly once. Check and review
+/// indexes retain bounded latest evidence; profile indexes retain incomplete
+/// concurrent runs until the scan can prove which runs are complete.
 #[derive(Debug, Default)]
 pub(crate) struct WorkGateReceiptIndex {
     checks: BTreeMap<String, IndexedCheckReceipts>,
     reviews: BTreeMap<String, WorkReviewReceiptStatus>,
+    evidence: BTreeMap<String, IndexedTargetReceipts>,
 }
 
 impl WorkGateReceiptIndex {
@@ -179,6 +185,12 @@ impl WorkGateReceiptIndex {
 
     pub(crate) fn review_receipt(&self, gate_id: &str) -> Option<&WorkReviewReceiptStatus> {
         self.reviews.get(gate_id)
+    }
+
+    pub(crate) fn target_receipts(&self, gate_id: &str) -> Option<&TargetReceiptGroup> {
+        self.evidence
+            .get(gate_id)
+            .and_then(IndexedTargetReceipts::selected)
     }
 }
 
@@ -242,8 +254,16 @@ pub(crate) fn work_gate_receipt_index(
     plan_id: &str,
     check_tools: &BTreeSet<String>,
     review_gate_ids: &BTreeSet<String>,
+    evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
 ) -> Result<WorkGateReceiptIndex> {
-    work_gate_receipt_index_with_cancellation(ctx, plan_id, check_tools, review_gate_ids, &|| false)
+    work_gate_receipt_index_with_cancellation(
+        ctx,
+        plan_id,
+        check_tools,
+        review_gate_ids,
+        evidence_targets,
+        &|| false,
+    )
 }
 
 pub(crate) fn work_gate_receipt_index_with_cancellation(
@@ -251,6 +271,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     plan_id: &str,
     check_tools: &BTreeSet<String>,
     review_gate_ids: &BTreeSet<String>,
+    evidence_targets: &BTreeMap<String, BTreeSet<TargetId>>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkGateReceiptIndex> {
     ensure_receipt_scan_active(cancelled)?;
@@ -262,8 +283,14 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
             .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
             .collect(),
         reviews: BTreeMap::new(),
+        evidence: evidence_targets
+            .iter()
+            .map(|(gate_id, targets)| {
+                (gate_id.clone(), IndexedTargetReceipts::new(targets.clone()))
+            })
+            .collect(),
     };
-    if check_tools.is_empty() && review_gate_ids.is_empty() {
+    if check_tools.is_empty() && review_gate_ids.is_empty() && evidence_targets.is_empty() {
         return Ok(index);
     }
 
@@ -327,6 +354,13 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
                 index
                     .reviews
                     .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
+            }
+        }
+
+        if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
+            let status = target_receipt_status(&receipt, run_id, target);
+            for receipts in index.evidence.values_mut() {
+                receipts.observe(status.clone());
             }
         }
         Ok(())
@@ -555,6 +589,30 @@ fn tool_receipt_status(receipt: &ReceiptRecord) -> ToolReceiptStatus {
         diff_summary,
         worktree_fingerprint: receipt.worktree_fingerprint.clone(),
         worktree_fingerprint_error: receipt.worktree_fingerprint_error.clone(),
+    }
+}
+
+fn target_receipt_status(
+    receipt: &ReceiptRecord,
+    run_id: &str,
+    target: &TargetId,
+) -> TargetReceiptStatus {
+    let tool = tool_receipt_status(receipt);
+    TargetReceiptStatus {
+        receipt_id: tool.receipt_id,
+        run_id: run_id.to_owned(),
+        target: target.clone(),
+        config_digest: receipt.config_digest.clone(),
+        input_digest: receipt.input_digest.clone(),
+        exit_status: tool.exit_status,
+        ended_at_ms: tool.ended_at_ms,
+        changed_paths: tool.changed_paths,
+        changed_path_count: tool.changed_path_count,
+        changed_paths_truncated: tool.changed_paths_truncated,
+        changed_paths_digest: tool.changed_paths_digest,
+        diff_summary: tool.diff_summary,
+        worktree_fingerprint: tool.worktree_fingerprint,
+        worktree_fingerprint_error: tool.worktree_fingerprint_error,
     }
 }
 

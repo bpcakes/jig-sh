@@ -315,6 +315,24 @@ fn work_gate_value(gate: &WorkGate) -> Value {
             "tool": &gate.tool,
             "required": gate.required,
         }),
+        WorkGate::Evidence(gate) => {
+            let (target, profile) = match &gate.selector {
+                crate::context::WorkEvidenceSelector::Target(target) => {
+                    (Some(target.to_string()), None)
+                }
+                crate::context::WorkEvidenceSelector::Profile(profile) => {
+                    (None, Some(profile.to_string()))
+                }
+            };
+            json!({
+                "id": &gate.id,
+                "kind": "evidence",
+                "target": target,
+                "profile": profile,
+                "conclusion": gate.conclusion,
+                "required": gate.required,
+            })
+        }
         WorkGate::CodexReview(gate) => json!({
             "id": &gate.id,
             "kind": "codex_review",

@@ -17,8 +17,8 @@ pub(crate) use plans::{
 #[cfg(test)]
 pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::{
-    CurrentWorktreeFingerprint, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptEvidence,
-    WorkReviewReceiptStatus, current_worktree_fingerprint,
+    CurrentWorktreeFingerprint, TargetReceiptStatus, ToolReceiptStatus, WorkGateReceiptIndex,
+    WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
     current_worktree_fingerprint_with_cancellation, work_gate_receipt_index,
     work_gate_receipt_index_with_cancellation,
 };

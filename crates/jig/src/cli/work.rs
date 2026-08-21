@@ -14,7 +14,8 @@ Examples:
   plan_id=\"$(jig work start --title \"Fix signup\" --body-file .agent/notes/signup-plan.md --print-plan-id)\"";
 
 pub(super) const WORK_CHECK_AFTER_HELP: &str = "\
-Run all required gates for a plan, or use --tool to run one configured gate.
+Run configured target/profile evidence and legacy check gates for a plan.
+Use --tool to select one legacy execution tool instead.
 Human-readable output is the default. Pass --json for structured automation output.
 
 Examples:
@@ -201,7 +202,7 @@ pub(crate) struct WorkCheckOpts {
 
     #[arg(
         long = "tool",
-        help = "Specific gate tool to run; defaults to configured gates"
+        help = "Specific legacy gate tool to run; defaults to all configured execution evidence"
     )]
     pub(crate) tools: Vec<String>,
 }
