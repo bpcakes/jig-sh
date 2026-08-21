@@ -473,7 +473,7 @@ fn run_configured_command(
     });
     let result = run_owned_process_tree_with_output_limits_and_observer(
         &mut command,
-        ctx.command_timeout(),
+        ctx.command_timeout().duration(),
         ProcessOutputLimits {
             stdout: usize::MAX,
             stderr: usize::MAX,

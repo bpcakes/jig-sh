@@ -37,7 +37,8 @@ timeout_seconds = 45
             .execution
             .as_ref()
             .unwrap()
-            .command_timeout_seconds,
+            .command_timeout()
+            .as_secs(),
         321
     );
 

@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
-use crate::context::RepoContext;
+use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
 use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, HEARTBEAT_INTERVAL};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
@@ -259,7 +259,7 @@ fn build_codex_command(
 fn run_worker_command(
     command: &mut Command,
     stdin_prompt: Option<String>,
-    timeout: Duration,
+    timeout: CommandTimeout,
     label: &str,
     observer: &mut dyn ExecutionObserver,
 ) -> Result<Output> {
@@ -286,7 +286,7 @@ fn run_worker_command(
     process.write_stdin(stdin_prompt)?;
 
     let started = Instant::now();
-    let deadline = started.checked_add(timeout);
+    let deadline = timeout.deadline_from(started);
     let mut next_heartbeat = HEARTBEAT_INTERVAL;
     let mut stdout_offset = 0;
     let mut stderr_offset = 0;
@@ -316,7 +316,7 @@ fn run_worker_command(
                     .unwrap_or(Duration::MAX);
             }
         }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if Instant::now() >= deadline {
             process.terminate_and_reap();
             bail!(
                 "Worker process timed out after {} seconds",
@@ -542,17 +542,20 @@ fn record_worker_receipt(
     .context("Failed to record worker receipt")
 }
 
-fn codex_timeout(ctx: &RepoContext) -> Result<Duration> {
+fn codex_timeout(ctx: &RepoContext) -> Result<CommandTimeout> {
     let Ok(value) = env::var(CODEX_TIMEOUT_ENV) else {
         return Ok(ctx.command_timeout());
     };
+    parse_codex_timeout(&value)
+}
+
+fn parse_codex_timeout(value: &str) -> Result<CommandTimeout> {
     let seconds = value
         .parse::<u64>()
         .with_context(|| format!("Invalid {CODEX_TIMEOUT_ENV} value '{value}'"))?;
-    if seconds == 0 {
-        bail!("{CODEX_TIMEOUT_ENV} must be greater than zero");
-    }
-    Ok(Duration::from_secs(seconds))
+    CommandTimeout::from_seconds(seconds).ok_or_else(|| {
+        anyhow!("{CODEX_TIMEOUT_ENV} must be between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}")
+    })
 }
 
 #[cfg(test)]
@@ -628,6 +631,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_timeout_override_uses_the_validated_command_timeout_range() {
+        assert_eq!(parse_codex_timeout("1").unwrap().as_secs(), 1);
+        assert_eq!(
+            parse_codex_timeout(&MAX_COMMAND_TIMEOUT_SECONDS.to_string())
+                .unwrap()
+                .as_secs(),
+            MAX_COMMAND_TIMEOUT_SECONDS
+        );
+        for value in [
+            "0".to_string(),
+            (MAX_COMMAND_TIMEOUT_SECONDS + 1).to_string(),
+        ] {
+            let error = parse_codex_timeout(&value).unwrap_err().to_string();
+            assert!(error.contains("must be between 1 and 86400"), "{error}");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_timeout_kills_process_group() {
@@ -656,7 +677,7 @@ wait
         let error = run_worker_command(
             &mut command,
             None,
-            Duration::from_secs(1),
+            CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
             &mut crate::execution::NoopExecutionObserver,
         )

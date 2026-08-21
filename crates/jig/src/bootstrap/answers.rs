@@ -648,7 +648,6 @@ impl RawAnswers {
         let status = self.status.unwrap_or_default();
         status.validate()?;
         let execution = self.execution.unwrap_or_default();
-        execution.validate()?;
         let legacy_dev_command = self.dev_command.filter(|value| !value.trim().is_empty());
 
         let web_package_manager = self.web_package_manager.unwrap_or_else(|| "bun".into());

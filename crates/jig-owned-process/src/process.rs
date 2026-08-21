@@ -34,6 +34,44 @@ const TRUNCATED_OUTPUT_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const MAX_OUTPUT_READS_PER_POLL: usize = 64;
 const MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION: usize = 16;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessDeadline {
+    At(Instant),
+    Unbounded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessDeadlineRemaining {
+    Time(Duration),
+    Elapsed,
+    Unbounded,
+}
+
+impl ProcessDeadline {
+    fn after(timeout: Duration) -> Self {
+        Instant::now()
+            .checked_add(timeout)
+            .map_or(Self::Unbounded, Self::At)
+    }
+
+    fn remaining(self) -> ProcessDeadlineRemaining {
+        match self {
+            Self::At(deadline) => deadline.checked_duration_since(Instant::now()).map_or(
+                ProcessDeadlineRemaining::Elapsed,
+                ProcessDeadlineRemaining::Time,
+            ),
+            Self::Unbounded => ProcessDeadlineRemaining::Unbounded,
+        }
+    }
+
+    fn as_optional_instant(self) -> Option<Instant> {
+        match self {
+            Self::At(deadline) => Some(deadline),
+            Self::Unbounded => None,
+        }
+    }
+}
+
 pub fn run_checked_output(
     command: &mut Command,
     failure_message: impl FnOnce(&Output) -> String,
@@ -510,7 +548,7 @@ fn wait_for_owned_process(
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
-    let deadline = Instant::now().checked_add(timeout);
+    let deadline = ProcessDeadline::after(timeout);
     loop {
         let made_output_progress = drains.poll(observer);
         observer.poll(started.elapsed());
@@ -521,19 +559,21 @@ fn wait_for_owned_process(
             return Ok(OwnedProcessWait::ExitedUnreaped);
         }
 
-        match deadline {
-            Some(deadline) => {
-                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                    return Ok(OwnedProcessWait::TimedOut);
-                };
+        match deadline.remaining() {
+            ProcessDeadlineRemaining::Time(remaining) => {
                 if made_output_progress {
                     std::thread::sleep(remaining.min(drains.active_poll_interval()));
                 } else {
                     std::thread::sleep(remaining.min(Duration::from_millis(10)));
                 }
             }
-            None if made_output_progress => std::thread::sleep(drains.active_poll_interval()),
-            None => std::thread::sleep(Duration::from_millis(10)),
+            ProcessDeadlineRemaining::Elapsed => return Ok(OwnedProcessWait::TimedOut),
+            ProcessDeadlineRemaining::Unbounded if made_output_progress => {
+                std::thread::sleep(drains.active_poll_interval());
+            }
+            ProcessDeadlineRemaining::Unbounded => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 }
@@ -595,21 +635,17 @@ fn wait_for_owned_process(
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
     let started = Instant::now();
-    let deadline = Instant::now().checked_add(timeout);
+    let deadline = ProcessDeadline::after(timeout);
     loop {
         drains.poll(observer);
         observer.poll(started.elapsed());
         if observer.cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
         }
-        let remaining = match deadline {
-            Some(deadline) => {
-                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-                    return Ok(OwnedProcessWait::TimedOut);
-                };
-                remaining
-            }
-            None => Duration::from_millis(10),
+        let remaining = match deadline.remaining() {
+            ProcessDeadlineRemaining::Time(remaining) => remaining,
+            ProcessDeadlineRemaining::Elapsed => return Ok(OwnedProcessWait::TimedOut),
+            ProcessDeadlineRemaining::Unbounded => Duration::from_millis(10),
         };
         if let Some(status) = process
             .child

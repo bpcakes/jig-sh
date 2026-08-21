@@ -13,6 +13,7 @@ use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metada
 
 mod defaults;
 mod execution_config;
+pub(crate) use execution_config::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS};
 mod loop_config;
 mod optional;
 mod runtime;
@@ -679,8 +680,7 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_frontend_app_roles(config)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    status_config::validate_runtime_config(config)?;
-    execution_config::validate_runtime_config(config)
+    status_config::validate_runtime_config(config)
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
