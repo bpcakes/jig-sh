@@ -32,6 +32,10 @@ After this work, termination reasons and output policies remain typed through or
   Evidence: Schema-backed review and refinement use the separately bounded `-o` file as authoritative output, so their provider stdout/stderr may truncate; schema-less worker invocations still use stdout as their result and therefore retain fatal capture overflow.
 - Observation: Bounded scheduling also gives cancellation a concrete start boundary.
   Evidence: Workers check shared cancellation before and after claiming an index, so at most the four already-active providers can have started when cancellation arrives; queued providers never emit a phase or launch a process.
+- Observation: The first final Clippy run rejected the scheduler's channel representation, not its behavior.
+  Evidence: `ProviderWorkerMessage::Finished` held a roughly 360-byte `ProviderRun` inline and the injected runner used an unnamed complex trait-object type; boxing the channel payload and naming `ProviderRunner` preserve the tested scheduler contract while shrinking and clarifying the boundary.
+- Observation: A bare trait-object alias implicitly required a `'static` injected runner in test builds.
+  Evidence: The second Clippy compile rejected scheduler test closures borrowing local atomics; parameterizing `ProviderRunner<'a>` expresses the scoped-thread lifetime that the implementation already enforces.
 
 ## Decision Log
 
@@ -135,3 +139,5 @@ Plan revision note (2026-08-21 21:14Z): Completed the cancellation half of Miles
 Plan revision note (2026-08-21 21:20Z): Completed Milestone 3 with scheduler-level concurrency, cancellation, order, and panic-balance tests plus the full status test module.
 
 Plan revision note (2026-08-21 21:22Z): Completed Milestone 4; documentation now distinguishes authoritative output from diagnostic transcripts and pre-spawn cancellation from interruption of a started command.
+
+Plan revision note (2026-08-21 21:23Z): Recorded and corrected the two scheduler representation lints exposed by the first final Clippy gate; the failed receipt remains in append-only evidence.

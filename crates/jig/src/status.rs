@@ -131,7 +131,7 @@ enum ProviderWorkerMessage {
     },
     Finished {
         index: usize,
-        run: ProviderRun,
+        run: Box<ProviderRun>,
     },
     Panicked {
         index: usize,
@@ -140,12 +140,15 @@ enum ProviderWorkerMessage {
     },
 }
 
+type ProviderRunner<'a> =
+    dyn Fn(&Path, &StatusProviderConfig, &dyn Fn() -> bool) -> ProviderRun + Sync + 'a;
+
 fn run_provider_tasks(
     root: &Path,
     providers: &[StatusProviderConfig],
     cancelled: &dyn Fn() -> bool,
     observer: &mut dyn ExecutionObserver,
-    runner: &(dyn Fn(&Path, &StatusProviderConfig, &dyn Fn() -> bool) -> ProviderRun + Sync),
+    runner: &ProviderRunner<'_>,
 ) -> Result<Vec<ProviderRun>> {
     if providers.is_empty() {
         return Ok(Vec::new());
@@ -193,7 +196,10 @@ fn run_provider_tasks(
                     match run {
                         Ok(run) => {
                             if sender
-                                .send(ProviderWorkerMessage::Finished { index, run })
+                                .send(ProviderWorkerMessage::Finished {
+                                    index,
+                                    run: Box::new(run),
+                                })
                                 .is_err()
                             {
                                 break;
@@ -243,7 +249,7 @@ fn run_provider_tasks(
                         elapsed: Duration::from_millis(run.duration_ms),
                     });
                     phases_started[index] = false;
-                    ordered[index] = Some(run);
+                    ordered[index] = Some(*run);
                 }
                 Ok(ProviderWorkerMessage::Panicked {
                     index,
