@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+pub mod repository;
+pub mod run;
 pub mod status_provider;
+
+pub use repository::{
+    ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
+    FieldProvenance, ProfileId, ProfileSpec, ResultParser, TargetId,
+};
+pub use run::{
+    EvidenceReference, Finding, FindingLocation, FindingSeverity, PlannedTarget, RunConclusion,
+    RunPlan, RunResult, RunStatus, SelectionReason, SourceIdentity, TargetRunResult,
+};
 
 pub mod kind {
     pub const COMMAND: &str = "command";
@@ -149,7 +160,7 @@ pub trait FeatureContext {
 
 #[cfg(test)]
 mod tests {
-    use super::FeatureContext;
+    use super::{FeatureContext, ManifestTool, kind};
 
     struct LegacySqlxContext;
 
@@ -207,5 +218,21 @@ mod tests {
     fn migration_authoring_is_derived_from_the_backend_capabilities() {
         assert!(LegacySqlxContext.migration_authoring_enabled());
         assert!(GoPostgresContext.migration_authoring_enabled());
+    }
+
+    #[test]
+    fn repository_dtos_do_not_change_legacy_manifest_tool_json() {
+        let tool = ManifestTool::new("jig.test", kind::COMMAND, "Run tests.")
+            .with_command("rust_test_command");
+
+        assert_eq!(
+            serde_json::to_value(tool).unwrap(),
+            serde_json::json!({
+                "name": "jig.test",
+                "kind": "command",
+                "description": "Run tests.",
+                "command": "rust_test_command"
+            })
+        );
     }
 }
