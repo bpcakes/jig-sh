@@ -6,7 +6,7 @@ This work hardens two control-plane guarantees introduced by execution supervisi
 
 - [x] Reviewed both findings and identified their ownership boundaries.
 - [x] Centralized owned-process cancellation classification and updated both Git adapters with pre-spawn regressions.
-- [ ] Make final draining report overflow to the owned-process policy boundary with regressions.
+- [x] Made fatal overflow authoritative over final capture state and added a post-wait regression while preserving truncating capture.
 - [ ] Run focused crate checks and all configured repository gates.
 
 ## Surprises & Discoveries

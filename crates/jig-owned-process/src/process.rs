@@ -142,7 +142,8 @@ impl std::fmt::Display for OwnedProcessOutputStream {
 pub enum ProcessOutputOverflowPolicy {
     /// Retain at most the configured limit while continuing to drain the pipe.
     Truncate,
-    /// Terminate the owned process tree as soon as either stream exceeds its limit.
+    /// Fail when either final capture exceeds its limit, terminating the owned
+    /// process tree promptly when overflow is observed before it exits.
     Error,
 }
 
@@ -314,7 +315,34 @@ pub fn run_owned_process_tree_with_output_policy_and_observer(
     );
     let status = finish_owned_process_wait(&mut process, wait_result);
     let (stdout, stderr) = drains.finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer);
-    status.map(|status| OwnedProcessTreeOutput {
+    finalize_owned_process_output(status, stdout, stderr, overflow_policy)
+}
+
+fn finalize_owned_process_output(
+    status: std::result::Result<ExitStatus, OwnedProcessTreeError>,
+    stdout: Option<BoundedProcessOutput>,
+    stderr: Option<BoundedProcessOutput>,
+    overflow_policy: ProcessOutputOverflowPolicy,
+) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
+    let status = status?;
+    let overflow = match overflow_policy {
+        ProcessOutputOverflowPolicy::Truncate => None,
+        ProcessOutputOverflowPolicy::Error => [
+            (OwnedProcessOutputStream::Stdout, &stdout),
+            (OwnedProcessOutputStream::Stderr, &stderr),
+        ]
+        .into_iter()
+        .find_map(|(stream, output)| {
+            output
+                .as_ref()
+                .is_some_and(|output| output.truncated)
+                .then_some(stream)
+        }),
+    };
+    if let Some(stream) = overflow {
+        return Err(OwnedProcessTreeError::OutputLimitExceeded(stream));
+    }
+    Ok(OwnedProcessTreeOutput {
         status,
         stdout,
         stderr,

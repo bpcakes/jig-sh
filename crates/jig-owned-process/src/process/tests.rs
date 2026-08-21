@@ -153,6 +153,49 @@ fn fatal_output_overflow_terminates_the_owned_tree_immediately() {
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[test]
+fn fatal_output_policy_rejects_overflow_discovered_after_wait() {
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "process::tests::owned_process_max_timeout_helper",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let capture = || BoundedProcessOutput {
+        bytes: vec![b'x'; 8],
+        truncated: true,
+        complete: true,
+    };
+    let error = match finalize_owned_process_output(
+        Ok(status),
+        Some(capture()),
+        None,
+        ProcessOutputOverflowPolicy::Error,
+    ) {
+        Ok(_) => panic!("fatal final output overflow unexpectedly succeeded"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        OwnedProcessTreeError::OutputLimitExceeded(OwnedProcessOutputStream::Stdout)
+    ));
+    let output = finalize_owned_process_output(
+        Ok(status),
+        Some(capture()),
+        None,
+        ProcessOutputOverflowPolicy::Truncate,
+    )
+    .unwrap();
+    assert!(output.stdout.unwrap().truncated);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[test]
 fn owned_process_timeout_overflow_remains_unbounded() {
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
