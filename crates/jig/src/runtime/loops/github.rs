@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::WorkflowTick;
+use super::workflow::WorkflowTick;
 
 const PR_LIST_FIELDS: &str = concat!(
     "number,title,url,state,isDraft,author,baseRefName,headRefName,headRefOid,",

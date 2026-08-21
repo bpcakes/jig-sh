@@ -14,9 +14,9 @@ use crate::runtime::worker_runner::{
 };
 use crate::state::now_ms;
 
-use super::{
-    AttemptRecord, AttemptStore, LeaseAcquire, LeaseStore, ResolvedWorkflow, WorkflowTick, github,
-};
+use super::github;
+use super::state::{AttemptRecord, AttemptStore, LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
+use super::workflow::{ResolvedWorkflow, WorkflowTick};
 
 pub(super) fn pr_manager_tick(
     ctx: &RepoContext,
@@ -767,7 +767,7 @@ fn prepare_worktree(
 ) -> Result<PathBuf> {
     let worktree = ctx
         .root()
-        .join(super::LOOP_CACHE_DIR)
+        .join(LOOP_CACHE_DIR)
         .join("worktrees")
         .join(&workflow.id)
         .join(format!(
