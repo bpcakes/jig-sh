@@ -693,7 +693,7 @@ fn e2e_workflow_paths_for_backend(
         paths.push(format!("{migration_dir}/**"));
     }
     paths.extend(if preset == super::ScaffoldPreset::GoReact {
-        vec!["go.mod", "go.sum", ".go-version"]
+        vec!["go.mod", "go.sum"]
     } else {
         vec![
             "Cargo.toml",

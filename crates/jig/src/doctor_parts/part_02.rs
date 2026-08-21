@@ -648,6 +648,152 @@ fn numeric_version_authority(
         })
 }
 
+fn go_module_version_authority(
+    path: &Path,
+) -> std::result::Result<Option<NumericVersion>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(format!("Could not inspect Go module {}", path.display())),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "Go module authority {} must be a real regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > GO_MODULE_AUTHORITY_MAX_BYTES {
+        return Err(format!(
+            "Go module authority {} must be a non-empty bounded go.mod file",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(path)
+        .map_err(|_| format!("Could not read Go module authority at {}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(GO_MODULE_AUTHORITY_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| format!("Could not read Go module authority at {}", path.display()))?;
+    if bytes.is_empty() || bytes.len() as u64 > GO_MODULE_AUTHORITY_MAX_BYTES {
+        return Err(format!(
+            "Go module authority {} must be a non-empty bounded go.mod file",
+            path.display()
+        ));
+    }
+    let contents = std::str::from_utf8(&bytes).map_err(|_| {
+        format!(
+            "Go module authority {} must contain valid UTF-8",
+            path.display()
+        )
+    })?;
+
+    let mut go_version = None;
+    let mut toolchain_version = None;
+    let mut toolchain_seen = false;
+    for raw_line in contents.lines() {
+        let line = raw_line.split_once("//").map_or(raw_line, |(code, _)| code);
+        let mut tokens = line.split_ascii_whitespace();
+        let Some(directive) = tokens.next() else {
+            continue;
+        };
+        if !matches!(directive, "go" | "toolchain") {
+            continue;
+        }
+        let token = tokens.next().ok_or_else(|| {
+            format!(
+                "Go module authority {} has an empty {directive} directive",
+                path.display()
+            )
+        })?;
+        if tokens.next().is_some() {
+            return Err(format!(
+                "Go module authority {} has an invalid {directive} directive",
+                path.display()
+            ));
+        }
+        let token = unquote_go_module_token(token).ok_or_else(|| {
+            format!(
+                "Go module authority {} has an invalid {directive} version token",
+                path.display()
+            )
+        })?;
+        match directive {
+            "go" => {
+                if go_version.is_some() {
+                    return Err(format!(
+                        "Go module authority {} declares the go version more than once",
+                        path.display()
+                    ));
+                }
+                go_version = Some(parse_go_module_version(token, "go", path)?);
+            }
+            "toolchain" => {
+                if toolchain_seen {
+                    return Err(format!(
+                        "Go module authority {} declares the toolchain more than once",
+                        path.display()
+                    ));
+                }
+                toolchain_seen = true;
+                toolchain_version = if token == "default" {
+                    None
+                } else {
+                    let version = token.strip_prefix("go").ok_or_else(|| {
+                        format!(
+                            "Go module authority {} toolchain must be default or an exact go version such as go1.26.0",
+                            path.display()
+                        )
+                    })?;
+                    Some(parse_go_module_version(version, "toolchain", path)?)
+                };
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    let go_version = go_version.ok_or_else(|| {
+        format!(
+            "Go module authority {} must declare one numeric go version such as go 1.26.0",
+            path.display()
+        )
+    })?;
+    if let Some(toolchain_version) = toolchain_version {
+        if toolchain_version < go_version {
+            return Err(format!(
+                "Go module authority {} declares toolchain {toolchain_version} below required go version {go_version}",
+                path.display()
+            ));
+        }
+        Ok(Some(toolchain_version))
+    } else {
+        Ok(Some(go_version))
+    }
+}
+
+fn unquote_go_module_token(token: &str) -> Option<&str> {
+    if token.starts_with('"') || token.ends_with('"') {
+        token
+            .strip_prefix('"')
+            .and_then(|token| token.strip_suffix('"'))
+            .filter(|token| !token.is_empty())
+    } else {
+        Some(token)
+    }
+}
+
+fn parse_go_module_version(
+    token: &str,
+    directive: &str,
+    path: &Path,
+) -> std::result::Result<NumericVersion, String> {
+    parse_numeric_version(token, false, true).ok_or_else(|| {
+        format!(
+            "Go module authority {} {directive} directive must use an exact numeric version such as 1.26.0",
+            path.display()
+        )
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct VersionSeries {
     major: u64,
@@ -799,8 +945,8 @@ fn go_runtime_check(
     if !ctx.is_go_backend() {
         return None;
     }
-    let authority_path = ctx.root().join(".go-version");
-    let required = match numeric_version_authority(&authority_path, "Go", true, "1.26.0") {
+    let authority_path = ctx.root().join("go.mod");
+    let required = match go_module_version_authority(&authority_path) {
         Ok(Some(required)) => required,
         Ok(None) => {
             return Some(
@@ -815,7 +961,7 @@ fn go_runtime_check(
                         authority_path.display()
                     ),
                 )
-                .with_fix("Restore .go-version with a numeric Go version such as 1.26.0.")
+                .with_fix("Restore the root go.mod with a numeric Go directive such as `go 1.26.0`.")
                 .with_data(json!({ "authority": authority_path.display().to_string() })),
             );
         }
@@ -829,7 +975,7 @@ fn go_runtime_check(
                     "invalid authority",
                     reason,
                 )
-                .with_fix("Correct .go-version, then rerun scripts/jig doctor.")
+                .with_fix("Correct the root go.mod Go/toolchain directives, then rerun scripts/jig doctor.")
                 .with_data(json!({ "authority": authority_path.display().to_string() })),
             );
         }

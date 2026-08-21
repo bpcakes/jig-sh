@@ -45,6 +45,7 @@ const COMMAND: &str = "doctor";
 const LAUNCHER_REPAIR_STAGING_DOCTOR_MIN_AGE: Duration = Duration::from_secs(5 * 60);
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const VERSION_AUTHORITY_MAX_BYTES: u64 = 128;
+const GO_MODULE_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const CARGO_MANIFEST_AUTHORITY_MAX_BYTES: u64 = 1024 * 1024;
 const SQLX_DRIVER_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);

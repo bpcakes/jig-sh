@@ -86,7 +86,7 @@ jobs:
       - name: Install Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version-file: .go-version
+          go-version-file: go.mod
           cache: true
           cache-dependency-path: go.mod
 [% else %]

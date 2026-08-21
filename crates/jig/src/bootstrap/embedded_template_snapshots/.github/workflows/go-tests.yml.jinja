@@ -6,7 +6,6 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
-      - ".go-version"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -22,7 +21,6 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
-      - ".go-version"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -54,7 +52,7 @@ jobs:
           rustflags: ""
       - uses: actions/setup-go@v6
         with:
-          go-version-file: .go-version
+          go-version-file: go.mod
           cache: true
           cache-dependency-path: go.mod
       - run: scripts/jig check fmt

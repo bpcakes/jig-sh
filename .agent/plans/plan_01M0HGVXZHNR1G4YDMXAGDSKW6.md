@@ -15,7 +15,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Reproduced the review findings against the clean `feat/go-backend-support` branch, read the repository and crate guides, and opened structured work plan `plan_01M0HGVXZHNR1G4YDMXAGDSKW6`.
 - [x] (2026-08-21) Classified the findings and selected long-term boundaries: contract v5, `go.mod` runtime authority, backend-neutral package normalization, explicit Go capabilities, and split backend/client drift proofs.
 - [x] (2026-08-21) Advanced the generated-harness epoch to contract v5, documented strict configuration additions as epoch-breaking, rejected mixed Go/SQLx identity at answer and load boundaries, and passed focused compatibility regressions.
-- [ ] Make `go.mod` the single Go toolchain authority for Doctor and generated CI.
+- [x] (2026-08-21) Made bounded root `go.mod` parsing the single Go toolchain authority, honored a newer `toolchain` directive, pointed Go and browser CI at `go.mod`, retired generated `.go-version`, refreshed snapshots, and passed focused Doctor/scaffold tests.
 - [ ] Separate backend-neutral package normalization from Rust crate-name validation.
 - [ ] Add backend-aware unavailable messages for Go lint and sqlc checks.
 - [ ] Add a client-only contract drift mode and run it from generated web CI.
@@ -40,6 +40,9 @@ Each independently useful change is committed separately. The complete repositor
 
 - Observation: the first broad library pass after the epoch bump passed 1,567 tests and failed only assertions whose fixtures combined the newly rendered launcher with a hard-coded v4 manifest or replacement token.
   Evidence: legacy v4 parser and context tests passed unchanged; rerunning the six affected current-launcher tests and the current-render adoption assertion after making their epoch source explicit passed.
+
+- Observation: `actions/setup-go` and the Go toolchain already share the needed authority semantics: setup-go reads `go.mod` and selects its `toolchain` directive when present, otherwise its `go` directive.
+  Evidence: official `actions/setup-go` advanced-usage documentation and the Go Modules Reference describe the same precedence; the local parser tests cover newer, default, duplicate, malformed, bounded, and symlinked authorities.
 
 ## Decision Log
 

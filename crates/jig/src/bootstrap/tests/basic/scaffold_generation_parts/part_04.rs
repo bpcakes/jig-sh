@@ -294,9 +294,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
 
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
-    assert_eq!(go_tests.matches(r#"- ".go-version""#).count(), 2);
+    assert!(go_tests.contains("go-version-file: go.mod"));
+    assert!(!go_tests.contains(".go-version"));
+    assert!(!destination.join(".go-version").exists());
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    assert!(browser_e2e.contains("go-version-file: go.mod"));
     assert!(browser_e2e.contains("cache-dependency-path: go.mod"));
 
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();

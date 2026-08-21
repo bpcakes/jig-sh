@@ -320,7 +320,7 @@ fn rust_runtime_check_accepts_an_active_version_at_or_above_the_cargo_authority(
 
 #[cfg(unix)]
 #[test]
-fn go_runtime_check_uses_the_go_version_authority() {
+fn go_runtime_check_uses_the_go_module_authority() {
     for (actual, compatible) in [("1.27.2", false), ("1.27.4", true)] {
         let temp = tempdir().unwrap();
         let root = temp.path().join("repo");
@@ -333,12 +333,16 @@ fn go_runtime_check_uses_the_go_version_authority() {
             fs::read_to_string(&config_path).unwrap()
         );
         fs::write(config_path, config).unwrap();
-        fs::write(root.join(".go-version"), "1.27.3\n").unwrap();
+        fs::write(
+            root.join("go.mod"),
+            "module example.com/ExampleProject\n\ngo 1.27.3\n",
+        )
+        .unwrap();
         write_test_executable(
             &bin.join("go"),
             &format!("#!/bin/sh\nprintf 'go version go{actual} linux/amd64\\n'\n"),
         );
-        let ctx = RepoContext::load_from_root(root).unwrap();
+        let ctx = RepoContext::load_from_root(root.clone()).unwrap();
 
         let check = go_runtime_check(
             &ctx,
@@ -350,6 +354,7 @@ fn go_runtime_check_uses_the_go_version_authority() {
         assert_eq!(check.ok, compatible, "{check:?}");
         assert_eq!(check.data["required"], "1.27.3");
         assert_eq!(check.data["actual"], actual);
+        assert_eq!(check.data["authority"], root.join("go.mod").display().to_string());
         assert_eq!(
             check.status,
             if compatible {
@@ -373,7 +378,7 @@ fn go_runtime_check_uses_the_go_version_authority() {
 
 #[cfg(unix)]
 #[test]
-fn missing_go_runtime_fix_uses_the_go_version_authority() {
+fn missing_go_runtime_fix_uses_the_go_module_authority() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("repo");
     let empty_bin = temp.path().join("bin");
@@ -385,7 +390,11 @@ fn missing_go_runtime_fix_uses_the_go_version_authority() {
         fs::read_to_string(&config_path).unwrap()
     );
     fs::write(config_path, config).unwrap();
-    fs::write(root.join(".go-version"), "1.28.1\n").unwrap();
+    fs::write(
+        root.join("go.mod"),
+        "module example.com/ExampleProject\n\ngo 1.28.1\n",
+    )
+    .unwrap();
     let ctx = RepoContext::load_from_root(root).unwrap();
 
     let check = go_runtime_check(
@@ -404,7 +413,7 @@ fn missing_go_runtime_fix_uses_the_go_version_authority() {
 }
 
 #[test]
-fn numeric_version_authority_bounds_and_validates_go_files() {
+fn numeric_version_authority_bounds_and_validates_single_token_files() {
     for (contents, expected) in [
         (Vec::new(), "bounded version token"),
         (vec![b'1'; 129], "bounded version token"),
@@ -412,7 +421,7 @@ fn numeric_version_authority_bounds_and_validates_go_files() {
         (b"1.27.0 1.28.0\n".to_vec(), "exactly one version token"),
     ] {
         let temp = tempdir().unwrap();
-        let authority = temp.path().join(".go-version");
+        let authority = temp.path().join("version");
         fs::write(&authority, contents).unwrap();
 
         let error = numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap_err();
@@ -421,7 +430,7 @@ fn numeric_version_authority_bounds_and_validates_go_files() {
     }
 
     let temp = tempdir().unwrap();
-    let authority = temp.path().join(".go-version");
+    let authority = temp.path().join("version");
     fs::write(&authority, "1.27\n").unwrap();
     assert_eq!(
         numeric_version_authority(&authority, "Go", true, "1.26.0").unwrap(),
@@ -433,6 +442,98 @@ fn numeric_version_authority_bounds_and_validates_go_files() {
     );
 }
 
+#[test]
+fn go_module_authority_prefers_a_newer_toolchain_and_accepts_default() {
+    let temp = tempdir().unwrap();
+    let authority = temp.path().join("go.mod");
+    fs::write(
+        &authority,
+        "module example.com/ExampleProject\n\ngo \"1.27\"\ntoolchain go1.28.2 // local floor\n",
+    )
+    .unwrap();
+    assert_eq!(
+        go_module_version_authority(&authority).unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 28,
+            patch: 2,
+        })
+    );
+
+    fs::write(
+        &authority,
+        "module example.com/ExampleProject\n\ngo 1.27\ntoolchain default\n",
+    )
+    .unwrap();
+    assert_eq!(
+        go_module_version_authority(&authority).unwrap(),
+        Some(NumericVersion {
+            major: 1,
+            minor: 27,
+            patch: 0,
+        })
+    );
+}
+
+#[test]
+fn go_module_authority_rejects_ambiguous_and_malformed_directives() {
+    for (contents, expected) in [
+        ("module example.com/ExampleProject\n", "must declare one numeric go version"),
+        ("go 1.27\ngo 1.28\n", "go version more than once"),
+        (
+            "go 1.27\ntoolchain go1.28\ntoolchain go1.29\n",
+            "toolchain more than once",
+        ),
+        (
+            "go 1.28\ntoolchain go1.27\n",
+            "below required go version",
+        ),
+        ("go stable\n", "exact numeric version"),
+        ("go 1.27 extra\n", "invalid go directive"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join("go.mod");
+        fs::write(&authority, contents).unwrap();
+
+        let error = go_module_version_authority(&authority).unwrap_err();
+        assert!(error.contains(expected), "{contents:?}: {error}");
+    }
+}
+
+#[test]
+fn go_module_authority_bounds_and_validates_the_file() {
+    for (contents, expected) in [
+        (Vec::new(), "non-empty bounded go.mod"),
+        (
+            vec![b'x'; GO_MODULE_AUTHORITY_MAX_BYTES as usize + 1],
+            "non-empty bounded go.mod",
+        ),
+        (vec![0xff], "valid UTF-8"),
+    ] {
+        let temp = tempdir().unwrap();
+        let authority = temp.path().join("go.mod");
+        fs::write(&authority, contents).unwrap();
+
+        let error = go_module_version_authority(&authority).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn go_module_authority_rejects_symlinks_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let target = temp.path().join("target.mod");
+    let authority = temp.path().join("go.mod");
+    fs::write(&target, "module example.com/ExampleProject\n\ngo 1.27.0\n").unwrap();
+    symlink(&target, &authority).unwrap();
+
+    let error = go_module_version_authority(&authority).unwrap_err();
+    assert!(error.contains("real regular file"), "{error}");
+}
+
 #[cfg(unix)]
 #[test]
 fn numeric_version_authority_rejects_symlinks_without_following_them() {
@@ -440,7 +541,7 @@ fn numeric_version_authority_rejects_symlinks_without_following_them() {
 
     let temp = tempdir().unwrap();
     let target = temp.path().join("target-version");
-    let authority = temp.path().join(".go-version");
+    let authority = temp.path().join("version");
     fs::write(&target, "1.27.0\n").unwrap();
     symlink(&target, &authority).unwrap();
 

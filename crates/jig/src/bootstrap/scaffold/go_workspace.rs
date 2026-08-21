@@ -13,10 +13,6 @@ use super::{InitScaffoldPlan, ScaffoldDb};
 
 const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
-        template: "go-react/workspace/.go-version.jinja",
-        output: ".go-version",
-    },
-    ScaffoldTemplateFile {
         template: "go-react/workspace/.env.example.jinja",
         output: ".env.example",
     },
