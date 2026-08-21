@@ -51,6 +51,9 @@ Each independently useful change is committed separately. The complete repositor
 - Observation: every PTY timeout orphaned its spawned `jig vault tui` process because `std::process::Child` does not kill on drop and the test only killed the child from its final wait helper.
   Evidence: five live children with parent PID 1 remained after five failed runs; after terminating those exact children and wrapping subsequent children in a kill-and-reap drop guard, a 20-iteration browser stress run passed and left no child process behind.
 
+- Observation: the vault partition passed 438/438 in failure-only diagnostic runs but the same PTY case repeatedly timed out when the partition followed the large non-vault partition in one configured command.
+  Evidence: direct partition runs `83fff0fc-ae81-4497-ae77-945878ad5a3d` and `1ed62e7c-ae5d-41d1-ac09-741ea720aed5` passed; combined gate runs continued to fail only the browser PTY case even after scheduler-slot reservation.
+
 ## Decision Log
 
 - Decision: Make contract v5 the first epoch that generated repositories may depend on the backend selector fields, while continuing to load v2-v4 repositories.
@@ -83,6 +86,10 @@ Each independently useful change is committed separately. The complete repositor
 
 - Decision: Own each spawned PTY child with a reusable kill-and-reap guard immediately after spawn.
   Rationale: Assertions and watchdog panics can occur before the explicit final wait. Cleanup therefore belongs to resource ownership, not the success-path control flow. The guard prevents failed tests from polluting later tests or leaving sensitive TUI processes alive.
+  Date/Author: 2026-08-21 / Codex
+
+- Decision: Run the `vault_tui` integration binary as a third, process-isolated phase of the source repository's configured test command.
+  Rationale: Nextest slot reservation did not isolate the terminal protocol from all phase-level effects of the preceding partitions. An explicit process boundary is observable, deterministic, and narrow: ordinary vault tests retain four-way concurrency, while the two PTY cases run alone after them. Locked and unlocked commands use the same partitioning.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective
