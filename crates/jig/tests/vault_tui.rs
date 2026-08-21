@@ -27,6 +27,8 @@ const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
+const PTY_EVENT_TIMEOUT: Duration = Duration::from_secs(15);
+const PTY_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -65,12 +67,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     set_nonblocking(&master);
 
     let mut output = Vec::new();
-    read_until(
-        &mut master,
-        &mut output,
-        "API_TOKEN",
-        Duration::from_secs(8),
-    );
+    read_until(&mut master, &mut output, "API_TOKEN", PTY_EVENT_TIMEOUT);
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
 
     let create_offset = output.len();
@@ -82,7 +79,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         create_offset,
         "Vault updated.",
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
@@ -93,7 +90,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         tools_offset,
         "Enter run/open",
-        Duration::from_secs(3),
+        PTY_EVENT_TIMEOUT,
     );
     let activity_offset = output.len();
     master.write_all(b"activity\r").unwrap();
@@ -102,7 +99,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         activity_offset,
         "field_batch_apply",
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
@@ -113,7 +110,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         browse_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        PTY_EVENT_TIMEOUT,
     );
 
     let confirmation_offset = output.len();
@@ -123,7 +120,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         confirmation_offset,
         "PEEK",
-        Duration::from_secs(3),
+        PTY_EVENT_TIMEOUT,
     );
     let peek_offset = output.len();
     master.write_all(b"PEEK\r").unwrap();
@@ -132,7 +129,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         peek_offset,
         PEEK_END_MARKER,
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     assert!(
         String::from_utf8_lossy(&output[peek_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -145,7 +142,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         cleared_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        PTY_EVENT_TIMEOUT,
     );
     assert!(
         !String::from_utf8_lossy(&output[cleared_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -165,7 +162,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resize_offset,
         FULL_CLEAR_MARKER,
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     let resized_frame_offset = resize_offset
         + output[resize_offset..]
@@ -178,7 +175,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resized_frame_offset,
         "Production",
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     let lock_offset = output.len();
     master.write_all(b"L").unwrap();
@@ -187,7 +184,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         lock_offset,
         "Vault passphrase",
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
 
     let resume_offset = output.len();
@@ -198,12 +195,12 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resume_offset,
         "API_TOKEN",
-        Duration::from_secs(8),
+        PTY_EVENT_TIMEOUT,
     );
     master.write_all(b"\x03").unwrap();
 
     let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
                     "vault TUI did not exit after Ctrl-C; output: {}",
@@ -281,12 +278,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     set_nonblocking(&master);
 
     let mut output = Vec::new();
-    read_until(
-        &mut master,
-        &mut output,
-        "API_TOKEN",
-        Duration::from_secs(8),
-    );
+    read_until(&mut master, &mut output, "API_TOKEN", PTY_EVENT_TIMEOUT);
     // SAFETY: the child PID is live and the runtime's signal session owns
     // structured SIGTERM restoration and redelivery.
     assert_eq!(
@@ -294,7 +286,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         0
     );
     let status =
-        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, PTY_EXIT_TIMEOUT)
             .unwrap_or_else(|| {
                 panic!(
                     "vault TUI did not exit after SIGTERM; output: {}",

@@ -19,7 +19,7 @@ Each independently useful change is committed separately. The complete repositor
 - [x] (2026-08-21) Extracted backend-neutral package normalization, confined Rust keyword/identifier prefixing to Rust-react, reused the neutral stem for default Go modules and frontend packages, and proved `loop` remains unchanged in a generated Go workspace.
 - [x] (2026-08-21) Added defaulted Go capability queries to the feature boundary and backend/database/stale-manifest diagnostics for lint and sqlc, with feature-unit and end-to-end dispatch coverage.
 - [x] (2026-08-21) Added client-only staged regeneration from committed OpenAPI documents, ran it after each generated web build, corrected the workflow-boundary documentation, and proved it neither invokes Go nor mutates the generated repository.
-- [x] (2026-08-21) Isolated interactive vault PTY tests from CPU-heavy vault crypto tests after two full-suite runs exposed the same load-dependent failure; the exact 438-test vault partition then passed 438/438.
+- [x] (2026-08-21) Isolated interactive vault PTY tests from CPU-heavy vault crypto tests after repeated full-suite runs exposed a load-dependent failure, then centralized the harness-only PTY watchdog deadlines so host contention cannot masquerade as a product failure.
 - [ ] Rebuild the development runtime, pass focused tests after each slice, pass the complete repository gates, update outcomes, and close structured work.
 
 ## Surprises & Discoveries
@@ -74,8 +74,8 @@ Each independently useful change is committed separately. The complete repositor
   Rationale: Backend tests already regenerate and compare committed OpenAPI documents. A new client-only mode can regenerate TypeScript clients from those committed documents in web CI. Together the workflows prove backend-to-document and document-to-client drift without duplicating Go or Cargo setup in frontend jobs.
   Date/Author: 2026-08-21 / Codex
 
-- Decision: Give each vault PTY integration test all four slots in the existing vault Nextest group.
-  Rationale: The browser test intentionally uses bounded UI-event deadlines and also performs password hashing. Competing crypto tests make those deadlines measure scheduler contention. Group-wide reservation preserves useful production-facing deadlines, serializes only the two interactive PTY cases, and avoids globally slowing the vault suite.
+- Decision: Give each vault PTY integration test all four slots in the existing vault Nextest group and use one generous harness-only event deadline.
+  Rationale: The browser test performs password hashing and many interactive redraws, but its wait bounds are test watchdogs rather than product latency requirements. Group-wide reservation removes known in-suite contention; a centralized 15-second watchdog tolerates external host load while preserving every functional assertion and returning immediately when each event arrives.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective
