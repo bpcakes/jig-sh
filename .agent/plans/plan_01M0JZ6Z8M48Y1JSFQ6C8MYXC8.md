@@ -34,7 +34,7 @@ and, over MCP:
 - [x] (2026-08-21) Recorded and committed the accepted product model in `docs/agent-native-repository-model.md`.
 - [x] (2026-08-21) Opened structured work as `plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8` and wrote this executable migration plan.
 - [x] (2026-08-21 20:24Z) Slice 1: added validated repository identities, component/action/profile records, immutable plan records, separate run status/conclusion, normalized findings/results, generated JSON Schema support, and a legacy manifest serialization regression.
-- [ ] Slice 2: build a resolved repository catalog and synthesize v2–v5 tools as `repo` targets with legacy aliases; commit independently.
+- [x] (2026-08-21 20:29Z) Slice 2: added one validated repository catalog, raw authored/resolved configuration digests, v6 component/action/profile inputs, and deterministic v2–v5 `repo` target projection with bidirectional aliases and a synthesized default profile.
 - [ ] Slice 3: add inspection, selector/profile resolution, plan explanation, and useful bare `jig check`; commit independently.
 - [ ] Slice 4: add durable run state and target-aware receipt fields with old-record compatibility; commit independently.
 - [ ] Slice 5: turn Rust, Go, and TypeScript feature metadata into adapter contributions and make v6 templates component-native; commit independently.

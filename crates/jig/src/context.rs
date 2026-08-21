@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use jig_contract::{FeatureContext, ManifestTool};
+use jig_contract::{
+    ActionSpec, ComponentSpec, FeatureContext, ManifestTool, ProfileId, ProfileSpec,
+};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::backend::{BackendLanguage, GoDatabase};
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
@@ -305,7 +308,16 @@ struct ContractManifest {
     #[allow(dead_code)]
     #[serde(default)]
     required_commands: Vec<String>,
+    #[serde(default)]
     tools: Vec<ManifestTool>,
+    #[serde(default)]
+    components: Vec<ComponentSpec>,
+    #[serde(default)]
+    actions: Vec<ActionSpec>,
+    #[serde(default)]
+    profiles: Vec<ProfileSpec>,
+    #[serde(default)]
+    default_check_profile: Option<ProfileId>,
 }
 
 #[derive(Clone, Debug)]
@@ -314,6 +326,7 @@ pub(crate) struct RepoContext {
     current_session_path: PathBuf,
     config: RepoConfig,
     manifest: ContractManifest,
+    contract_digest: String,
 }
 
 impl RepoContext {
@@ -326,6 +339,7 @@ impl RepoContext {
             .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+        let contract_digest = contract_source_digest(&config_path, &manifest_text)?;
 
         if !is_supported_contract_version(manifest.contract_version) {
             bail!(
@@ -363,6 +377,7 @@ impl RepoContext {
             current_session_path,
             config,
             manifest,
+            contract_digest,
         })
     }
 
@@ -405,6 +420,26 @@ impl RepoContext {
 
     pub(crate) fn tool_spec(&self, name: &str) -> Option<&ManifestTool> {
         self.manifest.tools.iter().find(|tool| tool.name == name)
+    }
+
+    pub(crate) fn component_specs(&self) -> &[ComponentSpec] {
+        &self.manifest.components
+    }
+
+    pub(crate) fn action_specs(&self) -> &[ActionSpec] {
+        &self.manifest.actions
+    }
+
+    pub(crate) fn profile_specs(&self) -> &[ProfileSpec] {
+        &self.manifest.profiles
+    }
+
+    pub(crate) fn default_check_profile(&self) -> Option<&ProfileId> {
+        self.manifest.default_check_profile.as_ref()
+    }
+
+    pub(crate) fn contract_digest(&self) -> &str {
+        &self.contract_digest
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -597,6 +632,17 @@ fn load_config(config_path: &Path) -> Result<RepoConfig> {
     })?;
     validate_config(&config)?;
     Ok(config)
+}
+
+fn contract_source_digest(config_path: &Path, manifest_text: &str) -> Result<String> {
+    let config = fs::read(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update((config.len() as u64).to_be_bytes());
+    hasher.update(config);
+    hasher.update((manifest_text.len() as u64).to_be_bytes());
+    hasher.update(manifest_text.as_bytes());
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 impl FeatureContext for RepoContext {
@@ -1042,16 +1088,19 @@ fn resolve_current_session_path(root: &Path) -> PathBuf {
 #[cfg(test)]
 impl RepoContext {
     pub(crate) fn load_from(root: &Path) -> Result<Self> {
-        let config_text = fs::read_to_string(root.join(".jig.toml"))?;
+        let config_path = root.join(".jig.toml");
+        let config_text = fs::read_to_string(&config_path)?;
         let config: RepoConfig = toml::from_str(&config_text)?;
         validate_config(&config)?;
         let manifest_text = fs::read_to_string(root.join(".agent/jig-contract.json"))?;
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)?;
+        let contract_digest = contract_source_digest(&config_path, &manifest_text)?;
         Ok(Self {
             root: root.to_path_buf(),
             current_session_path: root.join(".agent/.cache").join(CURRENT_SESSION_FILE),
             config,
             manifest,
+            contract_digest,
         })
     }
 }
