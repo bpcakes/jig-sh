@@ -106,7 +106,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
     let browse_offset = output.len();
-    master.write_all(b"\x1b").unwrap();
+    master.write_all(b"\r").unwrap();
     read_until_from(
         &mut master,
         &mut output,

@@ -54,6 +54,9 @@ Each independently useful change is committed separately. The complete repositor
 - Observation: the vault partition passed 438/438 in failure-only diagnostic runs but the same PTY case repeatedly timed out when the partition followed the large non-vault partition in one configured command.
   Evidence: direct partition runs `83fff0fc-ae81-4497-ae77-945878ad5a3d` and `1ed62e7c-ae5d-41d1-ac09-741ea720aed5` passed; combined gate runs continued to fail only the browser PTY case even after scheduler-slot reservation.
 
+- Observation: process-isolating `vault_tui` preserved the failing terminal frame and showed the browser test stuck in the verified-activity modal after sending a bare ESC byte.
+  Evidence: the modal itself advertises both Enter and Esc as close actions, but the test used the ambiguous escape-sequence prefix and then timed out waiting for the browser's `Value hidden.` frame.
+
 ## Decision Log
 
 - Decision: Make contract v5 the first epoch that generated repositories may depend on the backend selector fields, while continuing to load v2-v4 repositories.
@@ -90,6 +93,10 @@ Each independently useful change is committed separately. The complete repositor
 
 - Decision: Run the `vault_tui` integration binary as a third, process-isolated phase of the source repository's configured test command.
   Rationale: Nextest slot reservation did not isolate the terminal protocol from all phase-level effects of the preceding partitions. An explicit process boundary is observable, deterministic, and narrow: ordinary vault tests retain four-way concurrency, while the two PTY cases run alone after them. Locked and unlocked commands use the same partitioning.
+  Date/Author: 2026-08-21 / Codex
+
+- Decision: Close the verified-activity modal with Enter instead of a bare ESC byte.
+  Rationale: Both inputs are supported UI behavior, but ESC is also the prefix of terminal escape sequences and its decoding is timing-sensitive. Carriage return is an unambiguous complete key event, so it tests the same close transition without coupling the integration test to decoder timing.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective
