@@ -517,6 +517,12 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
             "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
             timeout.as_secs_f64()
         ),
+        Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart) => {
+            return Err(FrontendDependencyPreflightCancelled {
+                app_dir: app_dir.to_string(),
+            }
+            .into());
+        }
         Err(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
             return Err(FrontendDependencyPreflightCancelled {
                 app_dir: app_dir.to_string(),

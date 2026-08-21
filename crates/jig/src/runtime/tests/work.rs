@@ -607,6 +607,84 @@ fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
 }
 
 #[test]
+fn cancelled_collect_all_work_check_stops_unstarted_tools() {
+    struct CancelWhenStarted(std::path::PathBuf);
+
+    impl crate::execution::ExecutionObserver for CancelWhenStarted {}
+
+    impl crate::execution::ExecutionCancellation for CancelWhenStarted {
+        fn cancelled(&self) -> bool {
+            self.0.exists()
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+first_check_command = "printf started > first-check-started; sleep 30"
+later_check_command = "printf ran > later-check-ran"
+
+[[work.gates]]
+id = "first"
+kind = "check"
+tool = "jig.first_check"
+
+[[work.gates]]
+id = "later"
+kind = "check"
+tool = "jig.later_check"
+"#,
+        )
+        .required_commands(["first_check_command", "later_check_command"])
+        .tool(json!({
+            "name": "jig.first_check",
+            "kind": "command",
+            "description": "Run the first fixture check.",
+            "command": "first_check_command"
+        }))
+        .tool(json!({
+            "name": "jig.later_check",
+            "kind": "command",
+            "description": "Run the later fixture check.",
+            "command": "later_check_command"
+        }))
+        .write();
+    write_open_plan(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelWhenStarted(temp.path().join("first-check-started"));
+
+    let error = super::super::work::check_tools_collect_failures_with_observer(
+        &ctx,
+        "plan_1",
+        vec!["jig.first_check".into(), "jig.later_check".into()],
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!temp.path().join("later-check-ran").exists());
+    let receipts = read_receipts(temp.path());
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.first_check")
+        .expect("started cancelled check should record a child receipt");
+    assert_eq!(child["evidence"]["status"], "cancelled");
+    let batch = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("cancelled work check should record its batch receipt");
+    assert_eq!(batch["args"]["receipt_ids"], json!([child["id"]]));
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["tool_name"] != "jig.later_check")
+    );
+}
+
+#[test]
 fn timed_out_work_check_records_child_and_batch_failure_receipts() {
     let temp = tempdir().unwrap();
     write_timeout_check_fixture_repo(temp.path());

@@ -7,7 +7,7 @@ use crate::execution::{ExecutionControl, PhasePosition};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
-use super::super::tool_execution::manifest_tool_result_failure;
+use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
 use super::tools::{selected_tools, validate_check_tool};
 
 pub(super) fn check_with_observer(
@@ -35,7 +35,7 @@ pub(super) fn check_tools_with_observer(
     check_tools_with_failure_mode(ctx, plan_id, tools, true, observer)
 }
 
-pub(super) fn check_tools_collect_failures_with_observer(
+pub(in crate::runtime) fn check_tools_collect_failures_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     tools: Vec<String>,
@@ -73,7 +73,14 @@ fn check_tools_with_failure_mode(
                 position,
                 observer,
             ) {
-                Ok(result) => result,
+                Ok(ManifestToolExecutionOutcome::Completed(result)) => result,
+                Ok(ManifestToolExecutionOutcome::Cancelled(result)) => {
+                    let (_, message) = manifest_tool_result_failure(&result)?
+                        .ok_or_else(|| anyhow!("Cancelled tool returned a successful result"))?;
+                    results.push(result);
+                    check_failure = Some((1, anyhow!(message)));
+                    break;
+                }
                 Err(error) if fail_on_tool_error => {
                     check_failure = Some((1, error));
                     break;

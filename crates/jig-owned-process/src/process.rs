@@ -174,6 +174,7 @@ impl BoundedProcessOutput {
 pub enum OwnedProcessTreeError {
     Start(std::io::Error),
     TimedOut,
+    CancelledBeforeStart,
     Cancelled,
     OutputLimitExceeded(OwnedProcessOutputStream),
     Await,
@@ -185,6 +186,9 @@ impl std::fmt::Display for OwnedProcessTreeError {
         match self {
             Self::Start(error) => write!(formatter, "the process tree could not start: {error}"),
             Self::TimedOut => formatter.write_str("the process tree timed out"),
+            Self::CancelledBeforeStart => {
+                formatter.write_str("the process tree was cancelled before it started")
+            }
             Self::Cancelled => formatter.write_str("the process tree was cancelled"),
             Self::OutputLimitExceeded(stream) => {
                 write!(
@@ -279,7 +283,7 @@ pub fn run_owned_process_tree_with_output_policy_and_observer(
     observer: &mut dyn OwnedProcessObserver,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
     if observer.cancelled() {
-        return Err(OwnedProcessTreeError::Cancelled);
+        return Err(OwnedProcessTreeError::CancelledBeforeStart);
     }
     let mut process = spawn_owned_process(command).map_err(OwnedProcessTreeError::Start)?;
     let Ok(mut drains) = OwnedProcessOutputDrains::start(&mut process.child, limits) else {

@@ -664,6 +664,10 @@ fn process_failure(
                 provider.id, provider.timeout_seconds
             ),
         ),
+        OwnedProcessTreeError::CancelledBeforeStart => (
+            "cancelled",
+            format!("Status provider '{}' was cancelled", provider.id),
+        ),
         OwnedProcessTreeError::Cancelled => (
             "cancelled",
             format!("Status provider '{}' was cancelled", provider.id),

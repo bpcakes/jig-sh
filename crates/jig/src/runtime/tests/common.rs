@@ -235,7 +235,7 @@ tool = "jig.custom_check"
     write_open_plan(root);
 }
 
-fn write_open_plan(root: &Path) {
+pub(super) fn write_open_plan(root: &Path) {
     let ctx = RepoContext::load_from(root).unwrap();
     crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Test plan", "# Test plan\n").unwrap();
 }

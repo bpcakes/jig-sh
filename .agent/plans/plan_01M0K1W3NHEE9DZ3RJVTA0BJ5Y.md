@@ -13,7 +13,7 @@ After this work, termination reasons and output policies remain typed through or
 - [x] (2026-08-21 20:58Z) Reviewed the merged Claude and Codex findings, traced the affected callers, and opened structured work.
 - [x] (2026-08-21 21:04Z) Slice 1: made CLI progress finalization precede signal retirement, made deferred heartbeat wording historical, and covered interruption output in the production CLI.
 - [x] (2026-08-21 21:09Z) Slice 2a: added explicit fatal/truncating capture policy, prompt fatal termination on authoritative overflow, and nonfatal schema-backed worker transcript truncation with receipt flags.
-- [ ] Slice 2: preserve typed cancellation and output-overflow policy through owned-process and work-check orchestration.
+- [x] (2026-08-21 21:14Z) Slice 2b: preserved pre-start and in-flight cancellation through command orchestration so collect-all checks stop, started commands retain receipts, and unstarted commands do not manufacture child receipts.
 - [ ] Slice 3: bound status-provider concurrency, balance failure phases, and remove superseded gate helper surface.
 - [ ] Slice 4: reconcile durable plans and documentation with the final behavior.
 - [ ] Build the development binary, run configured format, Clippy, contract, and full test gates, inspect receipts, and finish structured work.
@@ -127,3 +127,5 @@ Plan revision note (2026-08-21 20:58Z): Created the initial self-contained plan 
 Plan revision note (2026-08-21 21:04Z): Completed Milestone 1 and recorded the JSON-versus-human progress test constraint discovered during focused validation.
 
 Plan revision note (2026-08-21 21:09Z): Split Milestone 2 at its natural API boundary so output-policy hardening and cancellation orchestration remain independently reviewable commits.
+
+Plan revision note (2026-08-21 21:14Z): Completed the cancellation half of Milestone 2 and verified the entire work-test module plus the owned-process crate.

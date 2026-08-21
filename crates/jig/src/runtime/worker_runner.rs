@@ -370,6 +370,9 @@ fn worker_process_error(error: OwnedProcessTreeError, timeout: CommandTimeout) -
             "Worker process timed out after {} seconds",
             timeout.as_secs()
         ),
+        OwnedProcessTreeError::CancelledBeforeStart => {
+            anyhow!("Worker process was cancelled before it started")
+        }
         OwnedProcessTreeError::Cancelled => anyhow!("Worker process was cancelled"),
         OwnedProcessTreeError::OutputLimitExceeded(stream) => anyhow!(
             "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"

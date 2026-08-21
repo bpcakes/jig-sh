@@ -482,6 +482,9 @@ fn app_server_error(error: &OwnedProcessTreeInteractionError, timeout: Duration)
                 timeout.as_secs_f64()
             )
         }
+        OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::CancelledBeforeStart) => {
+            APP_SERVER_INSPECTION_CANCELLED.into()
+        }
         OwnedProcessTreeInteractionError::Process(OwnedProcessTreeError::Cancelled) => {
             APP_SERVER_INSPECTION_CANCELLED.into()
         }

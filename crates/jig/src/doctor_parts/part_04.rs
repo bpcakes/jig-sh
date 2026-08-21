@@ -546,6 +546,7 @@ const fn driver_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     match error {
         OwnedProcessTreeError::Start(_) => "the driver probe could not start",
         OwnedProcessTreeError::TimedOut => "the driver probe timed out",
+        OwnedProcessTreeError::CancelledBeforeStart => "the driver probe was cancelled",
         OwnedProcessTreeError::Cancelled => "the driver probe was cancelled",
         OwnedProcessTreeError::OutputLimitExceeded(_) => {
             "the driver probe output exceeded the diagnostic capture limit"

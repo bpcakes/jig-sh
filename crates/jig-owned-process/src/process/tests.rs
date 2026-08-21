@@ -76,6 +76,17 @@ fn owned_process_output_capture_is_bounded_and_lossy_safe() {
     assert_eq!(stderr.bytes.len(), OWNED_PROCESS_OUTPUT_LIMIT);
 }
 
+#[test]
+fn cancellation_before_spawn_has_a_distinct_outcome() {
+    let mut command = Command::new("jig-fixture-command-that-must-not-exist");
+    let result = run_owned_process_tree_with_output(&mut command, Duration::from_secs(1), || true);
+
+    assert!(matches!(
+        result,
+        Err(OwnedProcessTreeError::CancelledBeforeStart)
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn fatal_output_overflow_terminates_the_owned_tree_immediately() {
