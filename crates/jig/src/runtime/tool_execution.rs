@@ -312,7 +312,8 @@ fn receipt_id_or_preserve_tool_error(
 ) -> Result<Option<String>> {
     if let Some(tool_failure) = tool_failure {
         match receipt_result {
-            Ok(_) => bail!("{tool_failure}"),
+            Ok(Some(receipt_id)) => bail!("{tool_failure}\nreceipt: {receipt_id}"),
+            Ok(None) => bail!("{tool_failure}"),
             Err(receipt_error) => {
                 bail!("{tool_failure}\nreceipt recording also failed:\n{receipt_error:#}")
             }
@@ -365,15 +366,64 @@ fn execute_command_tool(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
-    let output = run_configured_command(
+    let run_result = run_configured_command(
         ctx,
         invocation.tool_name,
         invocation.command_text,
         &args,
         position,
         observer,
-    )?;
+    );
     let ended = now_ms();
+    let output = match run_result {
+        Ok(output) => output,
+        Err(error) => {
+            let message = format!("{error:#}");
+            let evidence = serde_json::json!({
+                "kind": "supervised_command",
+                "schema_version": 1,
+                "status": "error",
+                "error": message,
+            });
+            let receipt_result = maybe_record_receipt(
+                ctx,
+                options.record_receipt,
+                ReceiptInput {
+                    tool_name: invocation.tool_name,
+                    args: args.clone(),
+                    invoked_command_key: Some(invocation.command_key.to_string()),
+                    plan_id,
+                    started_at_ms: started,
+                    ended_at_ms: ended,
+                    exit_status: 1,
+                    stdout: "",
+                    stderr: &message,
+                    evidence: Some(evidence),
+                    session_override: None,
+                    collect_git_metadata: options.collect_git_metadata,
+                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
+                    worktree_fingerprint_override: None,
+                },
+            );
+            let receipt_id = receipt_id_for_failure_mode(
+                options.failure_mode,
+                Some(message.clone()),
+                receipt_result,
+            )?;
+            return tool_response_value(ToolExecutionResponse {
+                ok: true,
+                tool: invocation.tool_name,
+                command_key: Some(invocation.command_key),
+                args,
+                result: ToolProcessResult {
+                    exit_status: 1,
+                    stdout: String::new(),
+                    stderr: message,
+                },
+                receipt_id,
+            });
+        }
+    };
     let exit_status = output.status.code().unwrap_or(1);
     let stdout = output
         .stdout

@@ -17,7 +17,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [x] (2026-08-21 20:49Z) Slice 2: separated supervision from transport writes with a bounded 64 KiB CLI event buffer and coalesced 4 KiB-per-stream MCP previews; transport flushes now occur only after supervised work returns.
 - [x] (2026-08-21 21:07Z) Slice 3: replaced unbounded configured-command, marketplace, worker-stream, and structured worker-file capture with a shared 4 MiB-per-output limit and explicit incomplete/truncated-output errors.
 - [x] (2026-08-21 21:34Z) Slice 4: made phase label/position explicit inputs to tool and worker execution, removed orphan aggregate starts, suppressed nested worker phases inside loop ticks, and added exact sequence tests for checks, review gates, and loop ticks.
-- [ ] Slice 5: record configured-command supervision failures and their diagnostic reason in direct and work-check receipts.
+- [x] (2026-08-21 21:51Z) Slice 5: converted configured-command supervision errors into failed receipt outcomes, retained fail-fast behavior with receipt IDs, and linked child failure receipts plus diagnostics from work-check batch receipts.
 - [ ] Update documentation and remove dead compatibility helpers exposed by the refactor where their removal reduces the bug surface.
 - [ ] Build the development binary, run focused tests after every slice, commit every slice separately, then run the full configured gates and finish structured work.
 
@@ -37,6 +37,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: `run_codex_exec_inner` previously called `fs::read` after checking only that the file was nonempty; it now rejects metadata lengths above the shared execution limit before allocating.
 - Observation: A position alone is insufficient phase context for workers because review gates and refinement iterations need caller-owned labels as well as aggregate numbering.
   Evidence: `WorkerPhase` carries label and position together as an optional typed scope; loop-owned workers pass `None`, while review/refine workers receive the caller's exact phase identity.
+- Observation: Work-check already had a collect-result mode, so supervision failures did not need a parallel receipt subsystem.
+  Evidence: Modeling timeout/cancellation/await/cleanup/capture errors as a synthetic failed tool result lets the existing child receipt, `receipt_ids`, batch verdict, and gate indexing paths remain authoritative.
 
 ## Decision Log
 
@@ -154,3 +156,5 @@ Plan revision note (2026-08-21 20:49Z): Recorded bounded deferred transport deli
 Plan revision note (2026-08-21 21:07Z): Recorded the shared 4 MiB capture policy and its worker-stream and structured-file regressions. Capture overflow is an explicit execution failure rather than a partial successful result.
 
 Plan revision note (2026-08-21 21:34Z): Recorded explicit phase-scope ownership. Exact observer tests now reject duplicate `1/1` starts, missing finishes, and lost aggregate positions.
+
+Plan revision note (2026-08-21 21:51Z): Recorded supervised failures as ordinary evidence-producing failed outcomes. A timeout regression now asserts both child and batch receipts contain the reason and that the batch references the child ID.

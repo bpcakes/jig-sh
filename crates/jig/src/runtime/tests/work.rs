@@ -607,6 +607,54 @@ fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
 }
 
 #[test]
+fn timed_out_work_check_records_child_and_batch_failure_receipts() {
+    let temp = tempdir().unwrap();
+    write_timeout_check_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let started = std::time::Instant::now();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let receipts = read_receipts(temp.path());
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.timeout_check")
+        .expect("timed-out configured check should record a child receipt");
+    assert_eq!(child["exit_status"], 1);
+    assert!(
+        child["stderr_preview"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(child["evidence"]["kind"], "supervised_command");
+    assert_eq!(child["evidence"]["status"], "error");
+
+    let batch = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("failed work check should record a batch receipt");
+    assert_eq!(batch["exit_status"], 1);
+    assert!(
+        batch["stderr_preview"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(batch["args"]["receipt_ids"][0], child["id"]);
+}
+
+#[test]
 fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let temp = tempdir().unwrap();
     write_mutating_check_fixture_repo(temp.path());

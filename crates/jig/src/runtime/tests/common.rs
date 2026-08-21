@@ -119,6 +119,33 @@ tool = "jig.custom_check"
     write_open_plan(root);
 }
 
+pub(super) fn write_timeout_check_fixture_repo(root: &Path) {
+    TestRepoBuilder::new(root)
+        .config(
+            r#"
+[commands]
+timeout_check_command = "sleep 30"
+
+[execution]
+command_timeout_seconds = 1
+
+[[work.gates]]
+id = "timeout"
+kind = "check"
+tool = "jig.timeout_check"
+"#,
+        )
+        .required_commands(["timeout_check_command"])
+        .tool(json!({
+            "name": "jig.timeout_check",
+            "kind": "command",
+            "description": "Run configured timeout check.",
+            "command": "timeout_check_command"
+        }))
+        .write();
+    write_open_plan(root);
+}
+
 pub(super) fn write_fail_fast_check_fixture_repo(root: &Path) {
     TestRepoBuilder::new(root)
         .config(

@@ -97,6 +97,10 @@ fn check_tools_with_failure_mode(
     let after_fingerprint = current_worktree_fingerprint(ctx);
     let worktree_fingerprint_override =
         work_check_fingerprint_evidence(&before_fingerprint, &after_fingerprint);
+    let receipt_stderr = check_failure
+        .as_ref()
+        .map(|(_, error)| format!("{error:#}"))
+        .unwrap_or_default();
     let receipt_result = record_receipt(
         ctx,
         ReceiptInput {
@@ -114,7 +118,7 @@ fn check_tools_with_failure_mode(
                 .as_ref()
                 .map_or(0, |(exit_status, _)| *exit_status),
             stdout: "",
-            stderr: "",
+            stderr: &receipt_stderr,
             evidence: None,
             session_override: None,
             collect_git_metadata: true,
