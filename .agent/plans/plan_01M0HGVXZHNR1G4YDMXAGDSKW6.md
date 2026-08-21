@@ -95,8 +95,8 @@ Each independently useful change is committed separately. The complete repositor
   Rationale: Nextest slot reservation did not isolate the terminal protocol from all phase-level effects of the preceding partitions. An explicit process boundary is observable, deterministic, and narrow: ordinary vault tests retain four-way concurrency, while the two PTY cases run alone after them. Locked and unlocked commands use the same partitioning.
   Date/Author: 2026-08-21 / Codex
 
-- Decision: Wait for the verified-activity modal's input-ready footer, assert the expected audit payload is present, and then close it with Enter.
-  Rationale: Payload visibility does not imply that the asynchronous worker has yielded to the interactive modal. Synchronizing on the footer tests the observable state transition and prevents input from racing the worker completion; Enter remains an unambiguous supported close event.
+- Decision: Wait for the verified-activity modal's input-ready footer, assert the expected audit payload is present, and then retry its idempotent Enter close at one-second intervals within the shared watchdog.
+  Rationale: Payload visibility does not imply that the asynchronous worker has yielded to the interactive modal, and a synthetic PTY can still lose a one-shot key at the transition boundary. Synchronizing on the footer tests the observable state transition; bounded resend models an ordinary user retry without weakening the 15-second failure bound or any resulting-state assertion.
   Date/Author: 2026-08-21 / Codex
 
 ## Outcomes & Retrospective
