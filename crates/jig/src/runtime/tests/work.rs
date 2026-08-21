@@ -634,6 +634,35 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
 }
 
 #[test]
+fn status_gate_batch_scans_receipts_once_for_multiple_open_plans() {
+    let temp = tempdir().unwrap();
+    write_mutating_check_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let second = crate::state::plans_open(
+        &ctx,
+        crate::state::PlanOpenRequest {
+            title: "Second plan".into(),
+            body: Some("Validate shared gate indexing.".into()),
+            body_file: None,
+        },
+    )
+    .unwrap();
+    let second_id = second["plan_id"].as_str().unwrap().to_string();
+    let plan_ids = vec!["plan_1".to_string(), second_id.clone()];
+
+    crate::state::reset_work_gate_receipt_index_scan_count();
+    let snapshots =
+        super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &plan_ids, &|| false)
+            .unwrap();
+
+    assert_eq!(snapshots.len(), 2);
+    assert!(snapshots.contains_key("plan_1"));
+    assert!(snapshots.contains_key(&second_id));
+    assert_eq!(crate::state::work_gate_receipt_index_scan_count(), 1);
+}
+
+#[test]
 fn work_gates_reports_missing_and_passing_required_gates() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

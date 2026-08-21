@@ -85,6 +85,24 @@ pub struct OwnedProcessTreeOutput {
     pub stderr: Option<BoundedProcessOutput>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OwnedProcessOutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// Receives process activity while an owned process tree is supervised.
+/// Callbacks run on the supervision thread and should return quickly.
+pub trait OwnedProcessObserver {
+    fn cancelled(&mut self) -> bool {
+        false
+    }
+
+    fn output(&mut self, _stream: OwnedProcessOutputStream, _bytes: &[u8]) {}
+
+    fn poll(&mut self, _elapsed: Duration) {}
+}
+
 pub struct BoundedProcessOutput {
     pub bytes: Vec<u8>,
     pub truncated: bool,
@@ -161,7 +179,28 @@ pub fn run_owned_process_tree_with_output_limits(
     limits: ProcessOutputLimits,
     mut cancelled: impl FnMut() -> bool,
 ) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
-    if cancelled() {
+    struct CancellationObserver<'a, F>(&'a mut F);
+    impl<F: FnMut() -> bool> OwnedProcessObserver for CancellationObserver<'_, F> {
+        fn cancelled(&mut self) -> bool {
+            (self.0)()
+        }
+    }
+
+    run_owned_process_tree_with_output_limits_and_observer(
+        command,
+        timeout,
+        limits,
+        &mut CancellationObserver(&mut cancelled),
+    )
+}
+
+pub fn run_owned_process_tree_with_output_limits_and_observer(
+    command: &mut Command,
+    timeout: Duration,
+    limits: ProcessOutputLimits,
+    observer: &mut dyn OwnedProcessObserver,
+) -> std::result::Result<OwnedProcessTreeOutput, OwnedProcessTreeError> {
+    if observer.cancelled() {
         return Err(OwnedProcessTreeError::Cancelled);
     }
     let mut process = spawn_owned_process(command).map_err(OwnedProcessTreeError::Start)?;
@@ -171,9 +210,9 @@ pub fn run_owned_process_tree_with_output_limits(
             Err(_) => Err(OwnedProcessTreeError::Cleanup),
         };
     };
-    let wait_result = wait_for_owned_process(&mut process, timeout, &mut cancelled, &mut drains);
+    let wait_result = wait_for_owned_process(&mut process, timeout, observer, &mut drains);
     let status = finish_owned_process_wait(&mut process, wait_result);
-    let (stdout, stderr) = drains.finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT);
+    let (stdout, stderr) = drains.finish(OWNED_PROCESS_OUTPUT_DRAIN_TIMEOUT, observer);
     status.map(|status| OwnedProcessTreeOutput {
         status,
         stdout,
@@ -467,13 +506,15 @@ enum OwnedProcessObservation {
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
     timeout: Duration,
-    cancelled: &mut impl FnMut() -> bool,
+    observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
+    let started = Instant::now();
     let deadline = Instant::now().checked_add(timeout);
     loop {
-        let made_output_progress = drains.poll();
-        if cancelled() {
+        let made_output_progress = drains.poll(observer);
+        observer.poll(started.elapsed());
+        if observer.cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
         }
         if observe_owned_process(process)? == OwnedProcessObservation::Exited {
@@ -550,13 +591,15 @@ fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Res
 fn wait_for_owned_process(
     process: &mut OwnedProcess,
     timeout: Duration,
-    cancelled: &mut impl FnMut() -> bool,
+    observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
+    let started = Instant::now();
     let deadline = Instant::now().checked_add(timeout);
     loop {
-        drains.poll();
-        if cancelled() {
+        drains.poll(observer);
+        observer.poll(started.elapsed());
+        if observer.cancelled() {
             return Ok(OwnedProcessWait::Cancelled);
         }
         let remaining = match deadline {
@@ -581,10 +624,10 @@ fn wait_for_owned_process(
 fn wait_for_owned_process(
     _process: &mut OwnedProcess,
     _timeout: Duration,
-    _cancelled: &mut impl FnMut() -> bool,
+    observer: &mut dyn OwnedProcessObserver,
     drains: &mut OwnedProcessOutputDrains,
 ) -> std::io::Result<OwnedProcessWait> {
-    drains.poll();
+    drains.poll(observer);
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "owned process-tree supervision is unavailable on this platform",

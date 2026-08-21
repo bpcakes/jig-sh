@@ -11,7 +11,7 @@ use std::{
     io::Write,
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -27,6 +27,33 @@ const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
+// Vault interactions perform deliberately expensive key derivation. Allow
+// enough headroom for this PTY test to share the vault-crypto test group with
+// three other KDF-heavy cases on loaded CI and developer machines.
+const UI_INTERACTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct ChildGuard(Child);
+
+impl std::ops::Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -51,7 +78,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
@@ -62,6 +89,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         .stderr(Stdio::from(stderr))
         .spawn()
         .unwrap();
+    let mut child = ChildGuard(child);
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -69,7 +97,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         "API_TOKEN",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
 
@@ -82,7 +110,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         create_offset,
         "Vault updated.",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
@@ -93,7 +121,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         tools_offset,
         "Enter run/open",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     let activity_offset = output.len();
     master.write_all(b"activity\r").unwrap();
@@ -101,19 +129,19 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         activity_offset,
-        "field_batch_apply",
-        Duration::from_secs(8),
+        "Audit verified:",
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
     let browse_offset = output.len();
-    master.write_all(b"\x1b").unwrap();
+    master.write_all(b"\r").unwrap();
     read_until_from(
         &mut master,
         &mut output,
         browse_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
 
     let confirmation_offset = output.len();
@@ -123,7 +151,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         confirmation_offset,
         "PEEK",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     let peek_offset = output.len();
     master.write_all(b"PEEK\r").unwrap();
@@ -132,7 +160,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         peek_offset,
         PEEK_END_MARKER,
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(
         String::from_utf8_lossy(&output[peek_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -145,7 +173,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         cleared_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(
         !String::from_utf8_lossy(&output[cleared_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -165,7 +193,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resize_offset,
         FULL_CLEAR_MARKER,
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     let resized_frame_offset = resize_offset
         + output[resize_offset..]
@@ -178,7 +206,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resized_frame_offset,
         "Production",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     let lock_offset = output.len();
     master.write_all(b"L").unwrap();
@@ -187,7 +215,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         lock_offset,
         "Vault passphrase",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
 
     let resume_offset = output.len();
@@ -198,7 +226,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resume_offset,
         "API_TOKEN",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     master.write_all(b"\x03").unwrap();
 
@@ -268,7 +296,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
@@ -278,6 +306,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         .stderr(Stdio::from(stderr))
         .spawn()
         .unwrap();
+    let mut child = ChildGuard(child);
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -466,8 +495,8 @@ fn read_until_from(
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for {needle:?}; output: {}",
-            String::from_utf8_lossy(output)
+            "timed out waiting for {needle:?}; recent output: {}",
+            String::from_utf8_lossy(&output[output.len().saturating_sub(4096)..])
         );
         std::thread::sleep(Duration::from_millis(10));
     }

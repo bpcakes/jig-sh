@@ -1,11 +1,11 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -13,11 +13,11 @@ use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 use crate::context::RepoContext;
+use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, HEARTBEAT_INTERVAL};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
-const DEFAULT_CODEX_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexExecMode {
@@ -89,10 +89,22 @@ pub(crate) struct CodexExecOutput {
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
     request: CodexExecRequest<'_>,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<CodexExecOutput> {
+    let phase_started = Instant::now();
+    observer.event(ExecutionEvent::PhaseStarted {
+        label: request.receipt.purpose,
+        current: 1,
+        total: 1,
+    });
     let started = now_ms();
-    let result = run_codex_exec_inner(&request);
+    let result = run_codex_exec_inner(ctx, &request, observer);
     let ended = now_ms();
+    observer.event(ExecutionEvent::PhaseFinished {
+        label: request.receipt.purpose,
+        success: result.as_ref().is_ok_and(|run| run.output.status.success()),
+        elapsed: phase_started.elapsed(),
+    });
 
     match result {
         Ok(run) => {
@@ -140,7 +152,11 @@ struct CodexRunOutput {
     provider_stderr: String,
 }
 
-fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput> {
+fn run_codex_exec_inner(
+    ctx: &RepoContext,
+    request: &CodexExecRequest<'_>,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<CodexRunOutput> {
     let schema_file = if let Some(schema) = request.output_schema {
         let schema_file = NamedTempFile::new().context("Failed to create Codex schema file")?;
         fs::write(
@@ -164,7 +180,13 @@ fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput
         schema_file.as_ref().map(NamedTempFile::path),
         output_file.as_ref().map(NamedTempFile::path),
     );
-    let output = run_worker_command(&mut command, request.prompt.stdin_prompt())?;
+    let output = run_worker_command(
+        &mut command,
+        request.prompt.stdin_prompt(),
+        codex_timeout(ctx)?,
+        request.receipt.purpose,
+        observer,
+    )?;
     let provider_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let provider_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let mut output = output;
@@ -233,7 +255,13 @@ fn build_codex_command(
     command
 }
 
-fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Result<Output> {
+fn run_worker_command(
+    command: &mut Command,
+    stdin_prompt: Option<String>,
+    timeout: Duration,
+    label: &str,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Output> {
     let stdout_file = NamedTempFile::new().context("Failed to create worker stdout file")?;
     let stderr_file = NamedTempFile::new().context("Failed to create worker stderr file")?;
     command
@@ -265,18 +293,66 @@ fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Re
         None
     };
 
-    let timeout = codex_timeout()?;
-    let Some(status) = child
-        .wait_timeout(timeout)
-        .context("Failed to wait for worker process")?
-    else {
-        terminate_worker_process(&mut child);
-        let _ = child.wait();
-        bail!(
-            "Worker process timed out after {} seconds",
-            timeout.as_secs()
-        );
+    let started = Instant::now();
+    let deadline = started.checked_add(timeout);
+    let mut next_heartbeat = HEARTBEAT_INTERVAL;
+    let mut stdout_offset = 0;
+    let mut stderr_offset = 0;
+    let status = loop {
+        emit_worker_output(
+            stdout_file.path(),
+            &mut stdout_offset,
+            ExecutionStream::Stdout,
+            observer,
+        )?;
+        emit_worker_output(
+            stderr_file.path(),
+            &mut stderr_offset,
+            ExecutionStream::Stderr,
+            observer,
+        )?;
+        if observer.cancelled() {
+            terminate_worker_process(&mut child);
+            let _ = child.wait();
+            bail!("Worker process was cancelled");
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= next_heartbeat {
+            observer.event(ExecutionEvent::Heartbeat { label, elapsed });
+            while next_heartbeat <= elapsed {
+                next_heartbeat = next_heartbeat
+                    .checked_add(HEARTBEAT_INTERVAL)
+                    .unwrap_or(Duration::MAX);
+            }
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            terminate_worker_process(&mut child);
+            let _ = child.wait();
+            bail!(
+                "Worker process timed out after {} seconds",
+                timeout.as_secs()
+            );
+        }
+        if let Some(status) = child
+            .wait_timeout(Duration::from_millis(50))
+            .context("Failed to wait for worker process")?
+        {
+            break status;
+        }
     };
+
+    emit_worker_output(
+        stdout_file.path(),
+        &mut stdout_offset,
+        ExecutionStream::Stdout,
+        observer,
+    )?;
+    emit_worker_output(
+        stderr_file.path(),
+        &mut stderr_offset,
+        ExecutionStream::Stderr,
+        observer,
+    )?;
 
     if let Some(writer) = writer {
         writer
@@ -289,6 +365,26 @@ fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Re
         stdout: fs::read(stdout_file.path()).context("Failed to read worker stdout")?,
         stderr: fs::read(stderr_file.path()).context("Failed to read worker stderr")?,
     })
+}
+
+fn emit_worker_output(
+    path: &Path,
+    offset: &mut u64,
+    stream: ExecutionStream,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<()> {
+    let mut file = fs::File::open(path).context("Failed to read live worker output")?;
+    file.seek(SeekFrom::Start(*offset))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    *offset = offset.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    if !bytes.is_empty() {
+        observer.event(ExecutionEvent::Output {
+            stream,
+            bytes: &bytes,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -393,9 +489,9 @@ fn record_worker_receipt(
     .context("Failed to record worker receipt")
 }
 
-fn codex_timeout() -> Result<Duration> {
+fn codex_timeout(ctx: &RepoContext) -> Result<Duration> {
     let Ok(value) = env::var(CODEX_TIMEOUT_ENV) else {
-        return Ok(DEFAULT_CODEX_TIMEOUT);
+        return Ok(ctx.command_timeout());
     };
     let seconds = value
         .parse::<u64>()
@@ -504,9 +600,15 @@ wait
 
         let mut command = Command::new(&script);
         command.arg(&marker);
-        let error = run_worker_command(&mut command, None)
-            .unwrap_err()
-            .to_string();
+        let error = run_worker_command(
+            &mut command,
+            None,
+            Duration::from_secs(1),
+            "test worker",
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("Worker process timed out after 1 seconds"));
         thread::sleep(Duration::from_millis(3500));

@@ -3,10 +3,11 @@ use serde_json::{Value, json};
 
 use crate::command::{WorkRefineRequest, WorkReviewRequest};
 use crate::context::{RepoContext, WorkGate, WorkRefinementConfig, WorkReviewGate};
+use crate::execution::{ExecutionEvent, ExecutionObserver};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
-use super::checks::check_tools_collect_failures;
+use super::checks::check_tools_collect_failures_with_observer;
 use super::tools::selected_tools;
 
 mod evidence;
@@ -21,13 +22,21 @@ use evidence::{
 use process::{run_codex_refine, run_codex_review};
 use prompt::{refine_prompt, review_output_schema, review_prompt};
 
-pub(super) fn review(ctx: &RepoContext, opts: WorkReviewRequest) -> Result<Value> {
+pub(super) fn review_with_observer(
+    ctx: &RepoContext,
+    opts: WorkReviewRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     let gates = selected_review_gates(ctx, &opts.gates)?;
-    run_review_gates(ctx, &opts.plan_id, &gates)
+    run_review_gates_with_observer(ctx, &opts.plan_id, &gates, observer)
 }
 
-pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value> {
+pub(super) fn refine_with_observer(
+    ctx: &RepoContext,
+    opts: WorkRefineRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     if opts.max_iterations == 0 {
         bail!("--max-iterations must be at least 1");
@@ -35,12 +44,18 @@ pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value
 
     let gates = selected_review_gates(ctx, &opts.gates)?;
     let mut iterations = Vec::new();
-    let mut review_result = run_review_gates(ctx, &opts.plan_id, &gates)?;
+    let mut review_result = run_review_gates_with_observer(ctx, &opts.plan_id, &gates, observer)?;
     let refinement = ctx.work_refinements().first();
     let mut fixer_failed = false;
     let mut refinement_required = false;
 
     for iteration in 1..=opts.max_iterations {
+        let iteration_label = format!("refinement iteration {iteration}");
+        observer.event(ExecutionEvent::PhaseStarted {
+            label: &iteration_label,
+            current: iteration,
+            total: opts.max_iterations,
+        });
         let findings = actionable_findings(&review_result)?;
         if findings.is_empty() {
             break;
@@ -57,16 +72,17 @@ pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value
             &gates,
             Some(refinement),
             &findings,
+            observer,
         )?;
         fixer_failed = refine_receipt["status"].as_str() == Some("failed");
         iterations.push(refine_receipt);
         if fixer_failed {
             // A failed fixer may have left partial edits behind, so refresh the
             // review evidence before reporting remaining findings.
-            review_result = run_review_gates(ctx, &opts.plan_id, &gates)?;
+            review_result = run_review_gates_with_observer(ctx, &opts.plan_id, &gates, observer)?;
             break;
         }
-        review_result = run_review_gates(ctx, &opts.plan_id, &gates)?;
+        review_result = run_review_gates_with_observer(ctx, &opts.plan_id, &gates, observer)?;
     }
 
     let remaining_findings = actionable_findings(&review_result)?;
@@ -75,10 +91,11 @@ pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value
     } else {
         // Refinement verifies the full configured check gate set, even when the
         // review gate subset was narrowed with --gate.
-        Some(check_tools_collect_failures(
+        Some(check_tools_collect_failures_with_observer(
             ctx,
             &opts.plan_id,
             selected_tools(ctx, &[])?,
+            observer,
         )?)
     };
     let failed_review_gates = review_failed_gates(&review_result)?;
@@ -113,15 +130,21 @@ pub(super) fn refine(ctx: &RepoContext, opts: WorkRefineRequest) -> Result<Value
     }))
 }
 
-pub(super) fn run_review_gates(
+pub(super) fn run_review_gates_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     gates: &[WorkReviewGate],
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let mut reviews = Vec::with_capacity(gates.len());
     let mut failed = Vec::new();
-    for gate in gates {
-        let review = run_review_gate(ctx, plan_id, gate)?;
+    for (index, gate) in gates.iter().enumerate() {
+        observer.event(ExecutionEvent::PhaseStarted {
+            label: &gate.id,
+            current: index + 1,
+            total: gates.len(),
+        });
+        let review = run_review_gate(ctx, plan_id, gate, observer)?;
         if review["status"].as_str() != Some("passed") {
             failed.push(gate.id.clone());
         }
@@ -138,7 +161,12 @@ pub(super) fn run_review_gates(
     }))
 }
 
-fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> Result<Value> {
+fn run_review_gate(
+    ctx: &RepoContext,
+    plan_id: &str,
+    gate: &WorkReviewGate,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     let skill = gate.skill.as_str();
     let threshold = gate.threshold;
     let schema = review_output_schema();
@@ -147,7 +175,7 @@ fn run_review_gate(ctx: &RepoContext, plan_id: &str, gate: &WorkReviewGate) -> R
     let prompt_hash = hash_text(&prompt);
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
-    let command_output = run_codex_review(ctx, plan_id, gate, &prompt, &schema)?;
+    let command_output = run_codex_review(ctx, plan_id, gate, &prompt, &schema, observer)?;
     let output = command_output.output;
     let ended = now_ms();
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -379,6 +407,7 @@ fn run_fixer(
     gates: &[WorkReviewGate],
     refinement: Option<&WorkRefinementConfig>,
     findings: &[Value],
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);
@@ -390,6 +419,7 @@ fn run_fixer(
         refinement
             .and_then(|refinement| refinement.model.as_deref())
             .or_else(|| gates.first().and_then(|gate| gate.model.as_deref())),
+        observer,
     )
     .context("Failed to run Codex refinement")?;
     let output = command_output.output;

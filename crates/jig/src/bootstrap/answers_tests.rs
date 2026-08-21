@@ -16,6 +16,9 @@ jig_version = "0.2.0-beta.1"
 sqlx_enabled = false
 schema_dump_enabled = false
 
+[execution]
+command_timeout_seconds = 321
+
 [[status.providers]]
 id = "factorish.example"
 argv = ["ruby", "scripts/status.rb", "--jig-v1"]
@@ -29,6 +32,14 @@ timeout_seconds = 45
     let provider = &effective.status.as_ref().unwrap().providers[0];
     assert_eq!(provider.id, "factorish.example");
     assert_eq!(provider.timeout_seconds, 45);
+    assert_eq!(
+        effective
+            .execution
+            .as_ref()
+            .unwrap()
+            .command_timeout_seconds,
+        321
+    );
 
     let rendered = RenderAnswers::from_answers_file(&path).unwrap();
     let value = serde_json::to_value(rendered).unwrap();
@@ -38,6 +49,7 @@ timeout_seconds = 45
         serde_json::json!(["ruby", "scripts/status.rb", "--jig-v1"])
     );
     assert_eq!(value["status"]["providers"][0]["timeout_seconds"], 45);
+    assert_eq!(value["execution"]["command_timeout_seconds"], 321);
 }
 
 #[test]

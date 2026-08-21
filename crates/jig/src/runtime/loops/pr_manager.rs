@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
+use crate::execution::ExecutionObserver;
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
 };
@@ -23,6 +24,7 @@ pub(super) fn pr_manager_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<WorkflowTick> {
     let codex_home = workflow
         .codex_home_configured
@@ -60,7 +62,10 @@ pub(super) fn pr_manager_tick(
                     attempt_store,
                     &item,
                     pull_request,
-                    codex_home.as_deref(),
+                    PrManagerExecution {
+                        codex_home: codex_home.as_deref(),
+                        observer,
+                    },
                 )?;
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
@@ -79,6 +84,11 @@ enum PrCandidate {
     Skip(Value),
     Idle(PrIdleItem),
     Pending(PrPendingItem),
+}
+
+struct PrManagerExecution<'a> {
+    codex_home: Option<&'a Path>,
+    observer: &'a mut dyn ExecutionObserver,
 }
 
 struct PrWorkItem {
@@ -306,7 +316,7 @@ fn handle_actionable_pr(
     attempt_store: &mut AttemptStore,
     item: &PrWorkItem,
     pull_request: &Value,
-    codex_home: Option<&Path>,
+    execution: PrManagerExecution<'_>,
 ) -> Result<Value> {
     if let Some(action) = attempt_blocking_action(workflow, attempt_store, item)? {
         return Ok(action);
@@ -329,7 +339,15 @@ fn handle_actionable_pr(
         }
     };
 
-    let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease, codex_home);
+    let action_result = run_pr_repair(
+        ctx,
+        workflow,
+        item,
+        pull_request,
+        &lease,
+        execution.codex_home,
+        execution.observer,
+    );
     let _ = lease_store.release(&branch_lease_key, &lease.owner);
     match action_result {
         Ok(action) => {
@@ -366,7 +384,7 @@ fn handle_actionable_pr(
                 "branch": item.head_ref,
                 "reasons": item.reasons,
                 "lease": lease,
-                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
+                "codex_home_resolved": execution.codex_home.map(|home| home.display().to_string()),
                 "attempt": attempt,
                 "error": format!("{error:#}"),
             }))
@@ -426,6 +444,7 @@ fn run_pr_repair(
     pull_request: &Value,
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let worktree = prepare_worktree(ctx, workflow, item)?;
     let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;
@@ -458,6 +477,7 @@ fn run_pr_repair(
                 collect_worktree_fingerprint: false,
             },
         },
+        observer,
     )?;
     if !worker.output.status.success() {
         bail!(

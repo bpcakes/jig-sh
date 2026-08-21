@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::context::{RepoContext, ReviewScopeArg, WorkReviewGate, parse_review_scope_arg};
+use crate::execution::ExecutionObserver;
 use crate::runtime::worker_runner::{
     CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
 };
@@ -21,6 +22,7 @@ pub(super) fn run_codex_review(
     gate: &WorkReviewGate,
     prompt: &str,
     schema: &Value,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<CodexReviewCommandOutput> {
     let output = run_codex_exec(
         ctx,
@@ -44,6 +46,7 @@ pub(super) fn run_codex_review(
                 collect_worktree_fingerprint: true,
             },
         },
+        observer,
     )?;
     Ok(CodexReviewCommandOutput {
         output: output.output,
@@ -57,6 +60,7 @@ pub(super) fn run_codex_refine(
     plan_id: &str,
     prompt: &str,
     model: Option<&str>,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<CodexRefineCommandOutput> {
     let output = run_codex_exec(
         ctx,
@@ -80,6 +84,7 @@ pub(super) fn run_codex_refine(
                 collect_worktree_fingerprint: true,
             },
         },
+        observer,
     )?;
     Ok(CodexRefineCommandOutput {
         output: output.output,

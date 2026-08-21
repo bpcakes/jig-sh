@@ -171,6 +171,66 @@ fn runner_accepts_one_valid_document_and_never_trusts_nonzero_stdout() {
 
 #[cfg(unix)]
 #[test]
+fn aggregate_runs_independent_providers_concurrently_and_keeps_configured_order() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[[status.providers]]
+id = "factorish.provider-a"
+argv = ["sh", "provider-a.sh"]
+timeout_seconds = 3
+
+[[status.providers]]
+id = "factorish.provider-b"
+argv = ["sh", "provider-b.sh"]
+timeout_seconds = 3
+"#,
+        )
+        .write();
+
+    for (name, other, id) in [
+        ("a", "b", "factorish.provider-a"),
+        ("b", "a", "factorish.provider-b"),
+    ] {
+        let mut report = report_value("complete", None);
+        report["provider"]["id"] = json!(id);
+        fs::write(
+            temp.path().join(format!("report-{name}.json")),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        let script = temp.path().join(format!("provider-{name}.sh"));
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch provider-{name}.started\nwhile [ ! -f provider-{other}.started ]; do sleep 0.01; done\ncat report-{name}.json\n"
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(script, permissions).unwrap();
+    }
+
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let runs = run_providers_concurrently(
+        &ctx,
+        &|| false,
+        &mut crate::execution::NoopExecutionObserver,
+    )
+    .unwrap();
+
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].id, "factorish.provider-a");
+    assert_eq!(runs[1].id, "factorish.provider-b");
+    assert!(runs.iter().all(|run| run.report.is_some()));
+}
+
+#[cfg(unix)]
+#[test]
 fn runner_maps_timeout_non_utf8_and_bounded_output_failures() {
     let mut timed_out = provider(vec!["sh".into(), "-c".into(), "sleep 3".into()]);
     timed_out.timeout_seconds = 1;

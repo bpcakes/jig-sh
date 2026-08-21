@@ -4,7 +4,8 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
-use crate::runtime::call_tool;
+use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream};
+use crate::runtime::call_tool_with_observer;
 use crate::tool_defs;
 
 pub fn serve(ctx: &RepoContext) -> Result<()> {
@@ -55,7 +56,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
                     "tools": tool_defs::tool_descriptors(ctx.tool_specs())
                 }
             })),
-            "tools/call" => Some(handle_tool_call(ctx, id, params)),
+            "tools/call" => Some(handle_tool_call(ctx, id, params, &mut writer, framing)),
             other => Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -72,7 +73,13 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
     }
 }
 
-fn handle_tool_call(ctx: &RepoContext, id: Option<Value>, params: Value) -> Value {
+fn handle_tool_call(
+    ctx: &RepoContext,
+    id: Option<Value>,
+    params: Value,
+    writer: &mut dyn Write,
+    framing: MessageFraming,
+) -> Value {
     let result = (|| -> Result<Value> {
         let name = params
             .get("name")
@@ -82,7 +89,14 @@ fn handle_tool_call(ctx: &RepoContext, id: Option<Value>, params: Value) -> Valu
             .get("arguments")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        let tool_result = call_tool(ctx, name, args)?;
+        let progress_token = params
+            .get("_meta")
+            .and_then(|meta| meta.get("progressToken"))
+            .filter(|token| token.is_string() || token.is_number())
+            .cloned();
+        let mut observer = McpProgressObserver::new(writer, framing, progress_token);
+        let tool_result = call_tool_with_observer(ctx, name, args, &mut observer)?;
+        observer.require_healthy()?;
         Ok(json!({
             "content": [
                 {
@@ -109,6 +123,93 @@ fn handle_tool_call(ctx: &RepoContext, id: Option<Value>, params: Value) -> Valu
                 "message": error.to_string()
             }
         }),
+    }
+}
+
+struct McpProgressObserver<'a> {
+    writer: &'a mut dyn Write,
+    framing: MessageFraming,
+    progress_token: Option<Value>,
+    progress: u64,
+    write_error: Option<String>,
+}
+
+impl<'a> McpProgressObserver<'a> {
+    fn new(
+        writer: &'a mut dyn Write,
+        framing: MessageFraming,
+        progress_token: Option<Value>,
+    ) -> Self {
+        Self {
+            writer,
+            framing,
+            progress_token,
+            progress: 0,
+            write_error: None,
+        }
+    }
+
+    fn notify(&mut self, message: String) {
+        let Some(progress_token) = self.progress_token.clone() else {
+            return;
+        };
+        self.progress = self.progress.saturating_add(1);
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {
+                "progressToken": progress_token,
+                "progress": self.progress,
+                "message": message,
+            }
+        });
+        if let Err(error) = write_message(self.writer, &notification, self.framing) {
+            self.write_error = Some(error.to_string());
+        }
+    }
+
+    fn require_healthy(&self) -> Result<()> {
+        match &self.write_error {
+            Some(error) => Err(anyhow!("Failed to send MCP progress notification: {error}")),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ExecutionObserver for McpProgressObserver<'_> {
+    fn event(&mut self, event: ExecutionEvent<'_>) {
+        let message = match event {
+            ExecutionEvent::PhaseStarted {
+                label,
+                current,
+                total,
+            } => format!("{label} started ({current}/{total})"),
+            ExecutionEvent::Output { stream, bytes } => {
+                let stream = match stream {
+                    ExecutionStream::Stdout => "stdout",
+                    ExecutionStream::Stderr => "stderr",
+                };
+                let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(4_096)]);
+                format!("{stream}: {}", preview.trim_end())
+            }
+            ExecutionEvent::Heartbeat { label, elapsed } => {
+                format!("{label} still running ({}s)", elapsed.as_secs())
+            }
+            ExecutionEvent::PhaseFinished {
+                label,
+                success,
+                elapsed,
+            } => format!(
+                "{label} {} ({}s)",
+                if success { "finished" } else { "failed" },
+                elapsed.as_secs()
+            ),
+        };
+        self.notify(message);
+    }
+
+    fn cancelled(&self) -> bool {
+        self.write_error.is_some()
     }
 }
 
@@ -192,10 +293,12 @@ fn write_message(writer: &mut dyn Write, value: &Value, framing: MessageFraming)
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::time::Duration;
 
     use serde_json::json;
 
-    use super::{MessageFraming, read_message, write_message};
+    use super::{McpProgressObserver, MessageFraming, read_message, write_message};
+    use crate::execution::{ExecutionEvent, ExecutionObserver};
 
     #[test]
     fn read_message_accepts_json_line() {
@@ -305,5 +408,45 @@ mod tests {
         let expected = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
         assert_eq!(&output[..expected.len()], expected);
         assert_eq!(&output[expected.len()..], body);
+    }
+
+    #[test]
+    fn progress_observer_emits_standard_notification_with_call_token() {
+        let mut output = Vec::new();
+        {
+            let mut observer = McpProgressObserver::new(
+                &mut output,
+                MessageFraming::JsonLine,
+                Some(json!("request-progress")),
+            );
+            observer.event(ExecutionEvent::Heartbeat {
+                label: "jig.test",
+                elapsed: Duration::from_secs(25),
+            });
+            observer.require_healthy().unwrap();
+        }
+
+        let notification: serde_json::Value =
+            serde_json::from_slice(output.strip_suffix(b"\n").unwrap()).unwrap();
+        assert_eq!(notification["method"], "notifications/progress");
+        assert_eq!(notification["params"]["progressToken"], "request-progress");
+        assert_eq!(notification["params"]["progress"], 1);
+        assert!(
+            notification["params"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("still running")
+        );
+    }
+
+    #[test]
+    fn progress_observer_is_silent_without_a_call_token() {
+        let mut output = Vec::new();
+        let mut observer = McpProgressObserver::new(&mut output, MessageFraming::JsonLine, None);
+        observer.event(ExecutionEvent::Heartbeat {
+            label: "jig.test",
+            elapsed: Duration::from_secs(25),
+        });
+        assert!(output.is_empty());
     }
 }

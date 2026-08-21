@@ -12,6 +12,7 @@ use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metada
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
 
 mod defaults;
+mod execution_config;
 mod loop_config;
 mod optional;
 mod runtime;
@@ -35,6 +36,7 @@ pub(crate) use runtime::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
 };
 
+pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
@@ -138,6 +140,8 @@ struct RepoConfig {
     loop_config: LoopConfig,
     #[serde(default)]
     status: StatusConfig,
+    #[serde(default)]
+    execution: execution_config::ExecutionConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
 }
@@ -675,7 +679,8 @@ fn validate_config(config: &RepoConfig) -> Result<()> {
     validate_frontend_app_roles(config)?;
     validate_vault_config(config)?;
     validate_dev_config(config)?;
-    status_config::validate_runtime_config(config)
+    status_config::validate_runtime_config(config)?;
+    execution_config::validate_runtime_config(config)
 }
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {

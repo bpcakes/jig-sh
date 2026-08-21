@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use super::{DevApp, FrontendApp, parse_frontend_app};
-use crate::context::StatusConfig;
+use crate::context::{ExecutionConfig, StatusConfig};
 
 #[derive(Args, Clone, Debug, Default)]
 pub struct AnswerOpts {
@@ -161,4 +161,6 @@ pub struct AnswerOpts {
     pub dev_apps: Vec<DevApp>,
     #[arg(skip)]
     pub(crate) status: Option<StatusConfig>,
+    #[arg(skip)]
+    pub(crate) execution: Option<ExecutionConfig>,
 }

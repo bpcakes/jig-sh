@@ -88,10 +88,11 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `frontend_apps`: list of app definitions. A frontend app may use `dir = "."` when the app lives at the repository root.
 - `dev`: Jig-native local development proxy settings and app definitions
 - `status`: read-only software-rewrite status providers executed by `scripts/jig status`
+- `execution`: supervision limits for long-running configured commands and workers
 
 The generated no-root-`Cargo.toml` Cargo defaults print a stable stdout prefix that `work check` recognizes as an intentional harness skip. Reworded custom commands still run normally, but they will be summarized as ordinary command output instead of `passed (all skipped)`. Custom commands should not print the exact generated prefix unless they intentionally want to opt into that skip rendering.
 
-Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig sqlx migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
+Top-level `*_command` values are committed repo configuration and run through non-login `bash -c` from the repo root with the user's normal process environment. They run in supervised process trees, stream progress to human-mode CLI stderr even when an agent captures that stream through a pipe, emit a heartbeat after every 25 silent seconds, and use `[execution].command_timeout_seconds` (default 1,800; valid range 1–86,400). JSON mode keeps progress disabled so its stdout and stderr contract remains clean. Treat changes to these keys like changes to project-owned shell scripts. Jig-owned Bash probes are narrower: frontend dependency readiness and launcher-backed doctor proxy diagnostics remove inherited Bash startup files, directory lookup, shell-option/trace controls, and exported functions before execution so those controls cannot spoof or corrupt structured results. Ordinary configured checks and development commands retain the user's environment. Jig-owned checks such as `scripts/jig check contract`, `scripts/jig sqlx migration add NAME`, `scripts/jig check schema`, and repo policy checks run natively inside the binary.
 
 Contracts that declare `"kind": "native"` tools require a runtime that supports the repository contract epoch. Use `scripts/jig`; it probes the repository, required tools, and requested build profile before selecting any development, cached, PATH, or newly installed binary.
 
@@ -99,7 +100,7 @@ Contracts that declare `"kind": "native"` tools require a runtime that supports 
 
 ## Accepted Key Summary
 
-Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `loop`, `status`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 renders omit and ignore it. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
+Jig rejects unknown `.jig.toml` keys so stale template answers fail early. The accepted top-level keys are `_src_path`, `_commit`, `_template_mode`, `_template_local_path`, `repo_name`, `default_branch`, `ci_github_runner`, `template_source_url`, `harness_footprint`, `sqlx_enabled`, `rust_crate_roots`, `rust_migration_dir`, `rust_sqlx_metadata_dir`, `schema_dump_enabled`, `schema_dump_command`, `schema_check_command`, `sqlx_check_command`, `migration_add_command`, `bootstrap_command`, `contract_check_command`, `dev_command`, `rust_fmt_check_command`, `rust_clippy_command`, `rust_test_command`, `rust_test_locked_command`, `web_package_manager`, `frontend_apps`, `vault`, `dev`, `work`, `loop`, `status`, `execution`, and `agent_tooling`. `jig_version` remains a legacy accepted input only so contract v2/v3 repositories can preserve their internal config/manifest consistency; v4 renders omit and ignore it. `schema_check_command`, `migration_add_command`, and `contract_check_command` are likewise legacy accepted keys for older rendered repos; new renders use native binary implementations.
 
 Nested accepted keys are:
 
@@ -109,6 +110,7 @@ Nested accepted keys are:
 - `[[dev.apps]]`: `name`, `dir`, `kind`, `command`, `argv`, `port`, `host`, `proxy`
 - `[status]`: `providers`
 - `[[status.providers]]`: `id`, `argv`, `timeout_seconds`
+- `[execution]`: `command_timeout_seconds`
 - `[work]`: `checks`, `gates`, `refinements`
 - `[[work.gates]]`: `id`, `kind`, `tool`, `skill`, `fail_on`, `severity`, `scope`, `model`, `required`
 - `[[work.refinements]]`: `id`, `skill`, `mode`, `model`

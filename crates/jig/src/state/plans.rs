@@ -183,6 +183,7 @@ pub(crate) fn ensure_plan_exists(ctx: &RepoContext, plan_id: &str) -> Result<()>
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn ensure_plan_exists_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
@@ -200,6 +201,7 @@ pub(crate) fn plan_status(ctx: &RepoContext, plan_id: &str) -> Result<Option<Pla
     Ok(plan_status_from_events(&events, plan_id))
 }
 
+#[allow(dead_code)]
 pub(crate) fn plan_status_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
@@ -239,6 +241,7 @@ pub(crate) fn open_plan_summaries(ctx: &RepoContext) -> Result<Vec<Value>> {
     Ok(open_plans(&events))
 }
 
+#[allow(dead_code)]
 pub(crate) fn open_plan_summaries_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
@@ -280,6 +283,7 @@ pub(crate) fn open_plan_summaries_with_cancellation(
         .collect())
 }
 
+#[allow(dead_code)]
 fn ensure_plan_scan_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
     ensure_status_collection_active(cancelled)
 }

@@ -2,28 +2,34 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jig_owned_process::{
-    OwnedProcessTreeError, format_exit_status, require_success, run_owned_process_tree_with_output,
+    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
+    run_owned_process_tree_with_output, run_owned_process_tree_with_output_limits_and_observer,
 };
 use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
+use crate::execution::{ExecutionEvent, ExecutionObserver, ProcessExecutionObserver};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
 const JIG_SKILLS_MARKETPLACE_ENV: &str = "JIG_SKILLS_MARKETPLACE";
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn dispatch(ctx: &RepoContext, command: AgentCommand) -> Result<JsonValue> {
+pub(super) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: AgentCommand,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<JsonValue> {
     // Agent tooling commands describe or mutate local client setup, not repo
     // work evidence, so they intentionally do not record receipts.
     match command {
         AgentCommand::Doctor => Ok(doctor(ctx)),
-        AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts),
+        AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts, observer),
     }
 }
 
@@ -175,9 +181,12 @@ fn doctor_with_progress(
     })
 }
 
-fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue> {
+fn bootstrap(
+    ctx: &RepoContext,
+    opts: AgentBootstrapRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<JsonValue> {
     let progress = CliProgress::new("agent bootstrap");
-    progress.header("install Codex marketplace");
     progress.info("repo", ctx.root().display());
     let codex_bin = crate::codex::codex_bin();
     let codex_bin_display = codex_bin.to_string_lossy().into_owned();
@@ -189,13 +198,47 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
         "install marketplace",
         format!("{codex_bin_display} plugin marketplace add"),
     );
-    let command_output = Command::new(&codex_bin)
+    let mut command = Command::new(&codex_bin);
+    command
         .args(["plugin", "marketplace", "add", &marketplace_source])
-        .output()
-        .with_context(|| {
-            format!("Failed to run {codex_bin_display} plugin marketplace add {marketplace_source}")
-        });
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let label = "codex marketplace registration";
+    let started = Instant::now();
+    observer.event(ExecutionEvent::PhaseStarted {
+        label,
+        current: 1,
+        total: 1,
+    });
+    let command_output = run_owned_process_tree_with_output_limits_and_observer(
+        &mut command,
+        ctx.command_timeout(),
+        ProcessOutputLimits {
+            stdout: usize::MAX,
+            stderr: usize::MAX,
+        },
+        &mut ProcessExecutionObserver::new(observer, label),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "Failed to run {codex_bin_display} plugin marketplace add {marketplace_source} under process supervision (timeout: {}s): {error}",
+            ctx.command_timeout().as_secs()
+        )
+    });
+    observer.event(ExecutionEvent::PhaseFinished {
+        label,
+        success: command_output
+            .as_ref()
+            .is_ok_and(|output| output.status.success()),
+        elapsed: started.elapsed(),
+    });
     let output = progress.log_blocked_on_err(command_output)?;
+    let output = Output {
+        status: output.status,
+        stdout: output.stdout.map_or_else(Vec::new, |output| output.bytes),
+        stderr: output.stderr.map_or_else(Vec::new, |output| output.bytes),
+    };
     if !output.status.success() {
         progress.blocked(format!(
             "Codex exited with {}",

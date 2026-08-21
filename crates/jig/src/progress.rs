@@ -1,7 +1,9 @@
 use std::fmt;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::time::Instant;
+
+use crate::execution::{ExecutionEvent, ExecutionObserver};
 
 /// Command-scoped terminal progress output.
 ///
@@ -31,6 +33,16 @@ impl CliProgress {
             command,
             enabled: false,
             color: false,
+            started_at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn for_human_output(command: &'static str, json_output: bool) -> Self {
+        let enabled = !json_output;
+        Self {
+            command,
+            enabled,
+            color: enabled && io::stderr().is_terminal() && color_enabled(),
             started_at: Instant::now(),
         }
     }
@@ -171,11 +183,95 @@ fn color_enabled() -> bool {
         && std::env::var("TERM").map_or(true, |term| term != "dumb")
 }
 
+pub(crate) struct CliExecutionObserver {
+    enabled: bool,
+    write_failed: bool,
+    output_needs_newline: bool,
+    cancellation: Box<dyn Fn() -> bool>,
+}
+
+impl CliExecutionObserver {
+    pub(crate) fn for_human_output(json_output: bool) -> Self {
+        Self {
+            enabled: !json_output,
+            write_failed: false,
+            output_needs_newline: false,
+            cancellation: Box::new(|| false),
+        }
+    }
+
+    #[cfg(all(unix, not(test)))]
+    pub(crate) fn with_cancellation(
+        json_output: bool,
+        cancellation: impl Fn() -> bool + 'static,
+    ) -> Self {
+        Self {
+            enabled: !json_output,
+            write_failed: false,
+            output_needs_newline: false,
+            cancellation: Box::new(cancellation),
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        if !self.enabled || self.write_failed {
+            return;
+        }
+        let mut stderr = io::stderr().lock();
+        self.write_failed = stderr
+            .write_all(bytes)
+            .and_then(|()| stderr.flush())
+            .is_err();
+    }
+
+    fn line(&mut self, line: String) {
+        if self.output_needs_newline {
+            self.write(b"\n");
+            self.output_needs_newline = false;
+        }
+        self.write(format!("{line}\n").as_bytes());
+    }
+}
+
+impl ExecutionObserver for CliExecutionObserver {
+    fn event(&mut self, event: ExecutionEvent<'_>) {
+        match event {
+            ExecutionEvent::PhaseStarted {
+                label,
+                current,
+                total,
+            } => self.line(format!("[..] {label} ({current}/{total})")),
+            ExecutionEvent::Output { stream, bytes } => {
+                let _ = stream;
+                self.write(bytes);
+                self.output_needs_newline = bytes.last().is_some_and(|byte| *byte != b'\n');
+            }
+            ExecutionEvent::Heartbeat { label, elapsed } => self.line(format!(
+                "[..] {label} still running ({})",
+                format_duration(elapsed)
+            )),
+            ExecutionEvent::PhaseFinished {
+                label,
+                success,
+                elapsed,
+            } => self.line(format!(
+                "[{}] {label} ({})",
+                if success { "ok" } else { "!!" },
+                format_duration(elapsed)
+            )),
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.write_failed || (self.cancellation)()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::{CliProgress, format_duration, leader};
+    use super::{CliExecutionObserver, CliProgress, format_duration, leader};
 
     #[test]
     fn disabled_progress_never_enables_output_or_color() {
@@ -183,6 +279,24 @@ mod tests {
 
         assert!(!progress.enabled);
         assert!(!progress.color);
+    }
+
+    #[test]
+    fn human_progress_remains_enabled_when_stderr_is_captured() {
+        let progress = CliProgress::for_human_output("test", false);
+        let observer = CliExecutionObserver::for_human_output(false);
+
+        assert!(progress.enabled);
+        assert!(observer.enabled);
+    }
+
+    #[test]
+    fn json_output_disables_human_progress() {
+        let progress = CliProgress::for_human_output("test", true);
+        let observer = CliExecutionObserver::for_human_output(true);
+
+        assert!(!progress.enabled);
+        assert!(!observer.enabled);
     }
 
     #[test]

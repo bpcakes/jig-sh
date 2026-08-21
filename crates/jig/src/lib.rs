@@ -8,6 +8,7 @@ mod context;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
 mod doctor;
+mod execution;
 mod frontend_metadata;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {

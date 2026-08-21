@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -17,8 +20,11 @@ use crate::cancellation::{
     status_collection_cancellation,
 };
 use crate::context::{RepoContext, StatusProviderConfig};
+use crate::execution::{
+    ExecutionEvent, ExecutionObserver, HEARTBEAT_INTERVAL, NoopExecutionObserver,
+};
 use crate::runtime::{
-    loop_status_snapshot_with_cancellation, work_gates_snapshot_with_cancellation,
+    loop_status_snapshot_with_cancellation, open_plan_gate_snapshots_with_cancellation,
 };
 use crate::state::{now_ms, state_summary_with_cancellation};
 
@@ -36,6 +42,7 @@ const STATUS_SCHEMA_VERSION: u64 = 1;
 const PROVIDER_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const PROVIDER_STDERR_LIMIT: usize = 64 * 1024;
 
+#[cfg(any(not(unix), test))]
 pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
     snapshot_with_cancellation(ctx, &|| false)
 }
@@ -44,12 +51,15 @@ pub(crate) fn snapshot_with_cancellation(
     ctx: &RepoContext,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
-    let mut runs = Vec::new();
-    for provider in ctx.status_providers() {
-        ensure_collection_active(cancelled)?;
-        runs.push(run_provider(ctx.root(), provider, cancelled));
-        ensure_collection_active(cancelled)?;
-    }
+    snapshot_with_cancellation_and_observer(ctx, cancelled, &mut NoopExecutionObserver)
+}
+
+pub(crate) fn snapshot_with_cancellation_and_observer(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
+    let runs = run_providers_concurrently(ctx, cancelled, observer)?;
 
     // Providers are contractually read-only. Observe repository and Jig state
     // after they return so a concurrent local edit is reflected as stale or
@@ -97,6 +107,95 @@ pub(crate) fn snapshot_with_cancellation(
         errors,
     })
     .map_err(Into::into)
+}
+
+fn run_providers_concurrently(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Vec<ProviderRun>> {
+    ensure_collection_active(cancelled)?;
+    let providers = ctx.status_providers();
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let shared_cancelled = Arc::new(AtomicBool::new(false));
+    let started = Instant::now();
+    let mut next_heartbeat = HEARTBEAT_INTERVAL;
+    let mut ordered = (0..providers.len())
+        .map(|_| None)
+        .collect::<Vec<Option<ProviderRun>>>();
+    std::thread::scope(|scope| -> Result<()> {
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = Vec::with_capacity(providers.len());
+        for (index, provider) in providers.iter().enumerate() {
+            observer.event(ExecutionEvent::PhaseStarted {
+                label: &provider.id,
+                current: index + 1,
+                total: providers.len(),
+            });
+            let sender = sender.clone();
+            let shared_cancelled = Arc::clone(&shared_cancelled);
+            let root = ctx.root();
+            handles.push(scope.spawn(move || {
+                let run = run_provider(root, provider, &|| shared_cancelled.load(Ordering::SeqCst));
+                let _ = sender.send((index, run));
+            }));
+        }
+        drop(sender);
+
+        let mut received = 0;
+        while received < providers.len() {
+            if cancelled() {
+                shared_cancelled.store(true, Ordering::SeqCst);
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= next_heartbeat {
+                observer.event(ExecutionEvent::Heartbeat {
+                    label: "status providers",
+                    elapsed,
+                });
+                while next_heartbeat <= elapsed {
+                    next_heartbeat = next_heartbeat
+                        .checked_add(HEARTBEAT_INTERVAL)
+                        .unwrap_or(Duration::MAX);
+                }
+            }
+            match receiver.recv_timeout(Duration::from_millis(25)) {
+                Ok((index, run)) => {
+                    observer.event(ExecutionEvent::PhaseFinished {
+                        label: &run.id,
+                        success: run.failure.is_none(),
+                        elapsed: Duration::from_millis(run.duration_ms),
+                    });
+                    ordered[index] = Some(run);
+                    received += 1;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        for handle in handles {
+            if handle.join().is_err() {
+                return Err(anyhow!("A status provider worker panicked"));
+            }
+        }
+        ensure_collection_active(cancelled)
+    })?;
+
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(index, run)| {
+            run.ok_or_else(|| {
+                anyhow!(
+                    "Status provider '{}' did not return a result",
+                    providers[index].id
+                )
+            })
+        })
+        .collect()
 }
 
 fn ensure_collection_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
@@ -300,32 +399,33 @@ fn work_snapshot(
         .filter_map(|plan| plan["plan_id"].as_str())
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    let gate_snapshots = open_plan_gate_snapshots_with_cancellation(ctx, &open_plan_ids, cancelled);
     let mut gates = Vec::with_capacity(open_plan_ids.len());
     for plan_id in open_plan_ids {
         ensure_collection_active(cancelled)?;
-        gates.push(
-            match work_gates_snapshot_with_cancellation(ctx, Some(plan_id.clone()), cancelled) {
-                Ok(snapshot) => json!({
+        gates.push(match &gate_snapshots {
+            Ok(snapshots) => json!({
+                "plan_id": plan_id,
+                "snapshot": snapshots.get(&plan_id),
+                "error": null,
+            }),
+            Err(error) if is_status_collection_cancellation(error) => {
+                return Err(status_collection_cancellation());
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                errors.push(StatusCollectionError {
+                    scope: format!("work.gates.{plan_id}"),
+                    code: "work_gates_unavailable",
+                    message: message.clone(),
+                });
+                json!({
                     "plan_id": plan_id,
-                    "snapshot": snapshot,
-                    "error": null,
-                }),
-                Err(error) if is_status_collection_cancellation(&error) => return Err(error),
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    errors.push(StatusCollectionError {
-                        scope: format!("work.gates.{plan_id}"),
-                        code: "work_gates_unavailable",
-                        message: message.clone(),
-                    });
-                    json!({
-                        "plan_id": plan_id,
-                        "snapshot": null,
-                        "error": message,
-                    })
-                }
-            },
-        );
+                    "snapshot": null,
+                    "error": message,
+                })
+            }
+        });
         ensure_collection_active(cancelled)?;
     }
 

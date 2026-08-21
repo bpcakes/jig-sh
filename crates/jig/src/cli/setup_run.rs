@@ -10,18 +10,39 @@ use crate::{context::RepoContext, doctor, runtime};
 
 pub(super) fn run_setup_command(json_output: bool) -> Result<()> {
     let ctx = RepoContext::load()?;
-    let output = run_setup_with(doctor::run, |command| runtime::dispatch(&ctx, command))?;
+    let progress = crate::progress::CliProgress::for_human_output("setup", json_output);
+    progress.header("prepare repository and agent tooling");
+    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
+    let output = run_setup_with_progress(
+        doctor::run,
+        |command| runtime::dispatch_with_observer(&ctx, command, &mut observer),
+        |current, total, label| progress.step(label, format!("phase {current}/{total}")),
+    )?;
+    progress.done("setup complete");
     emit(json_output, HumanOutput::Setup, &output)?;
     require_json_ok(true, &output)
 }
 
+#[cfg(test)]
 fn run_setup_with(
+    run_doctor: impl FnMut() -> Result<Value>,
+    dispatch: impl FnMut(RuntimeCommand) -> Result<Value>,
+) -> Result<Value> {
+    run_setup_with_progress(run_doctor, dispatch, |_, _, _| {})
+}
+
+fn run_setup_with_progress(
     mut run_doctor: impl FnMut() -> Result<Value>,
     mut dispatch: impl FnMut(RuntimeCommand) -> Result<Value>,
+    mut progress: impl FnMut(usize, usize, &str),
 ) -> Result<Value> {
+    const PHASES: usize = 7;
+    progress(1, PHASES, "doctor before");
     let doctor_before = run_doctor()?;
+    progress(2, PHASES, "bootstrap");
     let bootstrap = dispatch(RuntimeCommand::Bootstrap(ToolRequest::default()))?;
 
+    progress(3, PHASES, "agent readiness");
     let agent_before = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
     let mut registrations = Vec::new();
     if agent_before["codex"]["required"].as_bool().unwrap_or(false) {
@@ -34,6 +55,7 @@ fn run_setup_with(
             bail!("Agent tooling setup requires Codex marketplace support. {next_step}");
         }
         for source in unregistered_marketplace_sources(&agent_before)? {
+            progress(4, PHASES, "marketplace registration");
             registrations.push(dispatch(RuntimeCommand::Agent(AgentCommand::Bootstrap(
                 AgentBootstrapRequest {
                     marketplace: Some(source),
@@ -41,10 +63,13 @@ fn run_setup_with(
             )))?);
         }
     }
+    progress(5, PHASES, "agent verification");
     let agent_after = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
+    progress(6, PHASES, "contract verification");
     let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract(
         ToolRequest::default(),
     )))?;
+    progress(7, PHASES, "doctor after");
     let doctor_after = run_doctor()?;
     let ok = bootstrap["ok"].as_bool().unwrap_or(false)
         && agent_after["ok"].as_bool().unwrap_or(false)

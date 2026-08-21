@@ -1,44 +1,54 @@
-use std::process::{Command, Output};
+use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
+use jig_owned_process::{
+    ProcessOutputLimits, run_owned_process_tree_with_output_limits_and_observer,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::context::RepoContext;
+#[cfg(test)]
+use crate::execution::NoopExecutionObserver;
+use crate::execution::{ExecutionEvent, ExecutionObserver, ProcessExecutionObserver};
 use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
-pub(in crate::runtime) fn execute_manifest_tool_request(
+pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
     request: crate::command::ToolRequest,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let (plan_id, record_receipt) = request.into_parts();
-    execute_manifest_tool(ctx, tool_name, args, plan_id, record_receipt)
+    execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
 }
 
-pub(in crate::runtime) fn call_manifest_tool(
+pub(in crate::runtime) fn call_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool: &ManifestTool,
     args_obj: &JsonObject,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let plan_id = string_arg(args_obj, args::PLAN_ID);
     let args = tool_defs::execution_tool_args(tool, args_obj)?;
 
     // MCP execution tools are evidence-producing by design; the CLI-only
     // --no-receipt escape hatch is intentionally not part of the tool schema.
-    execute_manifest_tool(ctx, &tool.name, args, plan_id, true)
+    execute_manifest_tool_with_observer(ctx, &tool.name, args, plan_id, true, observer)
 }
 
-pub(in crate::runtime) fn execute_manifest_tool(
+pub(in crate::runtime) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
     plan_id: Option<String>,
     record_receipt: bool,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     execute_manifest_tool_with_options(
         ctx,
@@ -46,9 +56,11 @@ pub(in crate::runtime) fn execute_manifest_tool(
         args,
         plan_id,
         ManifestToolExecutionOptions::fail_fast(record_receipt, true, true),
+        observer,
     )
 }
 
+#[cfg(test)]
 pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerprint(
     ctx: &RepoContext,
     tool_name: &str,
@@ -61,6 +73,24 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
         args,
         plan_id,
         ManifestToolExecutionOptions::collect_result(true, false, false),
+        &mut NoopExecutionObserver,
+    )
+}
+
+pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
+    ctx: &RepoContext,
+    tool_name: &str,
+    args: Value,
+    plan_id: Option<String>,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
+    execute_manifest_tool_with_options(
+        ctx,
+        tool_name,
+        args,
+        plan_id,
+        ManifestToolExecutionOptions::collect_result(true, false, false),
+        observer,
     )
 }
 
@@ -151,6 +181,7 @@ fn execute_manifest_tool_with_options(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let tool = ctx
         .tool_spec(tool_name)
@@ -173,6 +204,7 @@ fn execute_manifest_tool_with_options(
                 args,
                 plan_id,
                 options,
+                observer,
             )
         }
         _ => bail!("Unsupported tool kind '{}' for {tool_name}", tool.kind),
@@ -311,13 +343,26 @@ fn execute_command_tool(
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let started = now_ms();
-    let output = run_configured_command(ctx, invocation.tool_name, invocation.command_text, &args)?;
+    let output = run_configured_command(
+        ctx,
+        invocation.tool_name,
+        invocation.command_text,
+        &args,
+        observer,
+    )?;
     let ended = now_ms();
     let exit_status = output.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = output
+        .stdout
+        .as_ref()
+        .map_or_else(String::new, |output| output.to_string_lossy());
+    let stderr = output
+        .stderr
+        .as_ref()
+        .map_or_else(String::new, |output| output.to_string_lossy());
 
     let receipt_result = maybe_record_receipt(
         ctx,
@@ -401,9 +446,16 @@ fn run_configured_command(
     tool_name: &str,
     command_text: &str,
     args: &Value,
-) -> Result<Output> {
+    observer: &mut dyn ExecutionObserver,
+) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
     let mut command = Command::new("bash");
-    command.current_dir(ctx.root()).arg("-c").arg(command_text);
+    command
+        .current_dir(ctx.root())
+        .arg("-c")
+        .arg(command_text)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     if tool_name == tool::MIGRATION_ADD {
         let name = args
@@ -413,9 +465,33 @@ fn run_configured_command(
         command.env("NAME", name);
     }
 
-    command
-        .output()
-        .with_context(|| format!("Failed to run configured command for {tool_name}"))
+    let started = Instant::now();
+    observer.event(ExecutionEvent::PhaseStarted {
+        label: tool_name,
+        current: 1,
+        total: 1,
+    });
+    let result = run_owned_process_tree_with_output_limits_and_observer(
+        &mut command,
+        ctx.command_timeout(),
+        ProcessOutputLimits {
+            stdout: usize::MAX,
+            stderr: usize::MAX,
+        },
+        &mut ProcessExecutionObserver::new(observer, tool_name),
+    )
+    .map_err(|error| {
+        anyhow!(
+            "Configured command for {tool_name} failed under process supervision (timeout: {}s): {error}",
+            ctx.command_timeout().as_secs()
+        )
+    });
+    observer.event(ExecutionEvent::PhaseFinished {
+        label: tool_name,
+        success: result.as_ref().is_ok_and(|output| output.status.success()),
+        elapsed: started.elapsed(),
+    });
+    result
 }
 
 #[derive(Serialize)]

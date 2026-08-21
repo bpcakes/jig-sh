@@ -2,8 +2,8 @@ use std::{process::Child, time::Duration};
 
 use super::{
     ACTIVE_OUTPUT_POLL_INTERVAL, BoundedProcessOutput, MAX_OUTPUT_READS_PER_POLL,
-    MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION, ProcessOutputLimits, ProcessPipe,
-    TRUNCATED_OUTPUT_POLL_INTERVAL,
+    MAX_OUTPUT_READS_PER_POLL_AFTER_TRUNCATION, OwnedProcessObserver, OwnedProcessOutputStream,
+    ProcessOutputLimits, ProcessPipe, TRUNCATED_OUTPUT_POLL_INTERVAL,
 };
 
 pub(super) struct OutputDrain {
@@ -26,7 +26,11 @@ impl OutputDrain {
         })
     }
 
-    pub(super) fn poll(&mut self) -> bool {
+    pub(super) fn poll(
+        &mut self,
+        stream: OwnedProcessOutputStream,
+        observer: &mut dyn OwnedProcessObserver,
+    ) -> bool {
         // A shell can issue thousands of tiny writes. Bound every poll to 64
         // read attempts while the retained output is capped separately. Once
         // capture truncates, tighten the same attempt budget to 16 so repeated
@@ -48,6 +52,7 @@ impl OutputDrain {
                 }
                 Ok(read) => {
                     made_progress = true;
+                    observer.output(stream, &chunk[..read]);
                     let remaining = self.limit.saturating_sub(self.bytes.len());
                     let retained = remaining.min(read);
                     self.bytes.extend_from_slice(&chunk[..retained]);
@@ -102,9 +107,15 @@ impl OwnedProcessOutputDrains {
         Ok(Self { stdout, stderr })
     }
 
-    pub(super) fn poll(&mut self) -> bool {
-        let stdout_progress = self.stdout.as_mut().is_some_and(OutputDrain::poll);
-        let stderr_progress = self.stderr.as_mut().is_some_and(OutputDrain::poll);
+    pub(super) fn poll(&mut self, observer: &mut dyn OwnedProcessObserver) -> bool {
+        let stdout_progress = self
+            .stdout
+            .as_mut()
+            .is_some_and(|drain| drain.poll(OwnedProcessOutputStream::Stdout, observer));
+        let stderr_progress = self
+            .stderr
+            .as_mut()
+            .is_some_and(|drain| drain.poll(OwnedProcessOutputStream::Stderr, observer));
         stdout_progress || stderr_progress
     }
 
@@ -126,12 +137,13 @@ impl OwnedProcessOutputDrains {
     pub(super) fn finish(
         mut self,
         timeout: Duration,
+        observer: &mut dyn OwnedProcessObserver,
     ) -> (Option<BoundedProcessOutput>, Option<BoundedProcessOutput>) {
         let deadline = std::time::Instant::now()
             .checked_add(timeout)
             .unwrap_or_else(std::time::Instant::now);
         while !self.is_terminal() && std::time::Instant::now() < deadline {
-            let made_progress = self.poll();
+            let made_progress = self.poll(observer);
             if !self.is_terminal() {
                 if made_progress {
                     std::thread::sleep(self.active_poll_interval());

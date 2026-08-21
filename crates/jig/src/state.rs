@@ -20,7 +20,7 @@ pub(crate) use receipts::{
     CurrentWorktreeFingerprint, ToolReceiptStatus, WorkGateReceiptIndex, WorkReviewReceiptEvidence,
     WorkReviewReceiptStatus, current_worktree_fingerprint,
     current_worktree_fingerprint_with_cancellation, work_gate_receipt_index,
-    work_gate_receipt_index_with_cancellation,
+    work_gate_receipt_index_with_cancellation, work_gate_receipt_indexes_with_cancellation,
 };
 pub(crate) use receipts::{ReceiptInput, ReceiptListFilter, receipts_list, record_receipt};
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};

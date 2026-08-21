@@ -8,6 +8,7 @@ use crate::command::{
     WorkStartRequest,
 };
 use crate::context::RepoContext;
+use crate::execution::ExecutionObserver;
 use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
     SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
@@ -74,16 +75,20 @@ impl From<&WorkFinishRequest> for PlanCloseRequest {
     }
 }
 
-pub(super) fn dispatch(ctx: &RepoContext, command: WorkCommand) -> Result<Value> {
+pub(super) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: WorkCommand,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     match command {
         WorkCommand::Goal(opts) => goal::goal(ctx, opts),
         WorkCommand::Start(opts) => start(ctx, opts.into()),
         WorkCommand::Append(opts) => plans_append(ctx, opts.into()),
-        WorkCommand::Check(opts) => checks::check(ctx, opts),
+        WorkCommand::Check(opts) => checks::check_with_observer(ctx, opts, observer),
         WorkCommand::Gates(opts) => gates::gates(ctx, opts),
         WorkCommand::Evidence(opts) => gates::evidence(ctx, opts),
-        WorkCommand::Review(opts) => review::review(ctx, opts),
-        WorkCommand::Refine(opts) => review::refine(ctx, opts),
+        WorkCommand::Review(opts) => review::review_with_observer(ctx, opts, observer),
+        WorkCommand::Refine(opts) => review::refine_with_observer(ctx, opts, observer),
         WorkCommand::Decide(opts) => decisions_add(ctx, opts.into()),
         WorkCommand::Receipts(opts) => receipts_list(ctx, opts.into()),
         WorkCommand::Status => state_summary(ctx).map(|mut value| {
@@ -99,12 +104,21 @@ pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Resu
     gates::gates(ctx, WorkGatesRequest { plan_id })
 }
 
+#[allow(dead_code)]
 pub(super) fn gates_snapshot_with_cancellation(
     ctx: &RepoContext,
     plan_id: Option<String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     gates::snapshot_with_cancellation(ctx, plan_id, cancelled)
+}
+
+pub(super) fn open_plan_gate_snapshots_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &[String],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<std::collections::BTreeMap<String, Value>> {
+    gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
 
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
@@ -159,9 +173,13 @@ pub(super) fn append_from_args(ctx: &RepoContext, args: Value) -> Result<Value> 
     plans_append(ctx, request.into())
 }
 
-pub(super) fn check_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn check_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     let request: WorkCheckRequest = request_from_args(args)?;
-    checks::check(ctx, request)
+    checks::check_with_observer(ctx, request, observer)
 }
 
 pub(super) fn gates_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
@@ -174,14 +192,22 @@ pub(super) fn evidence_from_args(ctx: &RepoContext, args: Value) -> Result<Value
     gates::evidence(ctx, request)
 }
 
-pub(super) fn review_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn review_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     let request: WorkReviewRequest = request_from_args(args)?;
-    review::review(ctx, request)
+    review::review_with_observer(ctx, request, observer)
 }
 
-pub(super) fn refine_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn refine_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     let request: WorkRefineRequest = request_from_args(args)?;
-    review::refine(ctx, request)
+    review::refine_with_observer(ctx, request, observer)
 }
 
 pub(super) fn decide_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {

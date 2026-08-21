@@ -15,6 +15,7 @@ use crate::command::{
     LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
 };
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
+use crate::execution::{ExecutionEvent, ExecutionObserver};
 use crate::state::{ReceiptInput, now_ms, open_plan_summaries, record_receipt};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
@@ -28,16 +29,24 @@ const PR_MANAGER_KIND: &str = "pr_manager";
 const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
 const WORKFLOW_LEASE_PREFIX: &str = "workflow:";
 
-pub(super) fn dispatch(ctx: &RepoContext, command: LoopCommand) -> Result<Value> {
+pub(super) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: LoopCommand,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     match command {
-        LoopCommand::Tick(request) => tick(ctx, request),
+        LoopCommand::Tick(request) => tick_with_observer(ctx, request, observer),
         LoopCommand::Status(request) => status(ctx, request),
-        LoopCommand::Run(request) => run_until(ctx, request),
+        LoopCommand::Run(request) => run_until_with_observer(ctx, request, observer),
         LoopCommand::ClearAttempt(request) => clear_attempt(ctx, request),
     }
 }
 
-fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
+fn tick_with_observer(
+    ctx: &RepoContext,
+    request: LoopTickRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     let started = now_ms();
     let workflow = resolve_workflow(
         ctx,
@@ -66,7 +75,13 @@ fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
         match lease_store.acquire(&lease_key, workflow.lease_ttl_seconds)? {
             LeaseAcquire::Acquired(acquired) => {
                 lease = Some(acquired.clone());
-                match run_workflow_tick(ctx, &workflow, &mut lease_store, &mut attempt_store) {
+                match run_workflow_tick(
+                    ctx,
+                    &workflow,
+                    &mut lease_store,
+                    &mut attempt_store,
+                    observer,
+                ) {
                     Ok(tick) => {
                         observed = tick.observed;
                         actions = tick.actions;
@@ -243,7 +258,11 @@ fn ensure_status_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
     ensure_status_collection_active(cancelled)
 }
 
-fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Value> {
+fn run_until_with_observer(
+    ctx: &RepoContext,
+    request: LoopRunRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     if request.until != "idle" {
         bail!(
             "Unsupported loop run stop condition '{}'. Use --until idle.",
@@ -256,8 +275,13 @@ fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Value> {
 
     let mut ticks = Vec::new();
     let mut status = "max_ticks_reached".to_string();
-    for _ in 0..request.max_ticks {
-        let tick = tick(
+    for index in 0..request.max_ticks {
+        observer.event(ExecutionEvent::PhaseStarted {
+            label: "loop tick",
+            current: (index + 1) as usize,
+            total: request.max_ticks as usize,
+        });
+        let tick = tick_with_observer(
             ctx,
             LoopTickRequest {
                 workflow: request.workflow.clone(),
@@ -265,6 +289,7 @@ fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Value> {
                 max_attempts: request.max_attempts,
                 backoff_seconds: request.backoff_seconds,
             },
+            observer,
         )?;
         let tick_status = tick["status"].as_str().unwrap_or("unknown").to_string();
         let idle = tick["idle"].as_bool().unwrap_or(false);
@@ -297,11 +322,14 @@ fn run_workflow_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<WorkflowTick> {
     match workflow.kind.as_str() {
         GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx),
         NOOP_STATUS_KIND => noop_status_tick(ctx),
-        PR_MANAGER_KIND => pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store),
+        PR_MANAGER_KIND => {
+            pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store, observer)
+        }
         _ => bail!(
             "Unsupported loop workflow kind '{}'. Supported kinds: {NOOP_STATUS_KIND}, {GITHUB_PR_STATUS_KIND}, {PR_MANAGER_KIND}.",
             workflow.kind

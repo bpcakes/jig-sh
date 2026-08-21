@@ -243,19 +243,47 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     review_gate_ids: &BTreeSet<String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkGateReceiptIndex> {
-    ensure_receipt_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
+    let plan_ids = BTreeSet::from([plan_id.to_string()]);
+    let mut indexes = work_gate_receipt_indexes_with_cancellation(
+        ctx,
+        &plan_ids,
+        check_tools,
+        review_gate_ids,
+        cancelled,
+    )?;
+    Ok(indexes
+        .remove(plan_id)
+        .expect("requested plan index was initialized"))
+}
 
-    let mut index = WorkGateReceiptIndex {
-        checks: check_tools
-            .iter()
-            .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
-            .collect(),
-        reviews: BTreeMap::new(),
-    };
-    if check_tools.is_empty() && review_gate_ids.is_empty() {
-        return Ok(index);
+pub(crate) fn work_gate_receipt_indexes_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &BTreeSet<String>,
+    check_tools: &BTreeSet<String>,
+    review_gate_ids: &BTreeSet<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, WorkGateReceiptIndex>> {
+    ensure_receipt_scan_active(cancelled)?;
+
+    let mut indexes = plan_ids
+        .iter()
+        .map(|plan_id| {
+            (
+                plan_id.clone(),
+                WorkGateReceiptIndex {
+                    checks: check_tools
+                        .iter()
+                        .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
+                        .collect(),
+                    reviews: BTreeMap::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if plan_ids.is_empty() || (check_tools.is_empty() && review_gate_ids.is_empty()) {
+        return Ok(indexes);
     }
+    ensure_state_layout(ctx)?;
 
     let path = ctx.state_file("receipts.jsonl");
     #[cfg(test)]
@@ -264,9 +292,12 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     scan_jsonl_raw(&path, cancelled, |record| {
         ensure_receipt_scan_active(cancelled)?;
         let receipt = parse_raw_receipt(record, &path)?;
-        if receipt.plan_id.as_deref() != Some(plan_id) {
+        let Some(plan_id) = receipt.plan_id.as_deref() else {
             return Ok(());
-        }
+        };
+        let Some(index) = indexes.get_mut(plan_id) else {
+            return Ok(());
+        };
 
         let direct_tool_name = index
             .checks
@@ -322,7 +353,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         Ok(())
     })?;
     ensure_receipt_scan_active(cancelled)?;
-    Ok(index)
+    Ok(indexes)
 }
 
 fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterator<Item = &'a str> {

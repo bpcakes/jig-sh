@@ -3,33 +3,47 @@ use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
+use crate::execution::{ExecutionEvent, ExecutionObserver};
 use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
 use crate::tool_defs::tool;
 
-use super::super::tool_execution::{
-    execute_manifest_tool_result_without_worktree_fingerprint, manifest_tool_result_failure,
-};
+use super::super::tool_execution::manifest_tool_result_failure;
 use super::tools::{selected_tools, validate_check_tool};
 
-pub(super) fn check(ctx: &RepoContext, opts: WorkCheckRequest) -> Result<Value> {
+pub(super) fn check_with_observer(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    check_tools(ctx, &opts.plan_id, selected_tools(ctx, &opts.tools)?)
+    check_tools_with_observer(
+        ctx,
+        &opts.plan_id,
+        selected_tools(ctx, &opts.tools)?,
+        observer,
+    )
 }
 
-pub(super) fn check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<Value> {
-    check_tools_with_failure_mode(ctx, plan_id, tools, true)
-}
-
-pub(super) fn check_tools_collect_failures(
+pub(super) fn check_tools_with_observer(
     ctx: &RepoContext,
     plan_id: &str,
     tools: Vec<String>,
+    observer: &mut dyn ExecutionObserver,
+) -> Result<Value> {
+    check_tools_with_failure_mode(ctx, plan_id, tools, true, observer)
+}
+
+pub(super) fn check_tools_collect_failures_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tools: Vec<String>,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     // Used by review refinement so failed verification checks are reported in
     // the refine result instead of aborting before all receipts are recorded.
-    check_tools_with_failure_mode(ctx, plan_id, tools, false)
+    check_tools_with_failure_mode(ctx, plan_id, tools, false, observer)
 }
 
 fn check_tools_with_failure_mode(
@@ -37,6 +51,7 @@ fn check_tools_with_failure_mode(
     plan_id: &str,
     tools: Vec<String>,
     fail_on_tool_error: bool,
+    observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
@@ -46,20 +61,27 @@ fn check_tools_with_failure_mode(
 
     let mut results = Vec::with_capacity(tools.len());
     let mut check_failure = None;
-    for name in &tools {
-        let result = match execute_manifest_tool_result_without_worktree_fingerprint(
-            ctx,
-            name,
-            json!({}),
-            Some(plan_id.to_string()),
-        ) {
-            Ok(result) => result,
-            Err(error) if fail_on_tool_error => {
-                check_failure = Some((1, error));
-                break;
-            }
-            Err(error) => return Err(error),
-        };
+    for (index, name) in tools.iter().enumerate() {
+        observer.event(ExecutionEvent::PhaseStarted {
+            label: name,
+            current: index + 1,
+            total: tools.len(),
+        });
+        let result =
+            match super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
+                ctx,
+                name,
+                json!({}),
+                Some(plan_id.to_string()),
+                observer,
+            ) {
+                Ok(result) => result,
+                Err(error) if fail_on_tool_error => {
+                    check_failure = Some((1, error));
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
         let result_failure = fail_on_tool_error
             .then(|| manifest_tool_result_failure(&result))
             .transpose()?
