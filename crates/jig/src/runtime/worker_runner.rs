@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -280,18 +281,9 @@ fn run_worker_command(
     }
     configure_worker_process(command);
 
-    let mut child = command.spawn().context("Failed to start worker process")?;
-    let writer = if let Some(prompt) = stdin_prompt {
-        let mut stdin = child.stdin.take().context("Failed to open worker stdin")?;
-        Some(thread::spawn(move || -> Result<()> {
-            stdin
-                .write_all(prompt.as_bytes())
-                .context("Failed to write worker prompt")?;
-            Ok(())
-        }))
-    } else {
-        None
-    };
+    let mut process =
+        WorkerProcess::new(command.spawn().context("Failed to start worker process")?);
+    process.write_stdin(stdin_prompt)?;
 
     let started = Instant::now();
     let deadline = started.checked_add(timeout);
@@ -312,8 +304,7 @@ fn run_worker_command(
             observer,
         )?;
         if observer.cancelled() {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
+            process.terminate_and_reap();
             bail!("Worker process was cancelled");
         }
         let elapsed = started.elapsed();
@@ -326,17 +317,18 @@ fn run_worker_command(
             }
         }
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
+            process.terminate_and_reap();
             bail!(
                 "Worker process timed out after {} seconds",
                 timeout.as_secs()
             );
         }
-        if let Some(status) = child
+        if let Some(status) = process
+            .child_mut()
             .wait_timeout(Duration::from_millis(50))
             .context("Failed to wait for worker process")?
         {
+            process.mark_reaped();
             break status;
         }
     };
@@ -354,17 +346,78 @@ fn run_worker_command(
         observer,
     )?;
 
-    if let Some(writer) = writer {
-        writer
-            .join()
-            .map_err(|_| anyhow!("Worker stdin writer thread panicked"))??;
-    }
+    process.finish_writer()?;
 
     Ok(Output {
         status,
         stdout: fs::read(stdout_file.path()).context("Failed to read worker stdout")?,
         stderr: fs::read(stderr_file.path()).context("Failed to read worker stderr")?,
     })
+}
+
+struct WorkerProcess {
+    child: Option<Child>,
+    writer: Option<JoinHandle<Result<()>>>,
+}
+
+impl WorkerProcess {
+    fn new(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            writer: None,
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child
+            .as_mut()
+            .expect("worker child is available until it has been reaped")
+    }
+
+    fn write_stdin(&mut self, prompt: Option<String>) -> Result<()> {
+        let Some(prompt) = prompt else {
+            return Ok(());
+        };
+        let mut stdin = self
+            .child_mut()
+            .stdin
+            .take()
+            .context("Failed to open worker stdin")?;
+        self.writer = Some(thread::spawn(move || -> Result<()> {
+            stdin
+                .write_all(prompt.as_bytes())
+                .context("Failed to write worker prompt")?;
+            Ok(())
+        }));
+        Ok(())
+    }
+
+    fn mark_reaped(&mut self) {
+        self.child.take();
+    }
+
+    fn terminate_and_reap(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            terminate_worker_process(&mut child);
+            let _ = child.wait();
+        }
+    }
+
+    fn finish_writer(&mut self) -> Result<()> {
+        if let Some(writer) = self.writer.take() {
+            writer
+                .join()
+                .map_err(|_| anyhow!("Worker stdin writer thread panicked"))??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for WorkerProcess {
+    fn drop(&mut self) {
+        self.terminate_and_reap();
+        let _ = self.finish_writer();
+    }
 }
 
 fn emit_worker_output(
@@ -615,6 +668,40 @@ wait
         assert!(
             !marker.exists(),
             "worker timeout killed the child process but left its process group running"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_process_guard_drop_kills_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("escaped-grandchild");
+        let script = temp.path().join("worker.sh");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+marker="$1"
+(sh -c 'sleep 1; printf leaked > "$1"' sh "$marker") &
+wait
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let mut command = Command::new(&script);
+        command.arg(&marker);
+        configure_worker_process(&mut command);
+        let process = WorkerProcess::new(command.spawn().unwrap());
+        drop(process);
+
+        thread::sleep(Duration::from_millis(1500));
+        assert!(
+            !marker.exists(),
+            "dropping the worker guard left its process group running"
         );
     }
 }
