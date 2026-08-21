@@ -180,6 +180,26 @@ go_database = "postgres"
 }
 
 #[test]
+fn go_backend_rejects_rust_sqlx_capability() {
+    let config: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+backend_language = "go"
+sqlx_enabled = true
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&config).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "backend_language = \"go\" cannot be combined with sqlx_enabled = true in .jig.toml; Go repositories use go_database and Goose/sqlc, while SQLx is owned by the Rust backend"
+    );
+}
+
+#[test]
 fn repo_vault_config_is_loaded() {
     let config: RepoConfig = toml::from_str(
         r#"_src_path = "/tmp/template"

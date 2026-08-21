@@ -426,7 +426,10 @@ fn adopt_keeps_project_owned_makefile() {
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(!answers.contains("makefile_enabled"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
-    assert!(contract.contains(r#""contract_version": 4"#));
+    assert!(contract.contains(&format!(
+        r#""contract_version": {}"#,
+        crate::context::CURRENT_CONTRACT_VERSION
+    )));
     assert!(!contract.contains("jig_version"));
     assert!(contract.contains(r#""kind": "command""#));
     assert!(!contract.contains("jig.run_target"));

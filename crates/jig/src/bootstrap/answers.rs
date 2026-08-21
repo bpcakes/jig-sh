@@ -1,4 +1,4 @@
-// agentic-loc-exception: legacy answer normalization remains centralized during contract-v4 rollout.
+// agentic-loc-exception: legacy answer normalization remains centralized during contract-v5 rollout.
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -647,6 +647,11 @@ impl RawAnswers {
             .or(default_repo_name)
             .ok_or_else(|| anyhow::anyhow!("Missing required answer: repo_name"))?;
         let sqlx_enabled = self.sqlx_enabled.unwrap_or(true);
+        if backend_language.is_go() && sqlx_enabled {
+            bail!(
+                "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
+            );
+        }
         let rust_migration_dir = self.rust_migration_dir.filter(|value| !value.is_empty());
         if sqlx_enabled && rust_migration_dir.is_none() {
             bail!(

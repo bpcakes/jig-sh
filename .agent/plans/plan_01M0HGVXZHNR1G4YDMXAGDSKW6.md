@@ -14,7 +14,7 @@ Each independently useful change is committed separately. The complete repositor
 
 - [x] (2026-08-21) Reproduced the review findings against the clean `feat/go-backend-support` branch, read the repository and crate guides, and opened structured work plan `plan_01M0HGVXZHNR1G4YDMXAGDSKW6`.
 - [x] (2026-08-21) Classified the findings and selected long-term boundaries: contract v5, `go.mod` runtime authority, backend-neutral package normalization, explicit Go capabilities, and split backend/client drift proofs.
-- [ ] Advance the generated-harness contract epoch and reject unsupported mixed Go/SQLx configuration.
+- [x] (2026-08-21) Advanced the generated-harness epoch to contract v5, documented strict configuration additions as epoch-breaking, rejected mixed Go/SQLx identity at answer and load boundaries, and passed focused compatibility regressions.
 - [ ] Make `go.mod` the single Go toolchain authority for Doctor and generated CI.
 - [ ] Separate backend-neutral package normalization from Rust crate-name validation.
 - [ ] Add backend-aware unavailable messages for Go lint and sqlc checks.
@@ -37,6 +37,9 @@ Each independently useful change is committed separately. The complete repositor
 
 - Observation: the local aggregate TypeScript typecheck already performs an end-to-end contract check, but the generated web workflow deliberately calls only package-local scripts.
   Evidence: `templates/project/scripts/check-webapps.sh.jinja` runs `scripts/contracts.mjs check` in aggregate `typecheck` mode, while `webapp-checks.yml.jinja` invokes `run-script "$APP_DIR" typecheck`.
+
+- Observation: the first broad library pass after the epoch bump passed 1,567 tests and failed only assertions whose fixtures combined the newly rendered launcher with a hard-coded v4 manifest or replacement token.
+  Evidence: legacy v4 parser and context tests passed unchanged; rerunning the six affected current-launcher tests and the current-render adoption assertion after making their epoch source explicit passed.
 
 ## Decision Log
 

@@ -69,6 +69,26 @@ schema_dump_enabled = false
 }
 
 #[test]
+fn go_backend_rejects_rust_sqlx_answers() {
+    let error = RawAnswers {
+        repo_name: Some("ExampleProject".into()),
+        backend_language: Some(BackendLanguage::Go),
+        go_database: Some(GoDatabase::Postgres),
+        sqlx_enabled: Some(true),
+        rust_migration_dir: Some("migrations".into()),
+        ..RawAnswers::default()
+    }
+    .resolve(None)
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(
+        error,
+        "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
+    );
+}
+
+#[test]
 fn generated_go_format_check_propagates_parser_failures_and_ignores_ignored_files() {
     let rendered = RawAnswers {
         repo_name: Some("demo".into()),

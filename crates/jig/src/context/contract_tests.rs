@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use super::*;
 
 #[test]
-fn supported_contract_versions_are_two_through_four() {
+fn supported_contract_versions_are_two_through_five() {
     for version in MIN_SUPPORTED_CONTRACT_VERSION..=CURRENT_CONTRACT_VERSION {
         let temp = tempdir().unwrap();
         fs::create_dir_all(temp.path().join(".agent")).unwrap();
@@ -97,7 +97,7 @@ bootstrap_command = "cargo fetch"
     fs::write(
         temp.path().join(".agent/jig-contract.json"),
         serde_json::to_string_pretty(&json!({
-            "contract_version": 5,
+            "contract_version": 6,
             "tool_namespace": "jig",
             "jig_version": "0.2.0-beta.1",
             "required_commands": ["bootstrap_command"],
@@ -111,7 +111,7 @@ bootstrap_command = "cargo fetch"
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("Unsupported jig contract version: 5"));
+    assert!(error.contains("Unsupported jig contract version: 6"));
 }
 
 #[test]

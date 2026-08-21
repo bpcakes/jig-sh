@@ -43,7 +43,7 @@ pub(crate) use work_config::{
     parse_review_scope_arg,
 };
 
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 5;
 pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
 pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
     "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
@@ -717,6 +717,11 @@ fn validate_backend_config(config: &RepoConfig) -> Result<()> {
         bail!(
             "go_database = \"{}\" requires backend_language = \"go\" in .jig.toml",
             config.go_database.as_str()
+        );
+    }
+    if config.backend_language.is_go() && config.sqlx_enabled {
+        bail!(
+            "backend_language = \"go\" cannot be combined with sqlx_enabled = true in .jig.toml; Go repositories use go_database and Goose/sqlc, while SQLx is owned by the Rust backend"
         );
     }
     if config.sqlx_enabled
