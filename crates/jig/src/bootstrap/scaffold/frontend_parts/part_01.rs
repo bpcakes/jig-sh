@@ -602,6 +602,7 @@ pub(super) fn render_frontend_workspace_files_for_backend(
     let context = json!({
         "package_name": package_name,
         "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
+        "go_toolchain_authority_path": GO_TOOLCHAIN_AUTHORITY_PATH,
         "package_manager": package_manager,
         "package_manager_spec": generated_package_manager_spec(package_manager),
         "package_manager_version": generated_package_manager_version(package_manager),

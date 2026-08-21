@@ -15,6 +15,7 @@ use super::templates::{
 };
 use super::write::{ScaffoldFile, scaffold_file};
 use super::{FrontendApp, ScaffoldDb, ScaffoldFrontend, ScaffoldFrontendKind, ScaffoldPreset};
+use crate::backend::GO_TOOLCHAIN_AUTHORITY_PATH;
 
 include!("frontend_parts/part_01.rs");
 include!("frontend_parts/part_02.rs");

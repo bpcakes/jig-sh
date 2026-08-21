@@ -73,10 +73,6 @@ mod tests {
             &self.required_commands
         }
 
-        fn migration_authoring_enabled(&self) -> bool {
-            self.go_postgres
-        }
-
         fn sqlx_enabled(&self) -> bool {
             false
         }

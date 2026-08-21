@@ -128,8 +128,10 @@ impl FeatureDescriptor {
 pub trait FeatureContext {
     fn contract_version(&self) -> u32;
     fn required_commands(&self) -> &[String];
-    fn migration_authoring_enabled(&self) -> bool;
     fn sqlx_enabled(&self) -> bool;
+    fn migration_authoring_enabled(&self) -> bool {
+        self.sqlx_enabled() || self.go_postgres_enabled()
+    }
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
     fn go_backend_enabled(&self) -> bool {
@@ -142,5 +144,68 @@ pub trait FeatureContext {
         self.required_commands()
             .iter()
             .any(|command| command == command_key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FeatureContext;
+
+    struct LegacySqlxContext;
+
+    struct GoPostgresContext;
+
+    impl FeatureContext for LegacySqlxContext {
+        fn contract_version(&self) -> u32 {
+            4
+        }
+
+        fn required_commands(&self) -> &[String] {
+            &[]
+        }
+
+        fn sqlx_enabled(&self) -> bool {
+            true
+        }
+
+        fn schema_dump_enabled(&self) -> bool {
+            false
+        }
+
+        fn frontend_app_count(&self) -> usize {
+            0
+        }
+    }
+
+    impl FeatureContext for GoPostgresContext {
+        fn contract_version(&self) -> u32 {
+            5
+        }
+
+        fn required_commands(&self) -> &[String] {
+            &[]
+        }
+
+        fn sqlx_enabled(&self) -> bool {
+            false
+        }
+
+        fn schema_dump_enabled(&self) -> bool {
+            false
+        }
+
+        fn frontend_app_count(&self) -> usize {
+            0
+        }
+
+        fn go_postgres_enabled(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn migration_authoring_is_derived_from_the_backend_capabilities() {
+        assert!(LegacySqlxContext.migration_authoring_enabled());
+        assert!(GoPostgresContext.migration_authoring_enabled());
     }
 }

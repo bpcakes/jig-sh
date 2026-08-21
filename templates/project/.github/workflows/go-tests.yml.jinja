@@ -6,6 +6,7 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "openapi/**"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -21,6 +22,7 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "openapi/**"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -52,11 +54,23 @@ jobs:
           rustflags: ""
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: <<[ go_toolchain_authority_path ]>>
           cache: true
           cache-dependency-path: go.mod
       - run: scripts/jig check fmt
       - run: scripts/jig check lint
       - run: scripts/jig check test-locked
 [% if go_database == "postgres" %]      - run: scripts/jig check sqlc
+[% endif %]
+[% if go_database == "postgres" %]
+  postgres-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: <<[ go_toolchain_authority_path ]>>
+          cache: true
+          cache-dependency-path: go.mod
+      - run: bash scripts/test-postgres.sh
 [% endif %]

@@ -10,7 +10,9 @@ use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
 };
-use crate::backend::{BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GoDatabase};
+use crate::backend::{
+    BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
+};
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
     config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
@@ -53,6 +55,7 @@ pub(super) struct RenderAnswers {
     harness_footprint: HarnessFootprint,
     backend_language: BackendLanguage,
     go_database: GoDatabase,
+    go_toolchain_authority_path: &'static str,
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
@@ -726,6 +729,7 @@ impl RawAnswers {
             harness_footprint: self.harness_footprint.unwrap_or_default(),
             backend_language,
             go_database,
+            go_toolchain_authority_path: GO_TOOLCHAIN_AUTHORITY_PATH,
             sqlx_enabled,
             rust_crate_roots: if backend_language == BackendLanguage::Go {
                 Vec::new()

@@ -284,6 +284,14 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             workflow.contains("actions-rust-lang/setup-rust-toolchain@v1"),
             "{workflow_name} must install Rust before invoking scripts/jig"
         );
+        assert!(
+            workflow.contains("go-version-file: go.mod"),
+            "{workflow_name} must use the generated Go module as its toolchain authority"
+        );
+        assert!(
+            !workflow.contains(".go-version"),
+            "{workflow_name} must not refer to the retired Go version file"
+        );
         assert!(workflow.contains("cache-dependency-path: go.mod"));
         assert_eq!(
             workflow
@@ -301,9 +309,14 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
 
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
-    assert!(go_tests.contains("go-version-file: go.mod"));
-    assert!(!go_tests.contains(".go-version"));
+    assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
+    assert!(go_tests.contains("postgres-integration:\n    runs-on: ubuntu-latest"));
+    assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
     assert!(!destination.join(".go-version").exists());
+
+    let gitignore = fs::read_to_string(destination.join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".contract-stage-*/"));
+    assert!(gitignore.contains(".contract-client-stage-*/"));
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
     assert!(browser_e2e.contains("go-version-file: go.mod"));

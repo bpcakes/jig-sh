@@ -608,10 +608,6 @@ impl FeatureContext for RepoContext {
         self.required_commands()
     }
 
-    fn migration_authoring_enabled(&self) -> bool {
-        self.migration_policy_enabled()
-    }
-
     fn sqlx_enabled(&self) -> bool {
         self.sqlx_enabled()
     }

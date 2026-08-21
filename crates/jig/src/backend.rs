@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub(crate) const GO_POSTGRES_MIGRATION_DIR: &str = "internal/database/migrations";
+pub(crate) const GO_TOOLCHAIN_AUTHORITY_PATH: &str = "go.mod";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
