@@ -132,6 +132,12 @@ pub trait FeatureContext {
     fn sqlx_enabled(&self) -> bool;
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
+    fn go_backend_enabled(&self) -> bool {
+        false
+    }
+    fn go_postgres_enabled(&self) -> bool {
+        false
+    }
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()
             .iter()

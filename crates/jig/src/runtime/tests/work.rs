@@ -43,6 +43,53 @@ fn unavailable_schema_check_explains_disabled_config() {
 }
 
 #[test]
+fn unavailable_go_checks_explain_backend_and_database_capabilities() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let lint_error = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckCommand::Lint(crate::cli::ToolOpts {
+            plan_id: None,
+            no_receipt: false,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(lint_error.contains("backend_language is not \"go\""));
+    assert!(lint_error.contains("check clippy"));
+
+    let sqlc_error = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
+            plan_id: None,
+            no_receipt: false,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(sqlc_error.contains("sqlc checks belong to a Go/PostgreSQL backend"));
+
+    let go = tempdir().unwrap();
+    crate::test_env::TestRepoBuilder::new(go.path())
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .config("backend_language = \"go\"\ngo_database = \"none\"")
+        .write();
+    let ctx = RepoContext::load_from(go.path()).unwrap();
+    let error = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
+            plan_id: None,
+            no_receipt: false,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("go_database is not \"postgres\""));
+}
+
+#[test]
 fn unavailable_typescript_check_explains_missing_contract_tool() {
     let temp = tempdir().unwrap();
     crate::test_env::TestRepoBuilder::new(temp.path())

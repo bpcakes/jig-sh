@@ -627,6 +627,14 @@ impl FeatureContext for RepoContext {
             self.frontend_apps().len()
         }
     }
+
+    fn go_backend_enabled(&self) -> bool {
+        self.is_go_backend()
+    }
+
+    fn go_postgres_enabled(&self) -> bool {
+        self.is_go_backend() && self.config.go_database.is_postgres()
+    }
 }
 
 fn non_empty_command<'a>(key: &str, command: &'a str) -> Result<&'a str> {
