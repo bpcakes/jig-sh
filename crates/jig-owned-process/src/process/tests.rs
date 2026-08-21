@@ -87,6 +87,17 @@ fn cancellation_before_spawn_has_a_distinct_outcome() {
     ));
 }
 
+#[test]
+fn process_error_classifies_both_cancellation_stages() {
+    assert!(OwnedProcessTreeError::CancelledBeforeStart.is_cancellation());
+    assert!(OwnedProcessTreeError::Cancelled.is_cancellation());
+    assert!(!OwnedProcessTreeError::TimedOut.is_cancellation());
+    assert!(
+        !OwnedProcessTreeError::OutputLimitExceeded(OwnedProcessOutputStream::Stdout)
+            .is_cancellation()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn fatal_output_overflow_terminates_the_owned_tree_immediately() {

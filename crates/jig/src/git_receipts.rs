@@ -16,8 +16,8 @@ use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use jig_owned_process::{
-    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
-    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
+    ProcessOutputLimits, format_exit_status, require_success, run_checked_output_with_context,
+    run_owned_process_tree_with_output_limits,
 };
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
@@ -586,7 +586,7 @@ fn run_git_command_with_cancellation(
         cancelled,
     ) {
         Ok(output) => output,
-        Err(OwnedProcessTreeError::Cancelled) => {
+        Err(error) if error.is_cancellation() => {
             return Err(WorktreeFingerprintCancelled.into());
         }
         Err(error) => {
@@ -847,6 +847,22 @@ mod tests {
                 .and_then(|(_, value)| value),
             Some(OsStr::new("0"))
         );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn cancellation_before_fingerprint_git_spawn_remains_typed() {
+        let temp = tempdir().unwrap();
+        let calls = Cell::new(0);
+        let error = repo_worktree_fingerprint_with_cancellation(temp.path(), &|| {
+            let current = calls.get();
+            calls.set(current + 1);
+            current == 1
+        })
+        .unwrap_err();
+
+        assert!(is_worktree_fingerprint_cancellation(&error), "{error:#}");
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]

@@ -181,6 +181,19 @@ pub enum OwnedProcessTreeError {
     Cleanup,
 }
 
+impl OwnedProcessTreeError {
+    pub const fn is_cancellation(&self) -> bool {
+        match self {
+            Self::CancelledBeforeStart | Self::Cancelled => true,
+            Self::Start(_)
+            | Self::TimedOut
+            | Self::OutputLimitExceeded(_)
+            | Self::Await
+            | Self::Cleanup => false,
+        }
+    }
+}
+
 impl std::fmt::Display for OwnedProcessTreeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
