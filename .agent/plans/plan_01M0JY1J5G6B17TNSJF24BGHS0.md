@@ -19,7 +19,7 @@ After this work, every top-level operation has exactly one signal owner, lower l
 - [x] (2026-08-21 21:34Z) Slice 4: made phase label/position explicit inputs to tool and worker execution, removed orphan aggregate starts, suppressed nested worker phases inside loop ticks, and added exact sequence tests for checks, review gates, and loop ticks.
 - [x] (2026-08-21 21:51Z) Slice 5: converted configured-command supervision errors into failed receipt outcomes, retained fail-fast behavior with receipt IDs, and linked child failure receipts plus diagnostics from work-check batch receipts.
 - [x] (2026-08-21 22:31Z) Updated configuration and public-contract documentation for deferred bounded progress, 4 MiB execution capture, and supervised-failure receipt evidence; removed superseded blocking lifecycle helpers.
-- [ ] Build the development binary, run focused tests after every slice, commit every slice separately, then run the full configured gates and finish structured work.
+- [x] (2026-08-21) Built the development binary, ran focused tests after every slice, committed every slice separately, passed formatting and workspace Clippy with warnings denied, passed the configured contract and complete two-stage test gates, and finished structured work successfully.
 
 ## Surprises & Discoveries
 
@@ -64,7 +64,11 @@ After this work, every top-level operation has exactly one signal owner, lower l
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. Completion requires all slices to be committed independently, full configured gates to pass, and the plan to record final evidence and remaining limitations.
+The findings came from a structural boundary problem rather than one isolated omission: signal ownership, cancellation, progress transport, phase lifecycle, output capture, and evidence recording had become coupled through callbacks and ad hoc wrappers. The completed slices give each concern one explicit owner and preserve those boundaries with production-path, sequence, overflow, cancellation, and receipt regressions.
+
+The behavior changes were kept in separately reviewable commits. The final development binary passed formatting and workspace Clippy with warnings denied. Structured work check then passed the contract gate (`receipt_01M0JZWTB15Z1D4GJER761SBFZ`) and the complete two-stage test gate (`receipt_01M0K0RFSKBH3EM1Q89RD2Y570`), recorded together by batch receipt `receipt_01M0K0RFV3K0G1N5YQTFMCNQ34`. The first test phase reported 2,180 tests across 24 binaries, followed by the separate vault phase. Both required gates were fresh before work was finished; the close operation recorded plan receipt `receipt_01M0K0VZMS5SXMF3RDRGJRM0BK` and session receipt `receipt_01M0K0VZNBBFMN86Q84DKT3WHA`.
+
+No known correctness limitation remains within the reviewed scope. Deferred progress intentionally retains bounded previews rather than unlimited live output, and execution capture intentionally fails above the documented 4 MiB limit; those are explicit resource contracts rather than silent truncation.
 
 ## Context and Orientation
 
@@ -168,3 +172,5 @@ Plan revision note (2026-08-21 22:17Z): Completed the remaining cancellation sli
 Plan revision note (2026-08-21 22:31Z): Documented the new resource, progress-delivery, cancellation, and receipt contracts before final repository-wide verification.
 
 Plan revision note (2026-08-21 22:38Z): Recorded and corrected the only initial final-gate failure by replacing positional refinement inputs with a typed request; workspace Clippy then passed with warnings denied.
+
+Plan revision note (2026-08-21): Recorded successful formatting, Clippy, contract, and complete two-stage test validation, linked the final receipts, and closed the structured work session successfully.
