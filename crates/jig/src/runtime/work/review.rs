@@ -61,13 +61,15 @@ pub(super) fn refine_with_observer(
 
         let refine_receipt = run_fixer(
             ctx,
-            &opts.plan_id,
-            iteration,
-            &gates,
-            Some(refinement),
-            &findings,
-            PhasePosition::new(iteration, opts.max_iterations)
-                .expect("review iteration is within the configured nonzero maximum"),
+            RefinementIteration {
+                plan_id: &opts.plan_id,
+                iteration,
+                gates: &gates,
+                refinement: Some(refinement),
+                findings: &findings,
+                position: PhasePosition::new(iteration, opts.max_iterations)
+                    .expect("review iteration is within the configured nonzero maximum"),
+            },
             observer,
         )?;
         fixer_failed = refine_receipt["status"].as_str() == Some("failed");
@@ -395,16 +397,28 @@ fn record_invalid_review_output(
     }))
 }
 
+struct RefinementIteration<'a> {
+    plan_id: &'a str,
+    iteration: usize,
+    gates: &'a [WorkReviewGate],
+    refinement: Option<&'a WorkRefinementConfig>,
+    findings: &'a [Value],
+    position: PhasePosition,
+}
+
 fn run_fixer(
     ctx: &RepoContext,
-    plan_id: &str,
-    iteration: usize,
-    gates: &[WorkReviewGate],
-    refinement: Option<&WorkRefinementConfig>,
-    findings: &[Value],
-    position: PhasePosition,
+    request: RefinementIteration<'_>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
+    let RefinementIteration {
+        plan_id,
+        iteration,
+        gates,
+        refinement,
+        findings,
+        position,
+    } = request;
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);
     let phase_label = format!("refinement iteration {iteration}");

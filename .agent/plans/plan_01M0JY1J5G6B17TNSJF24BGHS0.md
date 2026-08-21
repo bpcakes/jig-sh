@@ -41,6 +41,8 @@ After this work, every top-level operation has exactly one signal owner, lower l
   Evidence: Modeling timeout/cancellation/await/cleanup/capture errors as a synthetic failed tool result lets the existing child receipt, `receipt_ids`, batch verdict, and gate indexing paths remain authoritative.
 - Observation: Most long read-only scans already had cancellation-aware implementations for status aggregation, but runtime command dispatch selected their blocking wrappers.
   Evidence: Runtime dispatch now passes `ExecutionControl::cancelled` into state summary, work gate/evidence/finish, and loop status paths; a test that cancels after the dispatch boundary fails inside state collection, not only before or after it.
+- Observation: Explicit phase context exposed an over-wide refinement helper during final Clippy validation.
+  Evidence: Clippy rejected eight positional arguments; `RefinementIteration` now groups the iteration's plan, gates, findings, refinement profile, and phase position without a lint suppression.
 
 ## Decision Log
 
@@ -164,3 +166,5 @@ Plan revision note (2026-08-21 21:51Z): Recorded supervised failures as ordinary
 Plan revision note (2026-08-21 22:17Z): Completed the remaining cancellation slice. A production binary setup test now interrupts a live bootstrap and proves its delayed descendant marker is never written.
 
 Plan revision note (2026-08-21 22:31Z): Documented the new resource, progress-delivery, cancellation, and receipt contracts before final repository-wide verification.
+
+Plan revision note (2026-08-21 22:38Z): Recorded and corrected the only initial final-gate failure by replacing positional refinement inputs with a typed request; workspace Clippy then passed with warnings denied.
