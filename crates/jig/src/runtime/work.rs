@@ -112,15 +112,6 @@ pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Resu
     gates::gates(ctx, WorkGatesRequest { plan_id })
 }
 
-#[allow(dead_code)]
-pub(super) fn gates_snapshot_with_cancellation(
-    ctx: &RepoContext,
-    plan_id: Option<String>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    gates::snapshot_with_cancellation(ctx, plan_id, cancelled)
-}
-
 pub(super) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
     plan_ids: &[String],

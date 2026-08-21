@@ -686,7 +686,6 @@ fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> 
     })
 }
 
-#[allow(dead_code)]
 fn resolve_plan_state_with_cancellation(
     ctx: &RepoContext,
     plan_id: &str,
@@ -711,7 +710,6 @@ fn resolve_work_plan_id(ctx: &RepoContext, requested: Option<String>) -> Result<
     resolve_open_plan_id(&open_plans)
 }
 
-#[allow(dead_code)]
 fn resolve_work_plan_id_with_cancellation(
     ctx: &RepoContext,
     requested: Option<String>,

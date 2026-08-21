@@ -5,14 +5,12 @@ use std::path::Path;
 #[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use jig_contract::status_provider::v1::Input;
 use serde_json::{Value, json};
@@ -227,6 +225,147 @@ timeout_seconds = 3
     assert_eq!(runs[0].id, "factorish.provider-a");
     assert_eq!(runs[1].id, "factorish.provider-b");
     assert!(runs.iter().all(|run| run.report.is_some()));
+}
+
+#[derive(Default)]
+struct LifecycleObserver {
+    started: Vec<String>,
+    finished: Vec<(String, bool)>,
+}
+
+impl ExecutionObserver for LifecycleObserver {
+    fn event(&mut self, event: ExecutionEvent<'_>) {
+        match event {
+            ExecutionEvent::PhaseStarted { label, .. } => self.started.push(label.to_string()),
+            ExecutionEvent::PhaseFinished { label, success, .. } => {
+                self.finished.push((label.to_string(), success));
+            }
+            ExecutionEvent::Output { .. } | ExecutionEvent::Heartbeat { .. } => {}
+        }
+    }
+}
+
+fn scheduler_providers(count: usize) -> Vec<StatusProviderConfig> {
+    (0..count)
+        .map(|index| StatusProviderConfig {
+            id: format!("factorish.provider-{index}"),
+            argv: vec!["unused".into()],
+            timeout_seconds: 1,
+        })
+        .collect()
+}
+
+fn scheduler_run(provider: &StatusProviderConfig, duration: Duration) -> ProviderRun {
+    ProviderRun {
+        id: provider.id.clone(),
+        duration_ms: u64::try_from(duration.as_millis()).unwrap(),
+        report: None,
+        failure: None,
+    }
+}
+
+#[test]
+fn provider_scheduler_bounds_concurrency_and_preserves_order() {
+    use std::sync::atomic::AtomicUsize;
+
+    let providers = scheduler_providers(12);
+    let active = AtomicUsize::new(0);
+    let maximum = AtomicUsize::new(0);
+    let mut observer = LifecycleObserver::default();
+    let runs = run_provider_tasks(
+        Path::new("."),
+        &providers,
+        &|| false,
+        &mut observer,
+        &|_, provider, _| {
+            let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(concurrent, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(30));
+            active.fetch_sub(1, Ordering::SeqCst);
+            scheduler_run(provider, Duration::from_millis(30))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(maximum.load(Ordering::SeqCst), STATUS_PROVIDER_CONCURRENCY);
+    assert_eq!(
+        runs.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
+        providers
+            .iter()
+            .map(|provider| provider.id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(observer.started.len(), providers.len());
+    assert_eq!(observer.finished.len(), providers.len());
+}
+
+#[test]
+fn provider_scheduler_cancellation_leaves_queued_providers_unstarted() {
+    use std::sync::atomic::AtomicUsize;
+
+    let providers = scheduler_providers(12);
+    let cancelled = AtomicBool::new(false);
+    let started = AtomicUsize::new(0);
+    let mut observer = LifecycleObserver::default();
+    let error = run_provider_tasks(
+        Path::new("."),
+        &providers,
+        &|| cancelled.load(Ordering::SeqCst),
+        &mut observer,
+        &|_, provider, _| {
+            let index = started.fetch_add(1, Ordering::SeqCst);
+            if index == 0 {
+                cancelled.store(true, Ordering::SeqCst);
+            }
+            thread::sleep(Duration::from_millis(50));
+            scheduler_run(provider, Duration::from_millis(50))
+        },
+    )
+    .unwrap_err();
+
+    assert!(is_status_collection_cancellation(&error));
+    assert!(started.load(Ordering::SeqCst) <= STATUS_PROVIDER_CONCURRENCY);
+    assert_eq!(observer.started.len(), observer.finished.len());
+    assert!(observer.started.len() < providers.len());
+}
+
+#[test]
+fn provider_scheduler_balances_a_panicked_phase() {
+    let providers = scheduler_providers(2);
+    let mut observer = LifecycleObserver::default();
+    let error = run_provider_tasks(
+        Path::new("."),
+        &providers,
+        &|| false,
+        &mut observer,
+        &|_, provider, cancelled| {
+            if provider.id.ends_with("-0") {
+                panic!("fixture provider panic");
+            }
+            while !cancelled() {
+                thread::sleep(Duration::from_millis(1));
+            }
+            scheduler_run(provider, Duration::from_millis(1))
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("factorish.provider-0"));
+    let mut started = observer.started;
+    let mut finished = observer
+        .finished
+        .iter()
+        .map(|(label, _)| label.clone())
+        .collect::<Vec<_>>();
+    started.sort();
+    finished.sort();
+    assert_eq!(started, finished);
+    assert!(
+        observer
+            .finished
+            .iter()
+            .any(|(label, success)| label == "factorish.provider-0" && !success)
+    );
 }
 
 #[cfg(unix)]

@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -41,6 +42,7 @@ use git::{
 const STATUS_SCHEMA_VERSION: u64 = 1;
 const PROVIDER_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
 const PROVIDER_STDERR_LIMIT: usize = 64 * 1024;
+const STATUS_PROVIDER_CONCURRENCY: usize = 4;
 
 #[cfg(any(not(unix), test))]
 pub(crate) fn snapshot(ctx: &RepoContext) -> Result<Value> {
@@ -120,34 +122,102 @@ fn run_providers_concurrently(
         return Ok(Vec::new());
     }
 
+    run_provider_tasks(ctx.root(), providers, cancelled, observer, &run_provider)
+}
+
+enum ProviderWorkerMessage {
+    Started {
+        index: usize,
+    },
+    Finished {
+        index: usize,
+        run: ProviderRun,
+    },
+    Panicked {
+        index: usize,
+        duration: Duration,
+        message: String,
+    },
+}
+
+fn run_provider_tasks(
+    root: &Path,
+    providers: &[StatusProviderConfig],
+    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionObserver,
+    runner: &(dyn Fn(&Path, &StatusProviderConfig, &dyn Fn() -> bool) -> ProviderRun + Sync),
+) -> Result<Vec<ProviderRun>> {
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let shared_cancelled = Arc::new(AtomicBool::new(false));
+    let next_provider = AtomicUsize::new(0);
     let started = Instant::now();
     let mut heartbeat = HeartbeatSchedule::new();
     let mut ordered = (0..providers.len())
         .map(|_| None)
         .collect::<Vec<Option<ProviderRun>>>();
+    let mut phases_started = vec![false; providers.len()];
+    let mut worker_panic = None;
+    let mut externally_cancelled = false;
     std::thread::scope(|scope| -> Result<()> {
         let (sender, receiver) = mpsc::channel();
-        let mut handles = Vec::with_capacity(providers.len());
-        for (index, provider) in providers.iter().enumerate() {
-            observer.event(ExecutionEvent::PhaseStarted {
-                label: &provider.id,
-                position: PhasePosition::new(index + 1, providers.len())
-                    .expect("status providers are enumerated within a nonempty list"),
-            });
+        let worker_count = providers.len().min(STATUS_PROVIDER_CONCURRENCY);
+        let mut handles = Vec::with_capacity(worker_count);
+        for _ in 0..worker_count {
             let sender = sender.clone();
             let shared_cancelled = Arc::clone(&shared_cancelled);
-            let root = ctx.root();
+            let next_provider = &next_provider;
             handles.push(scope.spawn(move || {
-                let run = run_provider(root, provider, &|| shared_cancelled.load(Ordering::SeqCst));
-                let _ = sender.send((index, run));
+                loop {
+                    if shared_cancelled.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let index = next_provider.fetch_add(1, Ordering::SeqCst);
+                    if index >= providers.len() || shared_cancelled.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let item_started = Instant::now();
+                    if sender
+                        .send(ProviderWorkerMessage::Started { index })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    let run = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        runner(root, &providers[index], &|| {
+                            shared_cancelled.load(Ordering::SeqCst)
+                        })
+                    }));
+                    match run {
+                        Ok(run) => {
+                            if sender
+                                .send(ProviderWorkerMessage::Finished { index, run })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        Err(payload) => {
+                            shared_cancelled.store(true, Ordering::SeqCst);
+                            let message = panic_payload_message(payload);
+                            let _ = sender.send(ProviderWorkerMessage::Panicked {
+                                index,
+                                duration: item_started.elapsed(),
+                                message,
+                            });
+                            break;
+                        }
+                    }
+                }
             }));
         }
         drop(sender);
 
-        let mut received = 0;
-        while received < providers.len() {
+        loop {
             if cancelled() {
+                externally_cancelled = true;
                 shared_cancelled.store(true, Ordering::SeqCst);
             }
             let elapsed = started.elapsed();
@@ -158,14 +228,38 @@ fn run_providers_concurrently(
                 });
             }
             match receiver.recv_timeout(Duration::from_millis(25)) {
-                Ok((index, run)) => {
+                Ok(ProviderWorkerMessage::Started { index }) => {
+                    phases_started[index] = true;
+                    observer.event(ExecutionEvent::PhaseStarted {
+                        label: &providers[index].id,
+                        position: PhasePosition::new(index + 1, providers.len())
+                            .expect("status providers are enumerated within a nonempty list"),
+                    });
+                }
+                Ok(ProviderWorkerMessage::Finished { index, run }) => {
                     observer.event(ExecutionEvent::PhaseFinished {
-                        label: &run.id,
+                        label: &providers[index].id,
                         success: run.failure.is_none(),
                         elapsed: Duration::from_millis(run.duration_ms),
                     });
+                    phases_started[index] = false;
                     ordered[index] = Some(run);
-                    received += 1;
+                }
+                Ok(ProviderWorkerMessage::Panicked {
+                    index,
+                    duration,
+                    message,
+                }) => {
+                    observer.event(ExecutionEvent::PhaseFinished {
+                        label: &providers[index].id,
+                        success: false,
+                        elapsed: duration,
+                    });
+                    phases_started[index] = false;
+                    worker_panic = Some(anyhow!(
+                        "Status provider '{}' worker panicked: {message}",
+                        providers[index].id
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -176,8 +270,17 @@ fn run_providers_concurrently(
                 return Err(anyhow!("A status provider worker panicked"));
             }
         }
-        ensure_collection_active(cancelled)
+        Ok(())
     })?;
+
+    if externally_cancelled {
+        return Err(status_collection_cancellation());
+    }
+    if let Some(error) = worker_panic {
+        return Err(error);
+    }
+    debug_assert!(phases_started.iter().all(|started| !started));
+    ensure_collection_active(cancelled)?;
 
     ordered
         .into_iter()
@@ -191,6 +294,16 @@ fn run_providers_concurrently(
             })
         })
         .collect()
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
 }
 
 fn ensure_collection_active(cancelled: &dyn Fn() -> bool) -> Result<()> {
@@ -399,11 +512,28 @@ fn work_snapshot(
     for plan_id in open_plan_ids {
         ensure_collection_active(cancelled)?;
         gates.push(match &gate_snapshots {
-            Ok(snapshots) => json!({
-                "plan_id": plan_id,
-                "snapshot": snapshots.get(&plan_id),
-                "error": null,
-            }),
+            Ok(snapshots) => match snapshots.get(&plan_id) {
+                Some(snapshot) => json!({
+                    "plan_id": plan_id,
+                    "snapshot": snapshot,
+                    "error": null,
+                }),
+                None => {
+                    let message = format!(
+                        "Batched gate evaluation did not return requested plan '{plan_id}'"
+                    );
+                    errors.push(StatusCollectionError {
+                        scope: format!("work.gates.{plan_id}"),
+                        code: "work_gates_unavailable",
+                        message: message.clone(),
+                    });
+                    json!({
+                        "plan_id": plan_id,
+                        "snapshot": null,
+                        "error": message,
+                    })
+                }
+            },
             Err(error) if is_status_collection_cancellation(error) => {
                 return Err(status_collection_cancellation());
             }
@@ -454,6 +584,7 @@ fn loop_snapshot(
     Ok(snapshot)
 }
 
+#[derive(Debug)]
 struct ProviderRun {
     id: String,
     duration_ms: u64,
