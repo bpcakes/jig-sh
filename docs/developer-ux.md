@@ -163,6 +163,22 @@ targets are sorted before the plan id is derived, so equivalent requests
 against the same repository state have the same plan id. The existing named
 check forms and their receipt controls remain compatible.
 
+Executing one of these plans creates an append-only durable run even when the
+CLI waits for it to finish. Each target reaches its own conclusion and normally
+writes one receipt carrying the run id, structured target, configuration and
+input digests, and normalized findings. A reviewed plan is rejected before a
+run is created if the contract or worktree changed. Query the accepted plan and
+folded target results later with:
+
+```sh
+scripts/jig status run RUN_ID
+```
+
+Checks own their configured process trees, apply target timeouts, and preserve
+every target result on cancellation or explicit fail-fast skips. Receipt flags
+may appear before or after target selectors, for example
+`scripts/jig check api:test --no-receipt`.
+
 ## State Health And Retention
 
 Jig provides an offline repair path for its own repository state. `scripts/jig state diagnose` reports stream sizes and integrity without mutating state; add `--deep` to analyze legacy recursive session summaries and receipt payload growth. `state compact sessions --dry-run` validates and previews the repair. Apply mode creates an exact compressed backup under ignored `.agent/.cache/` before replacing the session stream, and `state restore --backup <path>` verifies that backup before restoring it.

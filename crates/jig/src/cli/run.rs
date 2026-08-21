@@ -235,6 +235,13 @@ fn run_command(cli: Cli) -> Result<()> {
         }
         CommandKind::Status(opts) => {
             let ctx = RepoContext::load()?;
+            if let Some(StatusCommand::Run { run_id }) = &opts.command {
+                let run = crate::state::run_by_id(&ctx, run_id)?;
+                let mut output = serde_json::to_value(run)?;
+                output["ok"] = serde_json::json!(true);
+                output["command"] = serde_json::json!("status run");
+                return emit(json_output, HumanOutput::RunStatus, &output);
+            }
             if opts.tui {
                 return status::tui::run(
                     ctx,
@@ -700,6 +707,9 @@ fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {
     let message = match &cli.command {
         CommandKind::Status(opts) if cli.json && opts.tui => {
             "`--tui` cannot be combined with `--json`"
+        }
+        CommandKind::Status(opts) if opts.command.is_some() && opts.tui => {
+            "a status subject cannot be combined with `--tui`"
         }
         CommandKind::Work(WorkCommand::Start(opts)) if cli.json && opts.print_plan_id => {
             "`--print-plan-id` cannot be combined with `--json`"

@@ -48,7 +48,7 @@ pub(crate) use state::{
     StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
     StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts,
 };
-pub(crate) use status_opts::StatusOpts;
+pub(crate) use status_opts::{StatusCommand, StatusOpts};
 pub(crate) use vault::{
     VaultAuditCommand, VaultAuditVerifyOpts, VaultBackupCommand, VaultBackupCreateOpts,
     VaultBackupRestoreOpts, VaultCommand, VaultExecOpts, VaultFieldCommand, VaultFieldListOpts,
@@ -174,6 +174,7 @@ versioned aggregate or --tui for the interactive dashboard.
 
 Examples:
   jig status
+  jig status run RUN_ID
   jig status --json
   jig status --tui";
 

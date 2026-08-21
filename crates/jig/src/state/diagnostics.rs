@@ -21,11 +21,12 @@ use crate::context::RepoContext;
 
 use super::jsonl::scan_jsonl_raw;
 
-const STATE_STREAMS: [(&str, &str); 4] = [
+const STATE_STREAMS: [(&str, &str); 5] = [
     ("sessions", "sessions.jsonl"),
     ("plans", "plans.jsonl"),
     ("receipts", "receipts.jsonl"),
     ("decisions", "decisions.jsonl"),
+    ("runs", "runs.jsonl"),
 ];
 const OVERSIZED_RECORD_BYTES: u64 = 1024 * 1024;
 const RECEIPT_RETENTION_RECOMMENDATION_BYTES: u64 = 8 * 1024 * 1024;

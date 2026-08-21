@@ -22,7 +22,10 @@ pub(crate) use receipts::{
     current_worktree_fingerprint_with_cancellation, work_gate_receipt_index,
     work_gate_receipt_index_with_cancellation,
 };
-pub(crate) use receipts::{ReceiptInput, ReceiptListFilter, receipts_list, record_receipt};
+pub(crate) use receipts::{
+    ReceiptInput, ReceiptListFilter, TargetReceiptMetadata, receipts_list, record_receipt,
+    record_target_receipt,
+};
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
 #[cfg(test)]
@@ -32,6 +35,10 @@ pub(crate) use receipts::{
 use records::DecisionRecord;
 #[cfg(test)]
 use records::{PlanEvent, ReceiptRecord};
+pub(crate) use runs::{
+    DurableRun, complete_run, mark_run_running, mark_target_started, record_target_result,
+    run_by_id, start_run,
+};
 #[cfg(test)]
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
@@ -54,6 +61,7 @@ mod maintenance;
 mod plans;
 mod receipts;
 mod records;
+mod runs;
 mod session_compaction;
 mod sessions;
 mod support;

@@ -64,22 +64,6 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
     )
 }
 
-pub(in crate::runtime) fn execute_manifest_tool_result_request(
-    ctx: &RepoContext,
-    tool_name: &str,
-    args: Value,
-    request: crate::command::ToolRequest,
-) -> Result<Value> {
-    let (plan_id, record_receipt) = request.into_parts();
-    execute_manifest_tool_with_options(
-        ctx,
-        tool_name,
-        args,
-        plan_id,
-        ManifestToolExecutionOptions::collect_result(record_receipt, true, true),
-    )
-}
-
 pub(in crate::runtime) fn manifest_tool_result_failure(
     response: &Value,
 ) -> Result<Option<(i32, String)>> {
@@ -195,7 +179,7 @@ fn execute_manifest_tool_with_options(
     }
 }
 
-fn run_native_tool(
+pub(in crate::runtime) fn run_native_tool(
     ctx: &RepoContext,
     tool_name: &str,
     args_value: &Value,

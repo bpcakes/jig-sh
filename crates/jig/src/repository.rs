@@ -13,7 +13,7 @@ mod inspect;
 mod planner;
 
 pub(crate) use inspect::{InspectRequest, inspect_repository};
-pub(crate) use planner::{PlanRunRequest, plan_run};
+pub(crate) use planner::{PlanRunRequest, plan_run, validate_run_plan};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 

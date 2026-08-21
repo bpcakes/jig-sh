@@ -43,6 +43,7 @@ pub(super) enum HumanOutput {
     Setup,
     Info,
     Status,
+    RunStatus,
     VaultRun,
     VaultGeneric,
     AgentDoctor,
@@ -100,6 +101,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::Setup => format_setup_summary(value),
         HumanOutput::Info => format_info_summary(value),
         HumanOutput::Status => status::format_summary(value),
+        HumanOutput::RunStatus => format_run_status_summary(value),
         HumanOutput::VaultRun => format_vault_run_summary(value),
         HumanOutput::VaultGeneric => format_vault_generic_summary(value),
         HumanOutput::AgentDoctor => format_agent_doctor_summary(value),
@@ -202,6 +204,34 @@ fn structured_target_text(value: &serde_json::Value) -> String {
     let component = value["component"].as_str().unwrap_or("?");
     let action = value["action"].as_str().unwrap_or("?");
     format!("{component}:{action}")
+}
+
+fn format_run_status_summary(value: &serde_json::Value) -> String {
+    let result = &value["result"];
+    let run_id = result["run_id"].as_str().unwrap_or("<unknown>");
+    let plan_id = result["plan_id"].as_str().unwrap_or("<unknown>");
+    let status = result["status"].as_str().unwrap_or("unknown");
+    let conclusion = result["conclusion"].as_str();
+    let state = conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+    let mut lines = vec![
+        format!("Run {run_id}: {state}"),
+        format!("  Plan: {plan_id}"),
+    ];
+    if let Some(targets) = result["targets"].as_array() {
+        for target in targets {
+            let address = structured_target_text(&target["target"]);
+            let status = target["status"].as_str().unwrap_or("unknown");
+            let conclusion = target["conclusion"].as_str();
+            let state =
+                conclusion.map_or_else(|| status.to_owned(), |value| format!("{status}/{value}"));
+            let receipt = target["receipt_id"]
+                .as_str()
+                .map_or_else(String::new, |id| format!(", receipt {id}"));
+            lines.push(format!("  - {address}: {state}{receipt}"));
+        }
+    }
+    lines.push("  full report: rerun with --json".into());
+    lines.join("\n")
 }
 
 pub(super) fn print_json(value: &serde_json::Value) -> Result<()> {

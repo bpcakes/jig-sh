@@ -46,14 +46,13 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
 
     fn try_from(opts: CheckOpts) -> Result<Self> {
         let CheckOpts {
-            tool,
-            profile,
-            affected,
-            explain,
-            fail_fast,
+            mut tool,
+            mut profile,
+            mut affected,
+            mut explain,
+            mut fail_fast,
             command,
         } = opts;
-        let selection_requested = profile.is_some() || affected.is_some() || explain || fail_fast;
 
         match command {
             None => Ok(Self::Repository(command::RepositoryCheckRequest {
@@ -65,6 +64,14 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                 tool: tool.into(),
             })),
             Some(CheckCommand::Selectors(selectors)) => {
+                let selectors = normalize_external_check_args(
+                    selectors,
+                    &mut tool,
+                    &mut profile,
+                    &mut affected,
+                    &mut explain,
+                    &mut fail_fast,
+                )?;
                 Ok(Self::Repository(command::RepositoryCheckRequest {
                     selectors,
                     profile,
@@ -74,7 +81,7 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     tool: tool.into(),
                 }))
             }
-            Some(command) if selection_requested => {
+            Some(command) if profile.is_some() || affected.is_some() || explain || fail_fast => {
                 let (selector, child_tool) = repository_selector(command)?;
                 Ok(Self::Repository(command::RepositoryCheckRequest {
                     selectors: vec![selector.into()],
@@ -88,6 +95,72 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
             Some(command) => direct_check_command(command, tool),
         }
     }
+}
+
+fn normalize_external_check_args(
+    raw: Vec<String>,
+    tool: &mut ToolOpts,
+    profile: &mut Option<String>,
+    affected: &mut Option<String>,
+    explain: &mut bool,
+    fail_fast: &mut bool,
+) -> Result<Vec<String>> {
+    let mut selectors = Vec::new();
+    let mut args = raw.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--no-receipt" => tool.no_receipt = true,
+            "--explain" => *explain = true,
+            "--fail-fast" => *fail_fast = true,
+            "--plan-id" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--plan-id requires a value"))?;
+                set_external_value(&mut tool.plan_id, value, "--plan-id")?;
+            }
+            "--profile" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--profile requires a value"))?;
+                set_external_value(profile, value, "--profile")?;
+            }
+            "--affected" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--affected requires a value"))?;
+                set_external_value(affected, value, "--affected")?;
+            }
+            _ if arg.starts_with("--plan-id=") => set_external_value(
+                &mut tool.plan_id,
+                arg["--plan-id=".len()..].to_owned(),
+                "--plan-id",
+            )?,
+            _ if arg.starts_with("--profile=") => {
+                set_external_value(profile, arg["--profile=".len()..].to_owned(), "--profile")?
+            }
+            _ if arg.starts_with("--affected=") => set_external_value(
+                affected,
+                arg["--affected=".len()..].to_owned(),
+                "--affected",
+            )?,
+            _ if arg.starts_with('-') => anyhow::bail!("unknown check option '{arg}'"),
+            _ => selectors.push(arg),
+        }
+    }
+    if tool.no_receipt && tool.plan_id.is_some() {
+        anyhow::bail!("--no-receipt cannot be combined with --plan-id");
+    }
+    Ok(selectors)
+}
+
+fn set_external_value(target: &mut Option<String>, value: String, option: &str) -> Result<()> {
+    if value.is_empty() {
+        anyhow::bail!("{option} requires a non-empty value");
+    }
+    if target.replace(value).is_some() {
+        anyhow::bail!("{option} cannot be used more than once");
+    }
+    Ok(())
 }
 
 fn direct_check_command(
@@ -709,6 +782,31 @@ impl From<ProxyServiceRuntimeOpts> for command::ProxyServiceRuntimeRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_check_selectors_accept_execution_flags_after_targets() {
+        let request = command::CheckCommand::try_from(CheckOpts {
+            tool: ToolOpts::default(),
+            profile: None,
+            affected: None,
+            explain: false,
+            fail_fast: false,
+            command: Some(CheckCommand::Selectors(vec![
+                "api:test".into(),
+                "web:lint".into(),
+                "--no-receipt".into(),
+                "--fail-fast".into(),
+            ])),
+        })
+        .unwrap();
+
+        let command::CheckCommand::Repository(request) = request else {
+            panic!("expected repository check request");
+        };
+        assert_eq!(request.selectors, ["api:test", "web:lint"]);
+        assert!(request.fail_fast);
+        assert_eq!(request.tool.into_parts(), (None, false));
+    }
 
     #[test]
     fn dev_conversion_preserves_default_launch_and_replace() {

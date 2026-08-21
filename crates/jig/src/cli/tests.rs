@@ -133,15 +133,15 @@ fn parses_agent_native_check_selections() {
     ));
 
     let exact =
-        Cli::try_parse_from(["jig", "check", "--no-receipt", "api:test", "web:lint"]).unwrap();
+        Cli::try_parse_from(["jig", "check", "api:test", "web:lint", "--no-receipt"]).unwrap();
     match exact.command {
         CommandKind::Check(CheckOpts {
             tool,
             command: Some(CheckCommand::Selectors(selectors)),
             ..
         }) => {
-            assert!(tool.no_receipt);
-            assert_eq!(selectors, ["api:test", "web:lint"]);
+            assert!(!tool.no_receipt);
+            assert_eq!(selectors, ["api:test", "web:lint", "--no-receipt"]);
         }
         other => panic!("expected target selectors, got {other:?}"),
     }

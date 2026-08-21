@@ -15,6 +15,7 @@ mod agent;
 mod loops;
 mod migration;
 mod prompt;
+mod run_execution;
 mod sqlx;
 mod tool_execution;
 mod vault;
@@ -325,49 +326,28 @@ fn dispatch_repository_check(
         }));
     }
 
-    let mut results = Vec::new();
-    let mut failed_targets = Vec::new();
-    for layer in &plan.execution_layers {
-        for target in layer {
-            let alias = catalog
-                .aliases_for_target(target)
-                .first()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "target '{target}' has no legacy execution alias; native target execution is not available yet"
-                    )
-                })?;
-            let response = tool_execution::execute_manifest_tool_result_request(
-                ctx,
-                alias,
-                json!({}),
-                request.tool.clone(),
-            )?;
-            let failed = tool_execution::manifest_tool_result_failure(&response)?.is_some();
-            results.push(json!({
-                "target": target,
-                "tool": alias,
-                "response": response,
-            }));
-            if failed {
-                failed_targets.push(target.clone());
-                if request.fail_fast {
-                    break;
-                }
-            }
-        }
-        if request.fail_fast && !failed_targets.is_empty() {
-            break;
-        }
-    }
+    let (work_plan_id, record_receipts) = request.tool.into_parts();
+    let execution = run_execution::execute_check_run(
+        ctx,
+        &catalog,
+        plan.clone(),
+        run_execution::ExecuteCheckRunRequest {
+            work_plan_id,
+            record_receipts,
+            fail_fast: request.fail_fast,
+        },
+        &|| false,
+    )?;
+    let ok = execution.run.result.conclusion == Some(jig_contract::RunConclusion::Success);
 
     Ok(json!({
-        "ok": failed_targets.is_empty(),
+        "ok": ok,
         "command": "check",
         "executed": true,
         "plan": plan,
-        "results": results,
-        "failed_targets": failed_targets,
+        "run": execution.run.result,
+        "results": execution.results,
+        "failed_targets": execution.failed_targets,
     }))
 }
 

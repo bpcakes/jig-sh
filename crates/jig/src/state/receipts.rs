@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use jig_contract::{Finding, TargetId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -46,6 +47,15 @@ pub(crate) struct ReceiptInput<'a> {
     pub(crate) collect_git_metadata: bool,
     pub(crate) collect_worktree_fingerprint: bool,
     pub(crate) worktree_fingerprint_override: Option<std::result::Result<String, String>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TargetReceiptMetadata {
+    pub(crate) run_id: String,
+    pub(crate) target: TargetId,
+    pub(crate) config_digest: String,
+    pub(crate) input_digest: String,
+    pub(crate) findings: Vec<Finding>,
 }
 
 pub(super) struct StateToolReceipt<'a> {
@@ -373,6 +383,22 @@ fn current_worktree_fingerprint_from_result(
 }
 
 pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
+    record_receipt_with_target(ctx, input, None)
+}
+
+pub(crate) fn record_target_receipt(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    target: TargetReceiptMetadata,
+) -> Result<String> {
+    record_receipt_with_target(ctx, input, Some(target))
+}
+
+fn record_receipt_with_target(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    target: Option<TargetReceiptMetadata>,
+) -> Result<String> {
     ensure_state_layout(ctx)?;
     let mut git_metadata = receipt_git_metadata(
         ctx,
@@ -391,6 +417,18 @@ pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Resu
             }
         }
     }
+    let (run_id, target_id, config_digest, input_digest, findings) = target.map_or_else(
+        || (None, None, None, None, Vec::new()),
+        |metadata| {
+            (
+                Some(metadata.run_id),
+                Some(metadata.target),
+                Some(metadata.config_digest),
+                Some(metadata.input_digest),
+                metadata.findings,
+            )
+        },
+    );
     let receipt = ReceiptRecord {
         id: new_id("receipt"),
         session_id: match input.session_override {
@@ -407,6 +445,11 @@ pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Resu
         stdout_preview: receipt_output_preview(input.stdout, input.exit_status),
         stderr_preview: receipt_output_preview(input.stderr, input.exit_status),
         evidence: input.evidence,
+        run_id,
+        target: target_id,
+        config_digest,
+        input_digest,
+        findings,
         changed_paths: git_metadata.changed_paths,
         changed_path_count: git_metadata.changed_path_count,
         changed_paths_truncated: git_metadata.changed_paths_truncated,

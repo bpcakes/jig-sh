@@ -386,6 +386,206 @@ checks = ["jig.fmt_check", "jig.test"]
 }
 
 #[test]
+fn repository_check_persists_queryable_runs_and_target_receipts() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+[commands]
+fmt_command = "printf 'fmt ran\n'"
+test_command = "printf 'test ran\n'"
+
+[work]
+checks = ["jig.fmt_check", "jig.test"]
+"#,
+        )
+        .required_commands(["fmt_command", "test_command"])
+        .tool(json!({
+            "name": "jig.fmt_check",
+            "kind": "command",
+            "description": "Run formatting.",
+            "command": "fmt_command"
+        }))
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run tests.",
+            "command": "test_command"
+        }))
+        .write();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = super::dispatch(
+        &ctx,
+        RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: Vec::new(),
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(Some("plan_work".into()), true),
+            },
+        )),
+    )
+    .unwrap();
+    let run_id = output["run"]["run_id"].as_str().unwrap();
+
+    let durable = crate::state::run_by_id(&ctx, run_id).unwrap();
+    assert_eq!(durable.work_plan_id.as_deref(), Some("plan_work"));
+    assert_eq!(durable.result.status, jig_contract::RunStatus::Completed);
+    assert_eq!(
+        durable.result.conclusion,
+        Some(jig_contract::RunConclusion::Success)
+    );
+    assert_eq!(durable.result.targets.len(), 2);
+    assert!(
+        durable
+            .result
+            .targets
+            .iter()
+            .all(|target| target.receipt_id.is_some())
+    );
+
+    let receipts = crate::state::receipts_list(
+        &ctx,
+        crate::state::ReceiptListFilter {
+            session_id: None,
+            plan_id: Some("plan_work".into()),
+            tool_name: None,
+            failed_only: false,
+            limit: 20,
+        },
+    )
+    .unwrap();
+    let receipts = receipts["receipts"].as_array().unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts.iter().all(|receipt| receipt["run_id"] == run_id));
+    assert!(receipts.iter().all(|receipt| receipt["target"].is_object()));
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["config_digest"].as_str().is_some())
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["input_digest"].as_str().is_some())
+    );
+}
+
+#[test]
+fn repository_execution_rejects_a_stale_plan_before_creating_a_run() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+[commands]
+test_command = "printf 'test ran\n'"
+
+[work]
+checks = ["jig.test"]
+"#,
+        )
+        .required_commands(["test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run tests.",
+            "command": "test_command"
+        }))
+        .write();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan =
+        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+            .unwrap();
+    fs::write(temp.path().join("changed-after-plan.txt"), "changed\n").unwrap();
+
+    let error = super::run_execution::execute_check_run(
+        &ctx,
+        &catalog,
+        plan,
+        super::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| false,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("stale or was modified"));
+    assert!(!temp.path().join(".agent/state/runs.jsonl").exists());
+    assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[test]
+fn repository_execution_records_cancelled_results_for_every_target() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+[commands]
+first_command = "printf 'first\n'"
+second_command = "printf 'second\n'"
+
+[work]
+checks = ["jig.first", "jig.second"]
+"#,
+        )
+        .required_commands(["first_command", "second_command"])
+        .tool(json!({
+            "name": "jig.first",
+            "kind": "command",
+            "description": "Run first.",
+            "command": "first_command"
+        }))
+        .tool(json!({
+            "name": "jig.second",
+            "kind": "command",
+            "description": "Run second.",
+            "command": "second_command"
+        }))
+        .write();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan =
+        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+            .unwrap();
+
+    let execution = super::run_execution::execute_check_run(
+        &ctx,
+        &catalog,
+        plan,
+        super::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| true,
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.run.result.conclusion,
+        Some(jig_contract::RunConclusion::Cancelled)
+    );
+    assert_eq!(execution.run.result.targets.len(), 2);
+    assert!(execution.run.result.targets.iter().all(|target| {
+        target.status == jig_contract::RunStatus::Completed
+            && target.conclusion == Some(jig_contract::RunConclusion::Cancelled)
+            && target.receipt_id.is_some()
+    }));
+}
+
+#[test]
 fn repository_check_collects_failures_unless_fail_fast_is_explicit() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())

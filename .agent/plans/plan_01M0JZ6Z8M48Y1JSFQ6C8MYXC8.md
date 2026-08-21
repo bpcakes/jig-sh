@@ -36,7 +36,7 @@ and, over MCP:
 - [x] (2026-08-21 20:24Z) Slice 1: added validated repository identities, component/action/profile records, immutable plan records, separate run status/conclusion, normalized findings/results, generated JSON Schema support, and a legacy manifest serialization regression.
 - [x] (2026-08-21 20:29Z) Slice 2: added one validated repository catalog, raw authored/resolved configuration digests, v6 component/action/profile inputs, and deterministic v2–v5 `repo` target projection with bidirectional aliases and a synthesized default profile.
 - [x] (2026-08-21 20:44Z) Slice 3: added component/target/profile inspection, one deterministic selector and dependency planner, read-only plan explanation, legacy-profile execution, and a useful bare `jig check` while preserving unmodified named legacy check responses.
-- [ ] Slice 4: add durable run state and target-aware receipt fields with old-record compatibility; commit independently.
+- [x] (2026-08-21 21:21Z) Slice 4: added stale-plan validation, owned target execution, append-only run lifecycle folding, target-aware compatible receipts, terminal cancellation/fail-fast results, and `jig status run RUN_ID` lookup.
 - [ ] Slice 5: turn Rust, Go, and TypeScript feature metadata into adapter contributions and make v6 templates component-native; commit independently.
 - [ ] Slice 6: add target/profile evidence gates while retaining tool gates; commit independently.
 - [ ] Slice 7: expose bounded MCP inspect/plan/execute/cancel operations with strict input/output schemas and durable lookup; commit independently.
@@ -63,6 +63,9 @@ and, over MCP:
 
 - Observation: making the existing Clap check subcommand optional preserves every established policy flag while an external-subcommand fallback accepts stack-neutral `component:action` selectors.
   Evidence: focused parser tests cover bare check, named checks, exact/multiple target selectors, profile explanation, and existing policy subcommands; the launcher/Clap allowlist test remains green.
+
+- Observation: Clap's external-subcommand fallback retains options written after an unknown target as raw selector tokens, unlike known legacy check subcommands.
+  Evidence: dogfooding `check repo:contract --no-receipt` initially treated `--no-receipt` as an action id; conversion now normalizes the closed repository-check option set on either side of selectors and has a regression test.
 
 ## Decision Log
 
@@ -96,6 +99,10 @@ and, over MCP:
 
 - Decision: CLI checks wait for their run and render the collected result. MCP execution starts a worker and immediately returns the durable run handle; cancellation uses the existing owned-process cancellation path.
   Rationale: interactive shell expectations stay conventional while MCP clients can disconnect, poll, or cancel long-running work.
+  Date/Author: 2026-08-21 / Codex.
+
+- Decision: Every selected target receives a terminal target result and, unless explicitly disabled, a target-attributed receipt, including dependency, fail-fast, and cancellation skips. Compatibility `results` continue to list only commands that actually started.
+  Rationale: durable evidence cannot leave ambiguous queued targets, while existing aggregate CLI consumers retain the meaning of their executed-result list.
   Date/Author: 2026-08-21 / Codex.
 
 - Decision: Do not implement artifact caching or infer action dependencies from component dependencies.

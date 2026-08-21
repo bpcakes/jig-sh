@@ -32,6 +32,45 @@ pub(crate) fn plan_run(
     plan_run_with_source(catalog, request, source)
 }
 
+/// Re-resolves a plan request against current checked-in configuration and
+/// source identity. An accepted plan is executable only while it remains the
+/// exact deterministic result of that resolution.
+pub(crate) fn validate_run_plan(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    plan: &RunPlan,
+) -> Result<()> {
+    if plan.schema_version != RunPlan::SCHEMA_VERSION {
+        bail!(
+            "run plan '{}' uses unsupported schema version {}",
+            plan.id,
+            plan.schema_version
+        );
+    }
+    if plan.config_digest != catalog.config_digest() {
+        bail!(
+            "run plan '{}' is stale: repository configuration changed",
+            plan.id
+        );
+    }
+    let expected = plan_run(
+        ctx,
+        catalog,
+        PlanRunRequest {
+            selectors: plan.selectors.clone(),
+            profile: plan.profile.as_ref().map(ToString::to_string),
+            affected_base: plan.affected_base.clone(),
+        },
+    )?;
+    if expected != *plan {
+        bail!(
+            "run plan '{}' is stale or was modified after planning; inspect a fresh plan before execution",
+            plan.id
+        );
+    }
+    Ok(())
+}
+
 fn head_commit(ctx: &RepoContext) -> Result<Option<String>> {
     let output = Command::new("git")
         .current_dir(ctx.root())

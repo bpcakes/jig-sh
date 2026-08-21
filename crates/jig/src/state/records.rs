@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::git_receipts::DiffStat;
+use jig_contract::{Finding, RunConclusion, RunPlan, TargetId, TargetRunResult};
 
 #[derive(Clone, Debug)]
 pub(super) enum SessionEvent {
@@ -431,6 +432,16 @@ pub(super) struct ReceiptRecord {
     pub(super) stderr_preview: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) evidence: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) target: Option<TargetId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) config_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) input_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) findings: Vec<Finding>,
     pub(super) changed_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) changed_path_count: Option<usize>,
@@ -447,6 +458,28 @@ pub(super) struct ReceiptRecord {
     pub(super) worktree_fingerprint: Option<String>,
     #[serde(default)]
     pub(super) worktree_fingerprint_error: Option<String>,
+}
+
+/// One append-only transition in a durable target run.
+///
+/// This intentionally uses a string event name and optional payloads rather
+/// than a tagged enum so readers can skip events written by newer runtimes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RunEventRecord {
+    pub(super) id: String,
+    pub(super) run_id: String,
+    pub(super) event: String,
+    pub(super) timestamp_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) work_plan_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) plan: Option<RunPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) target: Option<TargetId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) result: Option<TargetRunResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) conclusion: Option<RunConclusion>,
 }
 
 #[derive(Clone, Debug, Serialize, serde::Deserialize)]

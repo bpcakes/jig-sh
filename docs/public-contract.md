@@ -192,10 +192,21 @@ Profiles and explicit selectors are mutually exclusive.
 
 Executing a planned selection on a legacy contract returns an aggregate check
 response with `command: "check"`, `executed: true`, the exact plan, per-target
-legacy tool responses, and structured `failed_targets`. Existing named v2–v5
-check commands without planning flags retain their prior single-tool response.
-`--fail-fast` is explicit; aggregate selection otherwise collects every target
-failure it can execute.
+legacy tool responses, a terminal `run`, and structured `failed_targets`.
+Before execution the runtime deterministically resolves the reviewed request
+again and rejects a stale or modified plan without creating state. Existing
+named v2–v5 check commands without planning flags retain their prior single-tool
+response. `--fail-fast` is explicit; aggregate selection otherwise collects
+every target failure it can execute. Receipt options are accepted on either
+side of external target selectors.
+
+Every planned execution appends lifecycle events to `runs.jsonl`: one queued
+event owns the accepted immutable plan, followed by running/target events and
+exactly one terminal conclusion. `jig status run RUN_ID` returns that plan and
+the current folded `RunResult`. Target conclusions are independent of lifecycle
+status and use `success`, `failure`, `cancelled`, `timed_out`, `blocked`, or
+`skipped`. Unknown future run event names are ignored; malformed known
+lifecycle transitions fail closed.
 
 ## Runtime State
 
@@ -207,10 +218,11 @@ Current JSONL state files:
 - `plans.jsonl`
 - `receipts.jsonl`
 - `decisions.jsonl`
+- `runs.jsonl`
 
 State readers should tolerate missing files by treating them as empty. JSONL readers should ignore blank lines and fail loudly on malformed nonblank records. Session-start records retain their durable write-time summary, but `summary.recent_sessions` contains shallow event references whose nested `summary` is `null`; historical records that recursively embedded older summaries remain readable. Canonical session readers collapse duplicate IDs with identical event envelopes, as can arise after a line-union merge, and reject the same ID with a conflicting envelope.
 
-Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Older receipts without the new path-summary fields remain readable. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
+Receipt records may include an `evidence` object for structured runtime-owned evidence that does not fit safely in truncated stdout or stderr previews. A target receipt additionally carries optional `run_id`, structured `target`, `config_digest`, `input_digest`, and normalized `findings`; older records deserialize with those fields absent. Receipt Git metadata excludes `.agent/**`; `changed_paths` contains at most 100 sorted paths, while optional `changed_path_count`, `changed_paths_truncated`, and `changed_paths_digest` describe the full path set. Successful stdout and stderr previews use a 512-byte truncation threshold and failed previews use a 4,000-byte threshold. Older receipts without the new path-summary fields remain readable. Codex review receipts use `evidence.kind = "codex_review"` and store normalized findings there, capped to the first 100 findings with long finding fields shortened; raw finding and actionable counts remain available so truncation does not hide a failing gate. Their receipt `exit_status` is the gate verdict, while `evidence.codex_exit_status` is the underlying Codex process status. They also include short stdout/stderr previews for failed review debugging. Codex refinement receipts use `evidence.kind = "codex_refine"` and store the refinement iteration, optional refinement profile metadata, reviewed gate ids, finding fingerprints, and finding count.
 
 The active-session pointer is cache state, currently resolved through git as `jig-current-session.txt` and falling back under `.agent/.cache/`. Generated repos should not treat that path as a durable JSONL record.
 

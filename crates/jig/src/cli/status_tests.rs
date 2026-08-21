@@ -8,6 +8,7 @@ fn parses_top_level_status_command() {
     assert!(matches!(
         cli.command,
         CommandKind::Status(StatusOpts {
+            command: None,
             tui: false,
             refresh_seconds: None
         })
@@ -32,4 +33,14 @@ fn parses_top_level_status_command() {
     assert!(Cli::try_parse_from(["jig", "status", "--summary"]).is_err());
     assert!(Cli::try_parse_from(["jig", "status", "--refresh-seconds", "10"]).is_err());
     assert!(Cli::try_parse_from(["jig", "status", "--tui", "--refresh-seconds", "0"]).is_err());
+
+    let run = Cli::try_parse_from(["jig", "status", "run", "run_123"]).unwrap();
+    assert!(matches!(
+        run.command,
+        CommandKind::Status(StatusOpts {
+            command: Some(StatusCommand::Run { run_id }),
+            tui: false,
+            refresh_seconds: None,
+        }) if run_id == "run_123"
+    ));
 }
