@@ -7,7 +7,7 @@ on:
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
       - "Cargo.toml"
@@ -30,7 +30,7 @@ on:
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
-      - <<[ (rust_migration_dir ~ "/**") | tojson ]>>
+      - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
       - "Cargo.toml"

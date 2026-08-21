@@ -52,6 +52,10 @@ pub(super) static EMBEDDED_SCAFFOLD_TEMPLATE_FILES: &[EmbeddedScaffoldTemplateFi
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/config/config.go.jinja")),
     },
     EmbeddedScaffoldTemplateFile {
+        relative_path: "go-react/workspace/internal/config/config_test.go.jinja",
+        contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/config/config_test.go.jinja")),
+    },
+    EmbeddedScaffoldTemplateFile {
         relative_path: "go-react/workspace/internal/database/database.go.jinja",
         contents: include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bootstrap/scaffold/embedded_template_snapshots/go-react/workspace/internal/database/database.go.jinja")),
     },

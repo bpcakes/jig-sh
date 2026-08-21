@@ -609,6 +609,96 @@ fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan,
 }
 
 #[cfg(unix)]
+fn assert_rendered_scaffold_go_is_formatted_and_config_is_runnable(
+    plan: &scaffold::InitScaffoldPlan,
+    case: &str,
+) {
+    if !test_program_is_available("gofmt", &["-h"])
+        || !test_program_is_available("go", &["version"])
+    {
+        return;
+    }
+
+    let rendered = plan.render_files().unwrap();
+    let temp = tempdir().unwrap();
+    let mut go_paths = Vec::new();
+    let mut config_source = None;
+    let mut config_test_source = None;
+    for (index, file) in rendered
+        .into_iter()
+        .filter(|file| file.relative.ends_with(".go"))
+        .enumerate()
+    {
+        if file.relative == "internal/config/config.go" {
+            config_source = Some(file.contents.clone());
+        } else if file.relative == "internal/config/config_test.go" {
+            config_test_source = Some(file.contents.clone());
+        }
+        let path = temp.path().join(format!("rendered-{index}.go"));
+        fs::write(&path, file.contents).unwrap();
+        go_paths.push(path);
+    }
+
+    assert!(!go_paths.is_empty(), "{case}: scaffold rendered no Go");
+    let output = Command::new("gofmt")
+        .arg("-l")
+        .args(&go_paths)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && output.stdout.is_empty(),
+        "rendered Go was not gofmt-stable for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config_dir = temp.path().join("config");
+    fs::create_dir(&config_dir).unwrap();
+    fs::write(
+        config_dir.join("config.go"),
+        config_source.expect("Go scaffold renders internal/config/config.go"),
+    )
+    .unwrap();
+    fs::write(
+        config_dir.join("config_test.go"),
+        config_test_source.expect("Go scaffold renders internal/config/config_test.go"),
+    )
+    .unwrap();
+    let output = Command::new("go")
+        .args(["test", "config.go", "config_test.go"])
+        .current_dir(&config_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rendered Go config did not compile and pass its address cases for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new("go")
+        .args(["vet", "config.go", "config_test.go"])
+        .current_dir(&config_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "rendered Go config did not pass go vet for {case}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+fn test_program_is_available(program: &str, args: &[&str]) -> bool {
+    match Command::new(program).args(args).output() {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => panic!("failed to probe {program}: {error}"),
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn rust_react_package_stem_limit_is_applied_before_destination_mutation() {
     let _guard = lock_env();

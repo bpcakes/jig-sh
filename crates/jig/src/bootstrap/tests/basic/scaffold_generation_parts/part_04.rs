@@ -90,6 +90,39 @@ fn scaffold_rendered_rust_is_formatted_across_names_databases_and_migration_path
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn scaffold_rendered_go_is_formatted_and_config_handles_ip_hosts() {
+    let planning_root = tempdir().unwrap();
+    for db in [ScaffoldDb::None, ScaffoldDb::Postgres] {
+        let plan = scaffold::InitScaffoldPlan::from_opts(
+            &ScaffoldOpts {
+                preset: Some(ScaffoldPreset::GoReact),
+                db: Some(db),
+                frontends: Vec::new(),
+                frontend_list: Vec::new(),
+            },
+            &AnswerOpts {
+                repo_name: Some("demo".into()),
+                go_module: Some("example.com/ExampleProject".into()),
+                ..AnswerOpts::default()
+            },
+            planning_root.path(),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_rendered_scaffold_go_is_formatted_and_config_is_runnable(
+            &plan,
+            match db {
+                ScaffoldDb::None => "none",
+                ScaffoldDb::Postgres => "postgres",
+                ScaffoldDb::Sqlite => unreachable!(),
+            },
+        );
+    }
+}
+
 #[test]
 fn go_react_postgres_renders_go_contract_and_database_boundaries() {
     let planning_root = tempdir().unwrap();
@@ -125,6 +158,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
     assert!(paths.contains("cmd/api/database_command.go"));
     assert!(paths.contains("cmd/openapi/main.go"));
     assert!(paths.contains("sqlc.yaml"));
+    assert!(paths.contains("internal/config/config_test.go"));
     assert!(paths.contains("internal/database/migrations/00001_app_metadata.sql"));
     assert!(paths.contains("internal/database/database_test.go"));
     assert!(paths.contains("scripts/test-postgres.sh"));
@@ -310,6 +344,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
+    assert_eq!(
+        go_tests
+            .matches(r#"- "scripts/test-postgres.sh""#)
+            .count(),
+        2
+    );
     assert!(go_tests.contains("postgres-integration:\n    runs-on: ubuntu-latest"));
     assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
     assert!(!destination.join(".go-version").exists());

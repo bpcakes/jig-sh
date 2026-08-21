@@ -1,7 +1,9 @@
 package config
 
 import (
-	"fmt"
+[% if db_enabled %]	"errors"
+[% endif %]
+	"net"
 	"os"
 )
 
@@ -15,12 +17,12 @@ func Load() (Config, error) {
 	port := envOrDefault("PORT", "3000")
 [% if db_enabled %]	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
+		return Config{}, errors.New("DATABASE_URL is required")
 	}
 [% else %]	databaseURL := os.Getenv("DATABASE_URL")
 [% endif %]
 	return Config{
-		Address:     fmt.Sprintf("%s:%s", host, port),
+		Address:     net.JoinHostPort(host, port),
 		DatabaseURL: databaseURL,
 	}, nil
 }

@@ -1,0 +1,28 @@
+package config
+
+import "testing"
+
+func TestLoadJoinsHostAndPort(t *testing.T) {
+	t.Setenv("PORT", "4321")
+	t.Setenv("DATABASE_URL", "postgres://postgres:postgres@localhost/example")
+
+	for _, test := range []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "IPv4", host: "127.0.0.1", want: "127.0.0.1:4321"},
+		{name: "IPv6", host: "::1", want: "[::1]:4321"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOST", test.host)
+			got, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got.Address != test.want {
+				t.Fatalf("Address = %q, want %q", got.Address, test.want)
+			}
+		})
+	}
+}

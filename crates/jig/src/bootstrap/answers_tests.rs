@@ -69,6 +69,56 @@ schema_dump_enabled = false
 }
 
 #[test]
+fn divergent_sqlx_migration_answers_are_rejected_before_rendering() {
+    let error = RawAnswers {
+        repo_name: Some("ExampleProject".into()),
+        sqlx_enabled: Some(true),
+        migration_dir: Some("database/migrations".into()),
+        rust_migration_dir: Some("legacy/migrations".into()),
+        schema_dump_enabled: Some(false),
+        ..RawAnswers::default()
+    }
+    .resolve(None)
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("migration_dir"), "{error}");
+    assert!(error.contains("rust_migration_dir"), "{error}");
+    assert!(
+        error.contains("must identify the same SQLx migration directory"),
+        "{error}"
+    );
+}
+
+#[test]
+fn canonical_sqlx_migration_answer_drives_the_legacy_render_value() {
+    let rendered = RawAnswers {
+        repo_name: Some("ExampleProject".into()),
+        sqlx_enabled: Some(true),
+        migration_dir: Some("database/migrations".into()),
+        rust_migration_dir: None,
+        schema_dump_enabled: Some(false),
+        ..RawAnswers::default()
+    }
+    .resolve(None)
+    .unwrap();
+    let value = serde_json::to_value(rendered).unwrap();
+
+    assert_eq!(value["migration_dir"], "database/migrations");
+    assert_eq!(value["rust_migration_dir"], "database/migrations");
+}
+
+#[test]
+fn canonical_migration_answer_prevents_a_tooling_only_sqlx_default() {
+    let answers = AnswerOpts {
+        migration_dir: Some("database/migrations".into()),
+        ..AnswerOpts::default()
+    };
+
+    assert!(!should_default_init_sqlx_disabled(&answers));
+}
+
+#[test]
 fn go_backend_rejects_rust_sqlx_answers() {
     let error = RawAnswers {
         repo_name: Some("ExampleProject".into()),

@@ -945,7 +945,7 @@ fn go_runtime_check(
     if !ctx.is_go_backend() {
         return None;
     }
-    let authority_path = ctx.root().join("go.mod");
+    let authority_path = ctx.root().join(GO_TOOLCHAIN_AUTHORITY_PATH);
     let required = match go_module_version_authority(&authority_path) {
         Ok(Some(required)) => required,
         Ok(None) => {

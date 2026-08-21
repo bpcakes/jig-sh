@@ -113,6 +113,7 @@ pub(super) struct AnswerInputShape {
 }
 
 const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
+    "migration_dir",
     "rust_migration_dir",
     "rust_sqlx_metadata_dir",
     "schema_dump_command",
@@ -182,12 +183,10 @@ impl AnswerInput {
 impl AnswerInputShape {
     pub(super) fn from_table(table: &toml::Table) -> Self {
         let mut keys = table.keys().cloned().collect::<BTreeSet<_>>();
-        if table
-            .get("rust_migration_dir")
-            .and_then(toml::Value::as_str)
-            == Some("")
-        {
-            keys.remove("rust_migration_dir");
+        for migration_key in ["migration_dir", "rust_migration_dir"] {
+            if table.get(migration_key).and_then(toml::Value::as_str) == Some("") {
+                keys.remove(migration_key);
+            }
         }
         Self {
             sqlx_enabled: table.get("sqlx_enabled").and_then(toml::Value::as_bool),
@@ -624,6 +623,7 @@ impl RawAnswers {
         // a migration dir, resolve to the tooling-only profile instead of
         // making noninteractive adoption stop for SQLx configuration.
         if self.sqlx_enabled.is_none()
+            && self.migration_dir.as_deref().is_none_or(str::is_empty)
             && self.rust_migration_dir.as_deref().is_none_or(str::is_empty)
             && self.schema_dump_enabled != Some(true)
         {
@@ -655,10 +655,20 @@ impl RawAnswers {
                 "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
             );
         }
-        let rust_migration_dir = self.rust_migration_dir.filter(|value| !value.is_empty());
-        if sqlx_enabled && rust_migration_dir.is_none() {
+        let migration_dir_answer = self.migration_dir.filter(|value| !value.is_empty());
+        let legacy_rust_migration_dir = self.rust_migration_dir.filter(|value| !value.is_empty());
+        if sqlx_enabled
+            && let (Some(migration_dir), Some(rust_migration_dir)) =
+                (&migration_dir_answer, &legacy_rust_migration_dir)
+            && Path::new(migration_dir) != Path::new(rust_migration_dir)
+        {
             bail!(
-                "Missing required answer when sqlx_enabled is true (including when schema_dump_enabled implies SQLx): rust_migration_dir. Pass --rust-migration-dir <dir> for SQLx repos, or pass --sqlx-enabled false with schema_dump_enabled = false for tooling-only repos."
+                "migration_dir = {migration_dir:?} and rust_migration_dir = {rust_migration_dir:?} must identify the same SQLx migration directory; keep migration_dir canonical and remove or synchronize rust_migration_dir"
+            );
+        }
+        if sqlx_enabled && migration_dir_answer.is_none() && legacy_rust_migration_dir.is_none() {
+            bail!(
+                "Missing required answer when sqlx_enabled is true (including when schema_dump_enabled implies SQLx): migration_dir. Pass --rust-migration-dir <dir> to populate the canonical SQLx migration directory, or pass --sqlx-enabled false with schema_dump_enabled = false for tooling-only repos."
             );
         }
         if !sqlx_enabled && self.schema_dump_enabled == Some(true) {
@@ -705,16 +715,18 @@ impl RawAnswers {
             )
         });
         let migration_add_command = self.migration_add_command;
-        let migration_dir = self
-            .migration_dir
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                if backend_language.is_go() && go_database.is_postgres() {
-                    Some(GO_POSTGRES_MIGRATION_DIR.into())
-                } else {
-                    rust_migration_dir.clone()
-                }
-            });
+        let migration_dir = migration_dir_answer.or_else(|| {
+            if backend_language.is_go() && go_database.is_postgres() {
+                Some(GO_POSTGRES_MIGRATION_DIR.into())
+            } else {
+                legacy_rust_migration_dir.clone()
+            }
+        });
+        let rust_migration_dir = if sqlx_enabled {
+            migration_dir.clone()
+        } else {
+            legacy_rust_migration_dir
+        };
 
         Ok(RenderAnswers {
             repo_name,
@@ -791,6 +803,10 @@ impl RawAnswers {
 
 fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
     SQLX_SHAPED_ANSWER_KEYS.iter().any(|key| match *key {
+        "migration_dir" => answers
+            .migration_dir
+            .as_deref()
+            .is_some_and(|value| !value.is_empty()),
         "rust_migration_dir" => answers
             .rust_migration_dir
             .as_deref()

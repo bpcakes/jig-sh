@@ -37,6 +37,10 @@ const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
         output: "internal/config/config.go",
     },
     ScaffoldTemplateFile {
+        template: "go-react/workspace/internal/config/config_test.go.jinja",
+        output: "internal/config/config_test.go",
+    },
+    ScaffoldTemplateFile {
         template: "go-react/workspace/internal/httpapi/httpapi.go.jinja",
         output: "internal/httpapi/httpapi.go",
     },

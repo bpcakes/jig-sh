@@ -11,6 +11,7 @@ on:
       - "sqlc.yaml"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
+      - "scripts/test-postgres.sh"
 [% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
@@ -27,6 +28,7 @@ on:
       - "sqlc.yaml"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
+      - "scripts/test-postgres.sh"
 [% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
