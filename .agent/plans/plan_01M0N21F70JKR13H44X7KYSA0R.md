@@ -1,0 +1,57 @@
+# Harden review-discovered lifecycle boundaries
+
+This work classifies and fixes the current comprehensive-review findings at the abstractions that own them. The observable outcome is that progress shutdown cannot retain the process-wide stderr lock, a pushed PR repair is durably represented even if cancellation arrives immediately afterward, ambiguous GitHub mutations are reconciled, runtime commands have an explicit signal policy, configured commands have an explicit output-capture budget, and the affected tests assert semantic behavior.
+
+## Progress
+
+- [x] Read the repository and crate ownership guides and register structured work.
+- [ ] Make progress delivery abandonable without retaining shared stderr ownership.
+- [ ] Model PR repair commit boundaries and reconcile ambiguous GitHub mutations.
+- [ ] Make signal supervision an exhaustive runtime-command policy.
+- [ ] Move configured-command output capacity into validated repository configuration.
+- [ ] Restore semantic test coverage and exact launcher argument coverage.
+- [ ] Run all configured gates, inspect evidence, and close the work.
+
+## Surprises & Discoveries
+
+- The findings share a contract-shape problem: timeout, cancellation, and capture limits exist, but the interfaces still let callers forget the post-timeout or post-commit obligation.
+- The existing `Fix comprehensive review findings` plan is historical and its body describes an earlier launcher-hardening pass, so this pass uses a new plan with precise acceptance criteria.
+
+## Decision Log
+
+- Preserve native signal handling for runtime commands that do not implement cooperative cancellation; select cooperative supervision through an exhaustive match over `RuntimeCommand`.
+- Treat the successful push as the PR repair commit boundary. Cancellation after that boundary must return and persist a completed action that describes incomplete follow-up work.
+- Give GitHub reply mutations a deterministic hidden marker and reconcile both reply and resolve mutations after any ambiguous command failure.
+- Keep bounded internal protocol commands on a conservative fixed capture limit, but make configured repository commands use a validated repository-level limit.
+
+## Outcomes & Retrospective
+
+Pending implementation and final verification.
+
+## Context and orientation
+
+The main implementation lives in `crates/jig`. Relevant boundaries are `src/progress.rs`, `src/cli/run.rs`, `src/runtime/loops/pr_manager.rs`, `src/execution.rs`, `src/context/execution_config.rs`, and `src/runtime/tool_execution.rs`. The Vault TUI integration test is in `crates/jig/tests/vault_tui_unix.rs`.
+
+## Plan of work
+
+Implement each independent concern as a reviewable commit with focused tests. Do not rewrite append-only `.agent/state/*.jsonl`; include structured-work receipts only as newly appended records. After each slice, run its narrow tests. After all slices, rebuild the development binary, run `scripts/jig work check`, all configured gates, evidence and receipts inspection, and finish the work.
+
+## Concrete steps
+
+1. Replace background writes through `std::io::Stderr` with an independently owned OS handle and record presentation abandonment so later optional stderr writes do not wait behind an abandoned writer.
+2. Refactor PR manager outcomes around the push commit point. Persist the final head and action before honoring later cancellation. Validate GraphQL payloads and reconcile ambiguous reply/resolve outcomes with cancellation-independent reads.
+3. Add an exhaustive signal-policy method to runtime commands and install the cooperative signal session only for commands whose handlers consume the observer.
+4. Add a validated `execution.command_output_limit_bytes` contract field for configured commands while retaining a private bounded limit for Git/GitHub protocol commands.
+5. Restore the Vault activity assertion to the operation-specific event and strengthen the refinement stub argument assertion.
+
+## Validation and acceptance
+
+Focused unit and integration tests must prove each regression. `scripts/jig work gates --plan-id plan_01M0N21F70JKR13H44X7KYSA0R` must pass with `JIG_DEV_BIN=target/debug/jig`, and the final diff and receipts must contain no private fixture identifiers.
+
+## Idempotence and recovery
+
+All code edits are ordinary Git changes and each slice is committed separately. Structured state is append-only. GitHub reconciliation queries are read-only and reply idempotency markers are deterministic for a thread and pushed head, so retrying reconciliation does not create a second reply.
+
+## Interfaces and dependencies
+
+No new external service is introduced. Platform stderr-handle duplication uses existing platform dependencies. Configuration changes must update native defaults, serialization tests, templates, and generated contract fixtures together.
