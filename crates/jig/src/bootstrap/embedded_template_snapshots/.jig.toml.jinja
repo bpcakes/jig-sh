@@ -105,6 +105,7 @@ argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"")
 
 [execution]
 command_timeout_seconds = <<[ execution.command_timeout_seconds ]>>
+command_output_limit_bytes = <<[ execution.command_output_limit_bytes ]>>
 
 [% if status.providers | length == 0 %]
 [status]

@@ -56,7 +56,10 @@ rust_test_command = "dd if=/dev/zero bs=262144 count=1 2>/dev/null; exit 7"
     assert!(resized >= 4096, "failed to constrain test pipe capacity");
 
     let status = child
-        .wait_timeout(Duration::from_secs(5))
+        // This outer watchdog detects the historical infinite stderr-lock
+        // wait. Keep ample scheduling headroom for the repository's highly
+        // parallel full suite; production delivery still abandons after 250ms.
+        .wait_timeout(Duration::from_secs(30))
         .unwrap()
         .unwrap_or_else(|| {
             let _ = child.kill();
