@@ -15,10 +15,8 @@ current coordinates are injected. The long-running background proxy process is d
 it starts with a constrained environment and should not be used to run arbitrary
 repo commands.
 
-Jig supports this runtime on Linux and macOS. Windows-specific implementation
-paths remain from earlier compatibility work, but native Windows is not a
-supported or CI-tested host and those paths may change without compatibility
-guarantees. See the repository's [platform support policy](../../docs/platform-support.md).
+Jig supports this runtime on Linux and macOS. See the repository's
+[platform support policy](../../docs/platform-support.md).
 
 Foreground route cleanup keeps exact route ownership and shares one absolute
 lock deadline across all children, retries, and the final Drop fallback.
