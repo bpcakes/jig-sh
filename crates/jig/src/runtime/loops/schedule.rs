@@ -1,11 +1,8 @@
 use anyhow::{Result, bail};
-use chrono::{DateTime, TimeZone, Utc};
-use chrono_tz::Tz;
-use croner::Cron;
 use serde_json::{Value, json};
 
 use crate::command::{LoopDispatchRequest, LoopRunRequest, LoopTickRequest};
-use crate::context::{RepoContext, parse_five_field_cron};
+use crate::context::RepoContext;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
@@ -18,120 +15,13 @@ use super::workflow::{
     ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, resolve_workflow,
 };
 
+mod cron;
 mod policy;
 
+pub(super) use cron::ScheduleSpec;
 use policy::{
     DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails, begin_execution,
 };
-
-#[derive(Clone, Debug)]
-pub(super) struct ScheduleSpec {
-    expression: String,
-    timezone_name: String,
-    cron: Cron,
-    timezone: Tz,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct ScheduleWindow {
-    pub(super) due_at_ms: Option<u64>,
-    pub(super) next_at_ms: u64,
-}
-
-impl ScheduleSpec {
-    pub(super) fn parse(expression: &str, timezone_name: Option<&str>) -> Result<Self> {
-        let cron = parse_five_field_cron(expression)?;
-        let timezone_name = timezone_name.unwrap_or("UTC");
-        let timezone = timezone_name
-            .parse::<Tz>()
-            .map_err(|_| anyhow::anyhow!("Invalid IANA timezone '{timezone_name}'"))?;
-        Ok(Self {
-            expression: expression.to_string(),
-            timezone_name: timezone_name.to_string(),
-            cron,
-            timezone,
-        })
-    }
-
-    pub(super) fn expression(&self) -> &str {
-        &self.expression
-    }
-
-    pub(super) fn timezone_name(&self) -> &str {
-        &self.timezone_name
-    }
-
-    pub(super) fn window(
-        &self,
-        now_ms: u64,
-        last_scheduled_at_ms: Option<u64>,
-    ) -> Result<ScheduleWindow> {
-        let now = datetime_from_ms(now_ms)?.with_timezone(&self.timezone);
-        let most_recent = previous_matching(&self.cron, &now)?;
-        let next = next_matching(&self.cron, &now)?;
-        let most_recent_ms = timestamp_ms(most_recent)?;
-        let due_at_ms = (last_scheduled_at_ms.is_none_or(|last| most_recent_ms > last))
-            .then_some(most_recent_ms);
-        Ok(ScheduleWindow {
-            due_at_ms,
-            next_at_ms: timestamp_ms(next)?,
-        })
-    }
-}
-
-fn previous_matching<T: TimeZone>(cron: &Cron, now: &DateTime<T>) -> Result<DateTime<T>>
-where
-    T::Offset: Copy,
-{
-    let mut candidate = cron
-        .find_previous_occurrence(now, true)
-        .map_err(|error| anyhow::anyhow!("Failed to find due cron occurrence: {error}"))?;
-    for _ in 0..8 {
-        if cron
-            .is_time_matching(&candidate)
-            .map_err(|error| anyhow::anyhow!("Failed to validate due cron occurrence: {error}"))?
-        {
-            return Ok(candidate);
-        }
-        candidate = cron
-            .find_previous_occurrence(&candidate, false)
-            .map_err(|error| anyhow::anyhow!("Failed to find due cron occurrence: {error}"))?;
-    }
-    bail!("Cron evaluator did not produce a valid previous occurrence")
-}
-
-fn next_matching<T: TimeZone>(cron: &Cron, now: &DateTime<T>) -> Result<DateTime<T>>
-where
-    T::Offset: Copy,
-{
-    let mut candidate = cron
-        .find_next_occurrence(now, false)
-        .map_err(|error| anyhow::anyhow!("Failed to find next cron occurrence: {error}"))?;
-    for _ in 0..8 {
-        if cron
-            .is_time_matching(&candidate)
-            .map_err(|error| anyhow::anyhow!("Failed to validate next cron occurrence: {error}"))?
-        {
-            return Ok(candidate);
-        }
-        candidate = cron
-            .find_next_occurrence(&candidate, false)
-            .map_err(|error| anyhow::anyhow!("Failed to find next cron occurrence: {error}"))?;
-    }
-    bail!("Cron evaluator did not produce a valid next occurrence")
-}
-
-fn datetime_from_ms(timestamp_ms: u64) -> Result<DateTime<Utc>> {
-    let timestamp_ms = i64::try_from(timestamp_ms)
-        .map_err(|_| anyhow::anyhow!("Schedule timestamp exceeds supported range"))?;
-    DateTime::from_timestamp_millis(timestamp_ms)
-        .ok_or_else(|| anyhow::anyhow!("Schedule timestamp is outside Chrono's supported range"))
-}
-
-fn timestamp_ms<T: TimeZone>(timestamp: DateTime<T>) -> Result<u64> {
-    u64::try_from(timestamp.timestamp_millis())
-        .map_err(|_| anyhow::anyhow!("Cron occurrence predates the Unix epoch"))
-}
 
 pub(super) fn dispatch_due(ctx: &RepoContext, _: LoopDispatchRequest) -> Result<Value> {
     dispatch_due_at(ctx, now_ms())
@@ -381,6 +271,8 @@ fn dispatch_state_failure(
         "workflow_id": workflow.id,
         "occurrence": occurrence,
         "status": "failed",
+        "occurrence_state_persisted": false,
+        "state_error": error.to_string(),
         "next_at_ms": next_at_ms,
         "tick": tick,
         "error": error.to_string(),
@@ -655,6 +547,7 @@ timezone = "UTC"
         let dispatch_at = timestamp("2026-08-21T08:42:30Z");
 
         let first = dispatch_due_at(&ctx, dispatch_at).unwrap();
+        fs::remove_dir_all(temp.path().join(LOOP_CACHE_DIR)).unwrap();
         let second = dispatch_due_at(&ctx, dispatch_at).unwrap();
 
         assert_eq!(first["status"], "acted", "{first:#}");
@@ -667,6 +560,12 @@ timezone = "UTC"
         assert_eq!(second["status"], "idle", "{second:#}");
         assert_eq!(second["due_count"], 0);
         assert_eq!(second["executed_count"], 0);
+        assert!(
+            temp.path()
+                .join(super::super::state::LOOP_RUNTIME_DIR)
+                .join("schedule.json")
+                .is_file()
+        );
 
         let status = super::super::engine::status(
             &ctx,
@@ -746,6 +645,15 @@ timezone = "UTC"
                 .unwrap()
                 .is_empty()
         );
+
+        let mut occurrences = super::super::occurrence::OccurrenceStore::new(&ctx);
+        occurrences
+            .acknowledge("scheduled-noop@1787301600000")
+            .unwrap();
+        let acknowledged = dispatch_due_at(&ctx, dispatch_at).unwrap();
+        assert_eq!(acknowledged["status"], "idle", "{acknowledged:#}");
+        assert_eq!(acknowledged["due_count"], 0);
+        assert_eq!(acknowledged["needs_attention_count"], 0);
     }
 
     #[test]

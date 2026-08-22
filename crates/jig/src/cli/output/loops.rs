@@ -98,6 +98,24 @@ pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> St
     .join("\n")
 }
 
+pub(super) fn format_loop_acknowledge_occurrence_summary(value: &serde_json::Value) -> String {
+    let occurrence_id = value_str(value, "occurrence_id").unwrap_or("<unknown>");
+    let changed = value_bool(value, "changed").unwrap_or(false);
+    [
+        format!(
+            "Loop acknowledge-occurrence: {}",
+            if changed {
+                "acknowledged"
+            } else {
+                "already acknowledged"
+            }
+        ),
+        format!("  Occurrence: {occurrence_id}"),
+        "  full report: rerun with --json".into(),
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

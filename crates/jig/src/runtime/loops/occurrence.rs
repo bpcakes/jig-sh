@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{
     Arc,
@@ -14,15 +14,18 @@ use ulid::Ulid;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::state::{
-    LOOP_CACHE_DIR, read_json_or_default_with_cancellation, renewal_interval, with_json_cache_lock,
-};
+use super::state::renewal_interval;
 
-const SCHEDULE_SCHEMA_VERSION: u32 = 1;
+mod persistence;
+
+use persistence::SchedulePersistence;
+
+const SCHEDULE_SCHEMA_VERSION: u32 = 2;
+const LEGACY_SCHEDULE_SCHEMA_VERSION: u32 = 1;
 const OCCURRENCE_HISTORY_PER_WORKFLOW: usize = 20;
 const MAX_ERROR_CHARS: usize = 4_000;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(super) struct ScheduleOccurrence {
     pub(super) occurrence_id: String,
     pub(super) workflow_id: String,
@@ -32,6 +35,8 @@ pub(super) struct ScheduleOccurrence {
     pub(super) started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) finished_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) acknowledged_at_ms: Option<u64>,
     pub(super) status: OccurrenceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worker_receipt_id: Option<String>,
@@ -45,7 +50,7 @@ impl ScheduleOccurrence {
     fn is_prunable_history(&self) -> bool {
         matches!(
             self.status,
-            OccurrenceStatus::Succeeded | OccurrenceStatus::Failed
+            OccurrenceStatus::Succeeded | OccurrenceStatus::Failed | OccurrenceStatus::Acknowledged
         )
     }
 
@@ -63,6 +68,7 @@ pub(super) enum OccurrenceStatus {
     Succeeded,
     Failed,
     NeedsAttention,
+    Acknowledged,
 }
 
 impl OccurrenceStatus {
@@ -72,6 +78,7 @@ impl OccurrenceStatus {
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::NeedsAttention => "needs_attention",
+            Self::Acknowledged => "acknowledged",
         }
     }
 }
@@ -99,9 +106,11 @@ impl OccurrenceOutcome {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 struct ScheduleFile {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    migrated_to: Option<String>,
     occurrences: BTreeMap<String, ScheduleOccurrence>,
 }
 
@@ -109,6 +118,7 @@ impl Default for ScheduleFile {
     fn default() -> Self {
         Self {
             schema_version: SCHEDULE_SCHEMA_VERSION,
+            migrated_to: None,
             occurrences: BTreeMap::new(),
         }
     }
@@ -117,6 +127,11 @@ impl Default for ScheduleFile {
 pub(super) enum OccurrenceClaim {
     Acquired(ScheduleOccurrence),
     AlreadyRecorded(ScheduleOccurrence),
+}
+
+pub(super) enum OccurrenceAcknowledgement {
+    Acknowledged(ScheduleOccurrence),
+    AlreadyAcknowledged(ScheduleOccurrence),
 }
 
 pub(super) struct OccurrenceFinish<'a> {
@@ -128,9 +143,7 @@ pub(super) struct OccurrenceFinish<'a> {
 
 #[derive(Clone)]
 pub(super) struct OccurrenceStore {
-    dir: PathBuf,
-    path: PathBuf,
-    lock_path: PathBuf,
+    persistence: SchedulePersistence,
 }
 
 pub(super) struct OccurrenceGuard {
@@ -224,11 +237,8 @@ impl Drop for OccurrenceGuard {
 
 impl OccurrenceStore {
     pub(super) fn new(ctx: &RepoContext) -> Self {
-        let dir = ctx.root().join(LOOP_CACHE_DIR);
         Self {
-            path: dir.join("schedule.json"),
-            lock_path: dir.join("schedule.lock"),
-            dir,
+            persistence: SchedulePersistence::new(ctx),
         }
     }
 
@@ -272,6 +282,29 @@ impl OccurrenceStore {
         })
     }
 
+    pub(super) fn acknowledge(&mut self, occurrence_id: &str) -> Result<OccurrenceAcknowledgement> {
+        self.with_locked(|store| {
+            let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
+                anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
+            })?;
+            match record.status {
+                OccurrenceStatus::NeedsAttention => {
+                    record.status = OccurrenceStatus::Acknowledged;
+                    record.acknowledged_at_ms = Some(now_ms());
+                    let acknowledged = record.clone();
+                    prune_history(store);
+                    Ok(OccurrenceAcknowledgement::Acknowledged(acknowledged))
+                }
+                OccurrenceStatus::Acknowledged => Ok(
+                    OccurrenceAcknowledgement::AlreadyAcknowledged(record.clone()),
+                ),
+                status => bail!(
+                    "Scheduled occurrence '{occurrence_id}' is {status}; only needs_attention occurrences can be acknowledged"
+                ),
+            }
+        })
+    }
+
     fn abandon(&mut self, occurrence_id: &str, owner: &str) -> Result<ScheduleOccurrence> {
         self.with_locked(|store| {
             let record = store.occurrences.get(occurrence_id).ok_or_else(|| {
@@ -300,8 +333,7 @@ impl OccurrenceStore {
         &self,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<ScheduleOccurrence>> {
-        let store = read_json_or_default_with_cancellation::<ScheduleFile>(&self.path, cancelled)?;
-        validate_schema(&store)?;
+        let store = self.persistence.read_only(cancelled)?;
         Ok(sorted_occurrences(&store))
     }
 
@@ -338,6 +370,7 @@ impl OccurrenceStore {
                 claim_expires_at_ms: expiry(now, ttl_seconds),
                 started_at_ms: now,
                 finished_at_ms: None,
+                acknowledged_at_ms: None,
                 status: OccurrenceStatus::Running,
                 worker_receipt_id: None,
                 worktree: None,
@@ -379,7 +412,7 @@ impl OccurrenceStore {
     }
 
     fn with_locked<T>(&mut self, action: impl FnOnce(&mut ScheduleFile) -> Result<T>) -> Result<T> {
-        with_json_cache_lock(&self.dir, &self.lock_path, &self.path, action)
+        self.persistence.with_locked(action)
     }
 }
 
@@ -426,12 +459,23 @@ fn sorted_occurrences(store: &ScheduleFile) -> Vec<ScheduleOccurrence> {
 fn validate_schema(store: &ScheduleFile) -> Result<()> {
     if store.schema_version != SCHEDULE_SCHEMA_VERSION {
         bail!(
-            "Unsupported loop schedule cache schema version {}; expected {}",
+            "Unsupported loop schedule state schema version {}; expected {}",
             store.schema_version,
             SCHEDULE_SCHEMA_VERSION
         );
     }
     Ok(())
+}
+
+fn migrate_schedule_schema(store: &mut ScheduleFile) -> Result<()> {
+    match store.schema_version {
+        SCHEDULE_SCHEMA_VERSION => Ok(()),
+        LEGACY_SCHEDULE_SCHEMA_VERSION => {
+            store.schema_version = SCHEDULE_SCHEMA_VERSION;
+            Ok(())
+        }
+        _ => validate_schema(store),
+    }
 }
 
 fn prune_history(store: &mut ScheduleFile) {
@@ -471,6 +515,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::runtime::loops::state::{LOOP_CACHE_DIR, LOOP_RUNTIME_DIR};
 
     #[test]
     fn occurrence_claim_is_single_use_and_owner_checked() {
@@ -536,6 +581,110 @@ mod tests {
     }
 
     #[test]
+    fn acknowledging_attention_is_idempotent_and_preserves_the_claim() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = OccurrenceStore::new(&ctx);
+        let OccurrenceClaim::Acquired(claim) = store.claim_at("nightly", 100, 2, 1_000).unwrap()
+        else {
+            panic!("expected occurrence claim");
+        };
+        store.reconcile_stale_at(3_000).unwrap();
+
+        let OccurrenceAcknowledgement::Acknowledged(acknowledged) =
+            store.acknowledge(&claim.occurrence_id).unwrap()
+        else {
+            panic!("expected first acknowledgement to change state");
+        };
+        assert_eq!(acknowledged.status, OccurrenceStatus::Acknowledged);
+        assert!(acknowledged.acknowledged_at_ms.is_some());
+
+        let OccurrenceAcknowledgement::AlreadyAcknowledged(existing) =
+            store.acknowledge(&claim.occurrence_id).unwrap()
+        else {
+            panic!("expected repeated acknowledgement to be idempotent");
+        };
+        assert_eq!(existing.acknowledged_at_ms, acknowledged.acknowledged_at_ms);
+
+        let OccurrenceClaim::AlreadyRecorded(existing) =
+            store.claim_at("nightly", 100, 2, 4_000).unwrap()
+        else {
+            panic!("acknowledgement must not make the occurrence runnable again");
+        };
+        assert_eq!(existing.status, OccurrenceStatus::Acknowledged);
+    }
+
+    #[test]
+    fn schedule_state_migrates_out_of_disposable_cache_and_survives_cache_removal() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let legacy_dir = temp.path().join(LOOP_CACHE_DIR);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(
+            legacy_dir.join("schedule.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": LEGACY_SCHEDULE_SCHEMA_VERSION,
+                "occurrences": {
+                    "nightly@100": {
+                        "occurrence_id": "nightly@100",
+                        "workflow_id": "nightly",
+                        "scheduled_at_ms": 100,
+                        "owner": "owner",
+                        "claim_expires_at_ms": 200,
+                        "started_at_ms": 100,
+                        "finished_at_ms": 150,
+                        "status": "succeeded"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let migrated = OccurrenceStore::new(&ctx).snapshot().unwrap();
+        assert_eq!(migrated.len(), 1);
+        assert_eq!(migrated[0].status, OccurrenceStatus::Succeeded);
+        let durable_path = temp.path().join(LOOP_RUNTIME_DIR).join("schedule.json");
+        assert!(durable_path.is_file());
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(legacy_dir.join("schedule.json")).unwrap())
+                .unwrap();
+        assert_eq!(marker["schema_version"], SCHEDULE_SCHEMA_VERSION);
+        assert_eq!(marker["migrated_to"], ".agent/runtime/loop/schedule.json");
+
+        std::fs::remove_dir_all(&legacy_dir).unwrap();
+        let after_cache_removal = OccurrenceStore::new(&ctx).snapshot().unwrap();
+        assert_eq!(after_cache_removal, migrated);
+    }
+
+    #[test]
+    fn read_only_snapshot_can_inspect_legacy_state_without_migrating_it() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let legacy_dir = temp.path().join(LOOP_CACHE_DIR);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(
+            legacy_dir.join("schedule.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema_version": LEGACY_SCHEDULE_SCHEMA_VERSION,
+                "occurrences": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let snapshot = OccurrenceStore::new(&ctx)
+            .snapshot_read_only_with_cancellation(&|| false)
+            .unwrap();
+
+        assert!(snapshot.is_empty());
+        assert!(!temp.path().join(LOOP_RUNTIME_DIR).exists());
+    }
+
+    #[test]
     fn one_second_occurrence_claim_renews_before_expiry() {
         let temp = tempdir().unwrap();
         write_loop_fixture_repo(temp.path());
@@ -576,6 +725,7 @@ mod tests {
                     claim_expires_at_ms: 0,
                     started_at_ms: 0,
                     finished_at_ms: Some(1),
+                    acknowledged_at_ms: None,
                     status: OccurrenceStatus::Succeeded,
                     worker_receipt_id: None,
                     worktree: (scheduled_at_ms == 0).then(|| retained.display().to_string()),
@@ -612,6 +762,7 @@ mod tests {
                     claim_expires_at_ms: 0,
                     started_at_ms: 0,
                     finished_at_ms: Some(1),
+                    acknowledged_at_ms: None,
                     status: if scheduled_at_ms == 0 {
                         OccurrenceStatus::NeedsAttention
                     } else {

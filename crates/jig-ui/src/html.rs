@@ -109,7 +109,7 @@ pub(super) fn render_gates_table(page: &mut String, gates: &GatesView) {
 
 pub(super) fn status_badge_class(status: &str) -> &'static str {
     match status {
-        "passed" | "succeeded" => "ok",
+        "passed" | "succeeded" | "acknowledged" => "ok",
         "failed" | "invalid_output" => "fail",
         "missing" | "unsupported" => "idle",
         _ => "warn",

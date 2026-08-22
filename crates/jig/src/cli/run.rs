@@ -385,6 +385,7 @@ const fn loop_human_output(command: &LoopCommand) -> HumanOutput {
         LoopCommand::Status(_) => HumanOutput::LoopStatus,
         LoopCommand::Run(_) => HumanOutput::LoopRun,
         LoopCommand::ClearAttempt(_) => HumanOutput::LoopClearAttempt,
+        LoopCommand::AcknowledgeOccurrence(_) => HumanOutput::LoopAcknowledgeOccurrence,
     }
 }
 

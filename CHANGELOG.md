@@ -21,6 +21,7 @@
 - Renew workflow and branch leases while long-running loop workers are active
 - Serialize repository-checkout Codex tasks, keep retained task worktrees discoverable until cleanup, and preserve typed scheduled-task evidence
 - Prevent repeated `codex_task` execution through `loop run`, keep scheduled `needs_attention` failures durable, and harden cancellable worker waiting
+- Move the scheduled occurrence ledger out of disposable cache with a fail-closed migration, and add an idempotent acknowledgement transition that resolves attention without reopening an occurrence
 - Keep dev session cleanup signal-responsive
 - Keep stale missing Codex-home candidates from blocking a unique session resume
 - Recognize supported Codex app-server missing-thread response variants during resume lookup

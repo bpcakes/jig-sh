@@ -12,7 +12,8 @@ Examples:
   jig loop dispatch
   jig loop status --workflow noop-status
   jig loop run --workflow noop-status --until idle
-  jig loop clear-attempt --workflow pr-status --item pr-123";
+  jig loop clear-attempt --workflow pr-status --item pr-123
+  jig loop acknowledge-occurrence --occurrence nightly@1787364000000";
 
 pub(super) const LOOP_TICK_AFTER_HELP: &str = "\
 Run one idempotent reconcile pass for a workflow and record receipt evidence.
@@ -45,6 +46,14 @@ item that needed attention.
 Examples:
   jig loop clear-attempt --workflow pr-status --item pr-123";
 
+pub(super) const LOOP_ACKNOWLEDGE_OCCURRENCE_AFTER_HELP: &str = "\
+Acknowledge one scheduled occurrence after a human has inspected its ambiguous
+result. The occurrence remains recorded, so acknowledgement cannot cause the
+same schedule instant to run again.
+
+Examples:
+  jig loop acknowledge-occurrence --occurrence nightly@1787364000000";
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum LoopCommand {
     /// Run one idempotent orchestration tick.
@@ -71,6 +80,12 @@ pub(crate) enum LoopCommand {
         after_help = LOOP_CLEAR_ATTEMPT_AFTER_HELP
     )]
     ClearAttempt(LoopClearAttemptOpts),
+    /// Acknowledge one scheduled occurrence that needs attention.
+    #[command(
+        name = tool_defs::cli_command::LOOP_ACKNOWLEDGE_OCCURRENCE,
+        after_help = LOOP_ACKNOWLEDGE_OCCURRENCE_AFTER_HELP
+    )]
+    AcknowledgeOccurrence(LoopAcknowledgeOccurrenceOpts),
 }
 
 #[derive(Args, Debug)]
@@ -124,6 +139,12 @@ pub(crate) struct LoopClearAttemptOpts {
         help = "Workflow item key whose attempt record should be cleared"
     )]
     pub(crate) item: String,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct LoopAcknowledgeOccurrenceOpts {
+    #[arg(long, help = "Scheduled occurrence id reported by loop status")]
+    pub(crate) occurrence: String,
 }
 
 #[derive(Args, Clone, Debug, Default)]

@@ -2,12 +2,14 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use crate::cancellation::ensure_status_collection_active;
-use crate::command::{LoopClearAttemptRequest, LoopStatusRequest, LoopTickRequest};
+use crate::command::{
+    LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopStatusRequest, LoopTickRequest,
+};
 use crate::context::RepoContext;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
-use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
+use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
-use super::occurrence::{OccurrenceStatus, OccurrenceStore};
+use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStatus, OccurrenceStore};
 use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
     CODEX_TASK_KIND, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND, ResolvedWorkflow,
@@ -492,5 +494,58 @@ pub(super) fn clear_attempt(ctx: &RepoContext, request: LoopClearAttemptRequest)
         "workflow": evidence["workflow"],
         "item_key": evidence["item_key"],
         "cleared": cleared,
+    }))
+}
+
+pub(super) fn acknowledge_occurrence(
+    ctx: &RepoContext,
+    request: LoopAcknowledgeOccurrenceRequest,
+) -> Result<Value> {
+    let started = now_ms();
+    let occurrence_id = request.occurrence.trim();
+    if occurrence_id.is_empty() {
+        bail!("--occurrence must not be empty");
+    }
+    let mut occurrence_store = OccurrenceStore::new(ctx);
+    let (occurrence, changed) = match occurrence_store.acknowledge(occurrence_id)? {
+        OccurrenceAcknowledgement::Acknowledged(occurrence) => (occurrence, true),
+        OccurrenceAcknowledgement::AlreadyAcknowledged(occurrence) => (occurrence, false),
+    };
+    let ended = now_ms();
+    let evidence = json!({
+        "kind": "loop_acknowledge_occurrence",
+        "schema_version": 1,
+        "occurrence": occurrence,
+        "changed": changed,
+    });
+    let receipt_id = record_receipt(
+        ctx,
+        ReceiptInput {
+            tool_name: LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL,
+            args: json!({
+                "occurrence": occurrence_id,
+            }),
+            invoked_command_key: None,
+            plan_id: None,
+            started_at_ms: started,
+            ended_at_ms: ended,
+            exit_status: 0,
+            stdout: "",
+            stderr: "",
+            evidence: Some(evidence.clone()),
+            session_override: None,
+            collect_git_metadata: true,
+            collect_worktree_fingerprint: true,
+            worktree_fingerprint_override: None,
+        },
+    )?;
+
+    Ok(json!({
+        "ok": true,
+        "command": "loop acknowledge-occurrence",
+        "receipt_id": receipt_id,
+        "occurrence_id": occurrence_id,
+        "occurrence": evidence["occurrence"],
+        "changed": changed,
     }))
 }

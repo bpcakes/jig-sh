@@ -21,6 +21,7 @@ pub(super) fn dispatch(ctx: &RepoContext, command: LoopCommand) -> Result<Value>
         LoopCommand::Status(request) => engine::status(ctx, request),
         LoopCommand::Run(request) => schedule::run_until(ctx, request),
         LoopCommand::ClearAttempt(request) => engine::clear_attempt(ctx, request),
+        LoopCommand::AcknowledgeOccurrence(request) => engine::acknowledge_occurrence(ctx, request),
     }
 }
 

@@ -1,6 +1,7 @@
 .DS_Store
 .codex/
 .agent/.cache/
+.agent/runtime/
 .agent/plans/*.lock
 .venv/
 .pytest_cache/

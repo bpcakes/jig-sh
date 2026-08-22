@@ -22,6 +22,7 @@ use crate::state::now_ms;
 use super::workflow::ResolvedWorkflow;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
+pub(super) const LOOP_RUNTIME_DIR: &str = ".agent/runtime/loop";
 
 pub(super) fn renewal_interval(ttl_seconds: u64) -> Duration {
     let ttl_ms = ttl_seconds.saturating_mul(1_000);
@@ -420,6 +421,19 @@ pub(super) fn with_json_cache_lock<T, S>(
 where
     S: Default + DeserializeOwned + Serialize,
 {
+    with_exclusive_file_lock(dir, lock_path, || {
+        let mut store = read_json_or_default(data_path)?;
+        let result = action(&mut store)?;
+        write_json(data_path, &store)?;
+        Ok(result)
+    })
+}
+
+pub(super) fn with_exclusive_file_lock<T>(
+    dir: &Path,
+    lock_path: &Path,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
     let lock = OpenOptions::new()
         .create(true)
@@ -427,18 +441,16 @@ where
         .read(true)
         .write(true)
         .open(lock_path)
-        .with_context(|| format!("Failed to open loop cache lock {}", lock_path.display()))?;
+        .with_context(|| format!("Failed to open loop state lock {}", lock_path.display()))?;
     lock.lock_exclusive()
         .with_context(|| format!("Failed to lock {}", lock_path.display()))?;
 
-    let mut store = read_json_or_default(data_path)?;
-    let result = action(&mut store)?;
-    write_json(data_path, &store)?;
+    let result = action();
     drop(lock);
-    Ok(result)
+    result
 }
 
-fn read_json_or_default<T>(path: &Path) -> Result<T>
+pub(super) fn read_json_or_default<T>(path: &Path) -> Result<T>
 where
     T: Default + DeserializeOwned,
 {
@@ -476,15 +488,15 @@ where
     }
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let Some(parent) = path.parent() else {
-        return Err(anyhow!("Loop cache path has no parent: {}", path.display()));
+        return Err(anyhow!("Loop state path has no parent: {}", path.display()));
     };
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
     let tmp = path.with_extension(format!("tmp-{}", Ulid::new()));
     fs::write(
         &tmp,
-        serde_json::to_vec_pretty(value).context("Failed to encode loop cache JSON")?,
+        serde_json::to_vec_pretty(value).context("Failed to encode loop state JSON")?,
     )
     .with_context(|| format!("Failed to write {}", tmp.display()))?;
     fs::rename(&tmp, path).with_context(|| {

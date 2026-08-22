@@ -3,16 +3,17 @@ use crate::command;
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
     CheckMigrationImmutabilityOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts, DevStatusOpts,
-    DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts,
-    LoopCommand, LoopDispatchOpts, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
-    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
-    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
+    LoopAcknowledgeOccurrenceOpts, LoopClearAttemptOpts, LoopCommand, LoopDispatchOpts,
+    LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand,
+    ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts,
+    ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts,
+    ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts, ProxyStartOpts,
+    ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand, StateCompactSessionsOpts,
+    StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts, StateRestoreOpts, ToolOpts,
+    WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts,
+    WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts,
+    WorkStartOpts,
 };
 
 mod vault;
@@ -247,6 +248,7 @@ impl From<LoopCommand> for command::LoopCommand {
             LoopCommand::Status(opts) => Self::Status(opts.into()),
             LoopCommand::Run(opts) => Self::Run(opts.into()),
             LoopCommand::ClearAttempt(opts) => Self::ClearAttempt(opts.into()),
+            LoopCommand::AcknowledgeOccurrence(opts) => Self::AcknowledgeOccurrence(opts.into()),
         }
     }
 }
@@ -294,6 +296,14 @@ impl From<LoopClearAttemptOpts> for command::LoopClearAttemptRequest {
         Self {
             workflow: opts.workflow,
             item: opts.item,
+        }
+    }
+}
+
+impl From<LoopAcknowledgeOccurrenceOpts> for command::LoopAcknowledgeOccurrenceRequest {
+    fn from(opts: LoopAcknowledgeOccurrenceOpts) -> Self {
+        Self {
+            occurrence: opts.occurrence,
         }
     }
 }

@@ -245,7 +245,7 @@ fn workflow_from_config(
     validate_tuning(lease_ttl_seconds, max_attempts, backoff_seconds)?;
 
     let schedule = config_schedule(workflow)?;
-    let codex_task = config_codex_task(workflow);
+    let codex_task = config_codex_task(workflow)?;
     Ok(ResolvedWorkflow {
         id: workflow.id.clone(),
         kind: workflow.kind.clone(),
@@ -296,23 +296,33 @@ fn config_schedule(workflow: &LoopWorkflowConfig) -> Result<Option<ScheduleSpec>
         .transpose()
 }
 
-fn config_codex_task(workflow: &LoopWorkflowConfig) -> Option<CodexTaskSettings> {
-    (workflow.kind == CODEX_TASK_KIND).then(|| CodexTaskSettings {
-        prompt_file: workflow
-            .prompt_file
-            .clone()
-            .expect("validated codex_task config has a prompt_file"),
+fn config_codex_task(workflow: &LoopWorkflowConfig) -> Result<Option<CodexTaskSettings>> {
+    if workflow.kind != CODEX_TASK_KIND {
+        return Ok(None);
+    }
+    let prompt_file = workflow.prompt_file.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Loop workflow '{}' is missing required codex_task prompt_file",
+            workflow.id
+        )
+    })?;
+    let checkout = match workflow.checkout.as_deref().unwrap_or("worktree") {
+        "repo" => CodexTaskCheckout::Repo,
+        "worktree" => CodexTaskCheckout::Worktree,
+        checkout => bail!(
+            "Loop workflow '{}' has unsupported codex_task checkout '{checkout}'",
+            workflow.id
+        ),
+    };
+    Ok(Some(CodexTaskSettings {
+        prompt_file,
         model: workflow.model.clone(),
         sandbox: workflow
             .sandbox
             .clone()
             .unwrap_or_else(|| "read-only".into()),
-        checkout: match workflow.checkout.as_deref().unwrap_or("worktree") {
-            "repo" => CodexTaskCheckout::Repo,
-            "worktree" => CodexTaskCheckout::Worktree,
-            _ => unreachable!("validated codex_task config has a supported checkout"),
-        },
-    })
+        checkout,
+    }))
 }
 
 fn validate_tuning(lease_ttl_seconds: u64, max_attempts: u32, backoff_seconds: u64) -> Result<()> {
@@ -389,6 +399,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_task_conversion_reports_invalid_internal_config_without_panicking() {
+        let mut workflow = raw_codex_task_config();
+        workflow.prompt_file = None;
+        assert!(
+            config_codex_task(&workflow)
+                .unwrap_err()
+                .to_string()
+                .contains("missing required codex_task prompt_file")
+        );
+
+        let mut workflow = raw_codex_task_config();
+        workflow.checkout = Some("unsupported".into());
+        assert!(
+            config_codex_task(&workflow)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported codex_task checkout")
+        );
+    }
+
     fn workflow_with_checkout(id: &str, checkout: CodexTaskCheckout) -> ResolvedWorkflow {
         ResolvedWorkflow {
             id: id.into(),
@@ -406,6 +437,24 @@ mod tests {
                 sandbox: "read-only".into(),
                 checkout,
             }),
+        }
+    }
+
+    fn raw_codex_task_config() -> LoopWorkflowConfig {
+        LoopWorkflowConfig {
+            id: "scheduled".into(),
+            kind: CODEX_TASK_KIND.into(),
+            enabled: true,
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+            codex_home: None,
+            schedule: Some("* * * * *".into()),
+            timezone: None,
+            prompt_file: Some("task.md".into()),
+            model: None,
+            sandbox: None,
+            checkout: None,
         }
     }
 }

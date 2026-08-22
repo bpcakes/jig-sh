@@ -47,6 +47,69 @@ fn failed_loop_tick_and_dispatch_exit_nonzero_after_json_output() {
 }
 
 #[test]
+fn loop_acknowledge_occurrence_has_human_and_json_contracts() {
+    let repo = tempdir().unwrap();
+    write_info_commands_repo(repo.path());
+    let runtime_dir = repo.path().join(".agent/runtime/loop");
+    fs::create_dir_all(&runtime_dir).unwrap();
+    fs::write(
+        runtime_dir.join("schedule.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 2,
+            "occurrences": {
+                "nightly@100": {
+                    "occurrence_id": "nightly@100",
+                    "workflow_id": "nightly",
+                    "scheduled_at_ms": 100,
+                    "owner": "owner",
+                    "claim_expires_at_ms": 200,
+                    "started_at_ms": 100,
+                    "finished_at_ms": 200,
+                    "status": "needs_attention"
+                }
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let human = jig()
+        .current_dir(repo.path())
+        .args([
+            "loop",
+            "acknowledge-occurrence",
+            "--occurrence",
+            "nightly@100",
+        ])
+        .output()
+        .unwrap();
+    assert!(human.status.success(), "{human:?}");
+    assert!(human.stderr.is_empty(), "{human:?}");
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(human.contains("Loop acknowledge-occurrence: acknowledged"));
+    assert!(human.contains("Occurrence: nightly@100"));
+
+    let json = jig()
+        .current_dir(repo.path())
+        .args([
+            "loop",
+            "acknowledge-occurrence",
+            "--occurrence",
+            "nightly@100",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(json.status.success(), "{json:?}");
+    assert!(json.stderr.is_empty(), "{json:?}");
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["command"], "loop acknowledge-occurrence");
+    assert_eq!(json["occurrence_id"], "nightly@100");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["occurrence"]["status"], "acknowledged");
+}
+
+#[test]
 fn json_mode_classifies_output_mode_conflicts_as_usage_errors() {
     for args in [
         vec!["--json", "status", "--tui"],

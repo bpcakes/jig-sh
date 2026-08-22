@@ -7,6 +7,7 @@ pub(crate) enum LoopCommand {
     Status(LoopStatusRequest),
     Run(LoopRunRequest),
     ClearAttempt(LoopClearAttemptRequest),
+    AcknowledgeOccurrence(LoopAcknowledgeOccurrenceRequest),
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +42,11 @@ pub(crate) struct LoopRunRequest {
 pub(crate) struct LoopClearAttemptRequest {
     pub(crate) workflow: String,
     pub(crate) item: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct LoopAcknowledgeOccurrenceRequest {
+    pub(crate) occurrence: String,
 }
 
 fn default_until() -> String {
