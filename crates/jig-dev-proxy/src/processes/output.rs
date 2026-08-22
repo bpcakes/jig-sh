@@ -2,8 +2,6 @@ use std::collections::VecDeque;
 use std::io::{self, IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -12,10 +10,6 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use terminal_size::{Width, terminal_size_of};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA};
-#[cfg(windows)]
-use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 
 mod capture_start;
 
@@ -444,14 +438,7 @@ impl<R: AsRawFd> CancellableChildPipe<R> {
     }
 }
 
-#[cfg(windows)]
-impl<R> CancellableChildPipe<R> {
-    fn new(inner: R) -> io::Result<Self> {
-        Ok(Self { inner })
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 impl<R> CancellableChildPipe<R> {
     fn new(inner: R) -> io::Result<Self> {
         Ok(Self { inner })
@@ -465,44 +452,7 @@ impl<R: Read> Read for CancellableChildPipe<R> {
     }
 }
 
-#[cfg(windows)]
-impl<R: Read + AsRawHandle> Read for CancellableChildPipe<R> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        let mut available = 0u32;
-        let result = unsafe {
-            // SAFETY: the handle belongs to the live child pipe, all optional
-            // output buffers are null, and available points to writable u32
-            // storage for the duration of the call.
-            PeekNamedPipe(
-                self.inner.as_raw_handle() as _,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if result == 0 {
-            let error = io::Error::last_os_error();
-            return match error.raw_os_error() {
-                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32 => {
-                    Ok(0)
-                }
-                _ => Err(error),
-            };
-        }
-        if available == 0 {
-            return Err(io::Error::from(io::ErrorKind::WouldBlock));
-        }
-        let read_length = buffer.len().min(available as usize);
-        self.inner.read(&mut buffer[..read_length])
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 impl<R: Read> Read for CancellableChildPipe<R> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         self.inner.read(buffer)

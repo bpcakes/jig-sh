@@ -824,7 +824,7 @@ fn cleanup_dev_session_current_and_children(
     current_complete && prior_complete && session.cleanup_is_confirmed()
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 pub(super) fn run_apps_with_interrupt_probe(
     specs: Vec<AppRunSpec>,
     settings: &ProxySettings,

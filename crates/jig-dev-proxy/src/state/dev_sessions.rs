@@ -215,7 +215,7 @@ pub(super) fn write_to_path(path: &Path, sessions: &[DevSessionRecord]) -> Resul
     file.write_all(b"\n")?;
     file.sync_data()?;
     drop(file);
-    file_ops::replace_file(&tmp, path, STATE_FILE_FALLBACK)
+    file_ops::replace_file(&tmp, path)
 }
 
 pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {

@@ -20,8 +20,6 @@ mod session_control;
 mod session_id;
 mod state;
 mod types;
-#[cfg(any(windows, test))]
-mod windows_system;
 mod workspace;
 
 use std::collections::HashMap;
@@ -643,34 +641,9 @@ pub(crate) fn unix_pid(pid: u32) -> Option<i32> {
     i32::try_from(pid).ok()
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn terminate_proxy_pid(_pid: u32) -> bool {
     false
-}
-
-#[cfg(windows)]
-fn terminate_proxy_pid(pid: u32) -> bool {
-    let Ok(taskkill) = crate::windows_system::native_system_executable("taskkill.exe") else {
-        return false;
-    };
-    let Ok(status) = std::process::Command::new(&taskkill)
-        .env_clear()
-        .args(["/PID", &pid.to_string(), "/T"])
-        .status()
-    else {
-        return false;
-    };
-    if status.success() && wait_for_pid_exit(pid, Duration::from_secs(2)) {
-        return true;
-    }
-    let Ok(status) = std::process::Command::new(taskkill)
-        .env_clear()
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status()
-    else {
-        return false;
-    };
-    status.success() && wait_for_pid_exit(pid, Duration::from_secs(1))
 }
 
 fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {

@@ -1,11 +1,5 @@
 #[cfg(target_os = "linux")]
 use std::fs;
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, STILL_ACTIVE};
-#[cfg(windows)]
-use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 
 use crate::types::{Route, RouteMode};
 
@@ -92,35 +86,7 @@ pub(crate) fn observe_pid(pid: u32) -> PidObservation {
         let result = unsafe { libc::kill(pid, 0) };
         classify_unix_pid_probe(result, std::io::Error::last_os_error)
     }
-    #[cfg(windows)]
-    {
-        unsafe {
-            // SAFETY: OpenProcess does not take ownership of Rust memory. Any
-            // non-null handle is closed before this branch returns.
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                let error = std::io::Error::last_os_error();
-                return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
-                    PidObservation::Absent
-                } else {
-                    PidObservation::Uncertain
-                };
-            }
-            let mut exit_code = 0u32;
-            // SAFETY: handle is live and exit_code remains a valid out pointer.
-            let ok = GetExitCodeProcess(handle, &mut exit_code);
-            // SAFETY: handle was returned by OpenProcess and is closed once.
-            let _ = CloseHandle(handle);
-            if ok == 0 {
-                PidObservation::Uncertain
-            } else if exit_code == STILL_ACTIVE as u32 {
-                PidObservation::Alive
-            } else {
-                PidObservation::Absent
-            }
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = pid;
         PidObservation::Uncertain
@@ -179,35 +145,6 @@ fn linux_process_is_zombie(pid: u32) -> bool {
                 .and_then(|state| state.chars().next())
         })
         == Some('Z')
-}
-
-#[cfg(test)]
-pub(super) fn windows_tasklist_csv_pid(line: &str) -> Option<u32> {
-    csv_fields(line).get(1)?.parse().ok()
-}
-
-#[cfg(test)]
-fn csv_fields(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut field = String::new();
-    let mut chars = line.chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' if in_quotes && chars.peek() == Some(&'"') => {
-                field.push('"');
-                let _ = chars.next();
-            }
-            '"' => in_quotes = !in_quotes,
-            ',' if !in_quotes => {
-                fields.push(std::mem::take(&mut field));
-            }
-            _ => field.push(ch),
-        }
-    }
-    fields.push(field);
-    fields
 }
 
 #[cfg(target_os = "linux")]

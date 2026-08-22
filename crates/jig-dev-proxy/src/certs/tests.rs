@@ -125,7 +125,6 @@ fn untrust_requires_accept_trust_scope() {
     assert!(error.contains("--accept-trust-scope"));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn security_fingerprint_parser_pairs_sha1_with_pem_sha256() {
     let temp = tempdir().unwrap();
@@ -148,7 +147,6 @@ fn security_fingerprint_parser_pairs_sha1_with_pem_sha256() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn security_fingerprint_parser_rejects_malformed_sha1() {
     let temp = tempdir().unwrap();
@@ -162,20 +160,6 @@ fn security_fingerprint_parser_rejects_malformed_sha1() {
     let output = format!("SHA-1 hash: not-a-fingerprint\n{pem}");
 
     assert!(security_find_certificate_fingerprints(output.as_bytes()).is_empty());
-}
-
-#[cfg(windows)]
-#[test]
-fn generate_rejects_windows_private_key_writes() {
-    let temp = tempdir().unwrap();
-    let settings = ProxySettings {
-        state_dir: Some(temp.path().to_path_buf()),
-        ..ProxySettings::default()
-    };
-
-    let error = generate(&settings, false).unwrap_err().to_string();
-
-    assert!(error.contains("not supported on Windows"));
 }
 
 #[test]

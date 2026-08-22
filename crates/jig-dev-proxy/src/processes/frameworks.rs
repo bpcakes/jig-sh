@@ -119,14 +119,7 @@ pub(super) fn validate_shell_command(command: &str) -> Result<()> {
 }
 
 pub(super) fn shell_command(command: &str) -> Vec<String> {
-    #[cfg(windows)]
-    {
-        vec!["cmd".into(), "/C".into(), command.into()]
-    }
-    #[cfg(not(windows))]
-    {
-        vec!["sh".into(), "-c".into(), command.into()]
-    }
+    vec!["sh".into(), "-c".into(), command.into()]
 }
 
 pub(crate) fn inject_framework_flags(argv: &mut Vec<String>, kind: &AppKind, port: u16) {

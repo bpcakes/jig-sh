@@ -111,30 +111,6 @@ fn resolve_existing_applies_normal_validation_to_present_state() {
 }
 
 #[test]
-fn resolve_existing_recovers_a_session_replace_backup_under_the_shared_lock() {
-    let temp = tempdir().unwrap();
-    let state_dir = temp.path().join("proxy-state");
-    fs::create_dir_all(&state_dir).unwrap();
-    #[cfg(unix)]
-    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let expected = session("dev_recovered");
-    let backup = state_dir.join("dev-sessions.json.4294967295.123456.7.replace-backup");
-    let document = serde_json::to_vec_pretty(&DevSessionsDocument {
-        version: VERSION,
-        sessions: std::slice::from_ref(&expected),
-    })
-    .unwrap();
-    write_private_fixture(&backup, document);
-
-    let store = StateStore::resolve_existing(Some(state_dir))
-        .unwrap()
-        .unwrap();
-
-    assert!(!backup.exists());
-    assert_eq!(store.snapshot_dev_state().unwrap().sessions, vec![expected]);
-}
-
-#[test]
 fn mutation_writes_versioned_private_state_and_round_trips() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();

@@ -818,14 +818,7 @@ fn canonical_root_identity(root: &Path) -> String {
         use std::os::unix::ffi::OsStrExt;
         digest.update(root.as_os_str().as_bytes());
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        for unit in root.as_os_str().encode_wide() {
-            digest.update(unit.to_le_bytes());
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     digest.update(root.to_string_lossy().as_bytes());
     format!("sha256:{:x}", digest.finalize())
 }

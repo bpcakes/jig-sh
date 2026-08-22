@@ -4,8 +4,6 @@ use std::io::ErrorKind;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -377,17 +375,7 @@ fn detach_background_proxy(command: &mut Command) {
     }
 }
 
-#[cfg(windows)]
-fn detach_background_proxy(command: &mut Command) {
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    let system_root = std::env::var_os("SystemRoot")
-        .filter(|value| Path::new(value).is_absolute())
-        .unwrap_or_else(|| "C:\\".into());
-    command.current_dir(system_root);
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn detach_background_proxy(_command: &mut Command) {}
 
 #[cfg(test)]
