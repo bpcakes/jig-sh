@@ -1894,12 +1894,20 @@ if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
 fi
 mkdir -p .agent
 touch .agent/clean-review
-if [ "$*" = "--ask-for-approval never exec --sandbox workspace-write --ephemeral -" ]; then
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+if [ -n "$out" ]; then
   printf 'stdin' > prompt-source.txt
+  printf 'refined\n' > "$out"
 fi
 cat >/dev/null
 printf 'fixed\n' > fixed.txt
-printf 'refined\n'
 "#,
     );
 }

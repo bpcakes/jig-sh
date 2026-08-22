@@ -305,3 +305,4 @@
 {"id":"plan-event_01M0MQKHT9T7XSPDFE9P13E7DE","plan_id":"plan_01M0MQKHT92QQYKYK5SB6HM3AM","event":"open","timestamp_ms":1787402241865,"title":"Type cancellation outcomes at durable boundaries","body_path":".agent/plans/plan_01M0MQKHT92QQYKYK5SB6HM3AM.md","resolution":null}
 {"id":"plan-event_01M0MR4JWMBQEGNBM9EEQQ51PV","plan_id":"plan_01M0MQKHT92QQYKYK5SB6HM3AM","event":"append","timestamp_ms":1787402800020,"title":null,"body_path":".agent/plans/plan_01M0MQKHT92QQYKYK5SB6HM3AM.md","resolution":null}
 {"id":"plan-event_01M0MRADXF1QS0QA5CQMDT6NKD","plan_id":"plan_01M0MQKHT92QQYKYK5SB6HM3AM","event":"append","timestamp_ms":1787402991535,"title":null,"body_path":".agent/plans/plan_01M0MQKHT92QQYKYK5SB6HM3AM.md","resolution":null}
+{"id":"plan-event_01M0MRG7506STB9EFW8D32JAMP","plan_id":"plan_01M0MQKHT92QQYKYK5SB6HM3AM","event":"append","timestamp_ms":1787403181216,"title":null,"body_path":".agent/plans/plan_01M0MQKHT92QQYKYK5SB6HM3AM.md","resolution":null}

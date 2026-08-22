@@ -238,17 +238,16 @@ fn run_codex_exec_inner(
     } else {
         None
     };
-    let output_file = if request.output_schema.is_some() {
-        Some(NamedTempFile::new().context("Failed to create Codex output file")?)
-    } else {
-        None
-    };
+    // The last-message file is the authoritative result channel for every
+    // worker. Schema validation is optional and must not decide whether noisy
+    // provider transcripts are allowed to truncate.
+    let output_file = NamedTempFile::new().context("Failed to create Codex output file")?;
 
     let mut command = build_codex_command(
         crate::codex::codex_bin(),
         request,
         schema_file.as_ref().map(NamedTempFile::path),
-        output_file.as_ref().map(NamedTempFile::path),
+        output_file.path(),
     );
     let output = run_worker_command(
         &mut command,
@@ -264,11 +263,7 @@ fn run_codex_exec_inner(
     let provider_stderr_truncated = output.stderr_truncated;
     let mut output = output.output;
 
-    if let Some(output_file) = output_file {
-        if let Some(structured_output) = read_worker_output_file(output_file.path())? {
-            output.stdout = structured_output;
-        }
-    }
+    output.stdout = read_worker_output_file(output_file.path())?.unwrap_or_default();
 
     Ok(CodexRunOutput {
         output,
@@ -288,7 +283,7 @@ fn read_worker_output_file(path: &Path) -> Result<Option<Vec<u8>>> {
     }
     if output_metadata.len() > EXECUTION_OUTPUT_CAPTURE_LIMIT as u64 {
         bail!(
-            "Codex structured output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
         );
     }
     fs::read(path)
@@ -300,7 +295,7 @@ fn build_codex_command(
     bin: impl AsRef<OsStr>,
     request: &CodexExecRequest<'_>,
     schema_path: Option<&Path>,
-    output_path: Option<&Path>,
+    output_path: &Path,
 ) -> Command {
     let mut command = Command::new(bin);
     command.current_dir(request.root);
@@ -324,13 +319,10 @@ fn build_codex_command(
     if let Some(model) = request.model {
         command.arg("--model").arg(model);
     }
-    if let (Some(schema_path), Some(output_path)) = (schema_path, output_path) {
-        command
-            .arg("--output-schema")
-            .arg(schema_path)
-            .arg("-o")
-            .arg(output_path);
+    if let Some(schema_path) = schema_path {
+        command.arg("--output-schema").arg(schema_path);
     }
+    command.arg("-o").arg(output_path);
     match request.prompt {
         CodexPrompt::Argument(prompt) => {
             command.arg(prompt);
@@ -552,7 +544,7 @@ mod tests {
     use std::time::Duration;
 
     #[cfg(unix)]
-    use crate::test_env::{EnvVarGuard, lock_env};
+    use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     use std::path::Path;
 
@@ -615,7 +607,7 @@ mod tests {
             ProcessOutputOverflowPolicy::Truncate,
             "refinement edits are authoritative; its transcript is diagnostic"
         );
-        let command = build_codex_command("codex", &request, None, None);
+        let command = build_codex_command("codex", &request, None, Path::new("/tmp/codex-output"));
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -632,6 +624,8 @@ mod tests {
                 "--ephemeral",
                 "--model",
                 "gpt-x",
+                "-o",
+                "/tmp/codex-output",
                 "-",
             ]
         );
@@ -640,7 +634,8 @@ mod tests {
         }));
 
         request.codex_home = None;
-        let inherited_command = build_codex_command("codex", &request, None, None);
+        let inherited_command =
+            build_codex_command("codex", &request, None, Path::new("/tmp/codex-output"));
         assert!(
             inherited_command
                 .get_envs()
@@ -667,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_worker_output_file_is_size_bounded() {
+    fn worker_last_message_file_is_size_bounded() {
         let output = NamedTempFile::new().unwrap();
         output
             .as_file()
@@ -778,6 +773,74 @@ mod tests {
         assert_eq!(output.output.stdout.len(), EXECUTION_OUTPUT_CAPTURE_LIMIT);
         assert!(output.stdout_truncated);
         assert!(!output.stderr_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn schema_less_worker_uses_last_message_file_as_authoritative_output() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let script = temp.path().join("codex-stub.sh");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+printf 'diagnostic transcript\n'
+printf 'authoritative result\n' > "$out"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+        let _codex = EnvVarGuard::set("JIG_CODEX_BIN", &script);
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let outcome = run_codex_exec(
+            &ctx,
+            CodexExecRequest {
+                root: temp.path(),
+                codex_home: None,
+                mode: CodexExecMode::Exec,
+                model: None,
+                approval_policy: Some("never"),
+                sandbox: Some("workspace-write"),
+                ephemeral: true,
+                extra_args: Vec::new(),
+                output_schema: None,
+                transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
+                prompt: CodexPrompt::Stdin("example prompt"),
+                receipt: WorkerReceiptRequest {
+                    purpose: "test",
+                    plan_id: None,
+                    workflow_id: None,
+                    item_key: None,
+                    collect_git_metadata: false,
+                    collect_worktree_fingerprint: false,
+                },
+                phase: None,
+            },
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+        let CodexExecOutcome::Completed(output) = outcome else {
+            panic!("worker unexpectedly cancelled");
+        };
+
+        assert_eq!(output.output.stdout, b"authoritative result\n");
+        assert_eq!(output.provider_stdout, "diagnostic transcript\n");
     }
 
     #[cfg(unix)]
