@@ -14,7 +14,7 @@ After this work, every PR-repair child process uses the same typed owned-process
 - [x] (2026-08-22) Implemented typed supervision and post-cancellation reconciliation for every PR-manager Git command; focused PR-manager tests and strict crate Clippy pass.
 - [x] (2026-08-22) Added consuming, deadline-bounded CLI progress delivery; focused unit and production-binary signal/backpressure regressions pass.
 - [x] (2026-08-22) Ran focused tests and strict Clippy for both implementation slices and committed the Git slice independently.
-- [ ] Run format, Clippy, contract, and the complete configured test suite through `JIG_DEV_BIN=target/debug/jig`; inspect receipts and close the work.
+- [x] (2026-08-22) Ran format, strict Clippy, contract, and the complete configured two-part test suite through `JIG_DEV_BIN=target/debug/jig`; all gates passed.
 
 ## Surprises & Discoveries
 
@@ -41,7 +41,11 @@ After this work, every PR-repair child process uses the same typed owned-process
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The review findings shared one architectural root cause: execution completion was not modeled as an owned, typed boundary. The PR manager bypassed the repository's process supervisor, so cancellation became presentation text and a push's remote commit point was invisible. Progress buffering bounded memory but not final transport latency, so presentation could own signal retirement. These were structural omissions at two lifecycle boundaries rather than isolated conditional mistakes.
+
+The long-term fix reduces bug surface by reusing one owned-process contract for every PR-manager Git child, keeping cancellation distinct from failure through retry accounting, and explicitly reconciling the only externally committed operation (`git push`). Progress finalization now consumes its bounded payload once and gives delivery a fixed deadline, keeping output best-effort while execution and signal lifecycles remain authoritative. No new dependency or parallel supervisor was introduced.
+
+The Git and progress changes landed independently as `a0916c8` and `f6412c4`. Focused cancellation, push-reconciliation, slow-writer, I/O-error, and production signal/backpressure regressions pass. Final receipts `receipt_01M0MXQ3EGKCDPKT23PKQSW3MG`, `receipt_01M0MXQKQ3K09J59PA7W7Z0DAV`, `receipt_01M0MXQKS6TDA1HVKKTA63BHY3`, and `receipt_01M0MYJZ9YPK49V1ETWXR4EQSV` record passing format, strict Clippy, contract, and complete configured two-part tests respectively.
 
 ## Context and Orientation
 
