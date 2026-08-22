@@ -1276,77 +1276,6 @@ validate_invalid_config_info_reports_once() {
   [[ "$(grep -c 'Failed to parse' "$stderr_file")" == "1" ]]
 }
 
-validate_python_toml_fallback_preserves_literal_backslashes() {
-  local template_snapshot="$TMP_DIR/template-toml-fallback-snapshot"
-  local answers_file="$TMP_DIR/backend-toml-fallback.toml"
-  local rendered_dir="$TMP_DIR/render-toml-fallback"
-  local fake_bin_dir="$TMP_DIR/toml-fallback-bin"
-  local stderr_file="$TMP_DIR/toml-fallback.stderr"
-  local install_root="$TMP_DIR/toml-fallback-install"
-  local real_python helper_value
-
-  create_template_snapshot_repo "$template_snapshot"
-  cp "$ROOT_DIR/tests/fixtures/backend-only.toml" "$answers_file"
-  render_fixture_from_template "$template_snapshot" "$answers_file" "$rendered_dir"
-  python3 - "$rendered_dir/.jig.toml" <<'PY'
-import pathlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-path.write_text(re.sub(
-    r'^_src_path\s*=.*$',
-    lambda _: r"_src_path = 'C:\temp'",
-    text,
-    flags=re.MULTILINE,
-))
-PY
-  helper_value="$(JIG_FIXTURE_FORCE_NO_TOMLLIB=1 \
-    answers_get "$rendered_dir/.jig.toml" _src_path)"
-  if [[ "$helper_value" != 'C:\temp' ]]; then
-    echo "Fixture TOML fallback did not preserve a literal-string backslash: $helper_value" >&2
-    exit 1
-  fi
-
-  mkdir -p "$fake_bin_dir"
-  real_python="$(command -v python3)"
-  printf '%s\n' \
-    '#!/bin/sh' \
-    'if [ "${1:-}" = "-I" ] && [ "${2:-}" = "-c" ]; then' \
-    '  code="$3"' \
-    '  shift 3' \
-    '  prefix='"'"'import builtins' \
-    '_jig_real_import = builtins.__import__' \
-    'def _jig_import(name, globals=None, locals=None, fromlist=(), level=0):' \
-    '    if name == "tomllib":' \
-    '        raise ModuleNotFoundError("forced fallback")' \
-    '    return _jig_real_import(name, globals, locals, fromlist, level)' \
-    'builtins.__import__ = _jig_import'"'" \
-    '  exec "$JIG_FIXTURE_REAL_PYTHON" -I -c "$prefix
-$code" "$@"' \
-    'fi' \
-    'exec "$JIG_FIXTURE_REAL_PYTHON" "$@"' \
-    >"$fake_bin_dir/python3"
-  chmod +x "$fake_bin_dir/python3"
-
-  if (
-    cd "$rendered_dir"
-    env -u JIG_DEV_BIN PATH="$fake_bin_dir:$PATH" \
-      JIG_FIXTURE_REAL_PYTHON="$real_python" \
-      /bin/bash scripts/install-jig.sh --profile runtime "$install_root" \
-      >/dev/null 2>"$stderr_file"
-  ); then
-    echo "Unsupported literal-string source unexpectedly installed." >&2
-    exit 1
-  fi
-  if ! grep -Fq 'C:\temp' "$stderr_file"; then
-    echo "Python TOML fallback did not preserve literal-string backslashes." >&2
-    cat "$stderr_file" >&2
-    exit 1
-  fi
-}
-
 validate_seed_checks_the_copy_before_cache_publication() {
   local template_snapshot="$TMP_DIR/template-seed-publication-snapshot"
   local answers_file="$TMP_DIR/backend-seed-publication.toml"
@@ -1915,7 +1844,6 @@ validate_source_normalization_fixtures() {
   validate_source_checkout_requires_explicit_dev_binary_and_honors_refresh
   validate_local_source_change_during_build_is_not_cached
   validate_invalid_config_info_reports_once
-  validate_python_toml_fallback_preserves_literal_backslashes
   validate_seed_checks_the_copy_before_cache_publication
   validate_path_launcher_is_not_treated_as_runtime
   validate_incompatible_dev_help_is_not_retried

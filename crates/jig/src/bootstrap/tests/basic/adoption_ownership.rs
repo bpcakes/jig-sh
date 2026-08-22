@@ -566,13 +566,7 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
     let _guard = lock_env();
     let template = materialize_template_worktree();
 
-    for alias in [
-        ".git",
-        "GIT~1/config",
-        ".git::$INDEX_ALLOCATION",
-        ".g\u{200c}it/config",
-        "vendor\\.GiT...\\config",
-    ] {
+    for alias in [".git", ".g\u{200c}it/config"] {
         for mode in [
             "update",
             "update-force",

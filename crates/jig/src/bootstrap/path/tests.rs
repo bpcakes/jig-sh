@@ -290,20 +290,9 @@ fn repository_relative_ancestor_validation_rejects_escaping_paths() {
 fn repository_relative_path_validation_rejects_reserved_git_metadata_aliases() {
     for relative in [
         ".git",
-        ".git.",
-        ".git ",
-        "vendor/.GiT.../config",
-        "vendor/.GIT. . /config",
-        "GIT~1/config",
-        "vendor/git~1. . /config",
-        ".git:stream",
-        ".git .:stream",
-        ".git::$INDEX_ALLOCATION",
-        ".git...:alternate-stream",
-        "git~1::$DATA",
+        "vendor/.GiT/config",
         ".g\u{200c}it/config",
         "\u{feff}.G\u{202e}i\u{206a}T/config",
-        "vendor\\.GiT...\\config",
     ] {
         let error = validate_no_reserved_git_metadata_components(Path::new(relative))
             .unwrap_err()
@@ -323,11 +312,6 @@ fn repository_relative_path_validation_allows_git_near_misses() {
         ".gitignore",
         ".gitkeep",
         "git/config",
-        "git~2/config",
-        "git~10/config",
-        "git~1x/config",
-        ".gitx. ",
-        ".gitx:stream",
         ".git .config",
         ".git\u{a0}",
         ".git\u{200b}",

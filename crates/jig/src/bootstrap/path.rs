@@ -1189,7 +1189,7 @@ pub(crate) fn repository_permission_identity(permissions: &fs::Permissions) -> u
 pub(super) fn validate_no_reserved_git_metadata_components(relative: &Path) -> Result<()> {
     if let Some(component) = reserved_git_metadata_component(relative) {
         bail!(
-            "Unsafe repository path {}: component {component:?} aliases the reserved Git metadata component \".git\" under Git's NTFS/HFS path rules",
+            "Unsafe repository path {}: component {component:?} aliases the reserved Git metadata component \".git\" under Git's HFS path rules",
             relative.display()
         );
     }
@@ -1202,37 +1202,13 @@ fn reserved_git_metadata_component(relative: &Path) -> Option<&str> {
             return None;
         };
         let component = component.to_str()?;
-        component.split('\\').find(|segment| {
-            is_ntfs_git_metadata_alias(segment) || is_hfs_git_metadata_alias(segment)
-        })
+        is_hfs_git_metadata_alias(component).then_some(component)
     })
 }
 
 // Behavioral reference only; this is an independent Rust implementation of Git's
-// protections pinned at f60db8d575adb79761d363e026fb49bddf330c73:
-// https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/path.c#L1394-L1449
+// HFS protection pinned at f60db8d575adb79761d363e026fb49bddf330c73:
 // https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/utf8.c#L698-L787
-// Upstream cases: https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/t/t0060-path-utils.sh#L438-L527
-fn is_ntfs_git_metadata_alias(component: &str) -> bool {
-    [".git", "git~1"].into_iter().any(|prefix| {
-        let Some(remainder) = strip_ascii_case_prefix(component, prefix) else {
-            return false;
-        };
-        remainder
-            .split_once(':')
-            .map_or(remainder, |(before_stream, _)| before_stream)
-            .bytes()
-            .all(|byte| byte == b'.' || byte == b' ')
-    })
-}
-
-fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
-    value
-        .get(..prefix.len())
-        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
-        .then(|| &value[prefix.len()..])
-}
-
 fn is_hfs_git_metadata_alias(component: &str) -> bool {
     let mut normalized = component
         .chars()
