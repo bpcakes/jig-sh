@@ -40,7 +40,7 @@ and, over MCP:
 - [x] (2026-08-21 22:19Z) Slice 5: added feature-owned adapter contributions, explicit v6 components/actions/profiles and provenance, component-scoped commands, adapter-derived runtime capability checks, per-frontend execution, authored multi-stack recopy preservation, and v2–v5 template compatibility.
 - [x] (2026-08-21 23:26Z) Slice 6: added exact target/profile evidence gates, same-run profile proof, contract/input/worktree freshness, one-run configured work checks, strict selector validation, compatible legacy tool gates, and focused evidence/index modules.
 - [x] (2026-08-22 00:03Z) Slice 7: replaced v6 per-action MCP discovery with four strictly schema-bound repository operations, immediate durable run handles, typed catalog/run inspection, background execution, cross-process durable cancellation observation, terminal worker-error recovery, and v2–v5 compatibility.
-- [ ] Slice 8: add deterministic, explainable affected selection without artifact caching; commit independently.
+- [x] (2026-08-22 00:55Z) Slice 8: added deterministic Git-base affected selection, validated repository-relative inputs/roots, explainable direct and component propagation, post-filter action dependencies, source-complete freshness, CLI/MCP acceptance coverage, and no artifact cache.
 - [ ] Run focused acceptance fixtures, full formatting, strict Clippy, workspace tests, generated-template checks, contract checks, and structured-work gates through a fresh development binary.
 - [ ] Audit every acceptance item against code and test evidence, update this plan, and finish structured work.
 
@@ -90,6 +90,15 @@ and, over MCP:
 
 - Observation: doctor process tests silently stopped reaching their child probes after their shared fixture advanced to v6 without component/action/profile records, and SQLx root fields were later inserted inside the final repository profile table.
   Evidence: the current-contract doctor fixture now carries a minimal native repository model, SQLx mutates adapter provenance on both authored and resolved sides, and both exact process-cancellation tests pass.
+
+- Observation: the existing worktree fingerprint covered dirty state but not the checked-out commit, so two different clean commits could produce the same target input digest and make old evidence appear current.
+  Evidence: the fingerprint now includes the verified `HEAD` object id (or an explicit unborn marker), and a regression proves two clean commits have different fingerprints.
+
+- Observation: the first full Slice 8 gate exposed three stale migration tests rather than runtime failures: one string replacement no longer mutated the dynamic v6 evidence gate, and two Go Doctor fixtures still set the ignored v5 `backend_language` field while their v6 component advertised `rust`.
+  Evidence: the gate-mutation test now asserts and changes the actual evidence record; the Go fixtures update authored and resolved adapter records; all three focused reruns and the complete composite test gate pass.
+
+- Observation: `globset` 0.4.20 raises its Rust floor to 1.88 while this workspace supports Rust 1.85.
+  Evidence: workspace dependency resolution pins 0.4.19; its resolved `bstr` dependency declares Rust 1.65 compatibility, strict Clippy and the complete tests pass.
 
 ## Decision Log
 
@@ -155,6 +164,18 @@ and, over MCP:
 
 - Decision: Keep MCP resources and Tasks-extension projection as compatible later transports over the same catalog and run ids rather than prerequisites for v6.
   Rationale: the initial bounded tools work with every MCP client; transport capability negotiation should not fork repository semantics.
+  Date/Author: 2026-08-22 / Codex.
+
+- Decision: Treat `--affected` as a filter over the ordinary selector/profile candidate set. Resolve direct component inputs and configured dependent propagation first, then expand action dependencies.
+  Rationale: the same selector vocabulary composes predictably with affected planning, architectural component edges never become execution edges, and an unrelated change can produce an honest empty plan.
+  Date/Author: 2026-08-22 / Codex.
+
+- Decision: Action inputs use validated repository-relative forward-slash globs. An input outside its component root is explicitly global; component roots are a most-specific fallback only when no declared input matches a path.
+  Rationale: checked-in policy remains stack-neutral and inspectable while overlapping monorepo roots do not swallow paths already owned by a more precise action input.
+  Date/Author: 2026-08-22 / Codex.
+
+- Decision: Keep target freshness conservative by covering the checked-out commit and complete non-`.agent/` worktree identity; do not reuse evidence or artifacts based on affected selection.
+  Rationale: false invalidation is safer than stale proof, and introducing a per-target content hash or build cache requires a separate, explicit compatibility and performance design.
   Date/Author: 2026-08-22 / Codex.
 
 ## Outcomes & Retrospective
@@ -377,6 +398,31 @@ Slice 7 validation evidence:
     # generated v6 harness smoke: exactly four repository tools, each with input/output schema;
     # jig.inspect workspace returned structuredContent.kind=workspace with two components
 
+Slice 8 validation evidence:
+
+    cargo test -p jig-sh affected --no-fail-fast
+    # 14 passed, including Git-base safety, direct/global/root selection, propagation,
+    # deterministic reasons, legacy rejection, CLI execution, and MCP planning
+
+    cargo test -p jig-sh repository --no-fail-fast
+    # 81 focused library/integration tests passed
+
+    cargo clippy -p jig-sh --all-targets -- -D warnings
+    cargo build -p jig-sh --bin jig
+    JIG_DEV_BIN=target/debug/jig scripts/jig check contract
+    JIG_DEV_BIN=target/debug/jig scripts/jig check fmt
+    JIG_DEV_BIN=target/debug/jig scripts/jig check clippy
+    # all passed through the fresh development binary
+
+    generated Go + TypeScript v6 smoke repository
+    # `check test --affected HEAD --explain` selected api:test by direct Go input
+    # and web:test by the explicit api-to-dependent propagation policy, with stable reasons
+
+    JIG_DEV_BIN=target/debug/jig scripts/jig check test
+    # initial full run: 2,259/2,262 primary tests passed and exposed three stale branch fixtures
+    # focused fixture corrections passed; complete rerun passed with receipt
+    # receipt_01M0KFDN3THFNV45R97TDDDWQ7
+
 ## Interfaces and Dependencies
 
 `jig-contract` will export versioned, serde-stable types equivalent to:
@@ -409,4 +455,7 @@ Configured command runners initially reuse the existing named command table in `
 SHA-256 should reuse the workspace's existing digest dependency if available. Glob matching should reuse an existing dependency if one is already present; otherwise add one at workspace scope with anchored, repository-relative semantics and explicit tests. Process execution and cancellation must use `jig-owned-process`, not a second child-process implementation.
 
 
-Slice 7 complete: bounded v6 MCP inspect/plan/execute/cancel tools, strict typed schemas, durable background handles, cross-process cancellation observation, worker-error terminalization, legacy MCP compatibility, repaired current-v6 doctor fixtures, focused tests, strict Clippy, and generated-harness protocol smoke all pass.
+Slice 8 complete: affected planning is a deterministic selector/profile filter over explicit Git changes, validated action input policy and component propagation; reasons remain inspectable across CLI and MCP, action dependencies stay separate, clean commits invalidate freshness, legacy contracts fail before Git resolution, and the complete repository test gate passes after closing three stale migration fixtures.
+
+
+Slice 8 complete: deterministic Git-base affected selection now filters normal target candidates through validated repo-relative inputs and explicit component propagation, then expands action dependencies. CLI/MCP fixtures, strict Clippy, generated Go+TypeScript smoke, and the complete composite test gate pass; the full gate also exposed and closed three stale v6 migration fixtures.

@@ -9,9 +9,12 @@ use jig_contract::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{context::RepoContext, git_receipts::repo_worktree_fingerprint};
+use crate::{
+    context::RepoContext,
+    git_receipts::{repo_changed_paths_since, repo_worktree_fingerprint},
+};
 
-use super::RepositoryCatalog;
+use super::{RepositoryCatalog, affected::select_affected_targets};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlanRunRequest {
@@ -23,13 +26,29 @@ pub(crate) struct PlanRunRequest {
 pub(crate) fn plan_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
-    request: PlanRunRequest,
+    mut request: PlanRunRequest,
 ) -> Result<RunPlan> {
-    let source = SourceIdentity::new(
+    normalize_affected_base(&mut request.affected_base)?;
+    if request.affected_base.is_some() && catalog.contract_version() < 6 {
+        bail!("affected selection requires repository contract version 6 or later");
+    }
+    let source = current_source_identity(ctx)?;
+    let changed_paths = request
+        .affected_base
+        .as_deref()
+        .map(|base| repo_changed_paths_since(ctx.root(), base))
+        .transpose()?;
+    if changed_paths.is_some() && current_source_identity(ctx)? != source {
+        bail!("repository source changed while resolving affected paths; plan again");
+    }
+    plan_run_with_source_and_paths(catalog, request, source, changed_paths.as_deref())
+}
+
+fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
+    Ok(SourceIdentity::new(
         head_commit(ctx)?,
         repo_worktree_fingerprint(ctx.root()).context("Failed to identify the current worktree")?,
-    );
-    plan_run_with_source(catalog, request, source)
+    ))
 }
 
 /// Re-resolves a plan request against current checked-in configuration and
@@ -87,19 +106,35 @@ fn head_commit(ctx: &RepoContext) -> Result<Option<String>> {
     Ok((!commit.is_empty()).then_some(commit))
 }
 
+#[cfg(test)]
 fn plan_run_with_source(
+    catalog: &RepositoryCatalog,
+    request: PlanRunRequest,
+    source: SourceIdentity,
+) -> Result<RunPlan> {
+    plan_run_with_source_and_paths(catalog, request, source, None)
+}
+
+fn plan_run_with_source_and_paths(
     catalog: &RepositoryCatalog,
     mut request: PlanRunRequest,
     source: SourceIdentity,
+    changed_paths: Option<&[String]>,
 ) -> Result<RunPlan> {
-    if let Some(base) = request.affected_base.as_deref() {
-        bail!(
-            "affected selection against '{base}' is not available until component input propagation is configured"
-        );
-    }
+    normalize_affected_base(&mut request.affected_base)?;
     normalize_selectors(&mut request.selectors)?;
     if request.profile.is_some() && !request.selectors.is_empty() {
         bail!("choose either explicit selectors or --profile, not both");
+    }
+    match (&request.affected_base, changed_paths) {
+        (Some(base), None) => {
+            bail!("affected selection against '{base}' requires repository Git context")
+        }
+        (Some(_), Some(_)) if catalog.contract_version() < 6 => {
+            bail!("affected selection requires repository contract version 6 or later")
+        }
+        (None, Some(_)) => bail!("affected paths require an explicit Git base"),
+        _ => {}
     }
 
     let mut selected = BTreeMap::<TargetId, BTreeSet<SelectionReason>>::new();
@@ -127,6 +162,9 @@ fn plan_run_with_source(
 
     for selector in &request.selectors {
         select_explicit(catalog, selector, &mut selected)?;
+    }
+    if let Some(changed_paths) = changed_paths {
+        selected = select_affected_targets(catalog, selected, changed_paths)?;
     }
     expand_action_dependencies(catalog, &mut selected)?;
     validate_check_actions(catalog, selected.keys())?;
@@ -163,9 +201,21 @@ fn plan_run_with_source(
     );
     plan.selectors = request.selectors;
     plan.profile = selected_profile;
+    plan.affected_base = request.affected_base;
     plan.effects = effects.into_iter().collect();
     plan.id = plan_digest(&plan)?;
     Ok(plan)
+}
+
+fn normalize_affected_base(base: &mut Option<String>) -> Result<()> {
+    let Some(value) = base else {
+        return Ok(());
+    };
+    *value = value.trim().to_owned();
+    if value.is_empty() {
+        bail!("--affected requires a non-empty Git base");
+    }
+    Ok(())
 }
 
 fn normalize_selectors(selectors: &mut Vec<String>) -> Result<()> {
@@ -399,7 +449,7 @@ mod tests {
         ProfileId, ProfileSpec, SelectionReason, SourceIdentity, TargetId,
     };
 
-    use super::{PlanRunRequest, plan_run_with_source};
+    use super::{PlanRunRequest, plan_run_with_source, plan_run_with_source_and_paths};
     use crate::repository::RepositoryCatalog;
 
     fn fixture() -> RepositoryCatalog {
@@ -556,6 +606,108 @@ mod tests {
             plan.execution_layers,
             [vec![lint_target], vec![test_target]]
         );
+    }
+
+    #[test]
+    fn affected_plan_filters_candidates_before_expanding_action_dependencies() {
+        let components = [
+            ComponentSpec::new(ComponentId::parse("api").unwrap(), "api"),
+            ComponentSpec::new(ComponentId::parse("web").unwrap(), "web"),
+        ];
+        let lint_target: TargetId = "api:lint".parse().unwrap();
+        let api_target: TargetId = "api:test".parse().unwrap();
+        let web_target: TargetId = "web:test".parse().unwrap();
+        let mut lint = ActionSpec::new(
+            lint_target.clone(),
+            ActionIntent::Check,
+            ActionRunner::command("lint_command"),
+        );
+        lint.effects.push(ActionEffect::ReadOnly);
+        lint.inputs.push("api/**/*.go".into());
+        let mut api = ActionSpec::new(
+            api_target.clone(),
+            ActionIntent::Check,
+            ActionRunner::command("api_test_command"),
+        );
+        api.effects.push(ActionEffect::ReadOnly);
+        api.inputs.push("api/**/*.go".into());
+        api.depends_on.push(lint_target.clone());
+        let mut web = ActionSpec::new(
+            web_target.clone(),
+            ActionIntent::Check,
+            ActionRunner::command("web_test_command"),
+        );
+        web.effects.push(ActionEffect::ReadOnly);
+        web.inputs.push("web/**/*.ts".into());
+        let profile_id = ProfileId::parse("verify").unwrap();
+        let profile = ProfileSpec::new(profile_id.clone(), vec![api_target.clone(), web_target]);
+        let catalog = RepositoryCatalog::from_native(
+            6,
+            "digest",
+            &components,
+            &[lint, api, web],
+            &[profile],
+            Some(&profile_id),
+        )
+        .unwrap();
+
+        let plan = plan_run_with_source_and_paths(
+            &catalog,
+            PlanRunRequest {
+                affected_base: Some(" main ".into()),
+                ..PlanRunRequest::default()
+            },
+            source(),
+            Some(&["api/main.go".into()]),
+        )
+        .unwrap();
+
+        assert_eq!(plan.affected_base.as_deref(), Some("main"));
+        assert_eq!(
+            plan.targets
+                .iter()
+                .map(|target| target.target.to_string())
+                .collect::<Vec<_>>(),
+            ["api:lint", "api:test"]
+        );
+        assert_eq!(
+            plan.execution_layers,
+            [vec![lint_target], vec![api_target.clone()]]
+        );
+        assert_eq!(
+            plan.targets[0].reasons,
+            [SelectionReason::ActionDependency { target: api_target }]
+        );
+        assert_eq!(
+            plan.targets[1].reasons,
+            [
+                SelectionReason::Profile {
+                    profile: profile_id,
+                },
+                SelectionReason::DirectInput {
+                    path: "api/main.go".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn affected_plan_allows_a_deterministic_empty_selection() {
+        let plan = plan_run_with_source_and_paths(
+            &fixture(),
+            PlanRunRequest {
+                affected_base: Some("HEAD~1".into()),
+                ..PlanRunRequest::default()
+            },
+            source(),
+            Some(&["docs/guide.md".into()]),
+        )
+        .unwrap();
+
+        assert!(plan.targets.is_empty());
+        assert!(plan.execution_layers.is_empty());
+        assert!(plan.effects.is_empty());
+        assert_eq!(plan.affected_base.as_deref(), Some("HEAD~1"));
     }
 
     #[test]

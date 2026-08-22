@@ -49,6 +49,9 @@ dirs = "6.0.0"
 dotenvy = "0.15.7"
 fs4 = "0.13.1"
 flate2 = "1.1.9"
+# globset 0.4.20 requires Rust 1.88. Keep the latest release compatible with
+# the workspace's Rust 1.85 floor.
+globset = "=0.4.19"
 getrandom = "0.3.4"
 hkdf = "0.12.4"
 hmac = "0.12.1"

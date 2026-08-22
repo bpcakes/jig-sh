@@ -106,9 +106,17 @@ Configured command values are committed repo configuration and run through non-l
 
 `[repository]` is the reviewed source of workspace identity. Its generated records are repeated as `components`, `actions`, `profiles`, and `default_check_profile` in `.agent/jig-contract.json`; runtime loading rejects a mismatch.
 
-- `[[repository.components]]` declares `id`, `root`, optional description/tags/dependencies, affected propagation, adapter ids, guidance, and per-field provenance.
-- `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, input globs, target dependencies, timeout, result parser, compatibility aliases, and provenance.
+- `[[repository.components]]` declares `id`, a literal repository-relative `root` (`.` is allowed), optional description/tags/dependencies, affected propagation, adapter ids, guidance, and per-field provenance.
+- `[[repository.actions]]` declares a structured `{ component, action }` target, intent, effects, runner, repository-relative forward-slash input globs, target dependencies, timeout, result parser, compatibility aliases, and provenance. Inputs may intentionally name paths outside the component root to declare repository-global inputs.
 - `[[repository.profiles]]` declares a stable id and exact structured targets. `repository.default_check_profile` selects the profile used by bare `jig check`.
+
+Contract-v6 roots and input patterns are validated while the repository catalog
+loads. `scripts/jig check --affected BASE` resolves the selected/default profile
+or explicit target candidates, filters them with the Git changes from `BASE`,
+and then adds action dependencies. Direct input and configured component
+propagation reasons appear in `--explain` and JSON output. `.agent/` runtime
+state is excluded from selection, and an unrelated change may produce a valid
+empty plan.
 
 Generated frontend commands use `scripts/check-webapps.sh check-one` so `web:test` validates only the `web` component while preserving dependency setup and coverage enforcement. Aggregate `jig.typescript_*` tools remain compatibility actions and are not members of the default profile.
 

@@ -231,9 +231,11 @@ fn staging_rejects_generated_evidence_gate_with_conflicting_selectors() {
     let temp = tempdir().unwrap();
     let template = materialize_template_worktree();
     let config_template = template.path().join("templates/project/.jig.toml.jinja");
-    let config = fs::read_to_string(&config_template).unwrap().replacen(
-        "profile = \"verify\"",
-        "profile = \"verify\"\ntarget = \"api:test\"",
+    let original_config = fs::read_to_string(&config_template).unwrap();
+    assert!(original_config.contains("kind = \"evidence\""));
+    let config = original_config.replacen(
+        "kind = \"evidence\"",
+        "kind = \"evidence\"\ntarget = \"api:test\"",
         1,
     );
     fs::write(&config_template, config).unwrap();

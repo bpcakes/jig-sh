@@ -106,6 +106,15 @@ fn collect_git_receipt_metadata_with_options(
 }
 
 fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
+    repo_worktree_changed_path_buffers(root).map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| path.display().to_string())
+            .collect()
+    })
+}
+
+fn repo_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
     let output = git_output(
         root,
         &[
@@ -123,14 +132,104 @@ fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
         entries
             .into_iter()
             .flat_map(|entry| {
-                let mut paths = vec![entry.path.display().to_string()];
+                let mut paths = vec![entry.path];
                 if let Some(original_path) = entry.original_path {
-                    paths.push(original_path.display().to_string());
+                    paths.push(original_path);
                 }
                 paths
             })
             .collect()
     })
+}
+
+/// Returns the deterministic union of paths changed from the merge base of an
+/// explicit Git revision to `HEAD` and paths currently changed in the
+/// worktree. Agent state is excluded because planning and execution append it.
+pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
+    let base_commit = resolve_commit(root, base, "affected Git base")?;
+    let head_commit = resolve_commit(root, "HEAD", "Git HEAD for affected selection")?;
+    let range = format!("{base_commit}...{head_commit}");
+    let committed = git_output(
+        root,
+        &[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            &range,
+            "--",
+            ".",
+            ":(exclude).agent/**",
+        ],
+        "git diff for affected selection",
+    )?;
+
+    let mut paths = parse_name_only_z(&committed.stdout)?;
+    paths.extend(repo_worktree_changed_path_buffers(root)?);
+    let mut normalized = paths
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {
+    let revision = format!("{revision}^{{commit}}");
+    let output = git_output(
+        root,
+        &["rev-parse", "--verify", "--end-of-options", &revision],
+        label,
+    )
+    .with_context(|| {
+        format!(
+            "Invalid {label} {:?}",
+            revision.trim_end_matches("^{commit}")
+        )
+    })?;
+    let object_id = String::from_utf8(output.stdout)
+        .with_context(|| format!("{label} resolved to a non-UTF-8 object id"))?;
+    let object_id = object_id.trim();
+    if !matches!(object_id.len(), 40 | 64)
+        || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        bail!("{label} resolved to invalid object id {object_id:?}");
+    }
+    Ok(object_id.to_owned())
+}
+
+fn parse_name_only_z(stdout: &[u8]) -> Result<Vec<PathBuf>> {
+    if stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !stdout.ends_with(&[0]) {
+        bail!("Malformed git diff --name-only -z output: missing terminator");
+    }
+    stdout[..stdout.len() - 1]
+        .split(|byte| *byte == 0)
+        .map(|path| {
+            if path.is_empty() {
+                bail!("Malformed git diff --name-only -z output: empty path");
+            }
+            #[cfg(unix)]
+            {
+                Ok(path_buf_from_git_bytes(path))
+            }
+            #[cfg(not(unix))]
+            {
+                path_buf_from_git_bytes(path)
+            }
+        })
+        .collect()
+}
+
+fn strict_git_path(path: PathBuf) -> Result<String> {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let path = std::str::from_utf8(bytes)
+        .context("Affected selection requires UTF-8 Git paths")?
+        .to_owned();
+    Ok(path)
 }
 
 fn repo_diff_stat(root: &Path) -> Result<DiffStat> {
@@ -217,6 +316,15 @@ impl FingerprintCollection<'_> {
         }
     }
 
+    fn git_output_unchecked(self, root: &Path, args: &[&str], label: &str) -> Result<Output> {
+        match self {
+            Self::Blocking => git_output_unchecked(root, args, label),
+            Self::Cancellable(cancelled) => {
+                git_output_unchecked_with_cancellation(root, args, label, cancelled)
+            }
+        }
+    }
+
     fn git_hash_object(self, root: &Path, input: &[u8]) -> Result<String> {
         match self {
             Self::Blocking => git_hash_object(root, input),
@@ -251,6 +359,34 @@ fn repo_worktree_fingerprint_inner(
     root: &Path,
     collection: FingerprintCollection<'_>,
 ) -> Result<String> {
+    collection.ensure_active()?;
+    let head = collection.git_output_unchecked(
+        root,
+        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        "git rev-parse HEAD for worktree fingerprint",
+    )?;
+    let head_identity = match head.status.code() {
+        Some(0) => {
+            let object_id =
+                String::from_utf8(head.stdout).context("Git HEAD object id is not UTF-8")?;
+            let object_id = object_id.trim();
+            if !matches!(object_id.len(), 40 | 64)
+                || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                bail!("Git HEAD resolved to invalid object id {object_id:?}");
+            }
+            object_id.as_bytes().to_vec()
+        }
+        Some(1) => b"unborn".to_vec(),
+        _ => {
+            bail!(
+                "git rev-parse HEAD for worktree fingerprint failed with {}.\nstdout:\n{}\nstderr:\n{}",
+                format_exit_status(&head.status),
+                String::from_utf8_lossy(&head.stdout),
+                String::from_utf8_lossy(&head.stderr)
+            )
+        }
+    };
     collection.ensure_active()?;
     let status = collection.git_output(
         root,
@@ -288,7 +424,9 @@ fn repo_worktree_fingerprint_inner(
     let untracked = untracked_file_contents(root, &status.stdout, collection)?;
 
     let mut input = Vec::new();
-    input.extend_from_slice(b"status\0");
+    input.extend_from_slice(b"head\0");
+    input.extend_from_slice(&head_identity);
+    input.extend_from_slice(b"\0status\0");
     input.extend_from_slice(&status.stdout);
     input.extend_from_slice(b"\0unstaged\0");
     input.extend_from_slice(&unstaged.stdout);
@@ -527,6 +665,45 @@ fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
             )
         },
     )
+}
+
+fn git_output_unchecked(root: &Path, args: &[&str], label: &str) -> Result<Output> {
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args);
+    configure_read_only_git_environment(&mut command);
+    command
+        .output()
+        .with_context(|| format!("Failed to run {label} in {}", root.display()))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn git_output_unchecked_with_cancellation(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Output> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_git_command_with_cancellation(root, &mut command, label, cancelled)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn git_output_unchecked_with_cancellation(
+    root: &Path,
+    args: &[&str],
+    label: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Output> {
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    let output = git_output_unchecked(root, args, label)?;
+    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    Ok(output)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
@@ -923,6 +1100,67 @@ mod tests {
     }
 
     #[test]
+    fn affected_changed_paths_include_commits_and_the_current_worktree() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::create_dir_all(temp.path().join("api")).unwrap();
+        std::fs::create_dir_all(temp.path().join("web")).unwrap();
+        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
+        std::fs::write(temp.path().join("api/base.go"), "package api\n").unwrap();
+        std::fs::write(temp.path().join("web/base.ts"), "export {};\n").unwrap();
+        std::fs::write(temp.path().join(".agent/state/runs.jsonl"), "base\n").unwrap();
+        run_git(temp.path(), &["add", "."]);
+        run_git(temp.path(), &["commit", "-m", "base fixture"]);
+        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
+
+        std::fs::write(temp.path().join("api/committed.go"), "package api\n").unwrap();
+        run_git(temp.path(), &["add", "api/committed.go"]);
+        run_git(temp.path(), &["commit", "-m", "committed change"]);
+        std::fs::write(temp.path().join("web/base.ts"), "export const value = 1;\n").unwrap();
+        std::fs::write(temp.path().join("api/untracked.go"), "package api\n").unwrap();
+        std::fs::write(
+            temp.path().join(".agent/state/runs.jsonl"),
+            "base\nruntime\n",
+        )
+        .unwrap();
+
+        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
+
+        assert_eq!(
+            paths,
+            ["api/committed.go", "api/untracked.go", "web/base.ts"]
+        );
+    }
+
+    #[test]
+    fn affected_changed_paths_reject_invalid_bases_without_option_injection() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::write(temp.path().join("base.txt"), "base\n").unwrap();
+        run_git(temp.path(), &["add", "base.txt"]);
+        run_git(temp.path(), &["commit", "-m", "base fixture"]);
+
+        let error = repo_changed_paths_since(temp.path(), "--help")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Invalid affected Git base"));
+        assert!(error.contains("--help"));
+    }
+
+    #[test]
     fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
         let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
@@ -1018,6 +1256,29 @@ mod tests {
     }
 
     #[test]
+    fn worktree_fingerprint_changes_when_the_clean_head_commit_changes() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::write(temp.path().join("tracked.txt"), "one\n").unwrap();
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git(temp.path(), &["commit", "-m", "first fixture"]);
+        let first = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        std::fs::write(temp.path().join("tracked.txt"), "two\n").unwrap();
+        run_git(temp.path(), &["add", "tracked.txt"]);
+        run_git(temp.path(), &["commit", "-m", "second fixture"]);
+        let second = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn worktree_fingerprint_changes_when_large_untracked_file_content_changes() {
         let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
@@ -1096,5 +1357,15 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+    }
+
+    fn git_text(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 }

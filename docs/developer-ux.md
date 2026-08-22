@@ -160,8 +160,17 @@ scripts/jig check
 scripts/jig check test
 scripts/jig check repo:test
 scripts/jig check 'repo:*'
+scripts/jig check test --affected origin/main --explain
 scripts/jig check --profile verify --explain
 ```
+
+On contract-v6 repositories, `--affected BASE` narrows those normal candidates
+using committed changes from the Git merge base through `HEAD` plus staged,
+unstaged, and untracked paths. The plan explains each direct path and configured
+component-dependent propagation; `.agent/` state is ignored. A valid empty
+selection is a no-op. Action dependencies are added only after this filtering,
+and versions 2 through 5 retain their legacy check behavior without affected
+selection.
 
 Contract-v6 work gates name the same target/profile vocabulary. A default
 `scripts/jig work check --plan-id ...` resolves all configured evidence gates

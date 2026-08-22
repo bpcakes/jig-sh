@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::context::{RepoContext, WorkEvidenceSelector};
 
+mod affected;
 mod inspect;
 mod planner;
 
@@ -138,6 +139,7 @@ impl RepositoryCatalog {
             )?;
         }
         validate_action_dependencies(&actions)?;
+        affected::validate_native_path_policy(&components, &actions)?;
 
         let profiles = collect_profiles(profile_specs, &actions)?;
         let default_check_profile = default_check_profile.cloned();

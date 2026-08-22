@@ -327,12 +327,7 @@ fn go_runtime_check_uses_the_go_module_authority() {
         let bin = temp.path().join("bin");
         fs::create_dir_all(&bin).unwrap();
         write_doctor_fixture(&root);
-        let config_path = root.join(".jig.toml");
-        let config = format!(
-            "backend_language = \"go\"\ngo_database = \"none\"\n{}",
-            fs::read_to_string(&config_path).unwrap()
-        );
-        fs::write(config_path, config).unwrap();
+        configure_doctor_fixture_go_adapter(&root);
         fs::write(
             root.join("go.mod"),
             "module example.com/ExampleProject\n\ngo 1.27.3\n",
@@ -384,12 +379,7 @@ fn missing_go_runtime_fix_uses_the_go_module_authority() {
     let empty_bin = temp.path().join("bin");
     fs::create_dir_all(&empty_bin).unwrap();
     write_doctor_fixture(&root);
-    let config_path = root.join(".jig.toml");
-    let config = format!(
-        "backend_language = \"go\"\ngo_database = \"none\"\n{}",
-        fs::read_to_string(&config_path).unwrap()
-    );
-    fs::write(config_path, config).unwrap();
+    configure_doctor_fixture_go_adapter(&root);
     fs::write(
         root.join("go.mod"),
         "module example.com/ExampleProject\n\ngo 1.28.1\n",
@@ -410,6 +400,24 @@ fn missing_go_runtime_fix_uses_the_go_module_authority() {
         check.fix.as_deref(),
         Some("Install or activate Go 1.28.1 or newer, then run `scripts/jig doctor`.")
     );
+}
+
+fn configure_doctor_fixture_go_adapter(root: &Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let go_config = config.replacen("adapters = [\"rust\"]", "adapters = [\"go\"]", 1);
+    assert_ne!(config, go_config);
+    fs::write(config_path, go_config).unwrap();
+
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"][0]["adapters"] = json!(["go"]);
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

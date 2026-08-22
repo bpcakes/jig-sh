@@ -155,6 +155,45 @@ fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
 }
 
 #[test]
+fn mcp_repository_affected_plan_uses_the_shared_explainable_resolver() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("web/example.ts"),
+        "export const example = 'changed';\n",
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let planned = call_tool(
+        &ctx,
+        tool::PLAN_RUN,
+        json!({"selectors": ["test"], "affected_base": "HEAD"}),
+    )
+    .unwrap();
+
+    assert_repository_output_schema(&ctx, tool::PLAN_RUN, &planned);
+    assert_eq!(planned["plan"]["affected_base"], "HEAD");
+    assert_eq!(planned["plan"]["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        planned["plan"]["targets"][0]["target"],
+        json!({"component": "web", "action": "test"})
+    );
+    assert!(
+        planned["plan"]["targets"][0]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason
+                == &json!({
+                    "kind": "direct_input",
+                    "path": "web/example.ts"
+                }))
+    );
+}
+
+#[test]
 fn mcp_repository_failures_are_structured_terminal_conclusions() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");

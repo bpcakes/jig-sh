@@ -116,6 +116,23 @@ only the explicitly configured dependent propagation policy. Every selected
 target records a stable reason such as `direct_input`, `component_dependency`,
 `action_dependency`, `profile`, or `explicit`.
 
+`--affected BASE` is a modifier over the ordinary candidate set: Jig first
+resolves the explicit selectors or profile (using the default profile when
+neither was supplied), then keeps candidates on affected components. It is
+valid for that filter to produce an empty no-op plan. Only after filtering does
+Jig add declared action dependencies, so component dependency policy never
+silently becomes execution ordering.
+
+The changed-path set is the sorted union of committed changes from the merge
+base of `BASE` and `HEAD` plus staged, unstaged, and untracked worktree paths.
+Append-only `.agent/` state is excluded. Action input globs use validated,
+repository-relative forward-slash syntax. An input outside its component root
+is an explicit repository-global input. If no action input matches a changed
+path, Jig falls back to the most-specific containing component root. Dependent
+propagation follows reverse `depends_on` edges only while each source component
+opts into `propagate_affected_to_dependents`, and explanations retain the
+originating component and path.
+
 ## Action safety and runners
 
 Every action declares an intent and effects independently:
@@ -158,6 +175,10 @@ A qualified selector addresses an exact target or uses a simple `*` wildcard
 for either side. Named profiles are selected with `--profile`, not an ambiguous
 positional token. `--explain` resolves and prints the plan without execution.
 JSON output uses the same resolver and schema as MCP.
+
+Affected planning is available only to component-native contract-v6
+repositories, where the required inputs and propagation policy are inspectable.
+The same request and reasons are available through CLI JSON and `jig.plan_run`.
 
 Independent checks run concurrently and collect all failures by default so a
 developer or agent can repair a complete batch. `--fail-fast` is an explicit
@@ -257,6 +278,12 @@ Dagger already provide stack-specific caches; duplicating those caches would
 expand Jig into a build system. The run model retains configuration and input
 digests so a future evidence-reuse policy can be added only after proving a
 product need and defining safe freshness semantics.
+
+Current target input digests conservatively include the checked-out commit and
+the complete non-`.agent/` worktree fingerprint together with the target's
+declared inputs. This safely invalidates evidence when relevant content changes
+but can also invalidate it for an unrelated worktree change; it is freshness
+proof, not an artifact-cache key.
 
 ## Implementation migration
 

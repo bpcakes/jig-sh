@@ -78,9 +78,15 @@ For local validation, call the contract commands directly:
 scripts/jig check fmt
 scripts/jig check clippy
 scripts/jig check test
+scripts/jig check test --affected origin/main --explain
 ```
 
 These append receipts under `.agent/state/`. Pass `--no-receipt` to a one-off command when you don't want evidence recorded. Read existing state with `scripts/jig work status`, `scripts/jig work evidence`, and `scripts/jig work receipts --failed-only`.
+
+In contract-v6 repositories, `--affected BASE` filters the normal target or
+profile selection using Git changes and checked-in component/input policy. The
+plan retains direct-path and dependency reasons, so agents can inspect why each
+target was selected before executing it.
 
 See [Public Contract](docs/public-contract.md), [Status-provider protocol](docs/status-provider.md), and [Developer UX](docs/developer-ux.md) for the full surface.
 
