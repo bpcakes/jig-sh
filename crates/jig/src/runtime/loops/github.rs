@@ -349,7 +349,7 @@ fn review_thread_page(
         args.push(OsString::from("-F"));
         args.push(OsString::from(format!("threadsAfter={cursor}")));
     }
-    gh_json(ctx, args, &[0], observer)
+    Ok(gh_json(ctx, args, &[0], observer)?)
 }
 
 const fn review_threads_query() -> &'static str {
@@ -561,21 +561,23 @@ pub(super) fn gh_json(
     args: Vec<OsString>,
     allowed_statuses: &[i32],
     observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
+) -> std::result::Result<Value, ExecutionCommandError> {
     let command_label = command_label(&args);
     let output = run_gh(ctx, args, observer)?;
     let status = output.status_code.unwrap_or(-1);
     if !allowed_statuses.contains(&status) {
-        return Err(output.into_error(&command_label));
+        return Err(ExecutionCommandError::failed(
+            output.into_error(&command_label),
+        ));
     }
-    parse_gh_json(&output.stdout, &command_label)
+    parse_gh_json(&output.stdout, &command_label).map_err(ExecutionCommandError::failed)
 }
 
 fn run_gh(
     ctx: &RepoContext,
     args: Vec<OsString>,
     observer: &mut dyn ExecutionControl,
-) -> Result<GhOutput> {
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let gh = std::env::var_os("JIG_GH_BIN").unwrap_or_else(|| OsString::from("gh"));
     run_gh_with_program(ctx, args, &gh, observer)
 }
@@ -585,7 +587,7 @@ fn run_gh_with_program(
     args: Vec<OsString>,
     gh: &OsStr,
     observer: &mut dyn ExecutionControl,
-) -> Result<GhOutput> {
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let command_label = command_label(&args);
     let execution_label = format!("{} {command_label}", gh.to_string_lossy());
     let mut command = Command::new(gh);
@@ -600,8 +602,7 @@ fn run_gh_with_program(
         ctx.command_timeout(),
         &execution_label,
         observer,
-    )
-    .map_err(ExecutionCommandError::into_anyhow)?;
+    )?;
 
     Ok(GhOutput {
         status_code: output.status.code(),

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
@@ -38,6 +39,33 @@ impl ExecutionCommandError {
             Self::Cancelled => anyhow!("Execution was cancelled"),
             Self::Failed(error) => error,
         }
+    }
+}
+
+impl fmt::Display for ExecutionCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CancelledBeforeStart => {
+                formatter.write_str("Execution was cancelled before it started")
+            }
+            Self::Cancelled => formatter.write_str("Execution was cancelled"),
+            Self::Failed(error) => fmt::Display::fmt(error, formatter),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionCommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Failed(error) => error.source(),
+            Self::CancelledBeforeStart | Self::Cancelled => None,
+        }
+    }
+}
+
+impl From<anyhow::Error> for ExecutionCommandError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
     }
 }
 

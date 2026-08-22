@@ -10,9 +10,10 @@ use serde_json::{Value, json};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
-use crate::execution::ExecutionControl;
+use crate::execution::{ExecutionCommandError, ExecutionControl};
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
+    CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
+    run_codex_exec,
 };
 use crate::state::now_ms;
 
@@ -356,8 +357,26 @@ fn handle_actionable_pr(
         execution.observer,
     );
     let _ = lease_store.release(&branch_lease_key, &lease.owner);
+    record_pr_repair_outcome(
+        workflow,
+        attempt_store,
+        item,
+        &lease,
+        execution.codex_home,
+        action_result,
+    )
+}
+
+fn record_pr_repair_outcome(
+    workflow: &ResolvedWorkflow,
+    attempt_store: &mut AttemptStore,
+    item: &PrWorkItem,
+    lease: &impl serde::Serialize,
+    codex_home: Option<&Path>,
+    action_result: Result<PrRepairOutcome>,
+) -> Result<Value> {
     match action_result {
-        Ok(action) => {
+        Ok(PrRepairOutcome::Completed(action)) => {
             let item_version = action
                 .pointer("/push/final_head")
                 .and_then(Value::as_str)
@@ -376,6 +395,7 @@ fn handle_actionable_pr(
             )?;
             Ok(with_attempt(action, attempt))
         }
+        Ok(PrRepairOutcome::Cancelled(detail)) => bail!(detail),
         Err(error) => {
             let attempt = attempt_store.record_attempt_for_version(
                 workflow,
@@ -391,12 +411,17 @@ fn handle_actionable_pr(
                 "branch": item.head_ref,
                 "reasons": item.reasons,
                 "lease": lease,
-                "codex_home_resolved": execution.codex_home.map(|home| home.display().to_string()),
+                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "attempt": attempt,
                 "error": format!("{error:#}"),
             }))
         }
     }
+}
+
+enum PrRepairOutcome {
+    Completed(Value),
+    Cancelled(String),
 }
 
 fn attempt_blocking_action(
@@ -452,7 +477,7 @@ fn run_pr_repair(
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
     observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
+) -> Result<PrRepairOutcome> {
     let worktree = prepare_worktree(ctx, workflow, item)?;
     let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;
     let merge = if item.reasons.iter().any(|reason| reason == "merge_conflict") {
@@ -462,7 +487,7 @@ fn run_pr_repair(
     };
     let prompt = pr_worker_prompt(ctx, item, pull_request, merge.as_ref());
     let output_schema = pr_worker_output_schema();
-    let worker = run_codex_exec(
+    let worker = match run_codex_exec(
         ctx,
         CodexExecRequest {
             root: &worktree,
@@ -487,7 +512,22 @@ fn run_pr_repair(
             phase: None,
         },
         observer,
-    )?;
+    )? {
+        CodexExecOutcome::Completed(worker) => worker,
+        CodexExecOutcome::Cancelled {
+            before_start,
+            worker_receipt_id,
+        } => {
+            let timing = if before_start {
+                " before the worker started"
+            } else {
+                " while the worker was running"
+            };
+            return Ok(PrRepairOutcome::Cancelled(format!(
+                "PR manager repair was cancelled{timing}; worker receipt {worker_receipt_id}"
+            )));
+        }
+    };
     if !worker.output.status.success() {
         bail!(
             "PR manager worker exited with status {}",
@@ -499,12 +539,18 @@ fn run_pr_repair(
     let push = commit_and_push(&worktree, &item.head_ref, &base_head)?;
     let review_thread_posts =
         post_review_thread_updates(ctx, pull_request, &worker_output, observer);
+    if review_thread_posts.cancelled {
+        return Ok(PrRepairOutcome::Cancelled(format!(
+            "PR manager repair was cancelled after pushing {}; completed review thread updates: {}",
+            push["final_head"], review_thread_posts.posts
+        )));
+    }
     let status = if review_thread_posts.failed {
         "failed"
     } else {
         "attempted"
     };
-    Ok(json!({
+    Ok(PrRepairOutcome::Completed(json!({
         "kind": "pr_manager_worker",
         "status": status,
         "pr_number": item.pr_number,
@@ -526,7 +572,7 @@ fn run_pr_repair(
         } else {
             Value::Null
         },
-    }))
+    })))
 }
 
 fn pr_worker_output_schema() -> Value {
@@ -604,6 +650,7 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
 struct ReviewThreadPostResult {
     posts: Value,
     failed: bool,
+    cancelled: bool,
 }
 
 fn post_review_thread_updates(
@@ -620,9 +667,10 @@ fn post_review_thread_updates(
     let allowed_thread_ids = observed_review_thread_ids(pull_request);
     let mut posts = Vec::new();
     let mut failed = false;
+    let mut cancelled = false;
     for reply in replies {
         if observer.cancelled() {
-            failed = true;
+            cancelled = true;
             break;
         }
         let thread_id = reply
@@ -666,7 +714,15 @@ fn post_review_thread_updates(
         } else {
             match post_review_thread_reply(ctx, thread_id, body, observer) {
                 Ok(response) => Some(response),
-                Err(error) => {
+                Err(
+                    ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
+                ) => {
+                    cancelled = true;
+                    thread_failed = true;
+                    reply_error = Value::String("review thread reply was cancelled".into());
+                    None
+                }
+                Err(ExecutionCommandError::Failed(error)) => {
                     failed = true;
                     thread_failed = true;
                     reply_error = Value::String(format!("{error:#}"));
@@ -677,14 +733,30 @@ fn post_review_thread_updates(
         let mut resolve_error = Value::Null;
         let mut resolve_skipped = false;
         let mut resolve_skip_reason = Value::Null;
-        let resolve_response = if resolve && thread_failed && !body.is_empty() {
+        let resolve_response = if cancelled {
+            resolve_skipped = resolve;
+            resolve_skip_reason = if resolve {
+                Value::String("cancelled".into())
+            } else {
+                Value::Null
+            };
+            None
+        } else if resolve && thread_failed && !body.is_empty() {
             resolve_skipped = true;
             resolve_skip_reason = Value::String("reply_failed".into());
             None
         } else if resolve {
             match resolve_review_thread(ctx, thread_id, observer) {
                 Ok(response) => Some(response),
-                Err(error) => {
+                Err(
+                    ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
+                ) => {
+                    cancelled = true;
+                    thread_failed = true;
+                    resolve_error = Value::String("review thread resolution was cancelled".into());
+                    None
+                }
+                Err(ExecutionCommandError::Failed(error)) => {
                     failed = true;
                     thread_failed = true;
                     resolve_error = Value::String(format!("{error:#}"));
@@ -696,7 +768,7 @@ fn post_review_thread_updates(
         };
         posts.push(json!({
             "thread_id": thread_id,
-            "status": if thread_failed { "failed" } else { "posted" },
+            "status": if cancelled { "cancelled" } else if thread_failed { "failed" } else { "posted" },
             "replied": reply_response.is_some(),
             "reply_comment_id": reply_response
                 .as_ref()
@@ -719,10 +791,14 @@ fn post_review_thread_updates(
             "resolve_skipped": resolve_skipped,
             "resolve_skip_reason": resolve_skip_reason,
         }));
+        if cancelled {
+            break;
+        }
     }
     ReviewThreadPostResult {
         posts: json!(posts),
         failed,
+        cancelled,
     }
 }
 
@@ -742,7 +818,7 @@ fn post_review_thread_reply(
     thread_id: &str,
     body: &str,
     observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
+) -> std::result::Result<Value, ExecutionCommandError> {
     github::gh_json(
         ctx,
         vec![
@@ -764,7 +840,7 @@ fn resolve_review_thread(
     ctx: &RepoContext,
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
-) -> Result<Value> {
+) -> std::result::Result<Value, ExecutionCommandError> {
     github::gh_json(
         ctx,
         vec![
@@ -952,6 +1028,57 @@ fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
         object.insert("attempt".into(), json!(attempt));
     }
     action
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn cancelled_repair_does_not_consume_attempt_budget() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 1,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Example repair".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: "abc123".into(),
+            reasons: vec!["failing_checks".into()],
+        };
+        let mut attempt_store = AttemptStore::new(&ctx);
+
+        let error = record_pr_repair_outcome(
+            &workflow,
+            &mut attempt_store,
+            &item,
+            &json!({"owner": "test"}),
+            None,
+            Ok(PrRepairOutcome::Cancelled(
+                "PR manager repair was cancelled".into(),
+            )),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "PR manager repair was cancelled");
+        assert!(attempt_store.snapshot().unwrap().is_empty());
+    }
 }
 
 fn sanitize_path_component(value: &str) -> String {

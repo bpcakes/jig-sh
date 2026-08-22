@@ -54,7 +54,8 @@ pub(super) fn run_codex_review(
             }),
         },
         observer,
-    )?;
+    )?
+    .into_completed()?;
     Ok(CodexReviewCommandOutput {
         output: output.output,
         codex_stdout: output.provider_stdout,
@@ -99,7 +100,8 @@ pub(super) fn run_codex_refine(
             }),
         },
         observer,
-    )?;
+    )?
+    .into_completed()?;
     Ok(CodexRefineCommandOutput {
         output: output.output,
         worker_receipt_id: output.worker_receipt_id,

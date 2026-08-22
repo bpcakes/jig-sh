@@ -14,8 +14,8 @@ use tempfile::NamedTempFile;
 
 use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
 use crate::execution::{
-    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
-    ProcessExecutionObserver,
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
+    PhasePosition, ProcessExecutionObserver,
 };
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::WORKER_RUN_TOOL;
@@ -97,11 +97,38 @@ pub(crate) struct CodexExecOutput {
     pub(crate) worker_receipt_id: String,
 }
 
+pub(crate) enum CodexExecOutcome {
+    Completed(CodexExecOutput),
+    Cancelled {
+        before_start: bool,
+        worker_receipt_id: String,
+    },
+}
+
+impl CodexExecOutcome {
+    pub(crate) fn into_completed(self) -> Result<CodexExecOutput> {
+        match self {
+            Self::Completed(output) => Ok(output),
+            Self::Cancelled {
+                before_start,
+                worker_receipt_id,
+            } => {
+                let timing = if before_start {
+                    " before it started"
+                } else {
+                    ""
+                };
+                bail!("Codex worker was cancelled{timing}; receipt {worker_receipt_id}")
+            }
+        }
+    }
+}
+
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
     request: CodexExecRequest<'_>,
     observer: &mut dyn ExecutionControl,
-) -> Result<CodexExecOutput> {
+) -> Result<CodexExecOutcome> {
     let phase = request
         .phase
         .map(|phase| ExecutionPhase::start(observer, phase.label, phase.position));
@@ -130,15 +157,20 @@ pub(crate) fn run_codex_exec(
                     stdout_truncated: run.provider_stdout_truncated,
                     stderr_truncated: run.provider_stderr_truncated,
                     error: None,
+                    status: "completed",
                 },
             )?;
-            Ok(CodexExecOutput {
+            Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
                 worker_receipt_id: receipt_id,
-            })
+            }))
         }
-        Err(error) => {
+        Err(
+            error
+            @ (ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled),
+        ) => {
+            let before_start = matches!(error, ExecutionCommandError::CancelledBeforeStart);
             let message = format!("{error:#}");
             let receipt_id = record_worker_receipt(
                 ctx,
@@ -152,6 +184,29 @@ pub(crate) fn run_codex_exec(
                     stdout_truncated: false,
                     stderr_truncated: false,
                     error: Some(&message),
+                    status: "cancelled",
+                },
+            )?;
+            Ok(CodexExecOutcome::Cancelled {
+                before_start,
+                worker_receipt_id: receipt_id,
+            })
+        }
+        Err(ExecutionCommandError::Failed(error)) => {
+            let message = format!("{error:#}");
+            let receipt_id = record_worker_receipt(
+                ctx,
+                &request,
+                WorkerReceiptOutcome {
+                    started_at_ms: started,
+                    ended_at_ms: ended,
+                    exit_status: 1,
+                    stdout: "",
+                    stderr: &message,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    error: Some(&message),
+                    status: "error",
                 },
             )?;
             bail!("Codex worker invocation failed; receipt {receipt_id}: {message}");
@@ -171,7 +226,7 @@ fn run_codex_exec_inner(
     ctx: &RepoContext,
     request: &CodexExecRequest<'_>,
     observer: &mut dyn ExecutionControl,
-) -> Result<CodexRunOutput> {
+) -> std::result::Result<CodexRunOutput, ExecutionCommandError> {
     let schema_file = if let Some(schema) = request.output_schema {
         let schema_file = NamedTempFile::new().context("Failed to create Codex schema file")?;
         fs::write(
@@ -294,7 +349,7 @@ fn run_worker_command(
     label: &str,
     transcript_overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn ExecutionControl,
-) -> Result<WorkerCommandOutput> {
+) -> std::result::Result<WorkerCommandOutput, ExecutionCommandError> {
     let prompt_file = stdin_prompt
         .map(|prompt| -> Result<NamedTempFile> {
             let file = NamedTempFile::new().context("Failed to create worker stdin file")?;
@@ -358,26 +413,31 @@ fn complete_worker_output(
     })
 }
 
-fn worker_process_error(error: OwnedProcessTreeError, timeout: CommandTimeout) -> anyhow::Error {
+fn worker_process_error(
+    error: OwnedProcessTreeError,
+    timeout: CommandTimeout,
+) -> ExecutionCommandError {
     match error {
         OwnedProcessTreeError::Start(error) => {
-            anyhow!(error).context("Failed to start worker process")
+            ExecutionCommandError::failed(anyhow!(error).context("Failed to start worker process"))
         }
-        OwnedProcessTreeError::TimedOut => anyhow!(
+        OwnedProcessTreeError::TimedOut => ExecutionCommandError::failed(anyhow!(
             "Worker process timed out after {} seconds",
             timeout.as_secs()
-        ),
-        OwnedProcessTreeError::CancelledBeforeStart => {
-            anyhow!("Worker process was cancelled before it started")
+        )),
+        OwnedProcessTreeError::CancelledBeforeStart => ExecutionCommandError::CancelledBeforeStart,
+        OwnedProcessTreeError::Cancelled => ExecutionCommandError::Cancelled,
+        OwnedProcessTreeError::OutputLimitExceeded(stream) => {
+            ExecutionCommandError::failed(anyhow!(
+                "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            ))
         }
-        OwnedProcessTreeError::Cancelled => anyhow!("Worker process was cancelled"),
-        OwnedProcessTreeError::OutputLimitExceeded(stream) => anyhow!(
-            "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
-        ),
-        OwnedProcessTreeError::Await => anyhow!("Failed to wait for worker process"),
-        OwnedProcessTreeError::Cleanup => {
-            anyhow!("Worker process tree could not be cleaned up safely")
+        OwnedProcessTreeError::Await => {
+            ExecutionCommandError::failed(anyhow!("Failed to wait for worker process"))
         }
+        OwnedProcessTreeError::Cleanup => ExecutionCommandError::failed(anyhow!(
+            "Worker process tree could not be cleaned up safely"
+        )),
     }
 }
 
@@ -390,6 +450,7 @@ struct WorkerReceiptOutcome<'a> {
     stdout_truncated: bool,
     stderr_truncated: bool,
     error: Option<&'a str>,
+    status: &'static str,
 }
 
 fn record_worker_receipt(
@@ -397,12 +458,12 @@ fn record_worker_receipt(
     request: &CodexExecRequest<'_>,
     outcome: WorkerReceiptOutcome<'_>,
 ) -> Result<String> {
-    let status = if outcome.error.is_some() {
-        "error"
-    } else if outcome.exit_status == 0 {
+    let status = if outcome.status == "completed" && outcome.exit_status == 0 {
         "passed"
-    } else {
+    } else if outcome.status == "completed" {
         "failed"
+    } else {
+        outcome.status
     };
     let evidence = json!({
         "kind": "worker_run",
@@ -511,6 +572,16 @@ mod tests {
     }
 
     impl crate::execution::ExecutionCancellation for RecordingControl {}
+
+    struct CancelledControl;
+
+    impl crate::execution::ExecutionObserver for CancelledControl {}
+
+    impl crate::execution::ExecutionCancellation for CancelledControl {
+        fn cancelled(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
@@ -635,6 +706,25 @@ mod tests {
         assert!(output.output.status.success());
         assert_eq!(output.output.stdout, b"prompt through a file");
         assert_eq!(control.output, b"prompt through a file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_supervision_preserves_cancellation_as_control_flow() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Error,
+            &mut CancelledControl,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
     }
 
     #[cfg(unix)]
