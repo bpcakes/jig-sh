@@ -279,11 +279,13 @@ expand Jig into a build system. The run model retains configuration and input
 digests so a future evidence-reuse policy can be added only after proving a
 product need and defining safe freshness semantics.
 
-Current target input digests conservatively include the checked-out commit and
-the complete non-`.agent/` worktree fingerprint together with the target's
-declared inputs. This safely invalidates evidence when relevant content changes
-but can also invalidate it for an unrelated worktree change; it is freshness
-proof, not an artifact-cache key.
+Current target input digests conservatively include the committed non-`.agent/`
+source tree and the complete non-`.agent/` staged, unstaged, and untracked
+worktree projection together with the target's declared inputs. This safely
+invalidates evidence when relevant content changes but can also invalidate it
+for an unrelated source change. Commits containing only append-only `.agent/`
+state do not invalidate the evidence they record. The digest is freshness proof,
+not an artifact-cache key.
 
 ## Implementation migration
 

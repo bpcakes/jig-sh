@@ -92,7 +92,7 @@ and, over MCP:
   Evidence: the current-contract doctor fixture now carries a minimal native repository model, SQLx mutates adapter provenance on both authored and resolved sides, and both exact process-cancellation tests pass.
 
 - Observation: the existing worktree fingerprint covered dirty state but not the checked-out commit, so two different clean commits could produce the same target input digest and make old evidence appear current.
-  Evidence: the fingerprint now includes the verified `HEAD` object id (or an explicit unborn marker), and a regression proves two clean commits have different fingerprints.
+  Evidence: the fingerprint now includes the deterministic committed non-`.agent/` source-tree listing (or an explicit unborn marker), and a regression proves two clean source commits have different fingerprints.
 
 - Observation: the first full Slice 8 gate exposed three stale migration tests rather than runtime failures: one string replacement no longer mutated the dynamic v6 evidence gate, and two Go Doctor fixtures still set the ignored v5 `backend_language` field while their v6 component advertised `rust`.
   Evidence: the gate-mutation test now asserts and changes the actual evidence record; the Go fixtures update authored and resolved adapter records; all three focused reruns and the complete composite test gate pass.
@@ -102,6 +102,9 @@ and, over MCP:
 
 - Observation: allocating a PTY to the outer `work check` process can perturb the nested vault PTY integration test and make its resize clear-screen assertion time out even though the controlled preview completes and the UI returns.
   Evidence: the PTY-wrapped acceptance attempt passed all 2,262 primary and 436 vault tests but failed one final TUI assertion; the unchanged test then passed three consecutive focused non-PTY nextest runs and the complete non-PTY structured-work batch. No source correction was retained.
+
+- Observation: hashing the raw `HEAD` object id made a normal evidence-only closeout commit invalidate the gates it recorded even though every `.agent/` path was otherwise excluded from freshness.
+  Evidence: post-close inspection marked both gates stale after a commit containing only the plan and append-only state. The fingerprint now hashes the filtered committed source-tree listing instead; regressions prove source commits invalidate evidence while `.agent/`-only commits preserve it.
 
 ## Decision Log
 

@@ -360,33 +360,7 @@ fn repo_worktree_fingerprint_inner(
     collection: FingerprintCollection<'_>,
 ) -> Result<String> {
     collection.ensure_active()?;
-    let head = collection.git_output_unchecked(
-        root,
-        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-        "git rev-parse HEAD for worktree fingerprint",
-    )?;
-    let head_identity = match head.status.code() {
-        Some(0) => {
-            let object_id =
-                String::from_utf8(head.stdout).context("Git HEAD object id is not UTF-8")?;
-            let object_id = object_id.trim();
-            if !matches!(object_id.len(), 40 | 64)
-                || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                bail!("Git HEAD resolved to invalid object id {object_id:?}");
-            }
-            object_id.as_bytes().to_vec()
-        }
-        Some(1) => b"unborn".to_vec(),
-        _ => {
-            bail!(
-                "git rev-parse HEAD for worktree fingerprint failed with {}.\nstdout:\n{}\nstderr:\n{}",
-                format_exit_status(&head.status),
-                String::from_utf8_lossy(&head.stdout),
-                String::from_utf8_lossy(&head.stderr)
-            )
-        }
-    };
+    let committed_source_tree = committed_source_tree_identity(root, collection)?;
     collection.ensure_active()?;
     let status = collection.git_output(
         root,
@@ -424,8 +398,8 @@ fn repo_worktree_fingerprint_inner(
     let untracked = untracked_file_contents(root, &status.stdout, collection)?;
 
     let mut input = Vec::new();
-    input.extend_from_slice(b"head\0");
-    input.extend_from_slice(&head_identity);
+    input.extend_from_slice(b"committed-source-tree\0");
+    input.extend_from_slice(&committed_source_tree);
     input.extend_from_slice(b"\0status\0");
     input.extend_from_slice(&status.stdout);
     input.extend_from_slice(b"\0unstaged\0");
@@ -437,6 +411,70 @@ fn repo_worktree_fingerprint_inner(
 
     collection.ensure_active()?;
     collection.git_hash_object(root, &input)
+}
+
+fn committed_source_tree_identity(
+    root: &Path,
+    collection: FingerprintCollection<'_>,
+) -> Result<Vec<u8>> {
+    let head = collection.git_output_unchecked(
+        root,
+        &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        "git rev-parse HEAD for worktree fingerprint",
+    )?;
+    match head.status.code() {
+        Some(0) => {
+            let object_id =
+                String::from_utf8(head.stdout).context("Git HEAD object id is not UTF-8")?;
+            let object_id = object_id.trim();
+            if !matches!(object_id.len(), 40 | 64)
+                || !object_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                bail!("Git HEAD resolved to invalid object id {object_id:?}");
+            }
+            collection.ensure_active()?;
+            let tree = collection.git_output(
+                root,
+                &["ls-tree", "-r", "-z", "--full-tree", object_id],
+                "git ls-tree HEAD for worktree fingerprint",
+            )?;
+            committed_source_tree_without_agent_state(&tree.stdout, collection)
+        }
+        Some(1) => Ok(b"unborn".to_vec()),
+        _ => {
+            bail!(
+                "git rev-parse HEAD for worktree fingerprint failed with {}.\nstdout:\n{}\nstderr:\n{}",
+                format_exit_status(&head.status),
+                String::from_utf8_lossy(&head.stdout),
+                String::from_utf8_lossy(&head.stderr)
+            )
+        }
+    }
+}
+
+fn committed_source_tree_without_agent_state(
+    tree: &[u8],
+    collection: FingerprintCollection<'_>,
+) -> Result<Vec<u8>> {
+    let mut source_tree = Vec::with_capacity(tree.len());
+    for record in tree
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        collection.ensure_active()?;
+        let path_offset = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .context("Git ls-tree record is missing its path separator")?
+            + 1;
+        let path = &record[path_offset..];
+        if path == b".agent" || path.starts_with(b".agent/") {
+            continue;
+        }
+        source_tree.extend_from_slice(record);
+        source_tree.push(0);
+    }
+    Ok(source_tree)
 }
 
 fn untracked_file_contents(
@@ -1276,6 +1314,35 @@ mod tests {
         let second = repo_worktree_fingerprint(temp.path()).unwrap();
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn worktree_fingerprint_ignores_clean_commits_that_only_change_agent_state() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
+        std::fs::write(temp.path().join("tracked.txt"), "source\n").unwrap();
+        std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "first\n").unwrap();
+        run_git(temp.path(), &["add", "tracked.txt", ".agent"]);
+        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
+        let first = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        std::fs::write(
+            temp.path().join(".agent/state/receipts.jsonl"),
+            "first\nsecond\n",
+        )
+        .unwrap();
+        run_git(temp.path(), &["add", ".agent/state/receipts.jsonl"]);
+        run_git(temp.path(), &["commit", "-m", "record agent evidence"]);
+        let second = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        assert_eq!(first, second);
     }
 
     #[test]
