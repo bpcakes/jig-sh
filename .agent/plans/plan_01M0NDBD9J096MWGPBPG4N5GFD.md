@@ -29,7 +29,7 @@ Fix the supported-host installer regression, restore the published status-provid
 
 ## Outcomes & Retrospective
 
-The review findings resolved in five behaviorally independent commits. The installer fallback now executes under a deliberately restricted `PATH`; status-provider v1 retains its published path semantics; schema Git probes share the command's cancellation, timeout, output-cap, and process-tree ownership; and a tracked-source guard covers the supported-host surface missed by the manual cleanup.
+The review findings resolved in four behaviorally independent implementation commits, with separate planning and evidence commits. The installer fallback now executes under a deliberately restricted `PATH`; status-provider v1 retains its published path semantics; schema Git probes share the command's cancellation, timeout, output-cap, and process-tree ownership; and a tracked-source guard covers the supported-host surface missed by the manual cleanup.
 
 The root causes were mixed. The installer import and residual artifacts were sweep omissions amplified by parity checks that verified identical copies without executing the copied behavior. The status-provider regression and schema cancellation gap were structural boundary mistakes: platform cleanup crossed a versioned wire contract, while cooperative cancellation stopped at a legacy subprocess helper. The fixes reduce future bug surface at those boundaries instead of adding isolated exceptions.
 
