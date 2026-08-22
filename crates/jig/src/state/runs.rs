@@ -1,5 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
@@ -41,12 +42,17 @@ pub(crate) struct DurableRun {
 pub(crate) struct RunEventCursor(u64);
 
 pub(crate) struct RunLease {
-    file: File,
+    file: Option<File>,
+    path: PathBuf,
 }
 
 impl Drop for RunLease {
     fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.file);
+        if let Some(file) = self.file.take() {
+            let _ = FileExt::unlock(&file);
+            drop(file);
+        }
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -91,9 +97,10 @@ pub(crate) fn start_run(
     ctx: &RepoContext,
     plan: RunPlan,
     work_plan_id: Option<String>,
-) -> Result<DurableRun> {
+) -> Result<(DurableRun, RunLease)> {
     ensure_state_layout(ctx)?;
     let run_id = new_id("run");
+    let lease = acquire_run_lease(ctx, &run_id)?;
     let timestamp_ms = now_ms();
     append_event(
         ctx,
@@ -109,7 +116,7 @@ pub(crate) fn start_run(
             conclusion: None,
         },
     )?;
-    Ok(DurableRun {
+    let run = DurableRun {
         result: RunResult::queued(
             run_id,
             plan.id.clone(),
@@ -128,14 +135,18 @@ pub(crate) fn start_run(
         plan,
         work_plan_id,
         cancel_requested: false,
-    })
+    };
+    Ok((run, lease))
 }
 
-pub(crate) fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
-    let file = open_run_lease(ctx, run_id)?;
+fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
+    let (file, path) = open_run_lease(ctx, run_id)?;
     file.lock_exclusive()
         .with_context(|| format!("Failed to acquire worker lease for run '{run_id}'"))?;
-    Ok(RunLease { file })
+    Ok(RunLease {
+        file: Some(file),
+        path,
+    })
 }
 
 pub(crate) fn recover_abandoned_run(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
@@ -144,10 +155,13 @@ pub(crate) fn recover_abandoned_run(ctx: &RepoContext, run_id: &str) -> Result<D
         return Ok(run);
     }
 
-    let file = open_run_lease(ctx, run_id)?;
+    let (file, path) = open_run_lease(ctx, run_id)?;
     match file.try_lock_exclusive() {
         Ok(true) => {
-            let _lease = RunLease { file };
+            let _lease = RunLease {
+                file: Some(file),
+                path,
+            };
             let current = run_by_id(ctx, run_id)?;
             if current.result.status != RunStatus::Completed {
                 block_nonterminal_run(
@@ -166,19 +180,20 @@ pub(crate) fn recover_abandoned_run(ctx: &RepoContext, run_id: &str) -> Result<D
     }
 }
 
-fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
+fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<(File, PathBuf)> {
     ensure_state_layout(ctx)?;
     let lease_dir = ctx.root().join(RUN_LEASE_DIR);
     fs::create_dir_all(&lease_dir)
         .with_context(|| format!("Failed to create {}", lease_dir.display()))?;
     let path = lease_dir.join(format!("{run_id}.lock"));
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(&path)
-        .with_context(|| format!("Failed to open run lease {}", path.display()))
+        .with_context(|| format!("Failed to open run lease {}", path.display()))?;
+    Ok((file, path))
 }
 
 pub(crate) fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
@@ -478,7 +493,7 @@ mod tests {
     #[test]
     fn lifecycle_round_trips_from_append_only_events() {
         let (_temp, ctx) = context();
-        let started = start_run(&ctx, plan(), Some("plan_work".into())).unwrap();
+        let (started, _lease) = start_run(&ctx, plan(), Some("plan_work".into())).unwrap();
         let run_id = started.result.run_id;
         let target: TargetId = "repo:test".parse().unwrap();
 
@@ -506,7 +521,7 @@ mod tests {
     #[test]
     fn cancellation_requests_are_idempotent() {
         let (_temp, ctx) = context();
-        let started = start_run(&ctx, plan(), None).unwrap();
+        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
         let run_id = started.result.run_id;
 
         let first = request_run_cancel(&ctx, &run_id).unwrap();
@@ -519,9 +534,31 @@ mod tests {
     }
 
     #[test]
+    fn queued_runs_are_published_with_a_lease_and_terminal_leases_are_removed() {
+        let (_temp, ctx) = context();
+        let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+        let run_id = started.result.run_id;
+        let lease_path = ctx
+            .root()
+            .join(RUN_LEASE_DIR)
+            .join(format!("{run_id}.lock"));
+
+        assert!(lease_path.exists());
+        let inspected = recover_abandoned_run(&ctx, &run_id).unwrap();
+        assert_eq!(inspected.result.status, RunStatus::Queued);
+
+        drop(lease);
+        assert!(!lease_path.exists());
+        let recovered = recover_abandoned_run(&ctx, &run_id).unwrap();
+        assert_eq!(recovered.result.status, RunStatus::Completed);
+        assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
+        assert!(!lease_path.exists());
+    }
+
+    #[test]
     fn cancellation_observed_after_completion_does_not_corrupt_the_run() {
         let (_temp, ctx) = context();
-        let started = start_run(&ctx, plan(), None).unwrap();
+        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
         let run_id = started.result.run_id;
         let target: TargetId = "repo:test".parse().unwrap();
         let mut result = TargetRunResult::queued(target, "sha256:config", "sha256:input");
@@ -541,7 +578,7 @@ mod tests {
     #[test]
     fn unknown_future_events_are_ignored() {
         let (_temp, ctx) = context();
-        let started = start_run(&ctx, plan(), None).unwrap();
+        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
         append_event(
             &ctx,
             RunEventRecord {
@@ -570,7 +607,7 @@ mod tests {
     #[test]
     fn corrupt_known_lifecycle_is_rejected() {
         let (_temp, ctx) = context();
-        let started = start_run(&ctx, plan(), None).unwrap();
+        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
         complete_run(&ctx, &started.result.run_id, RunConclusion::Success).unwrap();
 
         let error = run_by_id(&ctx, &started.result.run_id).unwrap_err();

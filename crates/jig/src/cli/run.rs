@@ -729,27 +729,6 @@ fn normalize_external_check_global_flags(mut args: Vec<OsString>) -> Vec<OsStrin
 
 fn check_external_selector(args: &[OsString]) -> bool {
     const VALUE_OPTIONS: &[&str] = &["--plan-id", "--profile", "--affected"];
-    const KNOWN_COMMANDS: &[&str] = &[
-        "fmt",
-        "lint",
-        "clippy",
-        "test",
-        "test-locked",
-        "typescript-lint",
-        "typescript-typecheck",
-        "typescript-build",
-        "typescript-coverage",
-        "sqlx",
-        "sqlc",
-        "schema",
-        "contract",
-        "agent-map",
-        "agent-guides",
-        "rust-file-loc",
-        "no-mod-rs",
-        "migration-immutability",
-        "sqlx-unchecked-non-test",
-    ];
 
     let mut skip_value = false;
     for arg in args {
@@ -765,7 +744,7 @@ fn check_external_selector(args: &[OsString]) -> bool {
         if arg.starts_with('-') {
             continue;
         }
-        return !KNOWN_COMMANDS.contains(&arg.as_ref());
+        return !CHECK_SUBCOMMAND_NAMES.contains(&arg.as_ref());
     }
     false
 }

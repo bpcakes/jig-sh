@@ -288,6 +288,20 @@ fn dispatch_named_check(
     tool: crate::command::ToolRequest,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
+        if legacy_tool == tool::SCHEMA_CHECK {
+            let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+            let plan = crate::repository::plan_action_run(
+                ctx,
+                &catalog,
+                crate::repository::PlanRunRequest {
+                    selectors: vec![selector.into()],
+                    profile: None,
+                    affected_base: None,
+                },
+                std::collections::BTreeMap::new(),
+            )?;
+            return execute_repository_check_plan(ctx, &catalog, plan, tool, false);
+        }
         dispatch_repository_check(
             ctx,
             crate::command::RepositoryCheckRequest {
@@ -327,15 +341,25 @@ fn dispatch_repository_check(
         }));
     }
 
-    let (work_plan_id, record_receipts) = request.tool.into_parts();
+    execute_repository_check_plan(ctx, &catalog, plan, request.tool, request.fail_fast)
+}
+
+fn execute_repository_check_plan(
+    ctx: &RepoContext,
+    catalog: &crate::repository::RepositoryCatalog,
+    plan: jig_contract::RunPlan,
+    tool: crate::command::ToolRequest,
+    fail_fast: bool,
+) -> Result<Value> {
+    let (work_plan_id, record_receipts) = tool.into_parts();
     let execution = run_execution::execute_check_run(
         ctx,
-        &catalog,
+        catalog,
         plan.clone(),
         run_execution::ExecuteCheckRunRequest {
             work_plan_id,
             record_receipts,
-            fail_fast: request.fail_fast,
+            fail_fast,
         },
         &|| false,
     )?;

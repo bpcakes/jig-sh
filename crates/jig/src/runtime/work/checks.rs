@@ -28,7 +28,7 @@ pub(super) fn check(ctx: &RepoContext, opts: WorkCheckRequest) -> Result<Value> 
 }
 
 pub(super) fn check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<Value> {
-    run_check_tools(ctx, plan_id, tools)?.require_success()
+    run_check_tools(ctx, plan_id, tools, CheckFailureMode::ReportError)?.require_success()
 }
 
 pub(super) fn check_configured_collect_failures(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
@@ -39,6 +39,12 @@ pub(super) fn check_configured_collect_failures(ctx: &RepoContext, plan_id: &str
 enum CheckFailureMode {
     ReportError,
     Collect,
+}
+
+impl CheckFailureMode {
+    const fn continues_after_failure(self) -> bool {
+        matches!(self, Self::Collect)
+    }
 }
 
 fn check_configured(
@@ -63,10 +69,10 @@ fn check_configured(
                 "checks": [],
                 "receipt_id": null,
             }),
-            failure: None,
+            failures: Vec::new(),
         }
     } else {
-        run_check_tools(ctx, plan_id, tools)?
+        run_check_tools(ctx, plan_id, tools, failure_mode)?
     };
 
     if targets.is_empty() {
@@ -77,7 +83,7 @@ fn check_configured(
     }
     let CheckBatch {
         mut result,
-        failure: legacy_failure,
+        failures: legacy_failures,
     } = check_batch;
     let plan = plan_run(
         ctx,
@@ -109,7 +115,7 @@ fn check_configured(
     let object = result
         .as_object_mut()
         .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
-    let legacy_ok = legacy_failure.is_none();
+    let legacy_ok = legacy_failures.is_empty();
     object.insert("ok".into(), json!(legacy_ok && evidence_ok));
     object.insert("plan".into(), json!(plan));
     object.insert("run".into(), json!(execution.run.result));
@@ -117,12 +123,13 @@ fn check_configured(
     object.insert("failed_targets".into(), json!(execution.failed_targets));
 
     if matches!(failure_mode, CheckFailureMode::ReportError) {
+        let legacy_failure = failure_message(&legacy_failures);
         match (legacy_failure, evidence_ok) {
             (Some(failure), false) => bail!(
                 "{}\nWork evidence targets also failed: [{failed_target_labels}]",
-                failure.message
+                failure
             ),
-            (Some(failure), true) => bail!("{}", failure.message),
+            (Some(failure), true) => bail!("{failure}"),
             (None, false) => bail!("Work evidence targets failed: [{failed_target_labels}]"),
             (None, true) => {}
         }
@@ -151,19 +158,34 @@ struct CheckFailure {
 
 struct CheckBatch {
     result: Value,
-    failure: Option<CheckFailure>,
+    failures: Vec<CheckFailure>,
 }
 
 impl CheckBatch {
     fn require_success(self) -> Result<Value> {
-        if let Some(failure) = self.failure {
-            bail!("{}", failure.message);
+        if let Some(message) = failure_message(&self.failures) {
+            bail!("{message}");
         }
         Ok(self.result)
     }
 }
 
-fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<CheckBatch> {
+fn failure_message(failures: &[CheckFailure]) -> Option<String> {
+    (!failures.is_empty()).then(|| {
+        failures
+            .iter()
+            .map(|failure| failure.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+fn run_check_tools(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tools: Vec<String>,
+    failure_mode: CheckFailureMode,
+) -> Result<CheckBatch> {
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
     for name in &tools {
@@ -171,21 +193,31 @@ fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Resu
     }
 
     let mut results = Vec::with_capacity(tools.len());
-    let mut check_failure = None::<CheckFailure>;
+    let mut check_failures = Vec::<CheckFailure>::new();
     for name in &tools {
-        let result = execute_manifest_tool_result_without_worktree_fingerprint(
+        let execution = execute_manifest_tool_result_without_worktree_fingerprint(
             ctx,
             name,
             json!({}),
             Some(plan_id.to_string()),
-        )?;
-        let result_failure = manifest_tool_result_failure(&result)?;
-        results.push(result);
-        if let Some((exit_status, message)) = result_failure {
-            check_failure = Some(CheckFailure {
-                exit_status,
-                message,
-            });
+        );
+        match execution {
+            Ok(result) => {
+                let result_failure = manifest_tool_result_failure(&result)?;
+                results.push(result);
+                if let Some((exit_status, message)) = result_failure {
+                    check_failures.push(CheckFailure {
+                        exit_status,
+                        message,
+                    });
+                }
+            }
+            Err(error) => check_failures.push(CheckFailure {
+                exit_status: 1,
+                message: format!("{name} could not execute:\n{error:#}"),
+            }),
+        }
+        if !check_failures.is_empty() && !failure_mode.continues_after_failure() {
             break;
         }
     }
@@ -209,9 +241,11 @@ fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Resu
             plan_id: Some(plan_id.to_string()),
             started_at_ms: started,
             ended_at_ms: now_ms(),
-            exit_status: check_failure
-                .as_ref()
-                .map_or(0, |failure| failure.exit_status),
+            exit_status: check_failures
+                .iter()
+                .map(|failure| failure.exit_status)
+                .max()
+                .unwrap_or(0),
             stdout: "",
             stderr: "",
             evidence: None,
@@ -225,10 +259,10 @@ fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Resu
     let receipt_id = match receipt_result {
         Ok(receipt_id) => receipt_id,
         Err(receipt_error) => {
-            if let Some(check_error) = &check_failure {
+            if let Some(check_error) = failure_message(&check_failures) {
                 bail!(
                     "{}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
-                    check_error.message
+                    check_error
                 );
             }
             return Err(receipt_error);
@@ -237,12 +271,13 @@ fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Resu
 
     Ok(CheckBatch {
         result: json!({
-            "ok": check_failure.is_none(),
+            "ok": check_failures.is_empty(),
             "plan_id": plan_id,
             "checks": results,
+            "errors": check_failures.iter().map(|failure| &failure.message).collect::<Vec<_>>(),
             "receipt_id": receipt_id,
         }),
-        failure: check_failure,
+        failures: check_failures,
     })
 }
 
@@ -272,5 +307,62 @@ fn fingerprint_error(stage: &str, error: Option<&str>) -> String {
     match error {
         Some(error) => format!("Failed to collect worktree fingerprint {stage}: {error}"),
         None => format!("Failed to collect worktree fingerprint {stage}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn collect_mode_runs_and_reports_every_failed_check() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"
+[commands]
+first_check_command = "printf first > first-ran.txt; exit 3"
+second_check_command = "printf second > second-ran.txt; exit 5"
+
+[[work.gates]]
+id = "first"
+kind = "check"
+tool = "jig.first_check"
+
+[[work.gates]]
+id = "second"
+kind = "check"
+tool = "jig.second_check"
+"#,
+            )
+            .required_commands(["first_check_command", "second_check_command"])
+            .tools([
+                json!({
+                    "name": "jig.first_check",
+                    "kind": "command",
+                    "description": "First check.",
+                    "command": "first_check_command"
+                }),
+                json!({
+                    "name": "jig.second_check",
+                    "kind": "command",
+                    "description": "Second check.",
+                    "command": "second_check_command"
+                }),
+            ])
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Test", "# Test\n").unwrap();
+
+        let result = check_configured_collect_failures(&ctx, "plan_1").unwrap();
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["checks"].as_array().unwrap().len(), 2);
+        assert_eq!(result["errors"].as_array().unwrap().len(), 2);
+        assert!(temp.path().join("first-ran.txt").exists());
+        assert!(temp.path().join("second-ran.txt").exists());
     }
 }

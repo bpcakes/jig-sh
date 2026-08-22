@@ -202,6 +202,7 @@ fn launcher_capability_flag_allowlist_matches_clap_globals() {
         .map(|subcommand| subcommand.get_name())
         .collect::<Vec<_>>()
         .join(",");
+    assert_eq!(check_subcommands, CHECK_SUBCOMMAND_NAMES.join(","));
     assert_eq!(
         check_subcommands, LAUNCHER_CHECK_SUBCOMMANDS,
         "update the launcher check-subcommand marker and strict/capability parser when Clap check commands change"

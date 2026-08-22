@@ -28,7 +28,8 @@ mod work;
 
 pub(crate) use agent::{AgentBootstrapOpts, AgentCommand};
 pub(crate) use check::{
-    CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts,
+    CHECK_SUBCOMMAND_NAMES, CheckCommand, CheckMigrationImmutabilityOpts, CheckOpts,
+    CheckRustFileLocOpts,
 };
 pub(crate) use codex::CodexCommand;
 pub(crate) use loops::{

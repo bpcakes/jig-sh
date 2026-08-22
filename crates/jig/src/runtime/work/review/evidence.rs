@@ -105,6 +105,7 @@ pub(super) fn review_failed_gates(review_result: &Value) -> Result<Vec<Value>> {
 }
 
 pub(super) fn checks_passed(check_result: &Value) -> Result<bool> {
+    let batch_passed = check_result.get("ok").and_then(Value::as_bool) == Some(true);
     let checks = check_result
         .get("checks")
         .and_then(Value::as_array)
@@ -119,7 +120,7 @@ pub(super) fn checks_passed(check_result: &Value) -> Result<bool> {
     let target_passed = check_result
         .get("run")
         .is_none_or(|run| run["conclusion"].as_str() == Some("success"));
-    Ok(legacy_passed && target_passed)
+    Ok(batch_passed && legacy_passed && target_passed)
 }
 
 pub(super) fn finding_meets_threshold(finding: &Value, threshold: &str) -> bool {

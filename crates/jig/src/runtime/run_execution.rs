@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
@@ -46,8 +46,7 @@ pub(in crate::runtime) fn execute_check_run(
     request: ExecuteCheckRunRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
-    let run = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
-    let _lease = crate::state::acquire_run_lease(ctx, &run.result.run_id)?;
+    let (run, _lease) = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
     execute_started_check_run(ctx, catalog, run, request, cancelled)
 }
 
@@ -56,7 +55,7 @@ pub(in crate::runtime) fn start_check_run(
     catalog: &RepositoryCatalog,
     plan: RunPlan,
     work_plan_id: Option<String>,
-) -> Result<crate::state::DurableRun> {
+) -> Result<(crate::state::DurableRun, crate::state::RunLease)> {
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
     start_run(ctx, plan, work_plan_id)
 }
@@ -117,13 +116,7 @@ pub(in crate::runtime) fn execute_started_check_run(
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
                 let started_at_ms = now_ms();
-                let capture = run_target(
-                    ctx,
-                    catalog,
-                    planned,
-                    &run.plan.source.worktree_fingerprint,
-                    cancelled,
-                );
+                let capture = run_target(ctx, catalog, planned, cancelled);
                 finisher.finish(planned, Some(started_at_ms), capture)?
             };
 
@@ -174,9 +167,16 @@ fn run_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     planned: &PlannedTarget,
-    expected_worktree_fingerprint: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> TargetCapture {
+    let control = TargetExecutionControl::new(planned, cancelled);
+    let expected_worktree_fingerprint = match read_only_fingerprint_before(ctx, planned) {
+        Ok(fingerprint) => fingerprint,
+        Err(message) => {
+            return TargetCapture::blocked(message)
+                .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+        }
+    };
     let capture = match &planned.runner {
         ActionRunner::Command {
             command,
@@ -188,21 +188,22 @@ fn run_target(
             command,
             working_directory.as_deref(),
             environment,
-            cancelled,
+            &control,
         ),
         ActionRunner::Native { operation } => {
-            let timeout = Duration::from_secs(
-                planned
-                    .timeout_seconds
-                    .unwrap_or(DEFAULT_TARGET_TIMEOUT_SECONDS)
-                    .max(1),
-            );
+            let timeout = match control.remaining() {
+                Ok(timeout) => timeout,
+                Err(conclusion) => {
+                    return stopped_before_start(planned, conclusion)
+                        .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+                }
+            };
             match run_native_tool_with_control(
                 ctx,
                 operation,
                 &json!(planned.arguments),
                 timeout,
-                cancelled,
+                &|| control.is_cancelled(),
             ) {
                 Ok(output) => TargetCapture::from_process(
                     output.exit_status,
@@ -241,7 +242,86 @@ fn run_target(
         }
     }
     .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-    enforce_read_only_worktree(ctx, planned, expected_worktree_fingerprint, capture)
+    match expected_worktree_fingerprint {
+        Some(expected) => enforce_read_only_worktree(ctx, planned, &expected, capture),
+        None => capture,
+    }
+}
+
+struct TargetExecutionControl<'a> {
+    started: Instant,
+    timeout: Duration,
+    cancelled: &'a dyn Fn() -> bool,
+}
+
+impl<'a> TargetExecutionControl<'a> {
+    fn new(planned: &PlannedTarget, cancelled: &'a dyn Fn() -> bool) -> Self {
+        let timeout = Duration::from_secs(
+            planned
+                .timeout_seconds
+                .unwrap_or(DEFAULT_TARGET_TIMEOUT_SECONDS)
+                .max(1),
+        );
+        Self {
+            started: Instant::now(),
+            timeout,
+            cancelled,
+        }
+    }
+
+    fn remaining(&self) -> std::result::Result<Duration, RunConclusion> {
+        if (self.cancelled)() {
+            return Err(RunConclusion::Cancelled);
+        }
+        let remaining = self.timeout.saturating_sub(self.started.elapsed());
+        if remaining.is_zero() {
+            Err(RunConclusion::TimedOut)
+        } else {
+            Ok(remaining)
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        (self.cancelled)()
+    }
+}
+
+fn stopped_before_start(planned: &PlannedTarget, conclusion: RunConclusion) -> TargetCapture {
+    let reason = match conclusion {
+        RunConclusion::Cancelled => format!("target '{}' was cancelled", planned.target),
+        RunConclusion::TimedOut => format!("target '{}' timed out", planned.target),
+        _ => unreachable!("only cancellation and timeout stop target startup"),
+    };
+    TargetCapture::not_started(conclusion, reason)
+}
+
+fn is_read_only(planned: &PlannedTarget) -> bool {
+    planned
+        .effects
+        .contains(&jig_contract::ActionEffect::ReadOnly)
+        && !planned
+            .effects
+            .contains(&jig_contract::ActionEffect::Worktree)
+}
+
+fn read_only_fingerprint_before(
+    ctx: &RepoContext,
+    planned: &PlannedTarget,
+) -> std::result::Result<Option<String>, String> {
+    if !is_read_only(planned) {
+        return Ok(None);
+    }
+    let current = crate::state::current_worktree_fingerprint(ctx);
+    current.fingerprint.map(Some).ok_or_else(|| {
+        format!(
+            "could not establish the read-only worktree invariant before target '{}': {}",
+            planned.target,
+            current
+                .error
+                .as_deref()
+                .unwrap_or("worktree fingerprint was unavailable")
+        )
+    })
 }
 
 fn enforce_read_only_worktree(
@@ -250,15 +330,7 @@ fn enforce_read_only_worktree(
     expected: &str,
     mut capture: TargetCapture,
 ) -> TargetCapture {
-    if !planned
-        .effects
-        .contains(&jig_contract::ActionEffect::ReadOnly)
-        || planned
-            .effects
-            .contains(&jig_contract::ActionEffect::Worktree)
-    {
-        return capture;
-    }
+    debug_assert!(is_read_only(planned));
 
     let current = crate::state::current_worktree_fingerprint(ctx);
     match (current.fingerprint.as_deref(), current.error.as_deref()) {
@@ -299,7 +371,7 @@ fn run_command_target(
     command_key: &str,
     working_directory: Option<&str>,
     environment: &BTreeMap<String, String>,
-    cancelled: &dyn Fn() -> bool,
+    control: &TargetExecutionControl<'_>,
 ) -> TargetCapture {
     let command_text = match ctx.command_for_key(command_key) {
         Ok(command) => command,
@@ -337,17 +409,17 @@ fn run_command_target(
         .envs(environment)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let timeout = Duration::from_secs(
-        planned
-            .timeout_seconds
-            .unwrap_or(DEFAULT_TARGET_TIMEOUT_SECONDS)
-            .max(1),
-    );
+    let timeout = match control.remaining() {
+        Ok(timeout) => timeout,
+        Err(conclusion) => {
+            return stopped_before_start(planned, conclusion).with_command_key(command_key);
+        }
+    };
     match run_owned_process_tree_with_output_limits(
         &mut command,
         timeout,
         ProcessOutputLimits::default(),
-        cancelled,
+        || control.is_cancelled(),
     ) {
         Ok(output) => {
             let exit_status = output.status.code().unwrap_or(1);
@@ -763,7 +835,7 @@ mod tests {
             )],
             vec![vec![target]],
         );
-        let run = start_run(&ctx, plan, None).unwrap();
+        let (run, _lease) = start_run(&ctx, plan, None).unwrap();
 
         block_started_check_run(&ctx, &run.result.run_id, &anyhow::anyhow!("state failure"))
             .unwrap();

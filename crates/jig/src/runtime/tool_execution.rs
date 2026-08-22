@@ -1,5 +1,5 @@
 use std::process::{Command, Output};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
@@ -204,8 +204,7 @@ pub(in crate::runtime) fn run_native_tool_with_control(
     if cancelled() {
         return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
     }
-    let started = Instant::now();
-    match jig_features::native_tool_kind(tool_name)
+    let output = match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
         NativeToolKind::ContractCheck => Ok(crate::policy::contract_check(ctx)),
@@ -220,16 +219,27 @@ pub(in crate::runtime) fn run_native_tool_with_control(
             crate::policy::schema_check_with_control(ctx, timeout, cancelled)
         }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
+    }?;
+    Ok(bound_native_output(output))
+}
+
+fn bound_native_output(mut output: NativeToolOutput) -> NativeToolOutput {
+    let limits = jig_owned_process::ProcessOutputLimits::default();
+    truncate_native_stream(&mut output.stdout, limits.stdout);
+    truncate_native_stream(&mut output.stderr, limits.stderr);
+    output
+}
+
+fn truncate_native_stream(value: &mut String, limit: usize) {
+    if value.len() <= limit {
+        return;
     }
-    .and_then(|output| {
-        if cancelled() {
-            Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into())
-        } else if started.elapsed() >= timeout {
-            Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into())
-        } else {
-            Ok(output)
-        }
-    })
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push_str("\n[output truncated by Jig]\n");
 }
 
 fn execute_native_tool(
@@ -470,4 +480,62 @@ struct ToolProcessResult {
 
 fn tool_response_value(response: ToolExecutionResponse<'_>) -> Result<Value> {
     serde_json::to_value(response).context("Failed to serialize tool execution response")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn native_output_is_bounded_at_the_common_execution_seam() {
+        let limit = jig_owned_process::ProcessOutputLimits::default().stdout;
+        let output = bound_native_output(NativeToolOutput {
+            exit_status: 0,
+            stdout: "x".repeat(limit + 1),
+            stderr: "y".repeat(limit + 1),
+        });
+
+        assert!(output.stdout.starts_with(&"x".repeat(limit)));
+        assert!(output.stdout.ends_with("[output truncated by Jig]\n"));
+        assert!(output.stderr.ends_with("[output truncated by Jig]\n"));
+    }
+
+    #[test]
+    fn cancellation_after_an_in_process_mutation_does_not_reclassify_completion() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"
+backend_language = "go"
+go_database = "postgres"
+migration_dir = "migrations"
+"#,
+            )
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let probes = AtomicUsize::new(0);
+
+        let output = run_native_tool_with_control(
+            &ctx,
+            tool::MIGRATION_ADD,
+            &serde_json::json!({args::NAME: "create_examples"}),
+            Duration::from_secs(30),
+            &|| probes.fetch_add(1, Ordering::SeqCst) > 0,
+        )
+        .unwrap();
+
+        assert_eq!(output.exit_status, 0);
+        assert_eq!(probes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read_dir(temp.path().join("migrations"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
 }

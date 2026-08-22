@@ -203,28 +203,14 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
                     return;
                 }
             };
-            let run = match start_check_run(&worker_ctx, &worker_catalog, worker_plan, work_plan_id)
-            {
-                Ok(run) => run,
-                Err(error) => {
-                    let _ = started_tx.send(Err(error));
-                    return;
-                }
-            };
-            let _lease = match crate::state::acquire_run_lease(&worker_ctx, &run.result.run_id) {
-                Ok(lease) => lease,
-                Err(error) => {
-                    let message =
-                        format!("repository run worker could not acquire its lease: {error:#}");
-                    let _ = crate::state::block_nonterminal_run(
-                        &worker_ctx,
-                        &run.result.run_id,
-                        &message,
-                    );
-                    let _ = started_tx.send(Err(error));
-                    return;
-                }
-            };
+            let (run, _lease) =
+                match start_check_run(&worker_ctx, &worker_catalog, worker_plan, work_plan_id) {
+                    Ok(started) => started,
+                    Err(error) => {
+                        let _ = started_tx.send(Err(error));
+                        return;
+                    }
+                };
             let cancellation = RunCancellationProbe::new(
                 worker_ctx.clone(),
                 run.result.run_id.clone(),

@@ -330,3 +330,70 @@ target = "api:test"
     let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
     assert!(receipts.contains(r#""target":{"component":"api","action":"test"}"#));
 }
+
+#[test]
+fn hard_legacy_error_records_its_batch_and_does_not_suppress_evidence() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "legacy"
+kind = "check"
+tool = "jig.broken_check"
+
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "api_test_command = \"printf 'api tests passed\\n'\"",
+        "api_test_command = \"printf evidence > hard-error-evidence-ran.txt\"",
+    );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("missing_check_command"));
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.broken_check",
+        "kind": "command",
+        "description": "A deliberately unavailable check.",
+        "command": "missing_check_command"
+    }));
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("jig.broken_check could not execute"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("hard-error-evidence-ran.txt")).unwrap(),
+        "evidence"
+    );
+    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
+    assert!(receipts.contains(r#""tool_name":"jig.work_check""#));
+    assert!(receipts.contains(r#""target":{"component":"api","action":"test"}"#));
+}

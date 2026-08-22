@@ -275,6 +275,18 @@ fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
     assert!(!crate::runtime::mcp_repository::is_live_run_registered(
         &ctx, run_id
     ));
+    let lease_path = temp
+        .path()
+        .join(".agent/.cache/run-leases")
+        .join(format!("{run_id}.lock"));
+    let lease_cleanup_deadline = Instant::now() + Duration::from_secs(1);
+    while lease_path.exists() && Instant::now() < lease_cleanup_deadline {
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        !lease_path.exists(),
+        "terminal worker lease was not removed"
+    );
 
     let terminal_cancel = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
     assert_eq!(terminal_cancel["cancellation_requested"], false);
@@ -290,7 +302,8 @@ fn mcp_inspect_reconciles_a_run_whose_worker_lease_disappeared() {
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
     let plan: jig_contract::RunPlan = serde_json::from_value(planned["plan"].clone()).unwrap();
-    let abandoned = crate::state::start_run(&ctx, plan, None).unwrap();
+    let (abandoned, abandoned_lease) = crate::state::start_run(&ctx, plan, None).unwrap();
+    drop(abandoned_lease);
 
     let inspected = call_tool(
         &ctx,
@@ -500,6 +513,41 @@ fn repository_execution_fails_a_read_only_action_that_mutates_the_worktree() {
             .unwrap()
             .iter()
             .any(|finding| finding["source"] == "effect_policy")
+    );
+}
+
+#[test]
+fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_generate_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(
+        &ctx,
+        tool::PLAN_RUN,
+        json!({"selectors": ["api:generate", "api:test"]}),
+    )
+    .unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "success",
+        "{terminal:#}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
+        "generated"
     );
 }
 

@@ -49,6 +49,64 @@ fn unavailable_schema_check_explains_disabled_config() {
 }
 
 #[test]
+fn explicit_schema_check_executes_a_declared_worktree_action_on_contract_six() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/schema.sql"), "schema\n").unwrap();
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            "default_branch = \"main\"\nschema_dump_command = \"printf 'schema\\n' > docs/schema/schema.sql\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "schema" }
+intent = "check"
+effects = ["worktree", "process"]
+runner = { kind = "native", operation = "jig.schema_check" }
+inputs = ["api/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "schema"},
+        "intent": "check",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.schema_check"},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
+    )
+    .unwrap();
+
+    assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["run"]["conclusion"], "success");
+}
+
+#[test]
 fn unavailable_go_checks_explain_backend_and_database_capabilities() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

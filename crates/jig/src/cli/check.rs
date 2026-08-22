@@ -17,6 +17,28 @@ Examples:
   jig check contract
   jig check rust-file-loc --changed-against origin/main";
 
+pub(crate) const CHECK_SUBCOMMAND_NAMES: &[&str] = &[
+    tool_defs::cli_command::CHECK_FMT,
+    tool_defs::cli_command::CHECK_LINT,
+    tool_defs::cli_command::CHECK_CLIPPY,
+    tool_defs::cli_command::CHECK_TEST,
+    tool_defs::cli_command::CHECK_TEST_LOCKED,
+    tool_defs::cli_command::CHECK_TYPESCRIPT_LINT,
+    tool_defs::cli_command::CHECK_TYPESCRIPT_TYPECHECK,
+    tool_defs::cli_command::CHECK_TYPESCRIPT_BUILD,
+    tool_defs::cli_command::CHECK_TYPESCRIPT_COVERAGE,
+    tool_defs::cli_command::CHECK_SQLX,
+    tool_defs::cli_command::CHECK_SQLC,
+    tool_defs::cli_command::CHECK_SCHEMA,
+    tool_defs::cli_command::CHECK_CONTRACT,
+    tool_defs::cli_command::CHECK_AGENT_MAP,
+    tool_defs::cli_command::CHECK_AGENT_GUIDES,
+    tool_defs::cli_command::CHECK_RUST_FILE_LOC,
+    tool_defs::cli_command::CHECK_NO_MOD_RS,
+    tool_defs::cli_command::CHECK_MIGRATION_IMMUTABILITY,
+    tool_defs::cli_command::CHECK_SQLX_UNCHECKED_NON_TEST,
+];
+
 #[derive(Args, Debug, Default)]
 pub(crate) struct CheckOpts {
     #[command(flatten)]
