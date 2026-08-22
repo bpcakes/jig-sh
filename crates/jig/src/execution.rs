@@ -31,6 +31,15 @@ impl ExecutionCommandError {
     pub(crate) fn failed(error: impl Into<anyhow::Error>) -> Self {
         Self::Failed(error.into())
     }
+
+    #[cfg(test)]
+    pub(crate) fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::CancelledBeforeStart => anyhow!("Execution was cancelled before it started"),
+            Self::Cancelled => anyhow!("Execution was cancelled"),
+            Self::Failed(error) => error,
+        }
+    }
 }
 
 pub(crate) fn run_authoritative_execution_command(

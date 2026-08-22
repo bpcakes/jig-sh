@@ -12,6 +12,11 @@ use jig_owned_process::require_success;
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
+#[cfg(test)]
+use crate::execution::NoopExecutionObserver;
+use crate::execution::{
+    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
+};
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -282,20 +287,44 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     })
 }
 
+#[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+    schema_check_with_observer(ctx, &mut NoopExecutionObserver)
+        .map_err(ExecutionCommandError::into_anyhow)
+}
+
+pub(crate) fn schema_check_with_observer(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
     let command_text = ctx.schema_dump_command();
     if command_text.trim().is_empty() {
-        bail!("schema_dump_command is empty");
+        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
+            "schema_dump_command is empty"
+        )));
     }
     let schema_docs_dir = env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
     // A check intentionally reruns the configured dump command, then fails if
     // the dump output path has uncommitted changes.
-    let output = Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .current_dir(ctx.root())
         .arg("-c")
         .arg(command_text)
-        .output()
-        .context("Failed to run schema_dump_command")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        ctx.command_timeout(),
+        "Configured schema dump",
+        observer,
+    )?;
+    let output = std::process::Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    };
     require_success(&output, |_| {
         format!(
             "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
@@ -303,16 +332,22 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
-    })?;
+    })
+    .map_err(ExecutionCommandError::failed)?;
+    if observer.cancelled() {
+        return Err(ExecutionCommandError::Cancelled);
+    }
     let status = git_text(
         ctx.root(),
         &["status", "--porcelain", "--", schema_docs_dir.as_str()],
-    )?;
+    )
+    .map_err(ExecutionCommandError::failed)?;
     if !status.trim().is_empty() {
         let diff = git_text(
             ctx.root(),
             &["--no-pager", "diff", "--", schema_docs_dir.as_str()],
-        )?;
+        )
+        .map_err(ExecutionCommandError::failed)?;
         return Ok(NativeToolOutput {
             exit_status: 1,
             stdout: String::new(),

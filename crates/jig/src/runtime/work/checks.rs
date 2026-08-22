@@ -62,6 +62,10 @@ fn check_tools_with_failure_mode(
     let mut results = Vec::with_capacity(tools.len());
     let mut check_failure = None;
     for (index, name) in tools.iter().enumerate() {
+        if observer.cancelled() {
+            check_failure = Some((1, anyhow!("Work check was cancelled before {name} started")));
+            break;
+        }
         let position = PhasePosition::new(index + 1, tools.len())
             .expect("work checks are enumerated within a nonempty tool list");
         let result =

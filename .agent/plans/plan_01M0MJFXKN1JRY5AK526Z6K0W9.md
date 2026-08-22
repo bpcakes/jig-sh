@@ -7,7 +7,7 @@ This work closes the remaining review findings in the execution-supervision chan
 - [x] Reviewed the merged Claude/Codex findings and grouped them by ownership boundary.
 - [x] Made Codex transcript authority explicit so verbose refinement diagnostics truncate without terminating the edit-authoritative worker.
 - [ ] Introduce a typed repository command-supervision result and migrate configured commands, native schema dumps, and GitHub loop commands.
-- [ ] Check cancellation at orchestration boundaries before native work starts.
+- [x] Check cancellation at orchestration boundaries before native work starts.
 - [ ] Separate structural progress capacity from lossy child-output preview capacity.
 - [ ] Remove zero-plan status work, preserve concurrent panic diagnostics, and make setup phases monotonic.
 - [ ] Run focused checks and every configured repository gate through the development binary.

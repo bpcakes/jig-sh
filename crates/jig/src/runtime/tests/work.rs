@@ -685,6 +685,85 @@ tool = "jig.later_check"
 }
 
 #[test]
+fn cancelled_collect_all_work_check_stops_after_a_native_tool() {
+    #[derive(Default)]
+    struct CancelAfterNativePhase {
+        native_finished: bool,
+    }
+
+    impl crate::execution::ExecutionObserver for CancelAfterNativePhase {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            if matches!(
+                event,
+                crate::execution::ExecutionEvent::PhaseFinished {
+                    label: crate::tool_defs::tool::CONTRACT_CHECK,
+                    ..
+                }
+            ) {
+                self.native_finished = true;
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for CancelAfterNativePhase {
+        fn cancelled(&self) -> bool {
+            self.native_finished
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+later_check_command = "printf ran > later-check-ran"
+"#,
+        )
+        .required_commands(["later_check_command"])
+        .tool(json!({
+            "name": crate::tool_defs::tool::CONTRACT_CHECK,
+            "kind": "native",
+            "description": "Check the fixture contract."
+        }))
+        .tool(json!({
+            "name": "jig.later_check",
+            "kind": "command",
+            "description": "Run the later fixture check.",
+            "command": "later_check_command"
+        }))
+        .write();
+    write_open_plan(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterNativePhase::default();
+
+    let error = super::super::work::check_tools_collect_failures_with_observer(
+        &ctx,
+        "plan_1",
+        vec![
+            crate::tool_defs::tool::CONTRACT_CHECK.into(),
+            "jig.later_check".into(),
+        ],
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!temp.path().join("later-check-ran").exists());
+    let receipts = read_receipts(temp.path());
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt["tool_name"] == crate::tool_defs::tool::CONTRACT_CHECK)
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["tool_name"] != "jig.later_check")
+    );
+}
+
+#[test]
 fn timed_out_work_check_records_child_and_batch_failure_receipts() {
     let temp = tempdir().unwrap();
     write_timeout_check_fixture_repo(temp.path());
