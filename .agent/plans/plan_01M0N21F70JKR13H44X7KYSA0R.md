@@ -10,7 +10,7 @@ This work classifies and fixes the current comprehensive-review findings at the 
 - [x] Make signal supervision an exhaustive runtime-command policy.
 - [x] Move configured-command output capacity into validated repository configuration.
 - [x] Restore semantic test coverage and exact launcher argument coverage.
-- [ ] Run all configured gates, inspect evidence, and close the work.
+- [x] Run all configured gates, inspect evidence, and close the work.
 
 ## Surprises & Discoveries
 
@@ -18,6 +18,7 @@ This work classifies and fixes the current comprehensive-review findings at the 
 - The existing `Fix comprehensive review findings` plan is historical and its body describes an earlier launcher-hardening pass, so this pass uses a new plan with precise acceptance criteria.
 - A production-binary test with a deliberately constrained stderr pipe reproduces the former shutdown hang and proves later error handling does not write behind an abandoned progress delivery.
 - The same missing-policy pattern appeared in signal handling and output capture; exhaustive command policy and typed capture capacity make those choices visible at call sites.
+- Nested production-binary tests inherited `JIG_REPO_ROOT` and `JIG_INVOKE_CWD` from the outer `scripts/jig` launcher. That made the progress regression test recursively execute the repository test command instead of its isolated fixture. Removing launcher context at the subprocess boundary fixed the test harness rather than weakening its timeout or assertions.
 
 ## Decision Log
 
@@ -28,7 +29,9 @@ This work classifies and fixes the current comprehensive-review findings at the 
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The findings were not independent typos, but neither did they require replacing the repository's architecture. They were instances of one deeper boundary-completeness problem: abstractions represented the happy-path operation without owning the policy that becomes mandatory at timeout, cancellation, external commit, signal delivery, or output exhaustion. The fixes move those policies into exhaustive or typed owners: an independent stderr handle plus explicit abandonment, a durable post-push outcome, idempotency markers plus reconciliation, an exhaustive runtime signal policy, and a validated configured-command output budget. This reduces the bug surface by making callers unable to silently omit the exceptional-path obligation.
+
+Each concern landed as a separate implementation commit with focused regression coverage. The final development binary passed the configured contract and full test gates, including 2,220 non-Vault tests and the Vault-backed partition. `scripts/jig check fmt`, `scripts/jig check clippy`, and the final freshness check also passed.
 
 ## Context and orientation
 
