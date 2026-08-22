@@ -167,7 +167,9 @@ scripts/jig check --profile verify --explain
 On contract-v6 repositories, `--affected BASE` narrows those normal candidates
 using committed changes from the Git merge base through `HEAD` plus staged,
 unstaged, and untracked paths. The plan explains each direct path and configured
-component-dependent propagation; `.agent/` state is ignored. A valid empty
+component-dependent propagation; runtime-owned `.agent/state/` and
+`.agent/.cache/` data are ignored while checked-in contract inputs remain
+eligible. A valid empty
 selection is a no-op. Action dependencies are added only after this filtering,
 and versions 2 through 5 retain their legacy check behavior without affected
 selection.

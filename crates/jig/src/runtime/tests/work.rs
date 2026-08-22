@@ -49,7 +49,7 @@ fn unavailable_schema_check_explains_disabled_config() {
 }
 
 #[test]
-fn explicit_schema_check_executes_a_declared_worktree_action_on_contract_six() {
+fn explicit_schema_check_executes_a_declared_read_only_action_on_contract_six() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
@@ -66,7 +66,7 @@ fn explicit_schema_check_executes_a_declared_worktree_action_on_contract_six() {
             r#"[[repository.actions]]
 target = { component = "api", action = "schema" }
 intent = "check"
-effects = ["worktree", "process"]
+effects = ["read_only", "process"]
 runner = { kind = "native", operation = "jig.schema_check" }
 inputs = ["api/**"]
 
@@ -79,7 +79,7 @@ inputs = ["api/**"]
     manifest["actions"].as_array_mut().unwrap().push(json!({
         "target": {"component": "api", "action": "schema"},
         "intent": "check",
-        "effects": ["worktree", "process"],
+        "effects": ["read_only", "process"],
         "runner": {"kind": "native", "operation": "jig.schema_check"},
         "inputs": ["api/**"]
     }));

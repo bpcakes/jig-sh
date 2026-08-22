@@ -572,8 +572,10 @@ pub(super) fn jsonl_end_offset(path: &Path) -> Result<u64> {
 pub(super) fn scan_jsonl_raw_from(
     path: &Path,
     offset: u64,
+    cancelled: &dyn Fn() -> bool,
     mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
 ) -> Result<(u64, JsonlScanStats)> {
+    ensure_state_read_active(cancelled)?;
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -583,15 +585,26 @@ pub(super) fn scan_jsonl_raw_from(
             return Err(error).with_context(|| format!("Failed to open {}", path.display()));
         }
     };
-    FileExt::lock_shared(&file)
-        .with_context(|| format!("Failed to shared-lock {}", path.display()))?;
+    loop {
+        match FileExt::try_lock_shared(&file) {
+            Ok(true) => break,
+            Ok(false) => thread::sleep(DATA_LOCK_RETRY_DELAY),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+            }
+        }
+        ensure_state_read_active(cancelled)?;
+    }
+    ensure_state_read_active(cancelled)?;
     let file_len = file.metadata()?.len();
     let start = if offset <= file_len { offset } else { 0 };
     file.seek(SeekFrom::Start(start))?;
     let result = scan_jsonl_reader(
         BufReader::with_capacity(JSONL_READ_CHUNK, &file),
         path,
-        &|| false,
+        cancelled,
         &mut visitor,
     );
     let unlock = FileExt::unlock(&file);

@@ -22,6 +22,74 @@ pub(crate) use planner::{
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SelectorPart<T> {
+    Any,
+    Exact(T),
+}
+
+impl<T: AsRef<str>> SelectorPart<T> {
+    fn matches(&self, value: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Exact(expected) => expected.as_ref() == value,
+        }
+    }
+}
+
+/// A canonical repository selector. Legacy aliases deliberately live outside
+/// this grammar so a raw string can never change canonical selection meaning.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RepositorySelector {
+    Action(SelectorPart<ActionId>),
+    Target {
+        component: SelectorPart<ComponentId>,
+        action: SelectorPart<ActionId>,
+    },
+}
+
+impl RepositorySelector {
+    fn parse(value: &str) -> Result<Self> {
+        if let Some((component, action)) = value.split_once(':') {
+            if action.contains(':') {
+                bail!("invalid target selector '{value}': expected component:action");
+            }
+            return Ok(Self::Target {
+                component: parse_selector_part(component, |value| {
+                    ComponentId::parse(value).map_err(Into::into)
+                })?,
+                action: parse_selector_part(action, |value| {
+                    ActionId::parse(value).map_err(Into::into)
+                })?,
+            });
+        }
+        Ok(Self::Action(parse_selector_part(value, |value| {
+            ActionId::parse(value).map_err(Into::into)
+        })?))
+    }
+
+    fn matches(&self, target: &TargetId) -> bool {
+        match self {
+            Self::Action(action) => action.matches(target.action.as_str()),
+            Self::Target { component, action } => {
+                component.matches(target.component.as_str())
+                    && action.matches(target.action.as_str())
+            }
+        }
+    }
+}
+
+fn parse_selector_part<T>(
+    value: &str,
+    parse: impl FnOnce(String) -> Result<T>,
+) -> Result<SelectorPart<T>> {
+    if value == "*" {
+        Ok(SelectorPart::Any)
+    } else {
+        Ok(SelectorPart::Exact(parse(value.to_owned())?))
+    }
+}
+
 pub(crate) fn resolve_evidence_targets(
     catalog: &RepositoryCatalog,
     selector: &WorkEvidenceSelector,
@@ -376,6 +444,11 @@ fn register_aliases(
         if alias.trim().is_empty() {
             bail!("target '{target}' declares an empty legacy alias");
         }
+        if RepositorySelector::parse(alias).is_ok() {
+            bail!(
+                "legacy alias '{alias}' for target '{target}' is reserved for canonical repository selectors"
+            );
+        }
         if !local.insert(alias) {
             bail!("target '{target}' repeats legacy alias '{alias}'");
         }
@@ -641,6 +714,39 @@ checks = ["jig.test"]
         assert!(catalog.action(&web_target).is_some());
         assert_eq!(catalog.actions().count(), 2);
         assert_eq!(catalog.target_for_alias("jig.test"), Some(&api_target));
+    }
+
+    #[test]
+    fn native_catalog_rejects_aliases_that_are_canonical_selectors() {
+        for alias in ["test", "web:test", "*:test", "web:*"] {
+            let component = ComponentSpec::new(ComponentId::parse("web").unwrap(), "web");
+            let target: TargetId = "web:lint".parse().unwrap();
+            let mut action = ActionSpec::new(
+                target.clone(),
+                ActionIntent::Check,
+                ActionRunner::command("typescript_lint_command"),
+            );
+            action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+            action.legacy_aliases.push(alias.into());
+            let profile_id = ProfileId::parse("verify").unwrap();
+            let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+
+            let error = RepositoryCatalog::from_native(
+                6,
+                "sha256:config",
+                &[component],
+                &[action],
+                &[profile],
+                Some(&profile_id),
+            )
+            .unwrap_err()
+            .to_string();
+
+            assert!(
+                error.contains("reserved for canonical repository selectors"),
+                "alias {alias:?} was accepted: {error}"
+            );
+        }
     }
 
     #[test]

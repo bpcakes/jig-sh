@@ -19,7 +19,6 @@ const NATIVE_TOOLS: &[NativeToolDescriptor] = &[NativeToolDescriptor::new(
     NativeToolKind::SchemaCheck,
 )];
 const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
-const SCHEMA_CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::Worktree, ActionEffect::Process];
 const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
     AdapterActionDescriptor::new(
         "sqlx",
@@ -40,7 +39,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         "schema",
         "Check committed schema output for drift.",
         ActionIntent::Check,
-        SCHEMA_CHECK_EFFECTS,
+        CHECK_EFFECTS,
         AdapterRunnerDescriptor::Native(tool::SCHEMA_CHECK),
         &["**/*.sql", "**/*.rs"],
         Some(tool::SCHEMA_CHECK),
@@ -115,13 +114,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_check_declares_its_possible_worktree_mutation() {
+    fn schema_check_is_a_read_only_default_gate() {
         let schema = ADAPTER_ACTIONS
             .iter()
             .find(|action| action.id == "schema")
             .unwrap();
 
-        assert!(schema.effects.contains(&ActionEffect::Worktree));
-        assert!(!schema.effects.contains(&ActionEffect::ReadOnly));
+        assert!(schema.effects.contains(&ActionEffect::ReadOnly));
+        assert!(!schema.effects.contains(&ActionEffect::Worktree));
     }
 }

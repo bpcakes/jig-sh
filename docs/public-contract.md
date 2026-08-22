@@ -197,12 +197,16 @@ effects, input digests, and dependency execution layers. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
 that action across components; a target selector such as `api:test` is exact;
 and `*` is the only wildcard and occupies a whole component or action segment.
-Profiles and explicit selectors are mutually exclusive.
+Profiles and explicit selectors are mutually exclusive. Contract-6 legacy
+aliases must not parse as canonical action, target, or wildcard selectors;
+canonical selector meaning therefore cannot be shadowed by an alias.
 
 On contract 6, `--affected BASE` narrows that ordinary selector/profile
 candidate set. Jig safely resolves the explicit Git revision, compares the
 merge base with `HEAD`, unions staged, unstaged, and untracked paths, excludes
-`.agent/`, and sorts the result. Repository-relative action input globs identify
+runtime-owned `.agent/state/` and `.agent/.cache/` data, and sorts the result.
+Checked-in source such as `.agent/jig-contract.json` remains eligible.
+Repository-relative action input globs identify
 directly affected components, including explicit inputs outside a component
 root; when no input matches a path, the most-specific containing component root
 is used. A `.` component with explicit action inputs is not a catch-all owner

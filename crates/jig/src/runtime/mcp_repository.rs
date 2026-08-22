@@ -50,6 +50,7 @@ struct RunCancellationProbe {
     signalled: Arc<AtomicBool>,
     last_durable_check: Mutex<Option<Instant>>,
     event_cursor: Mutex<crate::state::RunEventCursor>,
+    poll_failure: Mutex<Option<String>>,
 }
 
 impl RunCancellationProbe {
@@ -60,6 +61,7 @@ impl RunCancellationProbe {
             signalled: Arc::new(AtomicBool::new(false)),
             last_durable_check: Mutex::new(None),
             event_cursor: Mutex::new(event_cursor),
+            poll_failure: Mutex::new(None),
         }
     }
 
@@ -67,9 +69,17 @@ impl RunCancellationProbe {
         self.signalled.store(true, Ordering::Release);
     }
 
-    fn is_cancelled(&self) -> bool {
+    fn is_cancelled(&self) -> Result<bool> {
+        if let Some(message) = self
+            .poll_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            bail!(message);
+        }
         if self.signalled.load(Ordering::Acquire) {
-            return true;
+            return Ok(true);
         }
 
         let now = Instant::now();
@@ -80,7 +90,7 @@ impl RunCancellationProbe {
         if last_check
             .is_some_and(|last| now.duration_since(last) < DURABLE_CANCELLATION_POLL_INTERVAL)
         {
-            return false;
+            return Ok(false);
         }
         *last_check = Some(now);
         drop(last_check);
@@ -90,12 +100,29 @@ impl RunCancellationProbe {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let requested =
-            crate::state::run_cancel_requested_since(&self.ctx, &self.run_id, &mut cursor)
-                .unwrap_or(false);
-        if requested {
-            self.signal();
+            crate::state::run_cancel_requested_since(&self.ctx, &self.run_id, &mut cursor, &|| {
+                self.signalled.load(Ordering::Acquire)
+            });
+        match requested {
+            Ok(true) => {
+                self.signal();
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(_) if self.signalled.load(Ordering::Acquire) => Ok(true),
+            Err(error) => {
+                let message = format!(
+                    "failed to inspect durable cancellation state for run '{}': {error:#}",
+                    self.run_id
+                );
+                *self
+                    .poll_failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.clone());
+                self.signal();
+                bail!(message)
+            }
         }
-        requested
     }
 }
 
@@ -125,7 +152,7 @@ fn inspect(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
             catalog_inspection(ctx, InspectRequest::Profile(id))?
         }
         RepositoryInspectArgs::Run { run_id } => {
-            let run = crate::state::recover_abandoned_run(ctx, &run_id)?;
+            let run = crate::state::reconcile_run_for_inspection(ctx, &run_id)?;
             RepositoryInspectResult::Run(RunInspection { run })
         }
     };
@@ -268,7 +295,7 @@ fn cancel(ctx: &RepoContext, args: CancelRunArgs) -> Result<Value> {
     if args.run_id.trim().is_empty() {
         bail!("jig.cancel_run requires a nonblank run_id");
     }
-    let reconciled = crate::state::recover_abandoned_run(ctx, &args.run_id)?;
+    let reconciled = crate::state::reconcile_run_for_inspection(ctx, &args.run_id)?;
     let run = if reconciled.result.status == RunStatus::Completed {
         reconciled
     } else {
@@ -350,4 +377,31 @@ fn live_runs() -> std::sync::MutexGuard<'static, HashMap<LiveRunKey, Arc<AtomicB
 #[cfg(test)]
 pub(super) fn is_live_run_registered(ctx: &RepoContext, run_id: &str) -> bool {
     live_runs().contains_key(&live_run_key(ctx, run_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn durable_cancellation_poll_failures_are_cached_and_reported() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let cursor = crate::state::run_event_cursor(&ctx).unwrap();
+        fs::write(ctx.state_file("runs.jsonl"), "not-json\n").unwrap();
+        let probe = RunCancellationProbe::new(ctx, "run_fixture".into(), cursor);
+
+        let first = probe.is_cancelled().unwrap_err().to_string();
+        let second = probe.is_cancelled().unwrap_err().to_string();
+
+        assert!(first.contains("failed to inspect durable cancellation state"));
+        assert!(first.contains("Failed to parse run event identity"));
+        assert_eq!(second, first);
+    }
 }

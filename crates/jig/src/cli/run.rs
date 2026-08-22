@@ -236,10 +236,7 @@ fn run_command(cli: Cli) -> Result<()> {
         CommandKind::Status(opts) => {
             let ctx = RepoContext::load()?;
             if let Some(StatusCommand::Run { run_id }) = &opts.command {
-                let run = crate::state::run_by_id(&ctx, run_id)?;
-                let mut output = serde_json::to_value(run)?;
-                output["ok"] = serde_json::json!(true);
-                output["command"] = serde_json::json!("status run");
+                let output = status_run_output(&ctx, run_id)?;
                 return emit(json_output, HumanOutput::RunStatus, &output);
             }
             if opts.tui {
@@ -375,6 +372,14 @@ fn run_command(cli: Cli) -> Result<()> {
             )
         }
     }
+}
+
+fn status_run_output(ctx: &RepoContext, run_id: &str) -> Result<serde_json::Value> {
+    let run = crate::state::reconcile_run_for_inspection(ctx, run_id)?;
+    let mut output = serde_json::to_value(run)?;
+    output["ok"] = serde_json::json!(true);
+    output["command"] = serde_json::json!("status run");
+    Ok(output)
 }
 
 fn run_sqlx_command(command: SqlxCommand, json_output: bool) -> Result<()> {

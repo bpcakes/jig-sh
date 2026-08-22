@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -47,7 +48,7 @@ pub(in crate::runtime) fn execute_check_run(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
     let (run, _lease) = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
-    execute_started_check_run(ctx, catalog, run, request, cancelled)
+    execute_started_check_run(ctx, catalog, run, request, &|| Ok(cancelled()))
 }
 
 pub(in crate::runtime) fn start_check_run(
@@ -65,7 +66,7 @@ pub(in crate::runtime) fn execute_started_check_run(
     catalog: &RepositoryCatalog,
     run: crate::state::DurableRun,
     request: ExecuteCheckRunRequest,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &dyn Fn() -> Result<bool>,
 ) -> Result<CheckRunExecution> {
     let run_id = run.result.run_id.clone();
     mark_run_running(ctx, &run_id)?;
@@ -90,24 +91,25 @@ pub(in crate::runtime) fn execute_started_check_run(
                     .get(dependency)
                     .is_some_and(|conclusion| *conclusion != RunConclusion::Success)
             });
-            let skip_reason = if cancelled() {
-                Some((
+            let skip_reason = match cancelled() {
+                Ok(true) => Some((
                     RunConclusion::Cancelled,
                     "run cancellation was requested before the target started".to_owned(),
-                ))
-            } else if dependency_failed {
-                Some((
+                )),
+                Err(error) => Some((
+                    RunConclusion::Blocked,
+                    format!("run cancellation state could not be inspected: {error:#}"),
+                )),
+                Ok(false) if dependency_failed => Some((
                     RunConclusion::Skipped,
                     "a declared target dependency did not succeed".to_owned(),
-                ))
-            } else if stop_after_failure {
-                Some((
+                )),
+                Ok(false) if stop_after_failure => Some((
                     RunConclusion::Skipped,
                     "the run stopped after an earlier failure because fail-fast was requested"
                         .to_owned(),
-                ))
-            } else {
-                None
+                )),
+                Ok(false) => None,
             };
 
             let (result, compatibility) = if let Some((conclusion, reason)) = skip_reason {
@@ -167,7 +169,7 @@ fn run_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     planned: &PlannedTarget,
-    cancelled: &dyn Fn() -> bool,
+    cancelled: &dyn Fn() -> Result<bool>,
 ) -> TargetCapture {
     let control = TargetExecutionControl::new(planned, cancelled);
     let expected_worktree_fingerprint = match read_only_fingerprint_before(ctx, planned) {
@@ -240,8 +242,10 @@ fn run_target(
                 )),
             }
         }
-    }
-    .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+    };
+    let capture = control
+        .enforce_poll_health(capture)
+        .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
     match expected_worktree_fingerprint {
         Some(expected) => enforce_read_only_worktree(ctx, planned, &expected, capture),
         None => capture,
@@ -251,11 +255,12 @@ fn run_target(
 struct TargetExecutionControl<'a> {
     started: Instant,
     timeout: Duration,
-    cancelled: &'a dyn Fn() -> bool,
+    cancelled: &'a dyn Fn() -> Result<bool>,
+    poll_failure: Mutex<Option<String>>,
 }
 
 impl<'a> TargetExecutionControl<'a> {
-    fn new(planned: &PlannedTarget, cancelled: &'a dyn Fn() -> bool) -> Self {
+    fn new(planned: &PlannedTarget, cancelled: &'a dyn Fn() -> Result<bool>) -> Self {
         let timeout = Duration::from_secs(
             planned
                 .timeout_seconds
@@ -266,33 +271,85 @@ impl<'a> TargetExecutionControl<'a> {
             started: Instant::now(),
             timeout,
             cancelled,
+            poll_failure: Mutex::new(None),
         }
     }
 
-    fn remaining(&self) -> std::result::Result<Duration, RunConclusion> {
-        if (self.cancelled)() {
-            return Err(RunConclusion::Cancelled);
+    fn remaining(&self) -> std::result::Result<Duration, TargetStop> {
+        match self.poll_cancelled() {
+            Ok(true) => return Err(TargetStop::Cancelled),
+            Ok(false) => {}
+            Err(message) => return Err(TargetStop::Blocked(message)),
         }
         let remaining = self.timeout.saturating_sub(self.started.elapsed());
         if remaining.is_zero() {
-            Err(RunConclusion::TimedOut)
+            Err(TargetStop::TimedOut)
         } else {
             Ok(remaining)
         }
     }
 
     fn is_cancelled(&self) -> bool {
-        (self.cancelled)()
+        self.poll_cancelled().unwrap_or(true)
+    }
+
+    fn poll_cancelled(&self) -> std::result::Result<bool, String> {
+        if let Some(message) = self.poll_failure() {
+            return Err(message);
+        }
+        match (self.cancelled)() {
+            Ok(cancelled) => Ok(cancelled),
+            Err(error) => {
+                let message = format!("cancellation state could not be inspected: {error:#}");
+                *self
+                    .poll_failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    fn poll_failure(&self) -> Option<String> {
+        self.poll_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn enforce_poll_health(&self, mut capture: TargetCapture) -> TargetCapture {
+        let Some(message) = self.poll_failure() else {
+            return capture;
+        };
+        capture.stderr.push_str(&format!("{message}\n"));
+        capture.findings.push(finding(message, "cancellation"));
+        capture.conclusion = RunConclusion::Blocked;
+        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+        capture
     }
 }
 
-fn stopped_before_start(planned: &PlannedTarget, conclusion: RunConclusion) -> TargetCapture {
-    let reason = match conclusion {
-        RunConclusion::Cancelled => format!("target '{}' was cancelled", planned.target),
-        RunConclusion::TimedOut => format!("target '{}' timed out", planned.target),
-        _ => unreachable!("only cancellation and timeout stop target startup"),
-    };
-    TargetCapture::not_started(conclusion, reason)
+enum TargetStop {
+    Cancelled,
+    TimedOut,
+    Blocked(String),
+}
+
+fn stopped_before_start(planned: &PlannedTarget, stop: TargetStop) -> TargetCapture {
+    match stop {
+        TargetStop::Cancelled => TargetCapture::not_started(
+            RunConclusion::Cancelled,
+            format!("target '{}' was cancelled", planned.target),
+        ),
+        TargetStop::TimedOut => TargetCapture::not_started(
+            RunConclusion::TimedOut,
+            format!("target '{}' timed out", planned.target),
+        ),
+        TargetStop::Blocked(message) => TargetCapture::blocked(format!(
+            "target '{}' could not start because {message}",
+            planned.target
+        )),
+    }
 }
 
 fn is_read_only(planned: &PlannedTarget) -> bool {
@@ -813,6 +870,34 @@ mod tests {
                 .to_string()
                 .contains("did not complete")
         );
+    }
+
+    #[test]
+    fn cancellation_poll_failures_block_target_execution() {
+        let target: TargetId = "repo:test".parse().unwrap();
+        let planned = PlannedTarget::new(
+            target,
+            jig_contract::ActionIntent::Check,
+            ActionRunner::command("rust_test_command"),
+            "sha256:input",
+        );
+        let control = TargetExecutionControl::new(&planned, &|| {
+            Err(anyhow::anyhow!("durable state is unavailable"))
+        });
+
+        let stop = control.remaining().unwrap_err();
+        assert!(matches!(stop, TargetStop::Blocked(_)));
+        let capture = control.enforce_poll_health(TargetCapture::from_process(
+            0,
+            String::new(),
+            String::new(),
+            ResultParser::ExitCode,
+        ));
+
+        assert_eq!(capture.conclusion, RunConclusion::Blocked);
+        assert_eq!(capture.receipt_exit_status, 1);
+        assert!(capture.stderr.contains("durable state is unavailable"));
+        assert_eq!(capture.findings[0].source.as_deref(), Some("cancellation"));
     }
 
     #[test]

@@ -670,7 +670,12 @@ When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 - `scripts/jig check schema`
 - `scripts/jig sqlx schema dump`
 
-`scripts/jig check schema` reruns `schema_dump_command`, then checks `SCHEMA_DOCS_DIR` for drift. `SCHEMA_DOCS_DIR` defaults to `docs/schema` when the environment variable is unset.
+`scripts/jig check schema` is a read-only freshness gate. It requires
+`SCHEMA_DOCS_DIR` to be clean, reruns `schema_dump_command`, captures any drift,
+and restores generator-created tracked, staged, and untracked changes before it
+returns. Use `scripts/jig sqlx schema dump` to apply the generated update.
+`SCHEMA_DOCS_DIR` defaults to `docs/schema`, must remain repository-relative,
+and is included in the generated default verification profile.
 
 The legacy `scripts/jig migration-add NAME`, `scripts/jig sqlx migration add NAME`, and `scripts/jig schema-dump` paths remain accepted as compatibility shims. New migration automation should use `scripts/jig migration add NAME`; SQLx schema commands remain under `scripts/jig sqlx schema ...`.
 

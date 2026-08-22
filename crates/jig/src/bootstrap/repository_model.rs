@@ -673,6 +673,48 @@ role = "admin"
     }
 
     #[test]
+    fn schema_freshness_is_part_of_the_default_profile_when_enabled() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("answers.toml");
+        fs::write(
+            &path,
+            r#"repo_name = "ExampleProject"
+sqlx_enabled = true
+schema_dump_enabled = true
+migration_dir = "migrations"
+schema_dump_command = "scripts/dump-schema.sh"
+"#,
+        )
+        .unwrap();
+        let answers = RenderAnswers::from_answers_file(&path).unwrap();
+
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+        let profile = model.profiles.first().unwrap();
+        assert!(
+            profile
+                .targets
+                .iter()
+                .any(|target| target.to_string() == "api:schema")
+        );
+        let schema = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == "api:schema")
+            .unwrap();
+        assert!(
+            schema
+                .effects
+                .contains(&jig_contract::ActionEffect::ReadOnly)
+        );
+        assert!(
+            !schema
+                .effects
+                .contains(&jig_contract::ActionEffect::Worktree)
+        );
+    }
+
+    #[test]
     fn adapter_identity_survives_loading_v6_authored_answers() {
         let answers = answers(
             r#"

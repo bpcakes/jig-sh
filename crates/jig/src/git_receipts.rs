@@ -25,6 +25,11 @@ const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
 const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
 const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
 const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
+const AFFECTED_SOURCE_PATHSPECS: &[&str] = &[
+    ".",
+    ":(exclude).agent/state/**",
+    ":(exclude).agent/.cache/**",
+];
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -142,30 +147,45 @@ fn repo_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
     })
 }
 
+fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut args = vec![
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+    ];
+    args.extend_from_slice(AFFECTED_SOURCE_PATHSPECS);
+    let output = git_output(root, &args, "git status --porcelain -z")?;
+    parse_porcelain_status_z(&output.stdout).map(|entries| {
+        entries
+            .into_iter()
+            .flat_map(|entry| {
+                let mut paths = vec![entry.path];
+                if let Some(original_path) = entry.original_path {
+                    paths.push(original_path);
+                }
+                paths
+            })
+            .collect()
+    })
+}
+
 /// Returns the deterministic union of paths changed from the merge base of an
 /// explicit Git revision to `HEAD` and paths currently changed in the
-/// worktree. Agent state is excluded because planning and execution append it.
+/// worktree. Runtime-owned agent state and cache data are excluded because
+/// planning and execution mutate them; committed contract and plan inputs stay
+/// visible to affected selection.
 pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
     let base_commit = resolve_commit(root, base, "affected Git base")?;
     let head_commit = resolve_commit(root, "HEAD", "Git HEAD for affected selection")?;
     let range = format!("{base_commit}...{head_commit}");
-    let committed = git_output(
-        root,
-        &[
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            &range,
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git diff for affected selection",
-    )?;
+    let mut args = vec!["diff", "--name-only", "-z", "--no-renames", &range, "--"];
+    args.extend_from_slice(AFFECTED_SOURCE_PATHSPECS);
+    let committed = git_output(root, &args, "git diff for affected selection")?;
 
     let mut paths = parse_name_only_z(&committed.stdout)?;
-    paths.extend(repo_worktree_changed_path_buffers(root)?);
+    paths.extend(repo_affected_worktree_changed_path_buffers(root)?);
     let mut normalized = paths
         .into_iter()
         .map(strict_git_path)
@@ -1174,6 +1194,90 @@ mod tests {
             paths,
             ["api/committed.go", "api/untracked.go", "web/base.ts"]
         );
+    }
+
+    #[test]
+    fn affected_changed_paths_include_a_staged_contract_manifest_but_not_runtime_state() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
+        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
+        std::fs::write(temp.path().join(".agent/state/runs.jsonl"), "base\n").unwrap();
+        run_git(temp.path(), &["add", "."]);
+        run_git(temp.path(), &["commit", "-m", "base fixture"]);
+        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
+
+        std::fs::write(
+            temp.path().join(".agent/jig-contract.json"),
+            "{\"version\":6}\n",
+        )
+        .unwrap();
+        run_git(temp.path(), &["add", ".agent/jig-contract.json"]);
+        std::fs::write(
+            temp.path().join(".agent/state/runs.jsonl"),
+            "base\nruntime\n",
+        )
+        .unwrap();
+
+        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
+
+        assert_eq!(paths, [".agent/jig-contract.json"]);
+    }
+
+    #[test]
+    fn affected_changed_paths_include_a_committed_contract_manifest() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
+        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
+        run_git(temp.path(), &["add", "."]);
+        run_git(temp.path(), &["commit", "-m", "base fixture"]);
+        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
+        std::fs::write(
+            temp.path().join(".agent/jig-contract.json"),
+            "{\"version\":6}\n",
+        )
+        .unwrap();
+        run_git(temp.path(), &["add", ".agent/jig-contract.json"]);
+        run_git(temp.path(), &["commit", "-m", "contract change"]);
+
+        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
+
+        assert_eq!(paths, [".agent/jig-contract.json"]);
+    }
+
+    #[test]
+    fn affected_changed_paths_include_an_untracked_contract_manifest() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::write(temp.path().join("README.md"), "fixture\n").unwrap();
+        run_git(temp.path(), &["add", "."]);
+        run_git(temp.path(), &["commit", "-m", "base fixture"]);
+        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
+        std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
+        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
+
+        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
+
+        assert_eq!(paths, [".agent/jig-contract.json"]);
     }
 
     #[test]

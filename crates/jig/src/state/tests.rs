@@ -51,7 +51,7 @@ fn jsonl_cursor_scans_only_records_appended_after_the_cursor() {
     append_jsonl(&path, &json!({"id": "new"})).unwrap();
 
     let mut records = Vec::new();
-    let (next, stats) = scan_jsonl_raw_from(&path, cursor, |record| {
+    let (next, stats) = scan_jsonl_raw_from(&path, cursor, &|| false, |record| {
         records.push(serde_json::from_slice::<Value>(record.bytes)?);
         Ok(())
     })
@@ -60,6 +60,35 @@ fn jsonl_cursor_scans_only_records_appended_after_the_cursor() {
     assert_eq!(records, [json!({"id": "new"})]);
     assert_eq!(stats.records, 1);
     assert_eq!(next, fs::metadata(path).unwrap().len());
+}
+
+#[test]
+fn jsonl_cursor_lock_wait_is_cancellable() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    fs::write(&path, "{\"id\":1}\n").unwrap();
+    let locked = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    locked.lock_exclusive().unwrap();
+    let polls = std::cell::Cell::new(0usize);
+
+    let error = scan_jsonl_raw_from(
+        &path,
+        0,
+        &|| {
+            polls.set(polls.get() + 1);
+            polls.get() > 2
+        },
+        |_| Ok(()),
+    )
+    .unwrap_err()
+    .to_string();
+
+    FileExt::unlock(&locked).unwrap();
+    assert!(error.contains("cancelled"));
 }
 
 #[test]

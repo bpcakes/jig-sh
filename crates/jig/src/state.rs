@@ -37,7 +37,7 @@ use records::DecisionRecord;
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
     DurableRun, RunEventCursor, RunLease, block_nonterminal_run, complete_run, mark_run_running,
-    mark_target_started, record_target_result, recover_abandoned_run, request_run_cancel,
+    mark_target_started, reconcile_run_for_inspection, record_target_result, request_run_cancel,
     run_by_id, run_cancel_requested_since, run_event_cursor, start_run,
 };
 #[cfg(test)]

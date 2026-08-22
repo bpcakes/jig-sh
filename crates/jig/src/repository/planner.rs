@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
-    ActionArguments, ActionEffect, ActionId, ActionIntent, ActionRunner, PlannedTarget, ProfileId,
-    RunPlan, SelectionReason, SourceIdentity, TargetId,
+    ActionArguments, ActionEffect, ActionIntent, ActionRunner, PlannedTarget, ProfileId, RunPlan,
+    SelectionReason, SourceIdentity, TargetId,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -366,38 +366,29 @@ fn select_explicit(
     selector: &str,
     selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
 ) -> Result<()> {
-    if let Some(target) = catalog.target_for_alias(selector) {
-        selected
-            .entry(target.clone())
-            .or_default()
-            .insert(SelectionReason::LegacyAlias {
-                alias: selector.to_owned(),
-            });
-        return Ok(());
+    let canonical = match super::RepositorySelector::parse(selector) {
+        Ok(canonical) => Some(canonical),
+        Err(_) if catalog.target_for_alias(selector).is_some() => None,
+        Err(error) => return Err(error),
+    };
+    if canonical.is_none() {
+        if let Some(target) = catalog.target_for_alias(selector) {
+            selected
+                .entry(target.clone())
+                .or_default()
+                .insert(SelectionReason::LegacyAlias {
+                    alias: selector.to_owned(),
+                });
+            return Ok(());
+        }
     }
 
-    let matches = if let Some((component, action)) = selector.split_once(':') {
-        if action.contains(':') {
-            bail!("invalid target selector '{selector}': expected component:action");
-        }
-        validate_selector_part("component", component)?;
-        validate_selector_part("action", action)?;
-        catalog
-            .actions()
-            .filter(|spec| {
-                selector_part_matches(component, spec.target.component.as_str())
-                    && selector_part_matches(action, spec.target.action.as_str())
-            })
-            .map(|spec| spec.target.clone())
-            .collect::<Vec<_>>()
-    } else {
-        validate_selector_part("action", selector)?;
-        catalog
-            .actions()
-            .filter(|spec| selector_part_matches(selector, spec.target.action.as_str()))
-            .map(|spec| spec.target.clone())
-            .collect::<Vec<_>>()
-    };
+    let canonical = canonical.expect("a non-alias selector must have canonical syntax");
+    let matches = catalog
+        .actions()
+        .filter(|spec| canonical.matches(&spec.target))
+        .map(|spec| spec.target.clone())
+        .collect::<Vec<_>>();
     if matches.is_empty() {
         bail!("check selector '{selector}' matched no targets");
     }
@@ -410,26 +401,6 @@ fn select_explicit(
             });
     }
     Ok(())
-}
-
-fn validate_selector_part(kind: &str, part: &str) -> Result<()> {
-    if part == "*" {
-        return Ok(());
-    }
-    match kind {
-        "component" => {
-            crate::repository::ComponentId::parse(part)?;
-        }
-        "action" => {
-            ActionId::parse(part)?;
-        }
-        _ => unreachable!("selector kinds are closed"),
-    }
-    Ok(())
-}
-
-fn selector_part_matches(selector: &str, value: &str) -> bool {
-    selector == "*" || selector == value
 }
 
 fn expand_action_dependencies(

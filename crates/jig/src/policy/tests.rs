@@ -704,6 +704,75 @@ fn schema_check_reports_stale_schema_dump() {
     assert_eq!(output.exit_status, 1);
     assert!(output.stderr.contains("Schema dump is stale"));
     assert!(output.stderr.contains("docs/schema"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
+        "stable\n",
+        "a read-only schema check must restore generator output"
+    );
+    assert!(
+        Command::new("git")
+            .current_dir(temp.path())
+            .args(["status", "--porcelain", "--", "docs/schema"])
+            .output()
+            .unwrap()
+            .stdout
+            .is_empty()
+    );
+}
+
+#[test]
+fn schema_check_preserves_preexisting_schema_edits_without_running_the_generator() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "printf 'generator-ran\\n' > generator-marker && printf 'changed\\n' > docs/schema/tables.sql",
+    );
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    fs::write(temp.path().join("docs/schema/tables.sql"), "local edit\n").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("already has uncommitted changes"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
+        "local edit\n"
+    );
+    assert!(!temp.path().join("generator-marker").exists());
+}
+
+#[test]
+fn schema_check_restores_new_files_staged_by_the_generator() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p docs/schema && printf 'new\\n' > docs/schema/new.sql && git add docs/schema/new.sql",
+    );
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(!temp.path().join("docs/schema/new.sql").exists());
+    assert!(
+        Command::new("git")
+            .current_dir(temp.path())
+            .args(["status", "--porcelain", "--", "docs/schema"])
+            .output()
+            .unwrap()
+            .stdout
+            .is_empty()
+    );
 }
 
 #[test]

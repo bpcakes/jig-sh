@@ -10,6 +10,8 @@ use jig_contract::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::cell::Cell;
 
 use crate::context::RepoContext;
 
@@ -27,6 +29,11 @@ const EVENT_TARGET_STARTED: &str = "target_started";
 const EVENT_TARGET_COMPLETED: &str = "target_completed";
 const EVENT_COMPLETED: &str = "completed";
 const EVENT_CANCEL_REQUESTED: &str = "cancel_requested";
+
+#[cfg(test)]
+thread_local! {
+    static FULL_RUN_EVENT_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 /// The accepted plan and current state reconstructed from the append-only run log.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
@@ -73,17 +80,12 @@ pub(crate) fn run_cancel_requested_since(
     ctx: &RepoContext,
     run_id: &str,
     cursor: &mut RunEventCursor,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<bool> {
     let path = ctx.state_file(RUNS_FILE);
     let mut requested = false;
-    let (offset, _) = scan_jsonl_raw_from(&path, cursor.0, |raw| {
-        let event = serde_json::from_slice::<RunEventIdentity>(raw.bytes).with_context(|| {
-            format!(
-                "Failed to parse run event identity {} in {}",
-                raw.line_number,
-                path.display()
-            )
-        })?;
+    let (offset, _) = scan_jsonl_raw_from(&path, cursor.0, cancelled, |raw| {
+        let event = parse_run_event_identity(raw, &path)?;
         if event.run_id == run_id && event.event == EVENT_CANCEL_REQUESTED {
             requested = true;
         }
@@ -149,7 +151,7 @@ fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     })
 }
 
-pub(crate) fn recover_abandoned_run(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
+pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let run = run_by_id(ctx, run_id)?;
     if run.result.status == RunStatus::Completed {
         return Ok(run);
@@ -270,13 +272,26 @@ pub(crate) fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let path = ctx.state_file(RUNS_FILE);
     let mut events = Vec::new();
     scan_jsonl_raw(&path, &|| false, |raw| {
-        let event = parse_run_event(raw, &path)?;
-        if event.run_id == run_id {
-            events.push(event);
+        let identity = parse_run_event_identity(raw, &path)?;
+        if identity.run_id == run_id {
+            events.push(parse_run_event(raw, &path)?);
         }
         Ok(())
     })?;
     fold_events(run_id, events)
+}
+
+fn parse_run_event_identity(
+    raw: RawJsonlRecord<'_>,
+    path: &std::path::Path,
+) -> Result<RunEventIdentity> {
+    serde_json::from_slice(raw.bytes).with_context(|| {
+        format!(
+            "Failed to parse run event identity {} in {}",
+            raw.line_number,
+            path.display()
+        )
+    })
 }
 
 fn append_simple_event(
@@ -307,6 +322,8 @@ fn append_event(ctx: &RepoContext, event: RunEventRecord) -> Result<()> {
 }
 
 fn parse_run_event(raw: RawJsonlRecord<'_>, path: &std::path::Path) -> Result<RunEventRecord> {
+    #[cfg(test)]
+    FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(counter.get() + 1));
     serde_json::from_slice(raw.bytes).with_context(|| {
         format!(
             "Failed to parse run record {} in {}",
@@ -519,6 +536,19 @@ mod tests {
     }
 
     #[test]
+    fn run_lookup_only_deserializes_full_events_for_the_requested_run() {
+        let (_temp, ctx) = context();
+        let (_first, _first_lease) = start_run(&ctx, plan(), None).unwrap();
+        let (second, _second_lease) = start_run(&ctx, plan(), None).unwrap();
+        FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(0));
+
+        let loaded = run_by_id(&ctx, &second.result.run_id).unwrap();
+
+        assert_eq!(loaded.result.run_id, second.result.run_id);
+        FULL_RUN_EVENT_PARSE_COUNT.with(|counter| assert_eq!(counter.get(), 1));
+    }
+
+    #[test]
     fn cancellation_requests_are_idempotent() {
         let (_temp, ctx) = context();
         let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
@@ -544,12 +574,12 @@ mod tests {
             .join(format!("{run_id}.lock"));
 
         assert!(lease_path.exists());
-        let inspected = recover_abandoned_run(&ctx, &run_id).unwrap();
+        let inspected = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
         assert_eq!(inspected.result.status, RunStatus::Queued);
 
         drop(lease);
         assert!(!lease_path.exists());
-        let recovered = recover_abandoned_run(&ctx, &run_id).unwrap();
+        let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
         assert_eq!(recovered.result.status, RunStatus::Completed);
         assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
         assert!(!lease_path.exists());

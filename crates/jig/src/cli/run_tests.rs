@@ -9,6 +9,36 @@ const CURRENT_GENERATED_LAUNCHER: &str =
     include_str!("../bootstrap/embedded_template_snapshots/scripts/jig.jinja");
 
 #[test]
+fn status_run_reconciles_an_abandoned_worker_before_rendering() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .required_commands(["rust_test_command"])
+        .write();
+    let ctx = crate::context::RepoContext::load_from(temp.path()).unwrap();
+    let target: jig_contract::TargetId = "repo:test".parse().unwrap();
+    let plan = jig_contract::RunPlan::new(
+        "run-plan_1",
+        "sha256:config",
+        jig_contract::SourceIdentity::new(None, "sha256:worktree"),
+        vec![jig_contract::PlannedTarget::new(
+            target.clone(),
+            jig_contract::ActionIntent::Check,
+            jig_contract::ActionRunner::command("rust_test_command"),
+            "sha256:input",
+        )],
+        vec![vec![target]],
+    );
+    let (started, lease) = crate::state::start_run(&ctx, plan, None).unwrap();
+    drop(lease);
+
+    let output = status_run_output(&ctx, &started.result.run_id).unwrap();
+
+    assert_eq!(output["command"], "status run");
+    assert_eq!(output["result"]["status"], "completed");
+    assert_eq!(output["result"]["conclusion"], "blocked");
+}
+
+#[test]
 fn template_errors_get_hint() {
     let missing_template_value =
         Cli::try_parse_from(["jig", "adopt", ".", "--template"]).unwrap_err();
