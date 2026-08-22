@@ -1641,6 +1641,48 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
 }
 
 #[test]
+fn work_refine_keeps_edit_and_iteration_evidence_after_transcript_overflow() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_review_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("src.rs"), "fn changed() {}\n").unwrap();
+    let codex_path = temp.path().join("codex-stub.sh");
+    write_verbose_refine_codex_stub(&codex_path);
+    let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Refine(
+            crate::cli::WorkRefineOpts {
+                plan_id: "plan_1".into(),
+                gates: Vec::new(),
+                max_iterations: 1,
+            },
+        )),
+    )
+    .unwrap();
+
+    assert_eq!(output["status"], "passed", "{output:#}");
+    assert_eq!(output["iterations"].as_array().unwrap().len(), 1);
+    assert!(output["iterations"][0]["receipt_id"].as_str().is_some());
+    assert_eq!(
+        fs::read_to_string(temp.path().join("fixed.txt")).unwrap(),
+        "fixed\n"
+    );
+    let receipts = read_receipts(temp.path());
+    let worker_receipt = receipts
+        .iter()
+        .find(|receipt| {
+            receipt["tool_name"] == WORKER_RUN_TOOL
+                && receipt["evidence"]["purpose"] == "work_refine"
+        })
+        .expect("verbose refinement should record its worker receipt");
+    assert_eq!(worker_receipt["evidence"]["stderr_truncated"], true);
+}
+
+#[test]
 fn work_refine_fails_when_review_gate_returns_invalid_output() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -1858,6 +1900,35 @@ fi
 cat >/dev/null
 printf 'fixed\n' > fixed.txt
 printf 'refined\n'
+"#,
+    );
+}
+
+fn write_verbose_refine_codex_stub(path: &Path) {
+    write_codex_stub(
+        path,
+        r#"#!/bin/sh
+if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
+  out=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "-o" ]; then
+      out="$arg"
+    fi
+    prev="$arg"
+  done
+  if [ -f .agent/clean-review ]; then
+    printf '{"summary":"clean","findings":[]}\n' > "$out"
+  else
+    printf '{"summary":"needs work","findings":[{"severity":"critical","path":"src.rs","line":1,"issue":"missing context","evidence":"bare propagation","recommendation":"add context"}]}\n' > "$out"
+  fi
+  exit 0
+fi
+mkdir -p .agent
+touch .agent/clean-review
+cat >/dev/null
+printf 'fixed\n' > fixed.txt
+head -c 4194305 /dev/zero >&2
 "#,
     );
 }
