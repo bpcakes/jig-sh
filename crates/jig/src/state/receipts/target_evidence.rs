@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{Result, bail};
 use jig_contract::TargetId;
+
+const MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TargetReceiptStatus {
@@ -52,11 +55,18 @@ impl IndexedTargetReceipts {
         }
     }
 
-    pub(super) fn observe(&mut self, receipt: TargetReceiptStatus) {
+    pub(super) fn observe(&mut self, receipt: TargetReceiptStatus) -> Result<()> {
         if !self.required_targets.contains(&receipt.target) {
-            return;
+            return Ok(());
         }
         let run_id = receipt.run_id.clone();
+        if !self.partial_by_run.contains_key(&run_id)
+            && self.partial_by_run.len() >= MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS
+        {
+            bail!(
+                "work evidence contains more than {MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS} incomplete run groups; archive stale receipts before evaluating this gate"
+            );
+        }
         let group = self
             .partial_by_run
             .entry(run_id.clone())
@@ -66,7 +76,7 @@ impl IndexedTargetReceipts {
             });
         group.receipts.insert(receipt.target.clone(), receipt);
         if group.receipts.len() != self.required_targets.len() {
-            return;
+            return Ok(());
         }
 
         let complete = self
@@ -80,6 +90,7 @@ impl IndexedTargetReceipts {
         if replace {
             self.latest_complete = Some(complete);
         }
+        Ok(())
     }
 
     pub(super) fn selected(&self) -> Option<&TargetReceiptGroup> {
@@ -89,5 +100,46 @@ impl IndexedTargetReceipts {
                     .cmp(&(right.latest_ended_at_ms(), right.run_id.as_str()))
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn receipt(run_id: String, target: &str) -> TargetReceiptStatus {
+        TargetReceiptStatus {
+            receipt_id: format!("receipt_{run_id}"),
+            run_id,
+            target: target.parse().unwrap(),
+            config_digest: None,
+            input_digest: None,
+            exit_status: 0,
+            ended_at_ms: 1,
+            changed_paths: Vec::new(),
+            changed_path_count: 0,
+            changed_paths_truncated: false,
+            changed_paths_digest: None,
+            diff_summary: String::new(),
+            worktree_fingerprint: None,
+            worktree_fingerprint_error: None,
+        }
+    }
+
+    #[test]
+    fn incomplete_run_groups_fail_closed_at_the_memory_bound() {
+        let required = BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]);
+        let mut index = IndexedTargetReceipts::new(required);
+        for sequence in 0..MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS {
+            index
+                .observe(receipt(format!("run_{sequence}"), "api:lint"))
+                .unwrap();
+        }
+
+        let error = index
+            .observe(receipt("run_overflow".into(), "api:lint"))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("incomplete run groups"));
     }
 }

@@ -747,7 +747,7 @@ fn schema_check_preserves_preexisting_schema_edits_without_running_the_generator
 }
 
 #[test]
-fn schema_check_restores_new_files_staged_by_the_generator() {
+fn schema_check_discards_new_files_staged_by_the_generator() {
     let temp = tempdir().unwrap();
     write_schema_policy_repo(
         temp.path(),
@@ -772,6 +772,31 @@ fn schema_check_restores_new_files_staged_by_the_generator() {
             .unwrap()
             .stdout
             .is_empty()
+    );
+}
+
+#[test]
+fn schema_check_isolates_unrelated_generator_writes_and_reads_untracked_inputs() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "printf 'mutated\\n' > unrelated.txt && cat schema-input > docs/schema/tables.sql",
+    );
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    fs::write(temp.path().join("schema-input"), "stable\n").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+    assert!(!temp.path().join("unrelated.txt").exists());
+    assert_eq!(
+        fs::read_to_string(temp.path().join("schema-input")).unwrap(),
+        "stable\n"
     );
 }
 

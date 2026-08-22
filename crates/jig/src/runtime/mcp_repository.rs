@@ -168,13 +168,15 @@ fn catalog_inspection(
     ctx: &RepoContext,
     request: InspectRequest,
 ) -> Result<RepositoryInspectResult> {
+    let current = current_repository_context(ctx)?;
     Ok(RepositoryInspectResult::Catalog(
-        crate::repository::inspect_repository_data(ctx, request)?,
+        crate::repository::inspect_repository_data(&current, request)?,
     ))
 }
 
 fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
-    let catalog = RepositoryCatalog::from_context(ctx)?;
+    let current = current_repository_context(ctx)?;
+    let catalog = RepositoryCatalog::from_context(&current)?;
     let arguments = args
         .arguments
         .into_iter()
@@ -186,7 +188,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
         })
         .collect::<Result<_>>()?;
     let plan = crate::repository::plan_action_run(
-        ctx,
+        &current,
         &catalog,
         PlanRunRequest {
             selectors: args.selectors,
@@ -203,14 +205,15 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
 }
 
 fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
-    let catalog = RepositoryCatalog::from_context(ctx)?;
-    crate::repository::validate_run_plan(ctx, &catalog, &args.plan)?;
+    let current = current_repository_context(ctx)?;
+    let catalog = RepositoryCatalog::from_context(&current)?;
+    crate::repository::validate_run_plan(&current, &catalog, &args.plan)?;
     validate_effect_approval(&args.plan.effects, &args.approved_effects)?;
     if let Some(plan_id) = args.work_plan_id.as_deref() {
-        crate::state::ensure_plan_is_open(ctx, plan_id)?;
+        crate::state::ensure_plan_is_open(&current, plan_id)?;
     }
 
-    let worker_ctx = ctx.clone();
+    let worker_ctx = current;
     let worker_catalog = catalog;
     let worker_plan = args.plan;
     let work_plan_id = args.work_plan_id;
@@ -270,6 +273,19 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
         status: run.result.status,
         run: run.result,
     })
+}
+
+fn current_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
+    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+        .context("Failed to refresh repository authority for MCP request")?;
+    if current.contract_version() != ctx.contract_version() {
+        bail!(
+            "repository contract changed from version {} to {}; restart the MCP server",
+            ctx.contract_version(),
+            current.contract_version()
+        );
+    }
+    Ok(current)
 }
 
 fn validate_effect_approval(planned: &[ActionEffect], approved: &[ActionEffect]) -> Result<()> {

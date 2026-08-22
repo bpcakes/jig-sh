@@ -236,6 +236,12 @@ status and use `success`, `failure`, `cancelled`, `timed_out`, `blocked`, or
 `skipped`. Unknown future run event names are ignored; malformed known
 lifecycle transitions fail closed.
 
+Run ids are durable inspection handles, so Jig does not silently expire their
+events. Exact run lookup scans the journal backward to the requested run's
+queued event and materializes only matching lifecycle records. Operators may
+remove `runs.jsonl` intentionally, but doing so explicitly forfeits inspection
+of the removed run history; receipt archiving does not alter run events.
+
 ## MCP Repository Operations
 
 Contract v6 advertises four repository operations rather than one MCP tool per

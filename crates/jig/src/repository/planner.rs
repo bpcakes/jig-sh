@@ -366,30 +366,25 @@ fn select_explicit(
     selector: &str,
     selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
 ) -> Result<()> {
+    let legacy_alias = catalog.target_for_alias(selector);
     let canonical = match super::RepositorySelector::parse(selector) {
-        Ok(canonical) => Some(canonical),
-        Err(_) if catalog.target_for_alias(selector).is_some() => None,
-        Err(error) => return Err(error),
-    };
-    if canonical.is_none() {
-        if let Some(target) = catalog.target_for_alias(selector) {
-            selected
-                .entry(target.clone())
-                .or_default()
-                .insert(SelectionReason::LegacyAlias {
-                    alias: selector.to_owned(),
-                });
+        Ok(canonical) => canonical,
+        Err(_) if legacy_alias.is_some() => {
+            select_legacy_alias(selected, selector, legacy_alias.expect("alias was checked"));
             return Ok(());
         }
-    }
-
-    let canonical = canonical.expect("a non-alias selector must have canonical syntax");
+        Err(error) => return Err(error),
+    };
     let matches = catalog
         .actions()
         .filter(|spec| canonical.matches(&spec.target))
         .map(|spec| spec.target.clone())
         .collect::<Vec<_>>();
     if matches.is_empty() {
+        if let Some(target) = legacy_alias {
+            select_legacy_alias(selected, selector, target);
+            return Ok(());
+        }
         bail!("check selector '{selector}' matched no targets");
     }
     for target in matches {
@@ -401,6 +396,19 @@ fn select_explicit(
             });
     }
     Ok(())
+}
+
+fn select_legacy_alias(
+    selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
+    alias: &str,
+    target: &TargetId,
+) {
+    selected
+        .entry(target.clone())
+        .or_default()
+        .insert(SelectionReason::LegacyAlias {
+            alias: alias.to_owned(),
+        });
 }
 
 fn expand_action_dependencies(
@@ -550,7 +558,8 @@ mod tests {
 
     use jig_contract::{
         ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId,
-        ComponentSpec, ProfileId, ProfileSpec, SelectionReason, SourceIdentity, TargetId,
+        ComponentSpec, ManifestTool, ProfileId, ProfileSpec, SelectionReason, SourceIdentity,
+        TargetId,
     };
 
     use super::{
@@ -651,6 +660,34 @@ mod tests {
         .unwrap();
         assert_eq!(exact.targets.len(), 1);
         assert_eq!(wildcard.targets.len(), 2);
+    }
+
+    #[test]
+    fn canonical_shaped_legacy_alias_falls_back_when_it_matches_no_target() {
+        let tools = [
+            ManifestTool::new("api:test", "command", "Run legacy API tests.")
+                .with_command("api_test_command"),
+        ];
+        let checks = vec!["api:test".to_owned()];
+        let catalog = RepositoryCatalog::from_legacy(5, "sha256:config", &tools, &checks).unwrap();
+
+        let plan = plan_run_with_source(
+            &catalog,
+            PlanRunRequest {
+                selectors: vec!["api:test".into()],
+                ..PlanRunRequest::default()
+            },
+            source(),
+        )
+        .unwrap();
+
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(
+            plan.targets[0].reasons,
+            [SelectionReason::LegacyAlias {
+                alias: "api:test".into(),
+            }]
+        );
     }
 
     #[test]

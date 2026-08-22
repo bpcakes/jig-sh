@@ -288,20 +288,6 @@ fn dispatch_named_check(
     tool: crate::command::ToolRequest,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
-        if legacy_tool == tool::SCHEMA_CHECK {
-            let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
-            let plan = crate::repository::plan_action_run(
-                ctx,
-                &catalog,
-                crate::repository::PlanRunRequest {
-                    selectors: vec![selector.into()],
-                    profile: None,
-                    affected_base: None,
-                },
-                std::collections::BTreeMap::new(),
-            )?;
-            return execute_repository_check_plan(ctx, &catalog, plan, tool, false);
-        }
         dispatch_repository_check(
             ctx,
             crate::command::RepositoryCheckRequest {

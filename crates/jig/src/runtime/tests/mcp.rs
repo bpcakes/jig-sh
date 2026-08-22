@@ -366,6 +366,48 @@ fn mcp_repository_effectful_action_requires_exact_plan_approval() {
 }
 
 #[test]
+fn mcp_repository_planning_refreshes_catalog_after_server_start() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    add_v6_generate_action(temp.path());
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
+
+    assert_eq!(
+        planned["plan"]["targets"][0]["target"]["action"],
+        "generate"
+    );
+}
+
+#[test]
+fn mcp_repository_execution_rejects_manifest_only_contract_drift() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest = fs::read_to_string(&manifest_path).unwrap();
+    manifest.push('\n');
+    fs::write(manifest_path, manifest).unwrap();
+
+    let error = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("repository configuration changed"),
+        "{error}"
+    );
+}
+
+#[test]
 fn mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -586,9 +628,14 @@ fn mcp_repository_cancel_is_cooperative_idempotent_and_cleans_registry() {
         terminal["result"]["run"]["result"]["conclusion"],
         "cancelled"
     );
-    assert!(!crate::runtime::mcp_repository::is_live_run_registered(
-        &ctx, run_id
-    ));
+    let registry_deadline = Instant::now() + Duration::from_secs(1);
+    while crate::runtime::mcp_repository::is_live_run_registered(&ctx, run_id) {
+        assert!(
+            Instant::now() < registry_deadline,
+            "completed run remained in the live registry"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
     thread::sleep(Duration::from_millis(100));
     assert!(!temp.path().join("api-finished.txt").exists());
 

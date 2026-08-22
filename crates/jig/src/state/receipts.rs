@@ -153,7 +153,8 @@ struct IndexedCheckReceipts {
 /// A request-scoped view of the receipts needed to evaluate configured work
 /// gates. Building it scans the receipt stream exactly once. Check and review
 /// indexes retain bounded latest evidence; profile indexes retain incomplete
-/// concurrent runs until the scan can prove which runs are complete.
+/// concurrent runs up to a fail-closed safety bound until the scan can prove
+/// which runs are complete.
 #[derive(Debug, Default)]
 pub(crate) struct WorkGateReceiptIndex {
     checks: BTreeMap<String, IndexedCheckReceipts>,
@@ -360,7 +361,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         if let (Some(run_id), Some(target)) = (receipt.run_id.as_ref(), receipt.target.as_ref()) {
             let status = target_receipt_status(&receipt, run_id, target);
             for receipts in index.evidence.values_mut() {
-                receipts.observe(status.clone());
+                receipts.observe(status.clone())?;
             }
         }
         Ok(())

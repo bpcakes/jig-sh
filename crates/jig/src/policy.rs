@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashSet};
-use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
@@ -29,6 +28,7 @@ const SOFT_LIMIT_END: usize = 600;
 // Files above this emit informational guidance for agent-review ergonomics.
 const TARGET_HIGH: usize = 400;
 mod agent_map;
+mod schema;
 mod sqlx;
 
 pub(crate) struct AgentMapInput {
@@ -363,7 +363,7 @@ fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
 
 #[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    schema_check_with_control(ctx, Duration::from_secs(30 * 60), &|| false)
+    schema::check(ctx)
 }
 
 pub(crate) fn schema_check_with_control(
@@ -371,167 +371,7 @@ pub(crate) fn schema_check_with_control(
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
-    let command_text = ctx.schema_dump_command();
-    if command_text.trim().is_empty() {
-        bail!("schema_dump_command is empty");
-    }
-    let configured_schema_docs_dir =
-        env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
-    let schema_docs_dir =
-        normalize_repo_relative_path(Path::new(&configured_schema_docs_dir), "SCHEMA_DOCS_DIR")?;
-    let schema_docs_dir = schema_docs_dir
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("SCHEMA_DOCS_DIR must be valid UTF-8"))?;
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| anyhow::anyhow!("schema check timeout is too large"))?;
-
-    let initial_status = schema_path_status(ctx.root(), schema_docs_dir, deadline, cancelled)?;
-    if !initial_status.trim().is_empty() {
-        return Ok(NativeToolOutput {
-            exit_status: 1,
-            stdout: String::new(),
-            stderr: format!(
-                "Schema output path {schema_docs_dir} already has uncommitted changes; preserve or commit them before checking generated schema drift.\n{initial_status}"
-            ),
-        });
-    }
-    let tracked_schema = !controlled_git_text(
-        ctx.root(),
-        &["ls-files", "--", schema_docs_dir],
-        deadline,
-        cancelled,
-    )?
-    .trim()
-    .is_empty();
-
-    let check_result =
-        run_schema_drift_check(ctx, command_text, schema_docs_dir, deadline, cancelled);
-    // Cleanup is mandatory even after timeout or cancellation, so it gets a
-    // fresh bounded deadline and is not interrupted by the caller's signal.
-    let restore_result = restore_schema_output(ctx.root(), schema_docs_dir, tracked_schema);
-    match (check_result, restore_result) {
-        (Ok(output), Ok(())) => Ok(output),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(restore_error)) => Err(restore_error)
-            .context("Failed to restore schema output after the read-only freshness check"),
-        (Err(check_error), Err(restore_error)) => bail!(
-            "Schema freshness check failed: {check_error:#}\nAdditionally failed to restore schema output: {restore_error:#}"
-        ),
-    }
-}
-
-fn run_schema_drift_check(
-    ctx: &RepoContext,
-    command_text: &str,
-    schema_docs_dir: &str,
-    deadline: Instant,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<NativeToolOutput> {
-    let mut dump = Command::new("bash");
-    dump.current_dir(ctx.root()).arg("-c").arg(command_text);
-    let output = controlled_output(&mut dump, deadline, cancelled)
-        .context("Failed to run schema_dump_command")?;
-    if !output.status.success() {
-        bail!(
-            "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
-            output.status.code().unwrap_or(1),
-            output.stdout,
-            output.stderr
-        );
-    }
-    let status = schema_path_status(ctx.root(), schema_docs_dir, deadline, cancelled)?;
-    if !status.trim().is_empty() {
-        let diff = controlled_git_text(
-            ctx.root(),
-            &["--no-pager", "diff", "HEAD", "--", schema_docs_dir],
-            deadline,
-            cancelled,
-        )?;
-        return Ok(NativeToolOutput {
-            exit_status: 1,
-            stdout: String::new(),
-            stderr: format!(
-                "Schema dump is stale. Re-run {command_text} and commit {schema_docs_dir} changes.\n{status}{diff}"
-            ),
-        });
-    }
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: "Schema dump is up to date.\n".into(),
-        stderr: String::new(),
-    })
-}
-
-fn schema_path_status(
-    root: &Path,
-    schema_docs_dir: &str,
-    deadline: Instant,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    controlled_git_text(
-        root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            "--",
-            schema_docs_dir,
-        ],
-        deadline,
-        cancelled,
-    )
-}
-
-fn restore_schema_output(root: &Path, schema_docs_dir: &str, tracked_schema: bool) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let indexed_schema = !controlled_git_text(
-        root,
-        &["ls-files", "--", schema_docs_dir],
-        deadline,
-        &|| false,
-    )?
-    .trim()
-    .is_empty();
-    if tracked_schema || indexed_schema {
-        controlled_git_text(
-            root,
-            &[
-                "restore",
-                "--source=HEAD",
-                "--staged",
-                "--",
-                schema_docs_dir,
-            ],
-            deadline,
-            &|| false,
-        )?;
-    }
-    if tracked_schema {
-        controlled_git_text(
-            root,
-            &[
-                "restore",
-                "--source=HEAD",
-                "--worktree",
-                "--",
-                schema_docs_dir,
-            ],
-            deadline,
-            &|| false,
-        )?;
-    }
-    controlled_git_text(
-        root,
-        &["clean", "-fd", "--", schema_docs_dir],
-        deadline,
-        &|| false,
-    )?;
-    let remaining = schema_path_status(root, schema_docs_dir, deadline, &|| false)?;
-    if !remaining.trim().is_empty() {
-        bail!("schema output remained dirty after restoration:\n{remaining}");
-    }
-    Ok(())
+    schema::check_with_control(ctx, timeout, cancelled)
 }
 
 struct ControlledOutput {

@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
-use std::io;
-use std::path::PathBuf;
+use std::io::{self, Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
@@ -33,7 +33,10 @@ const EVENT_CANCEL_REQUESTED: &str = "cancel_requested";
 #[cfg(test)]
 thread_local! {
     static FULL_RUN_EVENT_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static RUN_EVENT_IDENTITY_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
+
+const REVERSE_RUN_READ_CHUNK: usize = 16 * 1024;
 
 /// The accepted plan and current state reconstructed from the append-only run log.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
@@ -270,25 +273,119 @@ pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<Dura
 pub(crate) fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     ensure_state_layout(ctx)?;
     let path = ctx.state_file(RUNS_FILE);
+    let events = read_run_events_reverse(&path, run_id)?;
+    fold_events(run_id, events)
+}
+
+fn read_run_events_reverse(path: &Path, run_id: &str) -> Result<Vec<RunEventRecord>> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+        }
+    };
+    loop {
+        match FileExt::lock_shared(&file) {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                return read_run_events_forward(path, run_id);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+            }
+        }
+    }
+    let result = scan_run_events_reverse(&file, path, run_id);
+    let unlock = FileExt::unlock(&file);
+    match (result, unlock) {
+        (Ok(events), Ok(())) => Ok(events),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => {
+            Err(error).with_context(|| format!("Failed to unlock {}", path.display()))
+        }
+    }
+}
+
+fn read_run_events_forward(path: &Path, run_id: &str) -> Result<Vec<RunEventRecord>> {
     let mut events = Vec::new();
-    scan_jsonl_raw(&path, &|| false, |raw| {
-        let identity = parse_run_event_identity(raw, &path)?;
+    scan_jsonl_raw(path, &|| false, |raw| {
+        let identity = parse_run_event_identity(raw, path)?;
         if identity.run_id == run_id {
-            events.push(parse_run_event(raw, &path)?);
+            events.push(parse_run_event(raw, path)?);
         }
         Ok(())
     })?;
-    fold_events(run_id, events)
+    Ok(events)
+}
+
+fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec<RunEventRecord>> {
+    let mut file = file;
+    let mut cursor = file
+        .seek(SeekFrom::End(0))
+        .with_context(|| format!("Failed to seek {}", path.display()))?;
+    let mut carry = Vec::new();
+    let mut events = Vec::new();
+    let mut found_queued = false;
+    while cursor > 0 && !found_queued {
+        let read_len = usize::try_from(cursor.min(REVERSE_RUN_READ_CHUNK as u64))
+            .unwrap_or(REVERSE_RUN_READ_CHUNK);
+        cursor -= read_len as u64;
+        file.seek(SeekFrom::Start(cursor))
+            .with_context(|| format!("Failed to seek {}", path.display()))?;
+        let mut chunk = vec![0u8; read_len];
+        file.read_exact(&mut chunk)
+            .with_context(|| format!("Failed to read run-event tail {}", path.display()))?;
+        chunk.extend_from_slice(&carry);
+        let split_at = if cursor == 0 {
+            0
+        } else {
+            chunk
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(chunk.len(), |index| index + 1)
+        };
+        for record in chunk[split_at..].split(|byte| *byte == b'\n').rev() {
+            if record.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let raw = RawJsonlRecord {
+                bytes: record,
+                line_number: 0,
+                terminated: true,
+            };
+            let identity = parse_run_event_identity(raw, path)?;
+            if identity.run_id != run_id {
+                continue;
+            }
+            found_queued = identity.event == EVENT_QUEUED;
+            events.push(parse_run_event(raw, path)?);
+            if found_queued {
+                break;
+            }
+        }
+        carry = chunk[..split_at].to_vec();
+    }
+    events.reverse();
+    Ok(events)
 }
 
 fn parse_run_event_identity(
     raw: RawJsonlRecord<'_>,
     path: &std::path::Path,
 ) -> Result<RunEventIdentity> {
+    #[cfg(test)]
+    RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| counter.set(counter.get() + 1));
     serde_json::from_slice(raw.bytes).with_context(|| {
         format!(
-            "Failed to parse run event identity {} in {}",
-            raw.line_number,
+            "Failed to parse run event identity{} in {}",
+            if raw.line_number > 0 {
+                format!(" at line {}", raw.line_number)
+            } else {
+                String::new()
+            },
             path.display()
         )
     })
@@ -541,11 +638,26 @@ mod tests {
         let (_first, _first_lease) = start_run(&ctx, plan(), None).unwrap();
         let (second, _second_lease) = start_run(&ctx, plan(), None).unwrap();
         FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(0));
+        RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| counter.set(0));
 
         let loaded = run_by_id(&ctx, &second.result.run_id).unwrap();
 
         assert_eq!(loaded.result.run_id, second.result.run_id);
         FULL_RUN_EVENT_PARSE_COUNT.with(|counter| assert_eq!(counter.get(), 1));
+        RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| assert_eq!(counter.get(), 1));
+    }
+
+    #[test]
+    fn reverse_run_lookup_handles_records_larger_than_the_read_chunk() {
+        let (_temp, ctx) = context();
+        let mut large_plan = plan();
+        large_plan.selectors = vec!["x".repeat(REVERSE_RUN_READ_CHUNK * 2)];
+        let (started, _lease) = start_run(&ctx, large_plan, None).unwrap();
+
+        let loaded = run_by_id(&ctx, &started.result.run_id).unwrap();
+
+        assert_eq!(loaded.result.run_id, started.result.run_id);
+        assert_eq!(loaded.plan.selectors[0].len(), REVERSE_RUN_READ_CHUNK * 2);
     }
 
     #[test]

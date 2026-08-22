@@ -101,7 +101,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. Calls reuse the same catalog, planner, executor, and append-only state as the CLI.
+`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. The transport surface stays fixed for the server lifetime, while catalog inspection, planning, and execution reload current repository authority before reusing the same planner, executor, and append-only state as the CLI.
 
 `crates/jig/src/state/` stores append-only JSONL records:
 

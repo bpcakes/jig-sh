@@ -671,9 +671,10 @@ When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 - `scripts/jig sqlx schema dump`
 
 `scripts/jig check schema` is a read-only freshness gate. It requires
-`SCHEMA_DOCS_DIR` to be clean, reruns `schema_dump_command`, captures any drift,
-and restores generator-created tracked, staged, and untracked changes before it
-returns. Use `scripts/jig sqlx schema dump` to apply the generated update.
+`SCHEMA_DOCS_DIR` to be clean, reruns `schema_dump_command` in a disposable
+snapshot of the current repository, and reports any drift without letting the
+generator write to the live worktree. Use `scripts/jig sqlx schema dump` to
+apply the generated update.
 `SCHEMA_DOCS_DIR` defaults to `docs/schema`, must remain repository-relative,
 and is included in the generated default verification profile.
 

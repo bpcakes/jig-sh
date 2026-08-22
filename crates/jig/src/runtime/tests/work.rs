@@ -4,6 +4,47 @@ use std::path::Path;
 
 mod evidence;
 
+fn write_v6_schema_check_fixture(root: &Path, effects: &[&str]) {
+    write_v6_evidence_fixture_repo(root, "");
+    fs::create_dir_all(root.join("docs/schema")).unwrap();
+    fs::write(root.join("docs/schema/schema.sql"), "schema\n").unwrap();
+    let config_path = root.join(".jig.toml");
+    let effects_toml = serde_json::to_string(effects).unwrap();
+    let action = format!(
+        r#"[[repository.actions]]
+target = {{ component = "api", action = "schema" }}
+intent = "check"
+effects = {effects_toml}
+runner = {{ kind = "native", operation = "jig.schema_check" }}
+inputs = ["api/**"]
+
+[[repository.profiles]]"#
+    );
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            "default_branch = \"main\"\nschema_dump_command = \"printf 'schema\\n' > docs/schema/schema.sql\"",
+        )
+        .replace("[[repository.profiles]]", &action);
+    fs::write(config_path, config).unwrap();
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "schema"},
+        "intent": "check",
+        "effects": effects,
+        "runner": {"kind": "native", "operation": "jig.schema_check"},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn cli_dispatch_requires_manifest_tool_declaration() {
     let temp = tempdir().unwrap();
@@ -51,43 +92,7 @@ fn unavailable_schema_check_explains_disabled_config() {
 #[test]
 fn explicit_schema_check_executes_a_declared_read_only_action_on_contract_six() {
     let temp = tempdir().unwrap();
-    write_v6_evidence_fixture_repo(temp.path(), "");
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/schema.sql"), "schema\n").unwrap();
-    let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path)
-        .unwrap()
-        .replace(
-            "default_branch = \"main\"",
-            "default_branch = \"main\"\nschema_dump_command = \"printf 'schema\\n' > docs/schema/schema.sql\"",
-        )
-        .replace(
-            "[[repository.profiles]]",
-            r#"[[repository.actions]]
-target = { component = "api", action = "schema" }
-intent = "check"
-effects = ["read_only", "process"]
-runner = { kind = "native", operation = "jig.schema_check" }
-inputs = ["api/**"]
-
-[[repository.profiles]]"#,
-        );
-    fs::write(config_path, config).unwrap();
-    let manifest_path = temp.path().join(".agent/jig-contract.json");
-    let mut manifest: Value =
-        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["actions"].as_array_mut().unwrap().push(json!({
-        "target": {"component": "api", "action": "schema"},
-        "intent": "check",
-        "effects": ["read_only", "process"],
-        "runner": {"kind": "native", "operation": "jig.schema_check"},
-        "inputs": ["api/**"]
-    }));
-    fs::write(
-        manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
-    )
-    .unwrap();
+    write_v6_schema_check_fixture(temp.path(), &["read_only", "process"]);
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
@@ -104,6 +109,28 @@ inputs = ["api/**"]
 
     assert_eq!(output["ok"], true, "{output:#}");
     assert_eq!(output["run"]["conclusion"], "success");
+}
+
+#[test]
+fn explicit_schema_check_rejects_a_declared_worktree_effect() {
+    let temp = tempdir().unwrap();
+    write_v6_schema_check_fixture(temp.path(), &["worktree", "process"]);
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckOpts::with_command(
+            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: false,
+            }),
+        )),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("not a read-only check"), "{error}");
 }
 
 #[test]
