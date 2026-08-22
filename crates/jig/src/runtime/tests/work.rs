@@ -1894,18 +1894,12 @@ if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
 fi
 mkdir -p .agent
 touch .agent/clean-review
-out=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then
-    out="$arg"
-  fi
-  prev="$arg"
-done
-if [ -n "$out" ]; then
-  printf 'stdin' > prompt-source.txt
-  printf 'refined\n' > "$out"
+if [ "$#" -ne 9 ] || [ "$1 $2 $3 $4 $5 $6 $7" != "--ask-for-approval never exec --sandbox workspace-write --ephemeral -o" ] || [ -z "$8" ] || [ "$9" != "-" ]; then
+  echo "unexpected refine args: $*" >&2
+  exit 2
 fi
+printf 'stdin' > prompt-source.txt
+printf 'refined\n' > "$8"
 cat >/dev/null
 printf 'fixed\n' > fixed.txt
 "#,
@@ -1934,7 +1928,12 @@ if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
 fi
 mkdir -p .agent
 touch .agent/clean-review
+if [ "$#" -ne 9 ] || [ "$1 $2 $3 $4 $5 $6 $7" != "--ask-for-approval never exec --sandbox workspace-write --ephemeral -o" ] || [ -z "$8" ] || [ "$9" != "-" ]; then
+  echo "unexpected verbose refine args: $*" >&2
+  exit 2
+fi
 cat >/dev/null
+printf 'refined\n' > "$8"
 printf 'fixed\n' > fixed.txt
 head -c 4194305 /dev/zero >&2
 "#,

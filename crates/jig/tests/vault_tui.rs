@@ -129,7 +129,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         activity_offset,
-        "Audit verified:",
+        "field_batch_apply",
         UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
