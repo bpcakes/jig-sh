@@ -5,7 +5,7 @@ This work closes the remaining review findings in the execution-supervision chan
 ## Progress
 
 - [x] Reviewed the merged Claude/Codex findings and grouped them by ownership boundary.
-- [ ] Make Codex transcript authority explicit and preserve refinement evidence under verbose output.
+- [x] Made Codex transcript authority explicit so verbose refinement diagnostics truncate without terminating the edit-authoritative worker.
 - [ ] Introduce a typed repository command-supervision result and migrate configured commands, native schema dumps, and GitHub loop commands.
 - [ ] Check cancellation at orchestration boundaries before native work starts.
 - [ ] Separate structural progress capacity from lossy child-output preview capacity.

@@ -85,6 +85,7 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) ephemeral: bool,
     pub(crate) extra_args: Vec<OsString>,
     pub(crate) output_schema: Option<&'a Value>,
+    pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
     pub(crate) prompt: CodexPrompt<'a>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
     pub(crate) phase: Option<WorkerPhase<'a>>,
@@ -199,7 +200,7 @@ fn run_codex_exec_inner(
         request.prompt.stdin_prompt(),
         codex_timeout(ctx)?,
         request.receipt.purpose,
-        request.output_schema.is_some(),
+        request.transcript_overflow_policy,
         observer,
     )?;
     let provider_stdout = String::from_utf8_lossy(&output.output.stdout).into_owned();
@@ -291,7 +292,7 @@ fn run_worker_command(
     stdin_prompt: Option<&str>,
     timeout: CommandTimeout,
     label: &str,
-    allow_transcript_truncation: bool,
+    transcript_overflow_policy: ProcessOutputOverflowPolicy,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkerCommandOutput> {
     let prompt_file = stdin_prompt
@@ -313,11 +314,7 @@ fn run_worker_command(
             stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
             stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
-        if allow_transcript_truncation {
-            ProcessOutputOverflowPolicy::Truncate
-        } else {
-            ProcessOutputOverflowPolicy::Error
-        },
+        transcript_overflow_policy,
         &mut ProcessExecutionObserver::new(observer, label),
     )
     .map_err(|error| worker_process_error(error, timeout))?;
@@ -527,6 +524,7 @@ mod tests {
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: None,
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin("fix this"),
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
@@ -541,6 +539,11 @@ mod tests {
                 position: PhasePosition::single(),
             }),
         };
+        assert_eq!(
+            request.transcript_overflow_policy,
+            ProcessOutputOverflowPolicy::Truncate,
+            "refinement edits are authoritative; its transcript is diagnostic"
+        );
         let command = build_codex_command("codex", &request, None, None);
         let args = command
             .get_args()
@@ -624,7 +627,7 @@ mod tests {
             Some("prompt through a file"),
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
-            false,
+            ProcessOutputOverflowPolicy::Error,
             &mut control,
         )
         .unwrap();
@@ -648,7 +651,7 @@ mod tests {
             None,
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
-            false,
+            ProcessOutputOverflowPolicy::Error,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()
@@ -664,7 +667,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn schema_backed_worker_allows_truncated_provider_transcript() {
+    fn diagnostic_worker_allows_truncated_provider_transcript() {
         let mut command = Command::new("/bin/sh");
         command.args([
             "-c",
@@ -676,7 +679,7 @@ mod tests {
             None,
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
-            true,
+            ProcessOutputOverflowPolicy::Truncate,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap();
@@ -717,7 +720,7 @@ wait
             None,
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
-            false,
+            ProcessOutputOverflowPolicy::Error,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()

@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::process::Output;
 
 use anyhow::Result;
+use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::Value;
 
 use crate::context::{RepoContext, ReviewScopeArg, WorkReviewGate, parse_review_scope_arg};
@@ -37,6 +38,7 @@ pub(super) fn run_codex_review(
             ephemeral: true,
             extra_args: review_scope_args(gate)?,
             output_schema: Some(schema),
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Argument(prompt),
             receipt: WorkerReceiptRequest {
                 purpose: "work_review",
@@ -81,6 +83,7 @@ pub(super) fn run_codex_refine(
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: None,
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin(prompt),
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",

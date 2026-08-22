@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
@@ -467,6 +468,7 @@ fn run_pr_repair(
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: Some(&output_schema),
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin(&prompt),
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
