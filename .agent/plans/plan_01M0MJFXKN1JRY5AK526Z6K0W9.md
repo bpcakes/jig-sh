@@ -10,7 +10,7 @@ This work closes the remaining review findings in the execution-supervision chan
 - [x] Check cancellation at orchestration boundaries before native work starts.
 - [x] Separate structural progress capacity from lossy child-output preview capacity.
 - [x] Remove zero-plan status work, preserve concurrent panic diagnostics, and make setup phases monotonic.
-- [ ] Run focused checks and every configured repository gate through the development binary.
+- [x] Run focused checks and every configured repository gate through the development binary.
 
 ## Surprises & Discoveries
 
@@ -18,6 +18,8 @@ This work closes the remaining review findings in the execution-supervision chan
 - The native `schema_check` path invokes the configured schema dump with raw `Command::output`, so classifying the outer tool as native bypasses timeout, output, cancellation, and process-tree guarantees.
 - The GitHub loop branch accepts an execution observer at the orchestration boundary but does not pass it to its blocking `gh` subprocesses. Because the CLI now records terminating signals for cooperative cleanup, those subprocesses can delay signal redelivery indefinitely.
 - CLI structural events and child output share one append-only byte budget, allowing lossy preview data to evict the phase lifecycle that the feature exists to report.
+- The existing process overflow policy already expresses the required transcript choice. Adding a second authority enum would duplicate state without eliminating an invalid combination, so callers now select the concrete overflow policy explicitly.
+- Marketplace sources are discovered during the third setup phase, after earlier phase totals have already been rendered. Modeling registrations as items in one batch phase keeps the lifecycle total stable and monotonic.
 
 ## Decision Log
 
@@ -31,7 +33,11 @@ This work closes the remaining review findings in the execution-supervision chan
 
 ## Outcomes & Retrospective
 
-Pending implementation and final verification.
+The execution policy is now explicit at both worker and repository-command boundaries. Refinement, review, and PR-manager callers select diagnostic transcript truncation directly; configured commands, nested schema dumps, and GitHub CLI calls all use one crate-private supervisor for timeout, complete bounded capture, cancellation, heartbeat events, and process-tree cleanup. Work-check and loop orchestration stop before starting the next unit after cancellation.
+
+CLI progress retains event order while accounting structural lifecycle events separately from lossy output preview. Empty gate batches return without fingerprint work, concurrent provider panic diagnostics are retained in deterministic provider order, and setup registration items occupy one monotonic phase.
+
+Focused regressions cover verbose schema-less refinement evidence, schema timeout descendant cleanup, native batch cancellation, in-flight GitHub cancellation, post-overflow phase visibility, empty gate batches, concurrent panics, and multi-marketplace phase sequencing. The development binary passed format, Clippy, and contract checks. The complete configured test gate passed 2,201 tests across 24 binaries, with 107 tests and 8 binaries skipped by the configured Nextest profile; the passing test receipt is `receipt_01M0MMZAD4X6PTZX687YRXZ1ZH`.
 
 ## Context and orientation
 
