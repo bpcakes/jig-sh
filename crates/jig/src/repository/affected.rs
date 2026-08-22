@@ -343,7 +343,11 @@ mod tests {
         let mut repo_action = check_action(repo_target.clone(), "contract_command");
         repo_action.inputs.push(".jig.toml".into());
         let mut api_action = check_action(api_target.clone(), "api_test_command");
-        api_action.inputs.push("crates/**/*.rs".into());
+        api_action.inputs = vec![
+            "crates/**/*.rs".into(),
+            "**/Cargo.toml".into(),
+            "**/go.mod".into(),
+        ];
         let mut web_action = check_action(web_target.clone(), "web_test_command");
         web_action.inputs.push("apps/web/**/*.ts".into());
 
@@ -478,6 +482,18 @@ mod tests {
             target_names(&selected(&catalog, &["crates/api/src/lib.rs"])),
             ["api:test", "web:test"]
         );
+    }
+
+    #[test]
+    fn affected_nested_build_manifests_select_the_root_backend_and_dependents() {
+        let catalog = generated_root_fixture();
+
+        for path in ["crates/worker/Cargo.toml", "services/worker/go.mod"] {
+            assert_eq!(
+                target_names(&selected(&catalog, &[path])),
+                ["api:test", "web:test"]
+            );
+        }
     }
 
     #[test]

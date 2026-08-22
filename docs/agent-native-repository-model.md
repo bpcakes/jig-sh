@@ -128,7 +128,10 @@ base of `BASE` and `HEAD` plus staged, unstaged, and untracked worktree paths.
 Append-only `.agent/` state is excluded. Action input globs use validated,
 repository-relative forward-slash syntax. An input outside its component root
 is an explicit repository-global input. If no action input matches a changed
-path, Jig falls back to the most-specific containing component root. Dependent
+path, Jig falls back to the most-specific containing component root. A root
+component (`root = "."`) with declared inputs is intentionally input-authoritative
+and does not receive this fallback; an unrelated path can therefore produce an
+honest empty plan instead of selecting every root component. Dependent
 propagation follows reverse `depends_on` edges only while each source component
 opts into `propagate_affected_to_dependents`, and explanations retain the
 originating component and path.

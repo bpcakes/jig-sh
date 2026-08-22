@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
@@ -11,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     context::RepoContext,
-    git_receipts::{repo_changed_paths_since, repo_worktree_fingerprint},
+    git_receipts::{repo_changed_paths_since, repository_source_snapshot},
 };
 
 use super::{RepositoryCatalog, affected::select_affected_targets};
@@ -89,9 +88,11 @@ fn plan_run_with_policy(
 }
 
 fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
+    let source = repository_source_snapshot(ctx.root())
+        .context("Failed to identify the current worktree")?;
     Ok(SourceIdentity::new(
-        head_commit(ctx)?,
-        repo_worktree_fingerprint(ctx.root()).context("Failed to identify the current worktree")?,
+        source.head_commit,
+        source.worktree_fingerprint,
     ))
 }
 
@@ -150,22 +151,6 @@ pub(crate) fn validate_run_plan(
         );
     }
     Ok(())
-}
-
-fn head_commit(ctx: &RepoContext) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(ctx.root())
-        .args(["rev-parse", "--verify", "HEAD"])
-        .output()
-        .context("Failed to run git rev-parse for run planning")?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let commit = String::from_utf8(output.stdout)
-        .context("git rev-parse returned a non-UTF-8 commit id")?
-        .trim()
-        .to_owned();
-    Ok((!commit.is_empty()).then_some(commit))
 }
 
 #[cfg(test)]

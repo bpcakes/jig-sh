@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use tempfile::NamedTempFile;
 
+use crate::bootstrap::scrub_known_repository_git_environment;
+
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
@@ -298,15 +300,27 @@ fn changed_paths_digest(paths: &[String]) -> String {
     format!("sha256:{:x}", digest.finalize())
 }
 
-pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
+pub(crate) struct RepositorySourceSnapshot {
+    pub(crate) head_commit: Option<String>,
+    pub(crate) worktree_fingerprint: String,
+}
+
+pub(crate) fn repository_source_snapshot(root: &Path) -> Result<RepositorySourceSnapshot> {
     repo_worktree_fingerprint_inner(root, FingerprintCollection::Blocking, 0)
+}
+
+pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
+    Ok(repository_source_snapshot(root)?.worktree_fingerprint)
 }
 
 pub(crate) fn repo_worktree_fingerprint_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled), 0)
+    Ok(
+        repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled), 0)?
+            .worktree_fingerprint,
+    )
 }
 
 pub(crate) fn is_worktree_fingerprint_cancellation(error: &anyhow::Error) -> bool {
@@ -379,12 +393,12 @@ fn repo_worktree_fingerprint_inner(
     root: &Path,
     collection: FingerprintCollection<'_>,
     submodule_depth: usize,
-) -> Result<String> {
+) -> Result<RepositorySourceSnapshot> {
     if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
         bail!("worktree fingerprint submodules exceed the supported nesting depth");
     }
     collection.ensure_active()?;
-    let committed_source_tree = committed_source_tree_identity(root, collection)?;
+    let committed_source = committed_source_tree_identity(root, collection)?;
     collection.ensure_active()?;
     let status = collection.git_output(
         root,
@@ -427,7 +441,7 @@ fn repo_worktree_fingerprint_inner(
 
     let mut input = Vec::new();
     input.extend_from_slice(b"committed-source-tree\0");
-    input.extend_from_slice(&committed_source_tree);
+    input.extend_from_slice(&committed_source.tree_identity);
     input.extend_from_slice(b"\0status\0");
     input.extend_from_slice(&status.stdout);
     input.extend_from_slice(b"\0unstaged\0");
@@ -442,13 +456,21 @@ fn repo_worktree_fingerprint_inner(
     input.extend_from_slice(&submodules);
 
     collection.ensure_active()?;
-    collection.git_hash_object(root, &input)
+    Ok(RepositorySourceSnapshot {
+        head_commit: committed_source.head_commit,
+        worktree_fingerprint: collection.git_hash_object(root, &input)?,
+    })
+}
+
+struct CommittedSourceIdentity {
+    head_commit: Option<String>,
+    tree_identity: Vec<u8>,
 }
 
 fn committed_source_tree_identity(
     root: &Path,
     collection: FingerprintCollection<'_>,
-) -> Result<Vec<u8>> {
+) -> Result<CommittedSourceIdentity> {
     let head = collection.git_output_unchecked(
         root,
         &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
@@ -470,9 +492,15 @@ fn committed_source_tree_identity(
                 &["ls-tree", "-z", "--full-tree", object_id],
                 "git ls-tree HEAD for worktree fingerprint",
             )?;
-            committed_source_tree_without_agent_state(&tree.stdout, collection)
+            Ok(CommittedSourceIdentity {
+                head_commit: Some(object_id.to_owned()),
+                tree_identity: committed_source_tree_without_agent_state(&tree.stdout, collection)?,
+            })
         }
-        Some(1) => Ok(b"unborn".to_vec()),
+        Some(1) => Ok(CommittedSourceIdentity {
+            head_commit: None,
+            tree_identity: b"unborn".to_vec(),
+        }),
         _ => {
             bail!(
                 "git rev-parse HEAD for worktree fingerprint failed with {}.\nstdout:\n{}\nstderr:\n{}",
@@ -613,7 +641,7 @@ fn initialized_submodule_fingerprints(
         )?;
         fingerprints.extend_from_slice(relative.as_os_str().as_encoded_bytes());
         fingerprints.push(0);
-        fingerprints.extend_from_slice(fingerprint.as_bytes());
+        fingerprints.extend_from_slice(fingerprint.worktree_fingerprint.as_bytes());
         fingerprints.push(0);
     }
     Ok(fingerprints)
@@ -1118,6 +1146,7 @@ fn git_hash_file_with_cancellation(
 }
 
 fn configure_read_only_git_environment(command: &mut Command) {
+    scrub_known_repository_git_environment(command);
     // Receipt and gate fingerprint probes are observational. In particular,
     // `git status` must not refresh stat data by taking an optional index lock.
     command.env("GIT_OPTIONAL_LOCKS", "0");
@@ -1167,6 +1196,43 @@ mod tests {
                 .find(|(name, _)| *name == OsStr::new("GIT_OPTIONAL_LOCKS"))
                 .and_then(|(_, value)| value),
             Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn source_authority_ignores_ambient_repository_redirects() {
+        let _env = crate::test_env::lock_env();
+        let repository = tempdir().unwrap();
+        let redirected = tempdir().unwrap();
+        for (root, contents) in [
+            (repository.path(), "repository"),
+            (redirected.path(), "redirected"),
+        ] {
+            run_git(root, &["init"]);
+            run_git(root, &["config", "user.email", "fixture@example.com"]);
+            run_git(root, &["config", "user.name", "Fixture"]);
+            std::fs::write(root.join("tracked.txt"), contents).unwrap();
+            run_git(root, &["add", "tracked.txt"]);
+            run_git(root, &["commit", "-m", "fixture"]);
+        }
+        let expected_head = git_text(repository.path(), &["rev-parse", "HEAD"]);
+        let expected_fingerprint = repo_worktree_fingerprint(repository.path()).unwrap();
+        let _git_dir = crate::test_env::EnvVarGuard::set("GIT_DIR", redirected.path().join(".git"));
+        let _work_tree = crate::test_env::EnvVarGuard::set("GIT_WORK_TREE", redirected.path());
+        let _index = crate::test_env::EnvVarGuard::set(
+            "GIT_INDEX_FILE",
+            redirected.path().join(".git/index"),
+        );
+
+        assert_eq!(
+            repository_source_snapshot(repository.path())
+                .unwrap()
+                .head_commit,
+            Some(expected_head)
+        );
+        assert_eq!(
+            repo_worktree_fingerprint(repository.path()).unwrap(),
+            expected_fingerprint
         );
     }
 

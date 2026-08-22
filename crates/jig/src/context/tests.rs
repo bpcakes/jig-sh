@@ -6,6 +6,33 @@ use tempfile::tempdir;
 mod runtime;
 
 #[test]
+fn contract_digest_uses_the_validated_config_snapshot() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let config_path = temp.path().join(".jig.toml");
+    let snapshot = load_config_snapshot(&config_path).unwrap();
+    let manifest = fs::read_to_string(temp.path().join(".agent/jig-contract.json")).unwrap();
+
+    let expected = contract_source_digest(snapshot.source.as_bytes(), &manifest);
+    fs::write(
+        &config_path,
+        snapshot
+            .source
+            .replace("repo_name = \"demo\"", "repo_name = \"changed\""),
+    )
+    .unwrap();
+
+    assert_eq!(
+        contract_source_digest(snapshot.source.as_bytes(), &manifest),
+        expected
+    );
+    assert_ne!(
+        contract_source_digest(&fs::read(&config_path).unwrap(), &manifest),
+        expected
+    );
+}
+
+#[test]
 fn load_optional_ignores_stale_jig_repo_root() {
     let _env = lock_env();
     let temp = tempdir().unwrap();
@@ -1406,7 +1433,7 @@ proxy_por = 1556
     )
     .unwrap();
 
-    let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
+    let error = format!("{:#}", RepoContext::load_from(temp.path()).unwrap_err());
     assert!(error.contains("unknown field"));
     assert!(error.contains("proxy_por"));
 }
@@ -1443,7 +1470,7 @@ commmand = "typo"
     )
     .unwrap();
 
-    let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
+    let error = format!("{:#}", RepoContext::load_from(temp.path()).unwrap_err());
     assert!(error.contains("unknown field"));
     assert!(error.contains("commmand"));
 }
@@ -1476,7 +1503,7 @@ proxy_porrt = 1355
     )
     .unwrap();
 
-    let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
+    let error = format!("{:#}", RepoContext::load_from(temp.path()).unwrap_err());
     assert!(error.contains("unknown field"));
     assert!(error.contains("proxy_porrt"));
 }

@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use fs4::fs_std::FileExt;
@@ -52,18 +52,10 @@ pub(crate) struct DurableRun {
 pub(crate) struct RunEventCursor(u64);
 
 pub(crate) struct RunLease {
-    file: Option<File>,
-    path: PathBuf,
-}
-
-impl Drop for RunLease {
-    fn drop(&mut self) {
-        if let Some(file) = self.file.take() {
-            let _ = FileExt::unlock(&file);
-            drop(file);
-        }
-        let _ = fs::remove_file(&self.path);
-    }
+    // The path is deliberately stable for the repository lifetime. Removing
+    // an advisory-lock file after unlock permits another process to open and
+    // lock a new inode while an inspector still holds the old inode.
+    _file: File,
 }
 
 #[derive(Deserialize)]
@@ -145,13 +137,10 @@ pub(crate) fn start_run(
 }
 
 fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
-    let (file, path) = open_run_lease(ctx, run_id)?;
+    let file = open_run_lease(ctx, run_id)?;
     file.lock_exclusive()
         .with_context(|| format!("Failed to acquire worker lease for run '{run_id}'"))?;
-    Ok(RunLease {
-        file: Some(file),
-        path,
-    })
+    Ok(RunLease { _file: file })
 }
 
 pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
@@ -160,13 +149,10 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
         return Ok(run);
     }
 
-    let (file, path) = open_run_lease(ctx, run_id)?;
+    let file = open_run_lease(ctx, run_id)?;
     match file.try_lock_exclusive() {
         Ok(true) => {
-            let _lease = RunLease {
-                file: Some(file),
-                path,
-            };
+            let _lease = RunLease { _file: file };
             let current = run_by_id(ctx, run_id)?;
             if current.result.status != RunStatus::Completed {
                 block_nonterminal_run(
@@ -185,7 +171,7 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
     }
 }
 
-fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<(File, PathBuf)> {
+fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
     ensure_state_layout(ctx)?;
     let lease_dir = ctx.root().join(RUN_LEASE_DIR);
     fs::create_dir_all(&lease_dir)
@@ -198,7 +184,7 @@ fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<(File, PathBuf)> {
         .write(true)
         .open(&path)
         .with_context(|| format!("Failed to open run lease {}", path.display()))?;
-    Ok((file, path))
+    Ok(file)
 }
 
 pub(crate) fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
@@ -715,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_runs_are_published_with_a_lease_and_terminal_leases_are_removed() {
+    fn queued_runs_keep_a_stable_lease_inode_after_reconciliation() {
         let (_temp, ctx) = context();
         let (started, lease) = start_run(&ctx, plan(), None).unwrap();
         let run_id = started.result.run_id;
@@ -729,11 +715,53 @@ mod tests {
         assert_eq!(inspected.result.status, RunStatus::Queued);
 
         drop(lease);
-        assert!(!lease_path.exists());
+        assert!(lease_path.exists());
         let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
         assert_eq!(recovered.result.status, RunStatus::Completed);
         assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
-        assert!(!lease_path.exists());
+        assert!(lease_path.exists());
+    }
+
+    #[test]
+    fn concurrent_reconciliation_appends_one_terminal_event() {
+        use std::sync::{Arc, Barrier};
+
+        let (_temp, ctx) = context();
+        let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+        let run_id = started.result.run_id;
+        drop(lease);
+
+        let worker_count = 8;
+        let barrier = Arc::new(Barrier::new(worker_count));
+        let handles = (0..worker_count)
+            .map(|_| {
+                let ctx = ctx.clone();
+                let run_id = run_id.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    reconcile_run_for_inspection(&ctx, &run_id).unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            let run = handle.join().unwrap();
+            assert!(matches!(
+                run.result.status,
+                RunStatus::Queued | RunStatus::Completed
+            ));
+        }
+        let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
+        assert_eq!(recovered.result.status, RunStatus::Completed);
+        assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
+        let terminal_events = fs::read_to_string(ctx.state_file(RUNS_FILE))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<RunEventRecord>(line).unwrap())
+            .filter(|event| event.run_id == run_id && event.event == EVENT_COMPLETED)
+            .count();
+        assert_eq!(terminal_events, 1);
     }
 
     #[test]

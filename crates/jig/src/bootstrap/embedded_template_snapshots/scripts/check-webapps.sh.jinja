@@ -13,7 +13,7 @@ recovery_claim_token=""
 dependency_stamp_dir=".agent/tmp/web-dependencies"
 
 usage() {
-  echo "Usage: scripts/check-webapps.sh bootstrap|check-one <app-dir> <coverage-threshold> <script>|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
+  echo "Usage: scripts/check-webapps.sh bootstrap|check-one <app-dir> <coverage-threshold> <script>|contracts-drift-check <app-dir>|contracts-boundary-check <app-dir>|dependencies-install <app-dir>|dependencies-bootstrap <app-dir>|dependencies-ready <app-dir>|run-script <app-dir> <script>|lint|typecheck|build|coverage|node-version-file <app-dir>[% if web_package_manager == "pnpm" or web_package_manager == "yarn" %]|package-manager-spec <app-dir>[% endif %]" >&2
 }
 
 
@@ -2099,6 +2099,9 @@ run_check() {
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
       "$node_bin" scripts/enforce-coverage.cjs
   fi
+  if [ "$script_name" = "build:bundle" ] && [ -f scripts/contracts.mjs ]; then
+    "$node_bin" scripts/contracts.mjs artifact-check "$app_dir/dist"
+  fi
 }
 
 case "$mode" in
@@ -2147,11 +2150,19 @@ case "$mode" in
       exit 2
     fi
     run_check "$2" "$3" "$4"
-    if [ "$4" = "typecheck" ] && [ -f scripts/contracts.mjs ]; then
-      "$node_bin" scripts/contracts.mjs check
+    ;;
+  contracts-drift-check|contracts-boundary-check)
+    if [ "$#" -ne 2 ]; then
+      usage
+      exit 2
     fi
-    if [ "$4" = "build:bundle" ] && [ -f scripts/contracts.mjs ]; then
-      "$node_bin" scripts/contracts.mjs public-check
+    install_dependencies "$2"
+    if [ -f scripts/contracts.mjs ]; then
+      if [ "$mode" = "contracts-drift-check" ]; then
+        "$node_bin" scripts/contracts.mjs drift-check
+      else
+        "$node_bin" scripts/contracts.mjs boundary-check
+      fi
     fi
     ;;
   node-version-file)

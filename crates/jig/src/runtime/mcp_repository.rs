@@ -207,7 +207,6 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
 fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     let current = current_repository_context(ctx)?;
     let catalog = RepositoryCatalog::from_context(&current)?;
-    crate::repository::validate_run_plan(&current, &catalog, &args.plan)?;
     validate_effect_approval(&args.plan.effects, &args.approved_effects)?;
     if let Some(plan_id) = args.work_plan_id.as_deref() {
         crate::state::ensure_plan_is_open(&current, plan_id)?;
@@ -226,6 +225,11 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     thread::Builder::new()
         .name("jig-repository-run".into())
         .spawn(move || {
+            // start_check_run is the single freshness-validation boundary.
+            // The accepted handle is not published until that validation and
+            // durable run creation both succeed, so validating once here keeps
+            // the same safety ordering without an extra full fingerprint scan
+            // on the request thread.
             let event_cursor = match crate::state::run_event_cursor(&worker_ctx) {
                 Ok(cursor) => cursor,
                 Err(error) => {

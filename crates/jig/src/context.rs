@@ -347,14 +347,16 @@ pub(crate) struct RepoContext {
 impl RepoContext {
     pub(crate) fn load_from_root(root: PathBuf) -> Result<Self> {
         let config_path = root.join(".jig.toml");
-        let config = load_config(&config_path)?;
+        let loaded_config = load_config_snapshot(&config_path)?;
 
         let manifest_path = root.join(".agent/jig-contract.json");
         let manifest_text = fs::read_to_string(&manifest_path)
             .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
-        let contract_digest = contract_source_digest(&config_path, &manifest_text)?;
+        let contract_digest =
+            contract_source_digest(loaded_config.source.as_bytes(), &manifest_text);
+        let config = loaded_config.config;
 
         if !is_supported_contract_version(manifest.contract_version) {
             bail!(
@@ -662,7 +664,12 @@ impl RepoContext {
     }
 }
 
-fn load_config(config_path: &Path) -> Result<RepoConfig> {
+struct LoadedConfig {
+    config: RepoConfig,
+    source: String,
+}
+
+fn load_config_snapshot(config_path: &Path) -> Result<LoadedConfig> {
     let config_text = fs::read_to_string(config_path)
         .with_context(|| format!("Failed to read {}", config_path.display()))?;
     let config: RepoConfig = toml::from_str(&config_text).with_context(|| {
@@ -672,18 +679,23 @@ fn load_config(config_path: &Path) -> Result<RepoConfig> {
         )
     })?;
     validate_config(&config)?;
-    Ok(config)
+    Ok(LoadedConfig {
+        config,
+        source: config_text,
+    })
 }
 
-fn contract_source_digest(config_path: &Path, manifest_text: &str) -> Result<String> {
-    let config = fs::read(config_path)
-        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+fn load_config(config_path: &Path) -> Result<RepoConfig> {
+    Ok(load_config_snapshot(config_path)?.config)
+}
+
+fn contract_source_digest(config: &[u8], manifest_text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update((config.len() as u64).to_be_bytes());
     hasher.update(config);
     hasher.update((manifest_text.len() as u64).to_be_bytes());
     hasher.update(manifest_text.as_bytes());
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 impl FeatureContext for RepoContext {
@@ -1114,10 +1126,13 @@ fn find_optional_repo_root_from(start: &Path) -> Result<Option<PathBuf>> {
 }
 
 fn resolve_current_session_path(root: &Path) -> PathBuf {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
-        .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE])
-        .output();
+        .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE]);
+    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    command.env("GIT_OPTIONAL_LOCKS", "0");
+    let output = command.output();
 
     if let Ok(output) = output {
         if output.status.success() {
@@ -1140,16 +1155,15 @@ fn resolve_current_session_path(root: &Path) -> PathBuf {
 impl RepoContext {
     pub(crate) fn load_from(root: &Path) -> Result<Self> {
         let config_path = root.join(".jig.toml");
-        let config_text = fs::read_to_string(&config_path)?;
-        let config: RepoConfig = toml::from_str(&config_text)?;
-        validate_config(&config)?;
+        let loaded_config = load_config_snapshot(&config_path)?;
         let manifest_text = fs::read_to_string(root.join(".agent/jig-contract.json"))?;
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)?;
-        let contract_digest = contract_source_digest(&config_path, &manifest_text)?;
+        let contract_digest =
+            contract_source_digest(loaded_config.source.as_bytes(), &manifest_text);
         Ok(Self {
             root: root.to_path_buf(),
             current_session_path: root.join(".agent/.cache").join(CURRENT_SESSION_FILE),
-            config,
+            config: loaded_config.config,
             manifest,
             contract_digest,
         })

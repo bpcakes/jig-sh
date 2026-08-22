@@ -23,6 +23,22 @@ const COMMAND_TOOLS: &[(&str, &str)] = &[
     (TEST_LOCKED_COMMAND, tool::TEST_LOCKED),
 ];
 const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+// Go repositories can contain several modules or a go.work workspace. Treat
+// all module/workspace metadata as build authority instead of repeating a
+// root-only approximation on each action.
+const GO_CHECK_INPUTS: &[&str] = &[
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+    "**/go.mod",
+    "**/go.sum",
+    "**/go.work",
+    "**/go.work.sum",
+    "**/*.go",
+    "vendor/modules.txt",
+    "**/vendor/modules.txt",
+];
 const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
     AdapterActionDescriptor::new(
         "fmt",
@@ -30,7 +46,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Command(FMT_CHECK_COMMAND),
-        &["go.mod", "go.sum", "**/*.go"],
+        GO_CHECK_INPUTS,
         Some(tool::FMT_CHECK),
     ),
     AdapterActionDescriptor::new(
@@ -39,7 +55,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Command(LINT_COMMAND),
-        &["go.mod", "go.sum", "**/*.go"],
+        GO_CHECK_INPUTS,
         Some(tool::LINT),
     ),
     AdapterActionDescriptor::new(
@@ -48,7 +64,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Command(TEST_COMMAND),
-        &["go.mod", "go.sum", "**/*.go"],
+        GO_CHECK_INPUTS,
         Some(tool::TEST),
     ),
     AdapterActionDescriptor::new(
@@ -57,7 +73,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Command(TEST_LOCKED_COMMAND),
-        &["go.mod", "go.sum", "**/*.go"],
+        GO_CHECK_INPUTS,
         Some(tool::TEST_LOCKED),
     ),
 ];
@@ -162,6 +178,16 @@ mod tests {
 
         fn go_postgres_enabled(&self) -> bool {
             self.go_postgres
+        }
+    }
+
+    #[test]
+    fn every_go_check_tracks_nested_module_authority() {
+        for action in ADAPTER_ACTIONS {
+            assert!(action.inputs.contains(&"**/go.mod"));
+            assert!(action.inputs.contains(&"**/go.sum"));
+            assert!(action.inputs.contains(&"go.work"));
+            assert!(action.inputs.contains(&"go.work.sum"));
         }
     }
 

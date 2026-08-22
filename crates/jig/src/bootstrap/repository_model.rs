@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
-    ActionId, ActionIntent, ActionRunner, ActionSpec, AdapterRunnerDescriptor, ComponentId,
-    ComponentSpec, FieldProvenance, ManifestTool, ProfileId, ProfileSpec, TargetId, kind,
+    ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, AdapterRunnerDescriptor,
+    ComponentId, ComponentSpec, FieldProvenance, ManifestTool, ProfileId, ProfileSpec, TargetId,
+    kind,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,6 +16,8 @@ use super::source_inputs::FRONTEND_SHARED_INPUTS;
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
 const DEFAULT_PROFILE: &str = "verify";
+const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
+const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RepositoryRenderModel {
@@ -231,6 +234,13 @@ impl<'a> ModelBuilder<'a> {
             return Ok(());
         }
 
+        let first_app = self
+            .answers
+            .frontend_apps()
+            .first()
+            .expect("the frontend harness is enabled only with configured apps")
+            .clone();
+        self.add_frontend_contract_actions(&first_app)?;
         for app in self.answers.frontend_apps() {
             let component = frontend_component(app)?;
             let component_name = component.id.to_string();
@@ -238,6 +248,45 @@ impl<'a> ModelBuilder<'a> {
             self.add_typescript_actions(&component_name, app)?;
         }
         self.add_typescript_compatibility_actions()?;
+        Ok(())
+    }
+
+    fn add_frontend_contract_actions(&mut self, dependency_anchor: &FrontendApp) -> Result<()> {
+        for (action_id, description, mode) in [
+            (
+                FRONTEND_CONTRACT_DRIFT_ACTION,
+                "Check repository-wide OpenAPI and generated-client drift.",
+                "contracts-drift-check",
+            ),
+            (
+                FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                "Check the repository-wide public/private dependency boundary.",
+                "contracts-boundary-check",
+            ),
+        ] {
+            let command_key = CommandScope::Component.command_key(REPO_COMPONENT, action_id)?;
+            let command = format!(
+                "scripts/check-webapps.sh {mode} {}",
+                crate::shell::quote(&dependency_anchor.dir)
+            );
+            self.insert_command(&command_key, &command)?;
+            let mut action = ActionSpec::new(
+                target_id(REPO_COMPONENT, action_id)?,
+                ActionIntent::Check,
+                ActionRunner::command(command_key),
+            );
+            action.description = Some(description.into());
+            action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
+            action.inputs = frontend_contract_inputs();
+            action.provenance = provenance(&[
+                ("target", FieldProvenance::Inferred),
+                ("intent", FieldProvenance::Inherited),
+                ("effects", FieldProvenance::Inherited),
+                ("runner", FieldProvenance::Inferred),
+                ("inputs", FieldProvenance::Inferred),
+            ]);
+            self.insert_action(action)?;
+        }
         Ok(())
     }
 
@@ -347,12 +396,23 @@ impl<'a> ModelBuilder<'a> {
             action.description = Some(descriptor.description.into());
             action.effects = descriptor.effects.to_vec();
             action.inputs = frontend_inputs(&app.dir, descriptor.inputs);
+            action.depends_on = match descriptor.id {
+                "typecheck" => vec![
+                    target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION)?,
+                    target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?,
+                ],
+                "build" => {
+                    vec![target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?]
+                }
+                _ => Vec::new(),
+            };
             action.provenance = provenance(&[
                 ("target", FieldProvenance::Declared),
                 ("intent", FieldProvenance::Inherited),
                 ("effects", FieldProvenance::Inherited),
                 ("runner", FieldProvenance::Inferred),
                 ("inputs", FieldProvenance::Inferred),
+                ("depends_on", FieldProvenance::Inferred),
             ]);
             self.insert_action(action)?;
         }
@@ -573,6 +633,25 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
     resolved
 }
 
+fn frontend_contract_inputs() -> Vec<String> {
+    let mut inputs = FRONTEND_SHARED_INPUTS
+        .iter()
+        .copied()
+        .chain([
+            "Cargo.toml",
+            "**/Cargo.toml",
+            "**/*.rs",
+            "go.mod",
+            "**/go.mod",
+            "**/*.go",
+        ])
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
 fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProvenance> {
     entries
         .iter()
@@ -676,6 +755,41 @@ role = "admin"
                 .iter()
                 .any(|target| target.to_string() == "web:test")
         );
+
+        let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
+        let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
+        assert_eq!(
+            model
+                .actions
+                .iter()
+                .filter(|action| action.target == drift_target)
+                .count(),
+            1
+        );
+        assert_eq!(
+            model
+                .actions
+                .iter()
+                .filter(|action| action.target == boundary_target)
+                .count(),
+            1
+        );
+        for component in ["web", "admin"] {
+            let typecheck = model
+                .actions
+                .iter()
+                .find(|action| action.target.to_string() == format!("{component}:typecheck"))
+                .unwrap();
+            assert!(typecheck.depends_on.contains(&drift_target));
+            assert!(typecheck.depends_on.contains(&boundary_target));
+
+            let build = model
+                .actions
+                .iter()
+                .find(|action| action.target.to_string() == format!("{component}:build"))
+                .unwrap();
+            assert_eq!(build.depends_on, std::slice::from_ref(&boundary_target));
+        }
     }
 
     #[test]

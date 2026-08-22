@@ -55,14 +55,20 @@ const mode = process.argv[2];
 if (mode === "generate" || mode === "check") {
   await assertPublicBoundary([], true);
   await withStagedContracts(mode);
+} else if (mode === "drift-check") {
+  await withStagedContracts("check");
+} else if (mode === "boundary-check") {
+  await assertPublicBoundary([], true);
 } else if (mode === "client-check") {
   await assertPublicBoundary([], false);
   await withStagedClients();
 } else if (mode === "public-check") {
   await assertPublicBoundary(process.argv.slice(3), true);
+} else if (mode === "artifact-check") {
+  await assertPublicArtifacts(process.argv.slice(3), false);
 } else {
   throw new Error(
-    "Usage: node scripts/contracts.mjs generate|check|client-check|public-check [public-artifact ...]",
+    "Usage: node scripts/contracts.mjs generate|check|drift-check|boundary-check|client-check|public-check|artifact-check [public-artifact ...]",
   );
 }
 
@@ -234,7 +240,11 @@ async function assertPublicBoundary(explicitArtifacts, checkBackendDependencies)
   }
 [% endif %]
 
-  const conventionalArtifacts = [
+  await assertPublicArtifacts(explicitArtifacts, true);
+}
+
+async function assertPublicArtifacts(explicitArtifacts, includeConventionalArtifacts) {
+  const conventionalArtifacts = includeConventionalArtifacts ? [
     ...publicFrontendDirs.map((directory) => join(directory, "dist")),
 [% if backend_language == "rust" %]
     "target/debug/<<[ package_name ]>>-api",
@@ -244,7 +254,7 @@ async function assertPublicBoundary(explicitArtifacts, checkBackendDependencies)
 [% endif %]
     "docs/public",
     "public-docs",
-  ];
+  ] : [];
   for (const artifact of conventionalArtifacts) {
     const absolute = resolve(artifact);
     if (await pathExists(absolute)) await scanArtifact(absolute, artifact);

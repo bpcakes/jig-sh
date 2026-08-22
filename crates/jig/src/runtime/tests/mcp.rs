@@ -337,13 +337,9 @@ fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
         .path()
         .join(".agent/.cache/run-leases")
         .join(format!("{run_id}.lock"));
-    let lease_cleanup_deadline = Instant::now() + Duration::from_secs(1);
-    while lease_path.exists() && Instant::now() < lease_cleanup_deadline {
-        thread::sleep(Duration::from_millis(1));
-    }
     assert!(
-        !lease_path.exists(),
-        "terminal worker lease was not removed"
+        lease_path.exists(),
+        "terminal worker lease must keep a stable inode"
     );
 
     let terminal_cancel = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
