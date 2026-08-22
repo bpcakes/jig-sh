@@ -2,10 +2,6 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
-use jig_owned_process::{
-    ProcessOutputLimits, ProcessOutputOverflowPolicy,
-    run_owned_process_tree_with_output_policy_and_observer,
-};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -13,8 +9,8 @@ use crate::context::RepoContext;
 #[cfg(test)]
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{
-    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
-    ProcessExecutionObserver,
+    ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
+    run_authoritative_execution_command,
 };
 use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
@@ -385,7 +381,7 @@ struct CommandToolInvocation<'a> {
 }
 
 enum ConfiguredCommandOutcome {
-    Completed(jig_owned_process::OwnedProcessTreeOutput),
+    Completed(std::process::Output),
     CancelledBeforeStart,
     Cancelled,
 }
@@ -530,14 +526,8 @@ fn execute_command_tool(
         }
     };
     let exit_status = output.status.code().unwrap_or(1);
-    let stdout = output
-        .stdout
-        .as_ref()
-        .map_or_else(String::new, |output| output.to_string_lossy());
-    let stderr = output
-        .stderr
-        .as_ref()
-        .map_or_else(String::new, |output| output.to_string_lossy());
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     let receipt_result = maybe_record_receipt(
         ctx,
@@ -643,28 +633,23 @@ fn run_configured_command(
     }
 
     let phase = ExecutionPhase::start(observer, tool_name, position);
-    let result = match run_owned_process_tree_with_output_policy_and_observer(
+    let label = format!("Configured command for {tool_name}");
+    let result = match run_authoritative_execution_command(
         &mut command,
-        ctx.command_timeout().duration(),
-        ProcessOutputLimits {
-            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
-            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
-        },
-        ProcessOutputOverflowPolicy::Error,
-        &mut ProcessExecutionObserver::new(observer, tool_name),
+        ctx.command_timeout(),
+        &label,
+        observer,
     ) {
-        Ok(output) => require_complete_command_output(output, tool_name)
-            .map(ConfiguredCommandOutcome::Completed),
-        Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart) => {
+        Ok(output) => Ok(ConfiguredCommandOutcome::Completed(std::process::Output {
+            status: output.status,
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })),
+        Err(ExecutionCommandError::CancelledBeforeStart) => {
             Ok(ConfiguredCommandOutcome::CancelledBeforeStart)
         }
-        Err(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
-            Ok(ConfiguredCommandOutcome::Cancelled)
-        }
-        Err(error) => Err(anyhow!(
-            "Configured command for {tool_name} failed under process supervision (timeout: {}s): {error}",
-            ctx.command_timeout().as_secs()
-        )),
+        Err(ExecutionCommandError::Cancelled) => Ok(ConfiguredCommandOutcome::Cancelled),
+        Err(ExecutionCommandError::Failed(error)) => Err(error),
     };
     phase.finish(
         observer,
@@ -676,26 +661,6 @@ fn run_configured_command(
         }),
     );
     result
-}
-
-fn require_complete_command_output(
-    output: jig_owned_process::OwnedProcessTreeOutput,
-    tool_name: &str,
-) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
-    for (stream, capture) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
-        let capture = capture.as_ref().with_context(|| {
-            format!("Configured command for {tool_name} did not capture {stream}")
-        })?;
-        if capture.truncated {
-            bail!(
-                "Configured command for {tool_name} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
-            );
-        }
-        if !capture.complete {
-            bail!("Configured command for {tool_name} did not finish capturing {stream}");
-        }
-    }
-    Ok(output)
 }
 
 #[derive(Serialize)]
