@@ -277,9 +277,11 @@ impl PreparedCheckout {
                 let mut retained = outcome == TaskOutcome::Failed
                     || dirty.unwrap_or(true)
                     || head_changed.unwrap_or(true);
-                if !retained && let Err(error) = remove_worktree(&repo_root, &path, false) {
-                    retained = true;
-                    errors.push(format!("Failed to remove clean task worktree: {error:#}"));
+                if !retained {
+                    if let Err(error) = remove_worktree(&repo_root, &path, false) {
+                        retained = true;
+                        errors.push(format!("Failed to remove clean task worktree: {error:#}"));
+                    }
                 }
                 CheckoutCompletion {
                     report: CheckoutReport::Worktree {

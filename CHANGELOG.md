@@ -27,6 +27,7 @@
 - Preserve session-lookup cancellation even when Codex app-server emits stderr
 
 ### Changed
+- Return unsuccessful CLI exit codes when loop ticks, dispatches, or runs fail or need attention
 - Plan dev session management
 - Split dev lifecycle modules
 - Close dev session management work

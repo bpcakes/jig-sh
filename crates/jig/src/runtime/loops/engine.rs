@@ -7,7 +7,7 @@ use crate::context::RepoContext;
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
-use super::occurrence::OccurrenceStore;
+use super::occurrence::{OccurrenceStatus, OccurrenceStore};
 use super::state::{AttemptSections, AttemptStore, LeaseAcquire, LeaseGuard, LeaseStore};
 use super::workflow::{
     CODEX_TASK_KIND, GITHUB_PR_STATUS_KIND, NOOP_STATUS_KIND, PR_MANAGER_KIND, ResolvedWorkflow,
@@ -19,9 +19,45 @@ struct TickExecution {
     item_key: String,
 }
 
-pub(super) struct ScheduledTick {
-    pub(super) value: Value,
-    pub(super) completion: WorkflowCompletion,
+pub(super) enum ScheduledTick {
+    Reported {
+        value: Value,
+        completion: WorkflowCompletion,
+    },
+    Errored {
+        value: Option<Value>,
+        completion: WorkflowCompletion,
+        error: String,
+    },
+}
+
+impl ScheduledTick {
+    pub(super) fn value(&self) -> Option<&Value> {
+        match self {
+            Self::Reported { value, .. } => Some(value),
+            Self::Errored { value, .. } => value.as_ref(),
+        }
+    }
+
+    pub(super) fn completion(&self) -> &WorkflowCompletion {
+        match self {
+            Self::Reported { completion, .. } | Self::Errored { completion, .. } => completion,
+        }
+    }
+
+    pub(super) fn error(&self) -> Option<&str> {
+        match self {
+            Self::Reported { .. } => None,
+            Self::Errored { error, .. } => Some(error),
+        }
+    }
+
+    fn into_manual_result(self) -> Result<Value> {
+        match self {
+            Self::Reported { value, .. } => Ok(value),
+            Self::Errored { error, .. } => Err(anyhow::anyhow!(error)),
+        }
+    }
 }
 
 pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
@@ -36,7 +72,7 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         },
         &never_cancelled,
     )
-    .map(|tick| tick.value)
+    .and_then(ScheduledTick::into_manual_result)
 }
 
 pub(super) fn tick_scheduled(
@@ -190,7 +226,7 @@ fn tick_with_execution(
         "error": tick_error,
         "item_key": execution.item_key,
     });
-    let receipt_id = record_receipt(
+    let receipt_id = match record_receipt(
         ctx,
         ReceiptInput {
             tool_name: LOOP_TICK_TOOL,
@@ -218,16 +254,16 @@ fn tick_with_execution(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
-    )?;
-
-    if let Some(error) = evidence["error"].as_str() {
-        bail!(
-            "Loop workflow '{}' failed; receipt {}: {}",
-            workflow.id,
-            receipt_id,
-            error
-        );
-    }
+    ) {
+        Ok(receipt_id) => receipt_id,
+        Err(error) => {
+            return Ok(ScheduledTick::Errored {
+                value: None,
+                completion,
+                error: format!("Failed to record loop tick receipt: {error:#}"),
+            });
+        }
+    };
 
     let value = json!({
         "ok": status != "failed",
@@ -247,7 +283,18 @@ fn tick_with_execution(
         "release_warning": release_warning,
         "item_key": evidence["item_key"],
     });
-    Ok(ScheduledTick { value, completion })
+    if let Some(error) = evidence["error"].as_str() {
+        return Ok(ScheduledTick::Errored {
+            value: Some(value),
+            completion,
+            error: format!(
+                "Loop workflow '{}' failed; receipt {}: {}",
+                workflow.id, receipt_id, error
+            ),
+        });
+    }
+
+    Ok(ScheduledTick::Reported { value, completion })
 }
 
 pub(super) fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
@@ -283,8 +330,9 @@ pub(super) fn status_with_cancellation(
     ensure_status_active(cancelled)?;
     let mut occurrences =
         OccurrenceStore::new(ctx).snapshot_read_only_with_cancellation(cancelled)?;
-    if let Some(workflow) = request.workflow.as_deref() {
-        occurrences.retain(|record| record.workflow_id == workflow);
+    if request.workflow.is_some() {
+        let workflow_id = &resolved_workflows[0].id;
+        occurrences.retain(|record| record.workflow_id == *workflow_id);
     }
     ensure_status_active(cancelled)?;
     let checked_at_ms = now_ms();
@@ -311,8 +359,9 @@ pub(super) fn status_with_cancellation(
     let scheduled_needs_attention = occurrences
         .iter()
         .filter(|record| {
-            record.status == "needs_attention"
-                || (record.status == "running" && record.claim_expires_at_ms <= checked_at_ms)
+            record.status == OccurrenceStatus::NeedsAttention
+                || (record.status == OccurrenceStatus::Running
+                    && record.claim_expires_at_ms <= checked_at_ms)
         })
         .cloned()
         .collect::<Vec<_>>();

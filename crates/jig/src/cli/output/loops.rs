@@ -22,12 +22,14 @@ pub(super) fn format_loop_dispatch_summary(value: &serde_json::Value) -> String 
     let status = value_str(value, "status").unwrap_or("unknown");
     let due = value_u64(value, "due_count").unwrap_or(0);
     let executed = value_u64(value, "executed_count").unwrap_or(0);
+    let skipped = value_u64(value, "skipped_count").unwrap_or(0);
     let failed = value_u64(value, "failed_count").unwrap_or(0);
     let attention = value_u64(value, "needs_attention_count").unwrap_or(0);
     [
         format!("Loop dispatch: {status}"),
         format!("  Due: {due}"),
         format!("  Executed: {executed} ({failed} failed)"),
+        format!("  Skipped: {skipped}"),
         format!("  Needs attention: {attention}"),
         "  full report: rerun with --json".into(),
     ]
@@ -94,4 +96,23 @@ pub(super) fn format_loop_clear_attempt_summary(value: &serde_json::Value) -> St
         "  full report: rerun with --json".into(),
     ]
     .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn dispatch_summary_reports_deferred_occurrences() {
+        let summary = super::format_loop_dispatch_summary(&json!({
+            "status": "idle",
+            "due_count": 1,
+            "executed_count": 0,
+            "skipped_count": 1,
+            "failed_count": 0,
+            "needs_attention_count": 0,
+        }));
+
+        assert!(summary.contains("  Skipped: 1"), "{summary}");
+    }
 }

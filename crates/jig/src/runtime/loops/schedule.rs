@@ -11,10 +11,17 @@ use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
 use super::engine::{ScheduledTick, tick, tick_scheduled};
 use super::occurrence::{
-    OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStore, ScheduleOccurrence,
+    OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceOutcome, OccurrenceStatus,
+    OccurrenceStore, ScheduleOccurrence,
 };
 use super::workflow::{
     ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, resolve_workflow,
+};
+
+mod policy;
+
+use policy::{
+    DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails, begin_execution,
 };
 
 #[derive(Clone, Debug)]
@@ -29,126 +36,6 @@ pub(super) struct ScheduleSpec {
 pub(super) struct ScheduleWindow {
     pub(super) due_at_ms: Option<u64>,
     pub(super) next_at_ms: u64,
-}
-
-#[derive(Default)]
-struct DispatchStep {
-    action: Option<Value>,
-    due_count: u64,
-    executed_count: u64,
-    skipped_count: u64,
-    failed_count: u64,
-}
-
-#[derive(Default)]
-struct DispatchSummary {
-    due_count: u64,
-    executed_count: u64,
-    skipped_count: u64,
-    failed_count: u64,
-    needs_attention_count: u64,
-}
-
-impl DispatchSummary {
-    fn include(&mut self, step: &DispatchStep) {
-        self.due_count += step.due_count;
-        self.executed_count += step.executed_count;
-        self.skipped_count += step.skipped_count;
-        self.failed_count += step.failed_count;
-    }
-
-    fn requires_attention(&self) -> bool {
-        self.failed_count > 0 || self.needs_attention_count > 0
-    }
-
-    fn status(&self) -> &'static str {
-        if self.failed_count > 0 {
-            "failed"
-        } else if self.needs_attention_count > 0 {
-            "needs_attention"
-        } else if self.executed_count > 0 {
-            "acted"
-        } else {
-            "idle"
-        }
-    }
-}
-
-impl DispatchStep {
-    fn action(action: Value) -> Self {
-        Self {
-            action: Some(action),
-            ..Self::default()
-        }
-    }
-
-    fn failure(workflow_id: &str, error: impl std::fmt::Display) -> Self {
-        Self {
-            action: Some(json!({
-                "workflow_id": workflow_id,
-                "status": "failed",
-                "error": error.to_string(),
-            })),
-            failed_count: 1,
-            ..Self::default()
-        }
-    }
-}
-
-fn begin_execution<T>(step: &mut DispatchStep, start: impl FnOnce() -> Result<T>) -> Result<T> {
-    let execution = start()?;
-    step.executed_count = 1;
-    Ok(execution)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RunTickDisposition {
-    Continue,
-    Failed,
-    Stop(&'static str),
-}
-
-#[derive(Default)]
-struct RunSummary {
-    failed: bool,
-    stop_status: Option<&'static str>,
-}
-
-impl RunSummary {
-    fn observe(&mut self, disposition: RunTickDisposition) -> bool {
-        match disposition {
-            RunTickDisposition::Continue => false,
-            RunTickDisposition::Failed => {
-                self.failed = true;
-                false
-            }
-            RunTickDisposition::Stop(status) => {
-                self.stop_status = Some(status);
-                true
-            }
-        }
-    }
-
-    fn status(&self) -> &'static str {
-        if self.failed {
-            "failed"
-        } else {
-            self.stop_status.unwrap_or("max_ticks_reached")
-        }
-    }
-}
-
-impl RunTickDisposition {
-    fn from_tick(tick: &Value) -> Self {
-        match tick["status"].as_str() {
-            Some("failed") => Self::Failed,
-            Some("waiting") => Self::Stop("waiting"),
-            Some("disabled") => Self::Stop("disabled"),
-            Some("needs_attention") => Self::Stop("needs_attention"),
-            _ if tick["idle"].as_bool() == Some(true) => Self::Stop("idle"),
-            _ => Self::Continue,
-        }
-    }
 }
 
 impl ScheduleSpec {
@@ -277,7 +164,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
         occurrences
             .snapshot()?
             .iter()
-            .filter(|occurrence| occurrence.status == "needs_attention")
+            .filter(|occurrence| occurrence.status == OccurrenceStatus::NeedsAttention)
             .count(),
     )
     .unwrap_or(u64::MAX);
@@ -401,7 +288,7 @@ fn dispatch_workflow(
                     &claim.occurrence_id,
                     &claim.owner,
                     OccurrenceFinish {
-                        status: "failed",
+                        outcome: OccurrenceOutcome::Failed,
                         worker_receipt_id: None,
                         worktree: None,
                         error: Some(&error),
@@ -422,10 +309,10 @@ fn dispatch_workflow(
     };
     let cancelled = || guard.renewal_failed();
     let tick = tick_scheduled(ctx, &workflow.id, &claim.occurrence_id, &cancelled);
-    if tick
-        .as_ref()
-        .is_ok_and(|tick| tick.value["lease_acquired"].as_bool() == Some(false))
-    {
+    if tick.as_ref().is_ok_and(|tick| {
+        tick.value()
+            .is_some_and(|value| value["lease_acquired"].as_bool() == Some(false))
+    }) {
         return match guard.abandon() {
             Ok(abandoned) => {
                 step.executed_count = 0;
@@ -436,7 +323,7 @@ fn dispatch_workflow(
                     "status": "deferred",
                     "reason": "workflow_lease_held",
                     "next_at_ms": window.next_at_ms,
-                    "tick": tick.ok().map(|tick| tick.value),
+                    "tick": tick_value(&tick),
                 }));
                 step
             }
@@ -446,27 +333,27 @@ fn dispatch_workflow(
                     workflow,
                     &claim,
                     window.next_at_ms,
-                    tick.ok().map(|tick| tick.value),
+                    tick_value(&tick),
                     format!("Failed to abandon deferred occurrence: {error:#}"),
                 ));
                 step
             }
         };
     }
-    let (status, worker_receipt_id, worktree, error) = terminal_details(&tick);
+    let details = TerminalDetails::from_tick(&tick);
     match guard.finish(OccurrenceFinish {
-        status,
-        worker_receipt_id: worker_receipt_id.as_deref(),
-        worktree: worktree.as_deref(),
-        error: error.as_deref(),
+        outcome: details.outcome,
+        worker_receipt_id: details.worker_receipt_id.as_deref(),
+        worktree: details.worktree.as_deref(),
+        error: details.error.as_deref(),
     }) {
         Ok(record) => {
-            step.failed_count = u64::from(status == "failed");
+            step.failed_count = u64::from(details.outcome == OccurrenceOutcome::Failed);
             step.action = Some(dispatch_action(
                 &record,
-                status,
+                details.outcome.status().as_str(),
                 window.next_at_ms,
-                tick.ok().map(|tick| tick.value),
+                tick_value(&tick),
             ));
         }
         Err(finish_error) => {
@@ -475,7 +362,7 @@ fn dispatch_workflow(
                 workflow,
                 &claim,
                 window.next_at_ms,
-                tick.ok().map(|tick| tick.value),
+                tick_value(&tick),
                 format!("Failed to finish scheduled occurrence: {finish_error:#}"),
             ));
         }
@@ -500,21 +387,8 @@ fn dispatch_state_failure(
     })
 }
 
-fn terminal_details(
-    tick: &Result<ScheduledTick>,
-) -> (&'static str, Option<String>, Option<String>, Option<String>) {
-    match tick {
-        Ok(tick) => {
-            let failed = tick.value["status"].as_str() == Some("failed");
-            (
-                if failed { "failed" } else { "succeeded" },
-                tick.completion.worker_receipt_id.clone(),
-                tick.completion.worktree.clone(),
-                tick.completion.error.clone(),
-            )
-        }
-        Err(error) => ("failed", None, None, Some(format!("{error:#}"))),
-    }
+fn tick_value(tick: &Result<ScheduledTick>) -> Option<Value> {
+    tick.as_ref().ok().and_then(ScheduledTick::value).cloned()
 }
 
 fn dispatch_action(
@@ -598,12 +472,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
+    use super::super::workflow::WorkflowCompletion;
     use super::{
         DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, ScheduleSpec,
-        begin_execution, dispatch_due_at,
+        TerminalDetails, begin_execution, dispatch_due_at,
     };
     use crate::command::LoopStatusRequest;
     use crate::context::RepoContext;
+    use crate::runtime::loops::engine::ScheduledTick;
     use crate::test_env::TestRepoBuilder;
 
     #[test]
@@ -678,6 +554,47 @@ mod tests {
 
         begin_execution(&mut step, || Ok(())).unwrap();
         assert_eq!(step.executed_count, 1);
+    }
+
+    #[test]
+    fn scheduled_tick_preserves_needs_attention_as_an_occurrence_outcome() {
+        let tick = Ok(ScheduledTick::Reported {
+            value: json!({"status": "needs_attention"}),
+            completion: WorkflowCompletion::default(),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(
+            details.outcome,
+            super::super::occurrence::OccurrenceOutcome::NeedsAttention
+        );
+    }
+
+    #[test]
+    fn scheduled_tick_error_keeps_worker_completion_evidence() {
+        let tick = Ok(ScheduledTick::Errored {
+            value: Some(json!({"status": "failed"})),
+            completion: WorkflowCompletion {
+                worker_receipt_id: Some("receipt-worker".into()),
+                worktree: Some("/tmp/retained-worktree".into()),
+                error: Some("worker failed".into()),
+            },
+            error: "tick receipt failed".into(),
+        });
+
+        let details = TerminalDetails::from_tick(&tick);
+
+        assert_eq!(
+            details.outcome,
+            super::super::occurrence::OccurrenceOutcome::Failed
+        );
+        assert_eq!(details.worker_receipt_id.as_deref(), Some("receipt-worker"));
+        assert_eq!(details.worktree.as_deref(), Some("/tmp/retained-worktree"));
+        assert_eq!(
+            details.error.as_deref(),
+            Some("tick receipt failed; workflow completion: worker failed")
+        );
     }
 
     #[test]

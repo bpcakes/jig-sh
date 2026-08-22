@@ -32,7 +32,7 @@ pub(super) struct ScheduleOccurrence {
     pub(super) started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) finished_at_ms: Option<u64>,
-    pub(super) status: String,
+    pub(super) status: OccurrenceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worker_receipt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,14 +42,60 @@ pub(super) struct ScheduleOccurrence {
 }
 
 impl ScheduleOccurrence {
-    pub(super) fn is_terminal(&self) -> bool {
-        self.status != "running"
+    fn is_prunable_history(&self) -> bool {
+        matches!(
+            self.status,
+            OccurrenceStatus::Succeeded | OccurrenceStatus::Failed
+        )
     }
 
     fn has_retained_worktree(&self) -> bool {
         self.worktree
             .as_deref()
             .is_some_and(|worktree| Path::new(worktree).exists())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum OccurrenceStatus {
+    Running,
+    Succeeded,
+    Failed,
+    NeedsAttention,
+}
+
+impl OccurrenceStatus {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::NeedsAttention => "needs_attention",
+        }
+    }
+}
+
+impl std::fmt::Display for OccurrenceStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum OccurrenceOutcome {
+    Succeeded,
+    Failed,
+    NeedsAttention,
+}
+
+impl OccurrenceOutcome {
+    pub(super) const fn status(self) -> OccurrenceStatus {
+        match self {
+            Self::Succeeded => OccurrenceStatus::Succeeded,
+            Self::Failed => OccurrenceStatus::Failed,
+            Self::NeedsAttention => OccurrenceStatus::NeedsAttention,
+        }
     }
 }
 
@@ -74,7 +120,7 @@ pub(super) enum OccurrenceClaim {
 }
 
 pub(super) struct OccurrenceFinish<'a> {
-    pub(super) status: &'a str,
+    pub(super) outcome: OccurrenceOutcome,
     pub(super) worker_receipt_id: Option<&'a str>,
     pub(super) worktree: Option<&'a str>,
     pub(super) error: Option<&'a str>,
@@ -210,18 +256,12 @@ impl OccurrenceStore {
         owner: &str,
         finish: OccurrenceFinish<'_>,
     ) -> Result<ScheduleOccurrence> {
-        if !matches!(finish.status, "succeeded" | "failed") {
-            bail!(
-                "Unsupported scheduled occurrence terminal status '{}'; expected succeeded or failed",
-                finish.status
-            );
-        }
         self.with_locked(|store| {
             let record = store.occurrences.get_mut(occurrence_id).ok_or_else(|| {
                 anyhow::anyhow!("Scheduled occurrence not found: {occurrence_id}")
             })?;
             require_running_owner(record, owner)?;
-            record.status = finish.status.to_string();
+            record.status = finish.outcome.status();
             record.finished_at_ms = Some(now_ms());
             record.worker_receipt_id = finish.worker_receipt_id.map(str::to_string);
             record.worktree = finish.worktree.map(str::to_string);
@@ -298,7 +338,7 @@ impl OccurrenceStore {
                 claim_expires_at_ms: expiry(now, ttl_seconds),
                 started_at_ms: now,
                 finished_at_ms: None,
-                status: "running".into(),
+                status: OccurrenceStatus::Running,
                 worker_receipt_id: None,
                 worktree: None,
                 error: None,
@@ -354,7 +394,7 @@ fn require_running_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()>
             record.occurrence_id
         );
     }
-    if record.status != "running" {
+    if record.status != OccurrenceStatus::Running {
         bail!(
             "Scheduled occurrence '{}' is already {}",
             record.occurrence_id,
@@ -367,8 +407,8 @@ fn require_running_owner(record: &ScheduleOccurrence, owner: &str) -> Result<()>
 fn reconcile_stale_file(store: &mut ScheduleFile, now: u64) -> Vec<ScheduleOccurrence> {
     let mut reconciled = Vec::new();
     for record in store.occurrences.values_mut() {
-        if record.status == "running" && record.claim_expires_at_ms <= now {
-            record.status = "needs_attention".into();
+        if record.status == OccurrenceStatus::Running && record.claim_expires_at_ms <= now {
+            record.status = OccurrenceStatus::NeedsAttention;
             record.finished_at_ms = Some(now);
             record.error = Some("scheduled task stopped without a terminal result".into());
             reconciled.push(record.clone());
@@ -406,7 +446,7 @@ fn prune_history(store: &mut ScheduleFile) {
             .values()
             .filter(|record| {
                 record.workflow_id == workflow_id
-                    && record.is_terminal()
+                    && record.is_prunable_history()
                     && !record.has_retained_worktree()
             })
             .map(|record| (record.scheduled_at_ms, record.occurrence_id.clone()))
@@ -455,7 +495,7 @@ mod tests {
                     &claim.occurrence_id,
                     "another-owner",
                     OccurrenceFinish {
-                        status: "succeeded",
+                        outcome: OccurrenceOutcome::Succeeded,
                         worker_receipt_id: None,
                         worktree: None,
                         error: None,
@@ -485,14 +525,14 @@ mod tests {
         assert!(store.reconcile_stale_at(3_999).unwrap().is_empty());
         let reconciled = store.reconcile_stale_at(4_000).unwrap();
         assert_eq!(reconciled.len(), 1);
-        assert_eq!(reconciled[0].status, "needs_attention");
+        assert_eq!(reconciled[0].status, OccurrenceStatus::NeedsAttention);
 
         let OccurrenceClaim::AlreadyRecorded(existing) =
             store.claim_at("nightly", 100, 2, 5_000).unwrap()
         else {
             panic!("stale occurrence must not be reclaimed");
         };
-        assert_eq!(existing.status, "needs_attention");
+        assert_eq!(existing.status, OccurrenceStatus::NeedsAttention);
     }
 
     #[test]
@@ -509,13 +549,13 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1_200));
         let finished = guard
             .finish(OccurrenceFinish {
-                status: "succeeded",
+                outcome: OccurrenceOutcome::Succeeded,
                 worker_receipt_id: None,
                 worktree: None,
                 error: None,
             })
             .unwrap();
-        assert_eq!(finished.status, "succeeded");
+        assert_eq!(finished.status, OccurrenceStatus::Succeeded);
     }
 
     #[test]
@@ -536,7 +576,7 @@ mod tests {
                     claim_expires_at_ms: 0,
                     started_at_ms: 0,
                     finished_at_ms: Some(1),
-                    status: "succeeded".into(),
+                    status: OccurrenceStatus::Succeeded,
                     worker_receipt_id: None,
                     worktree: (scheduled_at_ms == 0).then(|| retained.display().to_string()),
                     error: None,
@@ -555,6 +595,39 @@ mod tests {
 
         assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW);
         assert!(!store.occurrences.contains_key("nightly@0"));
+    }
+
+    #[test]
+    fn pruning_never_discards_occurrences_that_need_attention() {
+        let mut store = ScheduleFile::default();
+        for scheduled_at_ms in 0..=OCCURRENCE_HISTORY_PER_WORKFLOW as u64 {
+            let occurrence_id = occurrence_id("nightly", scheduled_at_ms);
+            store.occurrences.insert(
+                occurrence_id.clone(),
+                ScheduleOccurrence {
+                    occurrence_id,
+                    workflow_id: "nightly".into(),
+                    scheduled_at_ms,
+                    owner: "owner".into(),
+                    claim_expires_at_ms: 0,
+                    started_at_ms: 0,
+                    finished_at_ms: Some(1),
+                    status: if scheduled_at_ms == 0 {
+                        OccurrenceStatus::NeedsAttention
+                    } else {
+                        OccurrenceStatus::Succeeded
+                    },
+                    worker_receipt_id: None,
+                    worktree: None,
+                    error: None,
+                },
+            );
+        }
+
+        prune_history(&mut store);
+
+        assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW + 1);
+        assert!(store.occurrences.contains_key("nightly@0"));
     }
 
     fn write_loop_fixture_repo(root: &std::path::Path) {
