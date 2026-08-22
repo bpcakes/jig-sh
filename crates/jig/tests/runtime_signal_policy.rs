@@ -58,6 +58,8 @@ exec sleep 60
     let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(["state", "diagnose", "--deep"])
         .current_dir(temp.path())
+        .env_remove("JIG_REPO_ROOT")
+        .env_remove("JIG_INVOKE_CWD")
         .env("PATH", path)
         .env("JIG_TEST_GIT_STARTED", &started_marker)
         .env("JIG_TEST_GIT_PID", &git_pid_path)

@@ -42,6 +42,8 @@ rust_test_command = "dd if=/dev/zero bs=262144 count=1 2>/dev/null; exit 7"
         .args(["check", "test", "--no-receipt"])
         .current_dir(temp.path())
         .env("NO_COLOR", "1")
+        .env_remove("JIG_REPO_ROOT")
+        .env_remove("JIG_INVOKE_CWD")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -53,10 +55,9 @@ rust_test_command = "dd if=/dev/zero bs=262144 count=1 2>/dev/null; exit 7"
     let resized = unsafe { libc::fcntl(blocked_stderr.as_raw_fd(), libc::F_SETPIPE_SZ, 4096) };
     assert!(resized >= 4096, "failed to constrain test pipe capacity");
 
-    // Poll `waitpid(WNOHANG)` directly instead of installing another SIGCHLD
-    // waiter inside Nextest's child-heavy full suite. This outer watchdog only
-    // detects the historical infinite stderr-lock wait; production delivery
-    // still abandons after 250ms.
+    // Poll `waitpid(WNOHANG)` directly. This outer watchdog only detects the
+    // historical infinite stderr-lock wait; production delivery still
+    // abandons after 250ms.
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
