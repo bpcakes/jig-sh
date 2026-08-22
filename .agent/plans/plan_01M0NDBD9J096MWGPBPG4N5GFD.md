@@ -9,7 +9,7 @@ Fix the supported-host installer regression, restore the published status-provid
 - [x] (2026-08-22) Restore status-provider v1 path compatibility and its conformance regression.
 - [x] (2026-08-22) Supervise schema-check Git probes and add process-directed cancellation coverage.
 - [x] (2026-08-22) Remove residual Windows artifacts and guidance and add a tracked-file inventory guard.
-- [ ] Run focused validation, the full configured test gate, format, Clippy, contract, and template parity checks.
+- [x] (2026-08-22) Run focused validation, the full configured test gate, format, Clippy, contract, and template parity checks.
 - [ ] Review the final diff, record evidence, and close structured work.
 
 ## Surprises & Discoveries
@@ -29,7 +29,11 @@ Fix the supported-host installer regression, restore the published status-provid
 
 ## Outcomes & Retrospective
 
-Pending implementation and final validation.
+The review findings resolved in five behaviorally independent commits. The installer fallback now executes under a deliberately restricted `PATH`; status-provider v1 retains its published path semantics; schema Git probes share the command's cancellation, timeout, output-cap, and process-tree ownership; and a tracked-source guard covers the supported-host surface missed by the manual cleanup.
+
+The root causes were mixed. The installer import and residual artifacts were sweep omissions amplified by parity checks that verified identical copies without executing the copied behavior. The status-provider regression and schema cancellation gap were structural boundary mistakes: platform cleanup crossed a versioned wire contract, while cooperative cancellation stopped at a legacy subprocess helper. The fixes reduce future bug surface at those boundaries instead of adding isolated exceptions.
+
+Final validation passed on the committed implementation tree. `scripts/jig work check` recorded fresh passing contract and test receipts; Nextest ran 2,152 selected tests across 27 binaries with exit status 0. Direct `scripts/jig check fmt --no-receipt`, `scripts/jig check clippy --no-receipt`, `scripts/jig check contract --no-receipt`, launcher/template parity, supported-host inventory, agent-map, agent-guide, and `git diff --check` checks also passed.
 
 ## Context and orientation
 
