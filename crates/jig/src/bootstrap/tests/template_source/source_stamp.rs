@@ -2,51 +2,6 @@ use super::*;
 
 #[cfg(unix)]
 #[test]
-fn native_binary_header_policy_accepts_pe_and_rejects_malformed_mz_files() {
-    let temp = tempdir().unwrap();
-    let valid_pe = temp.path().join("jig.exe");
-    let malformed_pe = temp.path().join("malformed.exe");
-    let mut bytes = vec![0_u8; 132];
-    bytes[..2].copy_from_slice(b"MZ");
-    bytes[0x3c..0x40].copy_from_slice(&128_u32.to_le_bytes());
-    bytes[128..132].copy_from_slice(b"PE\0\0");
-    fs::write(&valid_pe, &bytes).unwrap();
-    bytes[128..132].copy_from_slice(b"NOPE");
-    fs::write(&malformed_pe, bytes).unwrap();
-    let installer = include_str!("../../embedded_template_snapshots/scripts/install-jig.sh.jinja");
-    let start = installer
-        .find("native_binary_header_is_supported() {")
-        .expect("installer should define native binary header validation");
-    let end = installer[start..]
-        .find("\nresolve_compatible_path_jig() {")
-        .map(|offset| start + offset)
-        .expect("PATH resolution should follow native header validation");
-    let script = format!(
-        "set -euo pipefail\nrequire_python3() {{ command -v python3 >/dev/null; }}\n{}\nnative_binary_header_is_supported \"$1\"\n",
-        &installer[start..end]
-    );
-
-    let valid = Command::new("bash")
-        .args(["-c", &script, "pe-header"])
-        .arg(&valid_pe)
-        .output()
-        .unwrap();
-    assert!(
-        valid.status.success(),
-        "valid PE header was rejected: {}",
-        String::from_utf8_lossy(&valid.stderr)
-    );
-
-    let malformed = Command::new("bash")
-        .args(["-c", &script, "pe-header"])
-        .arg(&malformed_pe)
-        .output()
-        .unwrap();
-    assert!(!malformed.status.success());
-}
-
-#[cfg(unix)]
-#[test]
 fn local_source_stamp_fails_closed_when_git_diff_fails() {
     use std::os::unix::fs::PermissionsExt;
 

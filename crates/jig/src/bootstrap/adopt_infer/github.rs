@@ -9,8 +9,8 @@ use super::scan::{
 };
 
 const DEFAULT_SUPPORTED_GITHUB_RUNNER: &str = "ubuntu-latest";
-const WINDOWS_RUNNER_EXCLUSION_WARNING: &str = "Windows GitHub Actions runners are unsupported by Jig and were excluded from generated-check runner inference";
-const WINDOWS_RUNNER_FALLBACK_WARNING: &str = "ubuntu-latest was synthesized because every statically detected GitHub Actions runner targets unsupported Windows hosts";
+const UNSUPPORTED_RUNNER_EXCLUSION_WARNING: &str = "GitHub Actions runners outside Jig's supported host set were excluded from generated-check runner inference";
+const UNSUPPORTED_RUNNER_FALLBACK_WARNING: &str = "ubuntu-latest was synthesized because no statically detected GitHub Actions runner targets a supported host";
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct GithubCiInference {
@@ -77,27 +77,27 @@ pub(super) fn infer_ci_github_runner_with_metadata(
     }
     let supported_runner_count = runners
         .keys()
-        .filter(|runner| !runner_is_windows_host(runner))
+        .filter(|runner| runner_is_supported_host(runner))
         .count();
     if supported_runner_count > 1 {
         push_scan_warning(
             warnings,
             &workflows,
-            "multiple GitHub Actions runners detected; using the most common non-Windows runner with an ubuntu tie-break",
+            "multiple GitHub Actions runners detected for supported hosts; using the most common runner with an ubuntu tie-break",
         );
     }
-    let unsupported_windows_runners = runners
+    let unsupported_runners = runners
         .keys()
-        .filter(|runner| runner_is_windows_host(runner))
+        .filter(|runner| !runner_is_supported_host(runner))
         .cloned()
         .collect::<Vec<_>>();
     let selected_runner = select_github_runner(&runners);
-    let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_windows_runners.is_empty();
-    let unsupported_runner_warning = (!unsupported_windows_runners.is_empty()).then_some({
+    let fallback_to_ubuntu = selected_runner.is_none() && !unsupported_runners.is_empty();
+    let unsupported_runner_warning = (!unsupported_runners.is_empty()).then_some({
         if fallback_to_ubuntu {
-            WINDOWS_RUNNER_FALLBACK_WARNING
+            UNSUPPORTED_RUNNER_FALLBACK_WARNING
         } else {
-            WINDOWS_RUNNER_EXCLUSION_WARNING
+            UNSUPPORTED_RUNNER_EXCLUSION_WARNING
         }
     });
     if let Some(warning) = unsupported_runner_warning {
@@ -126,10 +126,10 @@ pub(super) fn infer_ci_github_runner_with_metadata(
 pub(super) fn select_github_runner(runners: &BTreeMap<String, usize>) -> Option<String> {
     runners
         .iter()
-        .filter(|(runner, _)| !runner_is_windows_host(runner))
+        .filter(|(runner, _)| runner_is_supported_host(runner))
         .max_by(|(left, left_count), (right, right_count)| {
-            // Prefer the most common non-Windows runner; use ubuntu labels as
-            // the stable tie-break because generated workflows are POSIX-oriented.
+            // Prefer the most common supported runner; use ubuntu labels as
+            // the stable tie-break.
             // The lexical tie-break keeps newer labels such as ubuntu-24.04
             // ahead of older labels.
             left_count
@@ -149,9 +149,12 @@ fn runner_preference(runner: &str) -> u8 {
     }
 }
 
-fn runner_is_windows_host(runner: &str) -> bool {
+fn runner_is_supported_host(runner: &str) -> bool {
     let runner = runner.to_ascii_lowercase();
-    runner == "windows" || runner.starts_with("windows-")
+    runner == "ubuntu"
+        || runner.starts_with("ubuntu-")
+        || runner == "macos"
+        || runner.starts_with("macos-")
 }
 
 fn collect_github_ci_shape<F>(

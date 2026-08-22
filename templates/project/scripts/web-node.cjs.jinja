@@ -36,28 +36,6 @@ const JIG_PACKAGE_MANAGER_METADATA_ARGUMENTS = [
   ],
 ];
 
-function packageManagerMetadataEnvironmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toUpperCase() === name);
-  return key ? environment[key] : undefined;
-}
-
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
 function validatePackageManagerMetadataExecutable(executable) {
   if (
     typeof executable !== "string" ||
@@ -67,122 +45,6 @@ function validatePackageManagerMetadataExecutable(executable) {
     throw new Error("unsafe package-manager metadata executable");
   }
   return executable;
-}
-
-function windowsPackageManagerMetadataPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') {
-      quoted = !quoted;
-    } else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else {
-      entry += character;
-    }
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function windowsPackageManagerMetadataExtensions(requested, configured) {
-  if (path.extname(requested)) return [""];
-  const raw = configured === undefined ? ".COM;.EXE;.BAT;.CMD" : configured;
-  const extensions = raw.split(";").filter((extension) => extension !== "");
-  if (
-    extensions.length === 0 ||
-    extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))
-  ) throw new Error("unsafe Windows PATHEXT");
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
-}
-
-function resolveWindowsPackageManagerMetadataExecutable(executable, options = {}) {
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const requested = validatePackageManagerMetadataExecutable(executable);
-  const environment = options.env || process.env;
-  const workingDirectory = typeof options.cwd === "string"
-    ? path.resolve(options.cwd)
-    : process.cwd();
-  let candidates = [];
-  const searchedPath = !path.isAbsolute(requested);
-
-  if (path.isAbsolute(requested)) {
-    candidates = [requested];
-  } else {
-    if (/[\\/]/.test(requested)) {
-      throw new Error("package-manager metadata executable must be absolute or a bare command");
-    }
-    const pathValue = packageManagerMetadataEnvironmentValue(environment, "PATH") || "";
-    const configuredExtensions = packageManagerMetadataEnvironmentValue(environment, "PATHEXT");
-    const extensions = windowsPackageManagerMetadataExtensions(requested, configuredExtensions);
-    for (const entry of windowsPackageManagerMetadataPathEntries(pathValue)) {
-      const directory = entry
-        ? (path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry))
-        : workingDirectory;
-      for (const extension of extensions) {
-        candidates.push(path.resolve(directory, `${requested}${extension}`));
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      const resolved = fs.realpathSync.native(candidate);
-      if (!fs.statSync(resolved).isFile()) continue;
-      return validatePackageManagerMetadataExecutable(resolved);
-    } catch (error) {
-      if (!searchedPath) throw error;
-    }
-  }
-  throw new Error("package-manager metadata executable was not found");
-}
-
-function encodePackageManagerMetadataBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) {
-    throw new Error("unsafe package-manager metadata batch argument");
-  }
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
-}
-
-function encodePackageManagerMetadataBatchInvocation(executable, args) {
-  if (/^[\\/]{2}[?.][\\/]/.test(executable) || executable.endsWith("\\")) {
-    throw new Error("unsafe package-manager metadata batch executable");
-  }
-  let commandLine = '"' + encodePackageManagerMetadataBatchArgument(executable, true);
-  for (const argument of args) {
-    commandLine += ` ${encodePackageManagerMetadataBatchArgument(argument)}`;
-  }
-  return commandLine + '"';
 }
 
 function spawnPackageManagerMetadata(executable, args, options) {
@@ -196,30 +58,10 @@ function spawnPackageManagerMetadata(executable, args, options) {
   if (!allowedArguments || args.some((value) => !/^[A-Za-z0-9._-]+$/.test(value))) {
     throw new Error("unsupported package-manager metadata arguments");
   }
-
-  const spawnOptions = { timeout: 30_000, ...options, shell: false };
-  if (process.platform !== "win32") {
-    return spawnSync(
-      validatePackageManagerMetadataExecutable(executable),
-      args,
-      spawnOptions
-    );
-  }
-
-  const resolved = resolveWindowsPackageManagerMetadataExecutable(executable, spawnOptions);
-  if (!/\.(?:cmd|bat)$/i.test(resolved)) {
-    return spawnSync(resolved, args, spawnOptions);
-  }
-
-  const environment = spawnOptions.env || process.env;
-  const commandInterpreter = validateWindowsCommandInterpreter(
-    packageManagerMetadataEnvironmentValue(environment, "COMSPEC")
-  );
-  const commandLine = encodePackageManagerMetadataBatchInvocation(resolved, args);
   return spawnSync(
-    commandInterpreter,
-    ["/d", "/s", "/v:off", "/c", commandLine],
-    { ...spawnOptions, windowsVerbatimArguments: true }
+    validatePackageManagerMetadataExecutable(executable),
+    args,
+    { timeout: 30_000, ...options, shell: false }
   );
 }
 // END JIG PACKAGE MANAGER METADATA LAUNCHER
@@ -744,9 +586,7 @@ if (operation === "patch-fingerprint") {
       typeof candidatePath !== "string" ||
       !candidatePath ||
       /[\0\r\n]/.test(candidatePath) ||
-      path.isAbsolute(candidatePath) ||
-      path.win32.isAbsolute(candidatePath) ||
-      candidatePath.startsWith("\\\\")
+      path.isAbsolute(candidatePath)
     ) {
       fail(`${description} must be repository-relative`);
     }
@@ -962,7 +802,7 @@ if (operation === "patch-fingerprint") {
   const records = [];
 
   for (const { context, sourceKind, sourcePath, selector, patchPath } of patchEntries) {
-    if (path.isAbsolute(patchPath) || path.win32.isAbsolute(patchPath) || patchPath.startsWith("\\\\")) {
+    if (path.isAbsolute(patchPath)) {
       fail(`${sourcePath} patch path ${JSON.stringify(patchPath)} must be repository-relative`);
     }
     const sourceDirectory = path.dirname(path.resolve(repositoryRoot, sourcePath));
@@ -1158,7 +998,7 @@ if (before.size === 0 || before.size > maximumBytes) {
 
 let descriptor;
 try {
-  const noFollow = process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW ?? 0);
+  const noFollow = fs.constants.O_NOFOLLOW ?? 0;
   descriptor = fs.openSync(absolute, fs.constants.O_RDONLY | noFollow);
 } catch {
   invalid("the regular file could not be opened without following symbolic links");
@@ -1347,105 +1187,27 @@ function environmentValue(environment, name) {
   return key ? environment[key] : undefined;
 }
 
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
-function windowsPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') quoted = !quoted;
-    else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else entry += character;
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function executableExtensions(command, environment) {
-  if (process.platform !== "win32" || path.extname(command)) return [""];
-  const raw = environmentValue(environment, "PATHEXT") || ".COM;.EXE;.BAT;.CMD";
-  const extensions = raw.split(";").filter(Boolean);
-  if (extensions.length === 0 || extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))) {
-    throw new Error("unsafe Windows PATHEXT");
-  }
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
-}
-
 function resolveExecutable(command, cwd, environment) {
   if (typeof command !== "string" || !command || /[\0-\x1f\x7f"\\/]/.test(command)) {
     throw new Error("unsafe manifest-parser executable");
   }
   const pathValue = environmentValue(environment, "PATH") || "";
-  const entries = process.platform === "win32"
-    ? windowsPathEntries(pathValue)
-    : pathValue.split(path.delimiter);
-  for (const entry of entries) {
+  for (const entry of pathValue.split(path.delimiter)) {
     const directory = entry
       ? (path.isAbsolute(entry) ? entry : path.resolve(cwd, entry))
       : cwd;
-    for (const extension of executableExtensions(command, environment)) {
-      const candidate = path.resolve(directory, `${command}${extension}`);
-      try {
-        if (!fs.statSync(candidate).isFile()) continue;
-        if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
-        const resolved = fs.realpathSync.native(candidate);
-        if (!fs.statSync(resolved).isFile() || /[\0-\x1f\x7f"]/.test(resolved)) continue;
-        return resolved;
-      } catch {
-        // Bare PATH lookup skips an unusable entry and continues in order.
-      }
+    const candidate = path.resolve(directory, command);
+    try {
+      if (!fs.statSync(candidate).isFile()) continue;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      const resolved = fs.realpathSync.native(candidate);
+      if (!fs.statSync(resolved).isFile() || /[\0-\x1f\x7f"]/.test(resolved)) continue;
+      return resolved;
+    } catch {
+      // Bare PATH lookup skips an unusable entry and continues in order.
     }
   }
   throw new Error(`${command} was not found on PATH`);
-}
-
-function encodeBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) throw new Error("unsafe manifest-parser batch argument");
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
 }
 
 function spawnManifestParser(executable, args, options) {
@@ -1466,23 +1228,7 @@ function spawnManifestParser(executable, args, options) {
     throw new Error("unsupported pnpm manifest-parser arguments");
   }
   const spawnOptions = { timeout: 30_000, ...options, shell: false };
-  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/i.test(executable)) {
-    return spawnSync(executable, args, spawnOptions);
-  }
-  if (/^[\\/]{2}[?.][\\/]/.test(executable) || executable.endsWith("\\")) {
-    throw new Error("unsafe pnpm manifest-parser batch executable");
-  }
-  let commandLine = '"' + encodeBatchArgument(executable, true);
-  for (const argument of args) commandLine += ` ${encodeBatchArgument(argument)}`;
-  commandLine += '"';
-  const interpreter = validateWindowsCommandInterpreter(
-    environmentValue(spawnOptions.env, "COMSPEC")
-  );
-  return spawnSync(
-    interpreter,
-    ["/d", "/s", "/v:off", "/c", commandLine],
-    { ...spawnOptions, windowsVerbatimArguments: true }
-  );
+  return spawnSync(executable, args, spawnOptions);
 }
 
 function queryAlternateManifest(directory) {
@@ -1645,28 +1391,6 @@ const JIG_PACKAGE_MANAGER_METADATA_ARGUMENTS = [
   ],
 ];
 
-function packageManagerMetadataEnvironmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toUpperCase() === name);
-  return key ? environment[key] : undefined;
-}
-
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
 function validatePackageManagerMetadataExecutable(executable) {
   if (
     typeof executable !== "string" ||
@@ -1676,122 +1400,6 @@ function validatePackageManagerMetadataExecutable(executable) {
     throw new Error("unsafe package-manager metadata executable");
   }
   return executable;
-}
-
-function windowsPackageManagerMetadataPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') {
-      quoted = !quoted;
-    } else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else {
-      entry += character;
-    }
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function windowsPackageManagerMetadataExtensions(requested, configured) {
-  if (path.extname(requested)) return [""];
-  const raw = configured === undefined ? ".COM;.EXE;.BAT;.CMD" : configured;
-  const extensions = raw.split(";").filter((extension) => extension !== "");
-  if (
-    extensions.length === 0 ||
-    extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))
-  ) throw new Error("unsafe Windows PATHEXT");
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
-}
-
-function resolveWindowsPackageManagerMetadataExecutable(executable, options = {}) {
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const requested = validatePackageManagerMetadataExecutable(executable);
-  const environment = options.env || process.env;
-  const workingDirectory = typeof options.cwd === "string"
-    ? path.resolve(options.cwd)
-    : process.cwd();
-  let candidates = [];
-  const searchedPath = !path.isAbsolute(requested);
-
-  if (path.isAbsolute(requested)) {
-    candidates = [requested];
-  } else {
-    if (/[\\/]/.test(requested)) {
-      throw new Error("package-manager metadata executable must be absolute or a bare command");
-    }
-    const pathValue = packageManagerMetadataEnvironmentValue(environment, "PATH") || "";
-    const configuredExtensions = packageManagerMetadataEnvironmentValue(environment, "PATHEXT");
-    const extensions = windowsPackageManagerMetadataExtensions(requested, configuredExtensions);
-    for (const entry of windowsPackageManagerMetadataPathEntries(pathValue)) {
-      const directory = entry
-        ? (path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry))
-        : workingDirectory;
-      for (const extension of extensions) {
-        candidates.push(path.resolve(directory, `${requested}${extension}`));
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      const resolved = fs.realpathSync.native(candidate);
-      if (!fs.statSync(resolved).isFile()) continue;
-      return validatePackageManagerMetadataExecutable(resolved);
-    } catch (error) {
-      if (!searchedPath) throw error;
-    }
-  }
-  throw new Error("package-manager metadata executable was not found");
-}
-
-function encodePackageManagerMetadataBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) {
-    throw new Error("unsafe package-manager metadata batch argument");
-  }
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
-}
-
-function encodePackageManagerMetadataBatchInvocation(executable, args) {
-  if (/^[\\/]{2}[?.][\\/]/.test(executable) || executable.endsWith("\\")) {
-    throw new Error("unsafe package-manager metadata batch executable");
-  }
-  let commandLine = '"' + encodePackageManagerMetadataBatchArgument(executable, true);
-  for (const argument of args) {
-    commandLine += ` ${encodePackageManagerMetadataBatchArgument(argument)}`;
-  }
-  return commandLine + '"';
 }
 
 function spawnPackageManagerMetadata(executable, args, options) {
@@ -1805,30 +1413,10 @@ function spawnPackageManagerMetadata(executable, args, options) {
   if (!allowedArguments || args.some((value) => !/^[A-Za-z0-9._-]+$/.test(value))) {
     throw new Error("unsupported package-manager metadata arguments");
   }
-
-  const spawnOptions = { timeout: 30_000, ...options, shell: false };
-  if (process.platform !== "win32") {
-    return spawnSync(
-      validatePackageManagerMetadataExecutable(executable),
-      args,
-      spawnOptions
-    );
-  }
-
-  const resolved = resolveWindowsPackageManagerMetadataExecutable(executable, spawnOptions);
-  if (!/\.(?:cmd|bat)$/i.test(resolved)) {
-    return spawnSync(resolved, args, spawnOptions);
-  }
-
-  const environment = spawnOptions.env || process.env;
-  const commandInterpreter = validateWindowsCommandInterpreter(
-    packageManagerMetadataEnvironmentValue(environment, "COMSPEC")
-  );
-  const commandLine = encodePackageManagerMetadataBatchInvocation(resolved, args);
   return spawnSync(
-    commandInterpreter,
-    ["/d", "/s", "/v:off", "/c", commandLine],
-    { ...spawnOptions, windowsVerbatimArguments: true }
+    validatePackageManagerMetadataExecutable(executable),
+    args,
+    { timeout: 30_000, ...options, shell: false }
   );
 }
 // END JIG PACKAGE MANAGER METADATA LAUNCHER
@@ -1981,14 +1569,7 @@ function executableIdentity(realPath) {
 }
 
 function resolveExecutable(command) {
-  if (process.platform === "win32") {
-    return executableIdentity(resolveWindowsPackageManagerMetadataExecutable(command, {
-      cwd,
-      env: process.env,
-    }));
-  }
-  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH");
-  const pathValue = pathKey ? process.env[pathKey] : "";
+  const pathValue = process.env.PATH || "";
   for (const entry of (pathValue || "").split(path.delimiter)) {
     const directory = entry || cwd;
     const candidate = path.resolve(directory, command);
@@ -2500,52 +2081,7 @@ if (
 ) process.exit(1);
 
 function environmentValue(name) {
-  const key = Object.keys(process.env).find((candidate) => candidate.toUpperCase() === name);
-  return key ? process.env[key] : undefined;
-}
-
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
-function windowsPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') quoted = !quoted;
-    else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else entry += character;
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function windowsExtensions(command) {
-  if (path.extname(command)) return [""];
-  const configured = environmentValue("PATHEXT");
-  const raw = configured === undefined ? ".COM;.EXE;.BAT;.CMD" : configured;
-  const extensions = raw.split(";").filter((extension) => extension !== "");
-  if (extensions.length === 0 || extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))) {
-    throw new Error("unsafe Windows PATHEXT");
-  }
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
+  return process.env[name];
 }
 
 function resolveExecutable(command) {
@@ -2553,62 +2089,29 @@ function resolveExecutable(command) {
     throw new Error("unsafe Yarn executable name");
   }
   const pathValue = environmentValue("PATH") || "";
-  const entries = process.platform === "win32" ? windowsPathEntries(pathValue) : pathValue.split(path.delimiter);
-  const extensions = process.platform === "win32" ? windowsExtensions(command) : [""];
-  for (const entry of entries) {
+  for (const entry of pathValue.split(path.delimiter)) {
     const directory = entry
       ? (path.isAbsolute(entry) ? entry : path.resolve(cwd, entry))
       : cwd;
-    for (const extension of extensions) {
-      const candidate = path.resolve(directory, `${command}${extension}`);
-      try {
-        const stats = fs.statSync(candidate);
-        if (!stats.isFile()) continue;
-        if (process.platform !== "win32") fs.accessSync(candidate, fs.constants.X_OK);
-        const resolved = fs.realpathSync.native(candidate);
-        if (!fs.statSync(resolved).isFile()) continue;
-        if (/[\0-\x1f\x7f"]/.test(resolved)) {
-          throw new Error("unsafe Yarn executable path");
-        }
-        return resolved;
-      } catch {
-        // Bare PATH lookup skips an unusable entry and continues in order.
+    const candidate = path.resolve(directory, command);
+    try {
+      const stats = fs.statSync(candidate);
+      if (!stats.isFile()) continue;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      const resolved = fs.realpathSync.native(candidate);
+      if (!fs.statSync(resolved).isFile()) continue;
+      if (/[\0-\x1f\x7f"]/.test(resolved)) {
+        throw new Error("unsafe Yarn executable path");
       }
+      return resolved;
+    } catch {
+      // Bare PATH lookup skips an unusable entry and continues in order.
     }
   }
   throw new Error("Yarn executable was not found on PATH");
 }
 
 const resolved = resolveExecutable("yarn");
-function encodeBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) throw new Error("unsafe Yarn batch argument");
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
-}
 
 function runtimeVersion() {
   const options = {
@@ -2618,18 +2121,7 @@ function runtimeVersion() {
     shell: false,
     timeout: 30_000,
   };
-  let result;
-  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(resolved)) {
-    const commandInterpreter = validateWindowsCommandInterpreter(environmentValue("COMSPEC"));
-    const commandLine = `"${encodeBatchArgument(resolved, true)} --version"`;
-    result = spawnSync(
-      commandInterpreter,
-      ["/d", "/s", "/v:off", "/c", commandLine],
-      { ...options, windowsVerbatimArguments: true }
-    );
-  } else {
-    result = spawnSync(resolved, ["--version"], options);
-  }
+  const result = spawnSync(resolved, ["--version"], options);
   if (result.error || result.signal || result.status !== 0 || typeof result.stdout !== "string") {
     throw new Error("could not resolve Yarn runtime version");
   }
@@ -3266,28 +2758,6 @@ const JIG_PACKAGE_MANAGER_METADATA_ARGUMENTS = [
   ],
 ];
 
-function packageManagerMetadataEnvironmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toUpperCase() === name);
-  return key ? environment[key] : undefined;
-}
-
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
 function validatePackageManagerMetadataExecutable(executable) {
   if (
     typeof executable !== "string" ||
@@ -3297,122 +2767,6 @@ function validatePackageManagerMetadataExecutable(executable) {
     throw new Error("unsafe package-manager metadata executable");
   }
   return executable;
-}
-
-function windowsPackageManagerMetadataPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') {
-      quoted = !quoted;
-    } else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else {
-      entry += character;
-    }
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function windowsPackageManagerMetadataExtensions(requested, configured) {
-  if (path.extname(requested)) return [""];
-  const raw = configured === undefined ? ".COM;.EXE;.BAT;.CMD" : configured;
-  const extensions = raw.split(";").filter((extension) => extension !== "");
-  if (
-    extensions.length === 0 ||
-    extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))
-  ) throw new Error("unsafe Windows PATHEXT");
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
-}
-
-function resolveWindowsPackageManagerMetadataExecutable(executable, options = {}) {
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const requested = validatePackageManagerMetadataExecutable(executable);
-  const environment = options.env || process.env;
-  const workingDirectory = typeof options.cwd === "string"
-    ? path.resolve(options.cwd)
-    : process.cwd();
-  let candidates = [];
-  const searchedPath = !path.isAbsolute(requested);
-
-  if (path.isAbsolute(requested)) {
-    candidates = [requested];
-  } else {
-    if (/[\\/]/.test(requested)) {
-      throw new Error("package-manager metadata executable must be absolute or a bare command");
-    }
-    const pathValue = packageManagerMetadataEnvironmentValue(environment, "PATH") || "";
-    const configuredExtensions = packageManagerMetadataEnvironmentValue(environment, "PATHEXT");
-    const extensions = windowsPackageManagerMetadataExtensions(requested, configuredExtensions);
-    for (const entry of windowsPackageManagerMetadataPathEntries(pathValue)) {
-      const directory = entry
-        ? (path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry))
-        : workingDirectory;
-      for (const extension of extensions) {
-        candidates.push(path.resolve(directory, `${requested}${extension}`));
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      const resolved = fs.realpathSync.native(candidate);
-      if (!fs.statSync(resolved).isFile()) continue;
-      return validatePackageManagerMetadataExecutable(resolved);
-    } catch (error) {
-      if (!searchedPath) throw error;
-    }
-  }
-  throw new Error("package-manager metadata executable was not found");
-}
-
-function encodePackageManagerMetadataBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) {
-    throw new Error("unsafe package-manager metadata batch argument");
-  }
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
-}
-
-function encodePackageManagerMetadataBatchInvocation(executable, args) {
-  if (/^[\\/]{2}[?.][\\/]/.test(executable) || executable.endsWith("\\")) {
-    throw new Error("unsafe package-manager metadata batch executable");
-  }
-  let commandLine = '"' + encodePackageManagerMetadataBatchArgument(executable, true);
-  for (const argument of args) {
-    commandLine += ` ${encodePackageManagerMetadataBatchArgument(argument)}`;
-  }
-  return commandLine + '"';
 }
 
 function spawnPackageManagerMetadata(executable, args, options) {
@@ -3426,30 +2780,10 @@ function spawnPackageManagerMetadata(executable, args, options) {
   if (!allowedArguments || args.some((value) => !/^[A-Za-z0-9._-]+$/.test(value))) {
     throw new Error("unsupported package-manager metadata arguments");
   }
-
-  const spawnOptions = { timeout: 30_000, ...options, shell: false };
-  if (process.platform !== "win32") {
-    return spawnSync(
-      validatePackageManagerMetadataExecutable(executable),
-      args,
-      spawnOptions
-    );
-  }
-
-  const resolved = resolveWindowsPackageManagerMetadataExecutable(executable, spawnOptions);
-  if (!/\.(?:cmd|bat)$/i.test(resolved)) {
-    return spawnSync(resolved, args, spawnOptions);
-  }
-
-  const environment = spawnOptions.env || process.env;
-  const commandInterpreter = validateWindowsCommandInterpreter(
-    packageManagerMetadataEnvironmentValue(environment, "COMSPEC")
-  );
-  const commandLine = encodePackageManagerMetadataBatchInvocation(resolved, args);
   return spawnSync(
-    commandInterpreter,
-    ["/d", "/s", "/v:off", "/c", commandLine],
-    { ...spawnOptions, windowsVerbatimArguments: true }
+    validatePackageManagerMetadataExecutable(executable),
+    args,
+    { timeout: 30_000, ...options, shell: false }
   );
 }
 // END JIG PACKAGE MANAGER METADATA LAUNCHER
@@ -3575,28 +2909,6 @@ const JIG_PACKAGE_MANAGER_METADATA_ARGUMENTS = [
   ],
 ];
 
-function packageManagerMetadataEnvironmentValue(environment, name) {
-  const key = Object.keys(environment).find((candidate) => candidate.toUpperCase() === name);
-  return key ? environment[key] : undefined;
-}
-
-function validateWindowsCommandInterpreter(interpreter) {
-  const driveAbsolute =
-    typeof interpreter === "string" && /^[A-Za-z]:[\\/]/.test(interpreter);
-  const uncAbsolute =
-    typeof interpreter === "string" &&
-    /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/].*)?$/.test(interpreter);
-  if (
-    !interpreter ||
-    /[\0-\x1f\x7f"]/.test(interpreter) ||
-    /^[\\/]{2}[?.][\\/]/.test(interpreter) ||
-    (!driveAbsolute && !uncAbsolute)
-  ) {
-    throw new Error("unsafe Windows command interpreter");
-  }
-  return interpreter;
-}
-
 function validatePackageManagerMetadataExecutable(executable) {
   if (
     typeof executable !== "string" ||
@@ -3606,122 +2918,6 @@ function validatePackageManagerMetadataExecutable(executable) {
     throw new Error("unsafe package-manager metadata executable");
   }
   return executable;
-}
-
-function windowsPackageManagerMetadataPathEntries(value) {
-  const entries = [];
-  let entry = "";
-  let quoted = false;
-  for (const character of value) {
-    if (character === '"') {
-      quoted = !quoted;
-    } else if (character === path.delimiter && !quoted) {
-      entries.push(entry);
-      entry = "";
-    } else {
-      entry += character;
-    }
-  }
-  if (quoted) throw new Error("unsafe quoted Windows PATH");
-  entries.push(entry);
-  return entries;
-}
-
-function windowsPackageManagerMetadataExtensions(requested, configured) {
-  if (path.extname(requested)) return [""];
-  const raw = configured === undefined ? ".COM;.EXE;.BAT;.CMD" : configured;
-  const extensions = raw.split(";").filter((extension) => extension !== "");
-  if (
-    extensions.length === 0 ||
-    extensions.some((extension) => !/^\.[A-Za-z0-9]+$/.test(extension))
-  ) throw new Error("unsafe Windows PATHEXT");
-  return [...new Map(extensions.map((extension) => [extension.toUpperCase(), extension])).values()];
-}
-
-function resolveWindowsPackageManagerMetadataExecutable(executable, options = {}) {
-  const fs = require("node:fs");
-  const path = require("node:path");
-  const requested = validatePackageManagerMetadataExecutable(executable);
-  const environment = options.env || process.env;
-  const workingDirectory = typeof options.cwd === "string"
-    ? path.resolve(options.cwd)
-    : process.cwd();
-  let candidates = [];
-  const searchedPath = !path.isAbsolute(requested);
-
-  if (path.isAbsolute(requested)) {
-    candidates = [requested];
-  } else {
-    if (/[\\/]/.test(requested)) {
-      throw new Error("package-manager metadata executable must be absolute or a bare command");
-    }
-    const pathValue = packageManagerMetadataEnvironmentValue(environment, "PATH") || "";
-    const configuredExtensions = packageManagerMetadataEnvironmentValue(environment, "PATHEXT");
-    const extensions = windowsPackageManagerMetadataExtensions(requested, configuredExtensions);
-    for (const entry of windowsPackageManagerMetadataPathEntries(pathValue)) {
-      const directory = entry
-        ? (path.isAbsolute(entry) ? entry : path.resolve(workingDirectory, entry))
-        : workingDirectory;
-      for (const extension of extensions) {
-        candidates.push(path.resolve(directory, `${requested}${extension}`));
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    try {
-      if (!fs.statSync(candidate).isFile()) continue;
-      const resolved = fs.realpathSync.native(candidate);
-      if (!fs.statSync(resolved).isFile()) continue;
-      return validatePackageManagerMetadataExecutable(resolved);
-    } catch (error) {
-      if (!searchedPath) throw error;
-    }
-  }
-  throw new Error("package-manager metadata executable was not found");
-}
-
-function encodePackageManagerMetadataBatchArgument(argument, forceQuote = false) {
-  if (/[\0\r\n]/.test(argument)) {
-    throw new Error("unsafe package-manager metadata batch argument");
-  }
-  const safeUnquoted = "#$*+-./:?@\\_";
-  const quote = forceQuote || argument.length === 0 || argument.endsWith("\\") ||
-    [...argument].some((character) => {
-      const code = character.codePointAt(0);
-      return code < 32 || code === 127 ||
-        (code < 128 && !/[A-Za-z0-9]/.test(character) && !safeUnquoted.includes(character));
-    });
-  let encoded = quote ? '"' : "";
-  let backslashes = 0;
-  for (const character of argument) {
-    if (character === "\\") {
-      backslashes += 1;
-      encoded += character;
-      continue;
-    }
-    if (character === '"') {
-      encoded += "\\".repeat(backslashes);
-      encoded += '"';
-    } else if (character === "%") {
-      encoded += "%%cd:~,";
-    }
-    backslashes = 0;
-    encoded += character;
-  }
-  if (quote) encoded += "\\".repeat(backslashes) + '"';
-  return encoded;
-}
-
-function encodePackageManagerMetadataBatchInvocation(executable, args) {
-  if (/^[\\/]{2}[?.][\\/]/.test(executable) || executable.endsWith("\\")) {
-    throw new Error("unsafe package-manager metadata batch executable");
-  }
-  let commandLine = '"' + encodePackageManagerMetadataBatchArgument(executable, true);
-  for (const argument of args) {
-    commandLine += ` ${encodePackageManagerMetadataBatchArgument(argument)}`;
-  }
-  return commandLine + '"';
 }
 
 function spawnPackageManagerMetadata(executable, args, options) {
@@ -3735,30 +2931,10 @@ function spawnPackageManagerMetadata(executable, args, options) {
   if (!allowedArguments || args.some((value) => !/^[A-Za-z0-9._-]+$/.test(value))) {
     throw new Error("unsupported package-manager metadata arguments");
   }
-
-  const spawnOptions = { timeout: 30_000, ...options, shell: false };
-  if (process.platform !== "win32") {
-    return spawnSync(
-      validatePackageManagerMetadataExecutable(executable),
-      args,
-      spawnOptions
-    );
-  }
-
-  const resolved = resolveWindowsPackageManagerMetadataExecutable(executable, spawnOptions);
-  if (!/\.(?:cmd|bat)$/i.test(resolved)) {
-    return spawnSync(resolved, args, spawnOptions);
-  }
-
-  const environment = spawnOptions.env || process.env;
-  const commandInterpreter = validateWindowsCommandInterpreter(
-    packageManagerMetadataEnvironmentValue(environment, "COMSPEC")
-  );
-  const commandLine = encodePackageManagerMetadataBatchInvocation(resolved, args);
   return spawnSync(
-    commandInterpreter,
-    ["/d", "/s", "/v:off", "/c", commandLine],
-    { ...spawnOptions, windowsVerbatimArguments: true }
+    validatePackageManagerMetadataExecutable(executable),
+    args,
+    { timeout: 30_000, ...options, shell: false }
   );
 }
 // END JIG PACKAGE MANAGER METADATA LAUNCHER

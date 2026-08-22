@@ -720,8 +720,7 @@ fn apply_staged_render_rejects_reserved_git_metadata_aliases_before_any_operatio
             .to_string();
 
             assert!(
-                error.contains("reserved Git metadata component")
-                    || error.contains("not portable to Windows"),
+                error.contains("reserved Git metadata component"),
                 "{alias}/{operation}/{force}/{dry_run}: {error}"
             );
             assert!(

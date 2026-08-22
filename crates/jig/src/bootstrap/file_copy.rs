@@ -67,21 +67,3 @@ pub(super) fn create_symlink(target: &Path, link_path: &Path) -> Result<()> {
     })?;
     Ok(())
 }
-
-#[cfg(windows)]
-pub(super) fn create_symlink(target: &Path, link_path: &Path) -> Result<()> {
-    use std::os::windows::fs as windows_fs;
-
-    if path_exists(link_path) {
-        fs::remove_file(link_path)
-            .with_context(|| format!("Failed to remove {}", link_path.display()))?;
-    }
-    windows_fs::symlink_file(target, link_path).with_context(|| {
-        format!(
-            "Failed to create symlink {} -> {}",
-            link_path.display(),
-            target.display()
-        )
-    })?;
-    Ok(())
-}

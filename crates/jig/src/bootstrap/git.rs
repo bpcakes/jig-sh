@@ -890,12 +890,7 @@ fn null_git_config_path() -> &'static OsStr {
     OsStr::new("/dev/null")
 }
 
-#[cfg(windows)]
-fn null_git_config_path() -> &'static OsStr {
-    OsStr::new("NUL")
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn null_git_config_path() -> &'static OsStr {
     OsStr::new("")
 }
@@ -932,15 +927,7 @@ fn prepare_private_git_template(
 }
 
 fn inherited_git_template_dir() -> Option<std::ffi::OsString> {
-    env::vars_os().find_map(|(name, value)| {
-        let matches = if cfg!(windows) {
-            name.to_string_lossy()
-                .eq_ignore_ascii_case("GIT_TEMPLATE_DIR")
-        } else {
-            name == "GIT_TEMPLATE_DIR"
-        };
-        matches.then_some(value)
-    })
+    env::var_os("GIT_TEMPLATE_DIR")
 }
 
 fn configured_git_template_dir(
@@ -1216,14 +1203,7 @@ fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
     metadata.mode()
 }
 
-#[cfg(windows)]
-fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
-    use std::os::windows::fs::MetadataExt;
-
-    metadata.file_attributes()
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
     u32::from(metadata.permissions().readonly())
 }
@@ -1302,13 +1282,6 @@ fn open_verified_git_template_file(
         use std::os::unix::fs::OpenOptionsExt;
 
         options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path).with_context(|| {
         format!(

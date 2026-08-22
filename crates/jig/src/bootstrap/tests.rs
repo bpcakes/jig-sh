@@ -891,4 +891,3 @@ mod init_report;
 mod status_provider;
 mod template_mode;
 mod template_source;
-mod windows_dependency_checker;
