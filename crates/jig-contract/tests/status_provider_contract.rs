@@ -135,6 +135,7 @@ fn semantic_validation_rejects_unsafe_source_path_forms() {
         "docs/./package.yml",
         "docs//package.yml",
         r"docs\package.yml",
+        "C:/repository/file.yml",
     ] {
         let mut report: v1::Report =
             serde_json::from_value(parsed_example()).expect("example must deserialize");

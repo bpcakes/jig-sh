@@ -125,7 +125,7 @@ Provider-level `diagnostics` use `info`, `warning`, or `error`. Diagnostics desc
 
 ## Paths and deterministic output
 
-All `path` fields are relative to the target repository and use `/` separators. They must not be absolute, include NUL, or contain empty, `.` or `..` components. Line and column values are one-based.
+All `path` fields are relative to the target repository and use `/` separators. They must not be absolute, contain a drive prefix or backslash, include NUL, or contain empty, `.` or `..` components. Line and column values are one-based. The drive-prefix restriction remains part of the version 1 wire contract even though Jig hosts are limited to Linux and macOS; changing what existing v1 consumers accept requires a new protocol major.
 
 Providers should emit deterministic arrays so reports are reviewable and cacheable: inputs by name, work packages by id, dependencies by id, acceptance checks by ordinal, and findings or evidence by stable code/reference. Consumers must not require physical JSON object-key order.
 

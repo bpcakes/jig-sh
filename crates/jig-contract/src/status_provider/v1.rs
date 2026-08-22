@@ -778,6 +778,14 @@ fn validate_source_path(errors: &mut Vec<ValidationError>, field: &str, value: &
     if value.contains('\\') {
         push_error(errors, field, "path must use forward slashes");
     }
+    if value.as_bytes().get(1).is_some_and(|byte| *byte == b':')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+    {
+        push_error(errors, field, "path must not contain a drive prefix");
+    }
     for component in value.split('/') {
         if component.is_empty() {
             push_error(errors, field, "path must not contain empty components");
