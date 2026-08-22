@@ -75,9 +75,6 @@ pub(super) fn pr_manager_tick(
                         observer: &mut *observer,
                     },
                 )?;
-                if observer.cancelled() {
-                    bail!("PR manager tick was cancelled");
-                }
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
                 if consumed_tick {
@@ -586,16 +583,22 @@ fn run_pr_repair_steps(
     let push = commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer)?;
     let review_thread_posts =
         post_review_thread_updates(ctx, pull_request, &worker_output, observer);
-    if review_thread_posts.cancelled {
-        return Ok(PrRepairOutcome::Cancelled(format!(
-            "PR manager repair was cancelled after pushing {}; completed review thread updates: {}",
-            push["final_head"], review_thread_posts.posts
-        )));
-    }
-    let status = if review_thread_posts.failed {
+    let status = if review_thread_posts.cancelled {
+        "cancelled_after_commit"
+    } else if review_thread_posts.failed {
         "failed"
     } else {
         "attempted"
+    };
+    let error = if review_thread_posts.cancelled {
+        Value::String(format!(
+            "PR manager repair was cancelled after pushing {}; follow-up review thread updates are incomplete",
+            push["final_head"]
+        ))
+    } else if review_thread_posts.failed {
+        Value::String("one or more review thread update intents failed".into())
+    } else {
+        Value::Null
     };
     Ok(PrRepairOutcome::Completed(json!({
         "kind": "pr_manager_worker",
@@ -614,11 +617,7 @@ fn run_pr_repair_steps(
         "worker_receipt_id": worker.worker_receipt_id,
         "push": push,
         "review_thread_posts": review_thread_posts.posts,
-        "error": if review_thread_posts.failed {
-            Value::String("one or more review thread update intents failed".into())
-        } else {
-            Value::Null
-        },
+        "error": error,
     })))
 }
 
@@ -1305,6 +1304,55 @@ mod cancellation_tests {
 
         assert!(error.to_string().contains("git fetch was cancelled"));
         assert!(attempt_store.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
+    fn post_commit_cancellation_records_the_pushed_head() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 2,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Example repair".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: "observed-head".into(),
+            reasons: vec!["failing_checks".into()],
+        };
+        let mut attempt_store = AttemptStore::new(&ctx);
+
+        let action = record_pr_repair_outcome(
+            &workflow,
+            &mut attempt_store,
+            &item,
+            &json!({"owner": "test"}),
+            None,
+            Ok(PrRepairOutcome::Completed(json!({
+                "kind": "pr_manager_worker",
+                "status": "cancelled_after_commit",
+                "push": {"final_head": "pushed-head"},
+            }))),
+        )
+        .unwrap();
+
+        assert_eq!(action["status"], "cancelled_after_commit");
+        assert_eq!(action["attempt"]["item_version"], "pushed-head");
+        assert_eq!(action["attempt"]["last_status"], "attempted");
+        let attempts = attempt_store.snapshot().unwrap();
+        assert_eq!(attempts[0].item_version.as_deref(), Some("pushed-head"));
     }
 
     #[cfg(unix)]
