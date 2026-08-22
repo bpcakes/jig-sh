@@ -16,7 +16,9 @@ use crate::command::{
 };
 use crate::context::{LoopConfig, LoopWorkflowConfig, RepoContext};
 use crate::execution::{ExecutionControl, ExecutionPhase, PhasePosition};
-use crate::state::{ReceiptInput, now_ms, open_plan_summaries, record_receipt};
+use crate::state::{
+    ReceiptInput, now_ms, open_plan_summaries, record_receipt, record_receipt_with_cancellation,
+};
 use crate::tool_defs::{LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
 mod github;
@@ -152,7 +154,7 @@ fn tick_with_observer(
         "release_warning": release_warning,
         "error": tick_error,
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: LOOP_TICK_TOOL,
@@ -176,6 +178,7 @@ fn tick_with_observer(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
 
     if let Some(error) = evidence["error"].as_str() {

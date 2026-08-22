@@ -11,7 +11,7 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 - [x] (2026-08-22T23:55:02+02:00) Completed the comprehensive review, reproduced the supported-host fail-open behavior, and classified the findings by owning abstraction.
 - [x] (2026-08-22T23:55:02+02:00) Opened structured work as `plan_01M0NQB6M2VB6J444TDDK592ET` and built the development `jig` binary.
 - [x] (2026-08-22T23:58:59+02:00) Committed this plan and its append-only work records as the planning slice.
-- [ ] Make Git-backed receipt finalization cooperative without sacrificing durable cancellation receipts; add regression coverage and commit the slice.
+- [x] (2026-08-23T00:18:09+02:00) Made Git-backed receipt finalization cooperative without sacrificing durable cancellation receipts; the full `jig-sh` library and signal-policy integration tests passed before committing the slice.
 - [ ] Monitor the Codex authoritative result file during execution, terminate the owned process tree at the configured limit, add regression coverage, and commit the slice.
 - [ ] Make the supported-host source inventory fail closed and match only actual Windows path components; add regression coverage and commit the slice.
 - [ ] Decouple the timeout test fixture, correct pull-request diagnostics, cover included Rust fragments with the format gate, format those fragments, and commit the cleanup slice.
@@ -34,6 +34,9 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 
 - Observation: `cargo fmt --all -- --check` does not discover source fragments loaded with `include!`; direct `rustfmt --check` reports drift in multiple files under `doctor_parts` and `doctor/tests_parts`.
   Evidence: running `rustfmt --edition 2024 --check` over those fragment directories reports formatting differences while Cargo's format check passes.
+
+- Observation: the installed Rust 1.97 Clippy reports three pre-existing `collapsible_if` warnings outside the cancellation slice when warnings are denied.
+  Evidence: `cargo clippy -p jig-sh --all-targets -- -D warnings` points to `crates/jig/build.rs` and two sites in `crates/jig-ui`; these files were unchanged by Milestone 1 and will be handled with the gate-cleanup slice if still required by the configured command.
 
 ## Decision Log
 
@@ -181,3 +184,5 @@ The worker slice should introduce an observer local to `worker_runner.rs` that i
 The policy script must remain Bash 3.2 compatible and depend only on existing repository tools (`git`, `grep`, and standard shell facilities). The format wrapper depends on the workspace's Cargo toolchain and standalone `rustfmt`; it becomes the value of `.jig.toml`'s `rust_fmt_check_command`.
 
 Plan revision note (2026-08-22): Expanded the structured-work stub into a self-contained implementation and validation plan after tracing each review finding to its owning lifecycle or policy abstraction.
+
+Plan revision note (2026-08-23): Marked the cancellation-safe receipt milestone complete after 1,570 library tests and both runtime signal-policy tests passed, and recorded unrelated Rust 1.97 Clippy drift for the later gate-cleanup slice.

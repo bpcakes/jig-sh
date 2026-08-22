@@ -17,7 +17,7 @@ use crate::execution::{
     EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
     PhasePosition, ProcessExecutionObserver,
 };
-use crate::state::{ReceiptInput, now_ms, record_receipt};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
@@ -159,6 +159,7 @@ pub(crate) fn run_codex_exec(
                     error: None,
                     status: "completed",
                 },
+                observer,
             )?;
             Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
@@ -186,6 +187,7 @@ pub(crate) fn run_codex_exec(
                     error: Some(&message),
                     status: "cancelled",
                 },
+                observer,
             )?;
             Ok(CodexExecOutcome::Cancelled {
                 before_start,
@@ -208,6 +210,7 @@ pub(crate) fn run_codex_exec(
                     error: Some(&message),
                     status: "error",
                 },
+                observer,
             )?;
             bail!("Codex worker invocation failed; receipt {receipt_id}: {message}");
         }
@@ -449,6 +452,7 @@ fn record_worker_receipt(
     ctx: &RepoContext,
     request: &CodexExecRequest<'_>,
     outcome: WorkerReceiptOutcome<'_>,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<String> {
     let status = if outcome.status == "completed" && outcome.exit_status == 0 {
         "passed"
@@ -486,7 +490,7 @@ fn record_worker_receipt(
         "stdout_truncated": outcome.stdout_truncated,
         "stderr_truncated": outcome.stderr_truncated,
     });
-    record_receipt(
+    record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: WORKER_RUN_TOOL,
@@ -512,6 +516,7 @@ fn record_worker_receipt(
             collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )
     .context("Failed to record worker receipt")
 }

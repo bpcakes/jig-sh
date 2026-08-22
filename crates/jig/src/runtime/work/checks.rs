@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 use crate::command::WorkCheckRequest;
 use crate::context::RepoContext;
 use crate::execution::{ExecutionControl, PhasePosition};
-use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
+use crate::state::{
+    ReceiptInput, current_worktree_fingerprint_for_receipt_with_cancellation,
+    current_worktree_fingerprint_with_cancellation, now_ms, record_receipt_with_cancellation,
+};
 use crate::tool_defs::tool;
 
 use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
@@ -54,7 +57,8 @@ fn check_tools_with_failure_mode(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let started = now_ms();
-    let before_fingerprint = current_worktree_fingerprint(ctx);
+    let before_fingerprint =
+        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
     for name in &tools {
         validate_check_tool(ctx, name, "Work check")?;
     }
@@ -105,14 +109,15 @@ fn check_tools_with_failure_mode(
         .iter()
         .filter_map(|result| result["receipt_id"].as_str())
         .collect::<Vec<_>>();
-    let after_fingerprint = current_worktree_fingerprint(ctx);
+    let after_fingerprint =
+        current_worktree_fingerprint_for_receipt_with_cancellation(ctx, &|| observer.cancelled());
     let worktree_fingerprint_override =
         work_check_fingerprint_evidence(&before_fingerprint, &after_fingerprint);
     let receipt_stderr = check_failure
         .as_ref()
         .map(|(_, error)| format!("{error:#}"))
         .unwrap_or_default();
-    let receipt_result = record_receipt(
+    let receipt_result = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_CHECK,
@@ -136,6 +141,7 @@ fn check_tools_with_failure_mode(
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: Some(worktree_fingerprint_override),
         },
+        &|| observer.cancelled(),
     );
 
     if let Some((_, check_error)) = check_failure {

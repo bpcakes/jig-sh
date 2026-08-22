@@ -13,7 +13,7 @@ use crate::execution::{
     run_authoritative_execution_command,
 };
 use crate::policy::NativeToolOutput;
-use crate::state::{ReceiptInput, now_ms, record_receipt};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
 pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
@@ -304,6 +304,7 @@ fn execute_native_tool(
                 started,
                 before_start: true,
             },
+            observer,
         );
     }
     let phase = ExecutionPhase::start(observer, tool_name, position);
@@ -327,6 +328,7 @@ fn execute_native_tool(
                     started,
                     before_start: true,
                 },
+                observer,
             );
         }
         NativeToolRun::Cancelled => {
@@ -340,6 +342,7 @@ fn execute_native_tool(
                     started,
                     before_start: false,
                 },
+                observer,
             );
         }
     };
@@ -364,6 +367,7 @@ fn execute_native_tool(
             collect_worktree_fingerprint: options.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     );
 
     let tool_failure = tool_failure_message(
@@ -403,6 +407,7 @@ struct CancelledNativeToolRequest<'a> {
 fn cancelled_native_tool_outcome(
     ctx: &RepoContext,
     request: CancelledNativeToolRequest<'_>,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     let CancelledNativeToolRequest {
         tool_name,
@@ -445,6 +450,7 @@ fn cancelled_native_tool_outcome(
                 collect_worktree_fingerprint: options.collect_worktree_fingerprint,
                 worktree_fingerprint_override: None,
             },
+            &|| observer.cancelled(),
         )?
     };
     let response = tool_response_value(ToolExecutionResponse {
@@ -588,6 +594,7 @@ fn execute_command_tool(
                     collect_worktree_fingerprint: options.collect_worktree_fingerprint,
                     worktree_fingerprint_override: None,
                 },
+                &|| observer.cancelled(),
             );
             let receipt_id = match receipt_result {
                 Ok(receipt_id) => receipt_id,
@@ -636,6 +643,7 @@ fn execute_command_tool(
                     collect_worktree_fingerprint: options.collect_worktree_fingerprint,
                     worktree_fingerprint_override: None,
                 },
+                &|| observer.cancelled(),
             );
             let receipt_id = receipt_id_for_failure_mode(
                 options.failure_mode,
@@ -680,6 +688,7 @@ fn execute_command_tool(
             collect_worktree_fingerprint: options.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     );
 
     let tool_failure = tool_failure_message(
@@ -711,9 +720,10 @@ fn maybe_record_receipt(
     ctx: &RepoContext,
     should_record_receipt: bool,
     input: ReceiptInput<'_>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<String>> {
     if should_record_receipt {
-        record_receipt(ctx, input).map(Some)
+        record_receipt_with_cancellation(ctx, input, cancelled).map(Some)
     } else {
         Ok(None)
     }

@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 use crate::command::{WorkRefineRequest, WorkReviewRequest};
 use crate::context::{RepoContext, WorkGate, WorkRefinementConfig, WorkReviewGate};
 use crate::execution::{ExecutionControl, PhasePosition};
-use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
+use crate::state::{
+    ReceiptInput, current_worktree_fingerprint_for_receipt_with_cancellation,
+    current_worktree_fingerprint_with_cancellation, now_ms, record_receipt_with_cancellation,
+};
 use crate::tool_defs::tool;
 
 use super::checks::check_tools_collect_failures_with_observer;
@@ -170,7 +173,8 @@ fn run_review_gate(
     let schema_hash = hash_json(&schema)?;
     let prompt_hash = hash_text(&prompt);
     let started = now_ms();
-    let before_fingerprint = current_worktree_fingerprint(ctx);
+    let before_fingerprint =
+        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
     let command_output =
         run_codex_review(ctx, plan_id, gate, &prompt, &schema, position, observer)?;
     let output = command_output.output;
@@ -196,6 +200,7 @@ fn run_review_gate(
                     worker_receipt_id: &command_output.worker_receipt_id,
                 },
                 &parse_error,
+                observer,
             );
         }
     };
@@ -221,7 +226,8 @@ fn run_review_gate(
         "failed"
     };
     let exit_status = if status == "passed" { 0 } else { 1 };
-    let after_fingerprint = current_worktree_fingerprint(ctx);
+    let after_fingerprint =
+        current_worktree_fingerprint_for_receipt_with_cancellation(ctx, &|| observer.cancelled());
     let evidence = json!({
         "kind": "codex_review",
         "schema_version": REVIEW_SCHEMA_VERSION,
@@ -251,7 +257,7 @@ fn run_review_gate(
         "findings": findings,
         "actionable_findings": actionable,
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_REVIEW,
@@ -274,6 +280,7 @@ fn run_review_gate(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
 
     Ok(json!({
@@ -311,6 +318,7 @@ struct InvalidReviewOutputContext<'a> {
 fn record_invalid_review_output(
     context: InvalidReviewOutputContext<'_>,
     parse_error: &str,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let InvalidReviewOutputContext {
         ctx,
@@ -353,7 +361,7 @@ fn record_invalid_review_output(
         "findings": [],
         "actionable_findings": [],
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_REVIEW,
@@ -376,6 +384,7 @@ fn record_invalid_review_output(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
 
     Ok(json!({
@@ -422,7 +431,8 @@ fn run_fixer(
     let started = now_ms();
     let prompt = refine_prompt(plan_id, iteration, gates, refinement, findings);
     let phase_label = format!("refinement iteration {iteration}");
-    let before_fingerprint = current_worktree_fingerprint(ctx);
+    let before_fingerprint =
+        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
     let command_output = run_codex_refine(
         ctx,
         plan_id,
@@ -437,7 +447,8 @@ fn run_fixer(
     .context("Failed to run Codex refinement")?;
     let output = command_output.output;
     let ended = now_ms();
-    let after_fingerprint = current_worktree_fingerprint(ctx);
+    let after_fingerprint =
+        current_worktree_fingerprint_for_receipt_with_cancellation(ctx, &|| observer.cancelled());
     let exit_status = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -463,7 +474,7 @@ fn run_fixer(
             .collect::<Vec<_>>(),
         "finding_count": findings.len(),
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_REFINE,
@@ -485,6 +496,7 @@ fn run_fixer(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
 
     Ok(json!({
