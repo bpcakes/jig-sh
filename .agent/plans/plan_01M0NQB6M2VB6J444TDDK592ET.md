@@ -15,8 +15,8 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 - [x] (2026-08-23T00:22:00+02:00) Monitored the Codex authoritative result file during execution, terminated the owned process tree at the configured limit, preserved external cancellation semantics, and passed all worker-runner regressions before committing the slice.
 - [x] (2026-08-23T00:23:29+02:00) Made the supported-host source inventory fail closed, narrowed Windows path matching, excluded append-only work plans as a class, and passed the direct script plus four integration regressions before committing the slice.
 - [x] (2026-08-23T00:28:46+02:00) Decoupled the timeout test fixture, corrected and covered pull-request diagnostics, added included Rust fragments to the format gate, normalized those fragments, and passed focused tests before committing the cleanup slice.
-- [ ] Run targeted checks, then the full configured test suite and remaining repository gates through the development binary.
-- [ ] Record evidence, update this plan's outcome, finish structured work, and commit the final append-only records.
+- [x] (2026-08-23T00:44:58+02:00) Ran targeted checks, the configured format and contract gates, and the complete two-part workspace Nextest suite through the development binary; all requested test gates passed.
+- [x] (2026-08-23T00:44:58+02:00) Recorded fresh gate evidence, updated this plan's outcome, and finished the structured-work session successfully; its append-only records are included in the final evidence commit.
 
 ## Surprises & Discoveries
 
@@ -70,7 +70,16 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. On completion, summarize the landed commits, validation evidence, any remaining risks, and whether the structural invariants above proved sufficient.
+The work landed as four independently reviewable implementation commits after the initial plan commit:
+
+- `6575fbe` separates mandatory receipt append from optional cancellable Git enrichment and threads that boundary through every cooperative runtime caller.
+- `1401143` brings the Codex authoritative result file into owned-process observation, with prompt process-tree cleanup on overflow and external cancellation precedence.
+- `8483c58` makes the supported-host inventory fail closed, narrows its path match, and replaces per-plan exclusions with a stable plan-category boundary.
+- `5d1ac97` removes shared timeout-fixture coupling, corrects PR diagnostics, and makes standalone doctor fragments part of the repository format gate.
+
+The structural invariants were sufficient: targeted cancellation, worker, policy, PR-manager, schema, UI, and format tests passed; the full `jig-sh` library run passed 1,570 tests with two ignored; and the authoritative configured work check passed both contract and the complete two-part workspace Nextest command in 880.6 seconds. Receipts `receipt_01M0NSGEWDWAP7GPTXFB818GKT`, `receipt_01M0NTBAW7A0YP0GTXYC6T9Q32`, and `receipt_01M0NTBBF5EDS6AERVMHTARECK` are fresh against the final implementation worktree.
+
+One unrelated limitation remains: Rust 1.97 turns the configured deny-warnings Clippy command into a repository-wide style migration across numerous pre-existing files. Partial rewrites were deliberately removed; no reviewed defect or test failure remains, and this lint migration should be handled as its own bounded plan.
 
 ## Context and Orientation
 
@@ -195,3 +204,5 @@ Plan revision note (2026-08-23): Marked the authoritative worker-output mileston
 Plan revision note (2026-08-23): Marked the supported-host inventory milestone complete after proving both Git inventory commands fail closed and a benign `window.rs` path remains allowed; generalized the plan exclusion instead of adding another per-plan exception.
 
 Plan revision note (2026-08-23): Marked the fixture, diagnostic, and format-gate cleanup complete, and explicitly separated broad Rust 1.97 Clippy migration work after two workspace probes showed it was unrelated and substantially larger than this review-fix scope.
+
+Plan revision note (2026-08-23): Recorded final passing format, contract, and complete Nextest evidence, summarized the four implementation slices, and documented the sole unrelated Clippy toolchain limitation before structured-work closure.
