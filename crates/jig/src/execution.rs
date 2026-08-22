@@ -32,7 +32,6 @@ impl ExecutionCommandError {
         Self::Failed(error.into())
     }
 
-    #[cfg(test)]
     pub(crate) fn into_anyhow(self) -> anyhow::Error {
         match self {
             Self::CancelledBeforeStart => anyhow!("Execution was cancelled before it started"),

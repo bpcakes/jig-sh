@@ -32,7 +32,7 @@ pub(super) fn pr_manager_tick(
         .as_deref()
         .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
         .transpose()?;
-    let observed = github::github_pr_status_snapshot(ctx)?;
+    let observed = github::github_pr_status_snapshot(ctx, observer)?;
     let pull_requests = observed
         .get("pull_requests")
         .and_then(Value::as_array)
@@ -44,6 +44,9 @@ pub(super) fn pr_manager_tick(
 
     let mut actions = Vec::new();
     for pull_request in pull_requests {
+        if observer.cancelled() {
+            bail!("PR manager tick was cancelled");
+        }
         let candidate = classify_pull_request(pull_request, default_branch);
         match candidate {
             PrCandidate::Skip(action) => actions.push(action),
@@ -65,9 +68,12 @@ pub(super) fn pr_manager_tick(
                     pull_request,
                     PrManagerExecution {
                         codex_home: codex_home.as_deref(),
-                        observer,
+                        observer: &mut *observer,
                     },
                 )?;
+                if observer.cancelled() {
+                    bail!("PR manager tick was cancelled");
+                }
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
                 if consumed_tick {
@@ -491,7 +497,8 @@ fn run_pr_repair(
 
     let worker_output = parse_pr_worker_output(&worker.output.stdout)?;
     let push = commit_and_push(&worktree, &item.head_ref, &base_head)?;
-    let review_thread_posts = post_review_thread_updates(ctx, pull_request, &worker_output);
+    let review_thread_posts =
+        post_review_thread_updates(ctx, pull_request, &worker_output, observer);
     let status = if review_thread_posts.failed {
         "failed"
     } else {
@@ -603,6 +610,7 @@ fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
     worker_output: &Value,
+    observer: &mut dyn ExecutionControl,
 ) -> ReviewThreadPostResult {
     let empty = Vec::new();
     let replies = worker_output
@@ -613,6 +621,10 @@ fn post_review_thread_updates(
     let mut posts = Vec::new();
     let mut failed = false;
     for reply in replies {
+        if observer.cancelled() {
+            failed = true;
+            break;
+        }
         let thread_id = reply
             .get("thread_id")
             .and_then(Value::as_str)
@@ -652,7 +664,7 @@ fn post_review_thread_updates(
         let reply_response = if body.is_empty() {
             None
         } else {
-            match post_review_thread_reply(ctx, thread_id, body) {
+            match post_review_thread_reply(ctx, thread_id, body, observer) {
                 Ok(response) => Some(response),
                 Err(error) => {
                     failed = true;
@@ -670,7 +682,7 @@ fn post_review_thread_updates(
             resolve_skip_reason = Value::String("reply_failed".into());
             None
         } else if resolve {
-            match resolve_review_thread(ctx, thread_id) {
+            match resolve_review_thread(ctx, thread_id, observer) {
                 Ok(response) => Some(response),
                 Err(error) => {
                     failed = true;
@@ -725,7 +737,12 @@ fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-fn post_review_thread_reply(ctx: &RepoContext, thread_id: &str, body: &str) -> Result<Value> {
+fn post_review_thread_reply(
+    ctx: &RepoContext,
+    thread_id: &str,
+    body: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     github::gh_json(
         ctx,
         vec![
@@ -739,10 +756,15 @@ fn post_review_thread_reply(ctx: &RepoContext, thread_id: &str, body: &str) -> R
             OsString::from(format!("body={body}")),
         ],
         &[0],
+        observer,
     )
 }
 
-fn resolve_review_thread(ctx: &RepoContext, thread_id: &str) -> Result<Value> {
+fn resolve_review_thread(
+    ctx: &RepoContext,
+    thread_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     github::gh_json(
         ctx,
         vec![
@@ -754,6 +776,7 @@ fn resolve_review_thread(ctx: &RepoContext, thread_id: &str) -> Result<Value> {
             OsString::from(format!("threadId={thread_id}")),
         ],
         &[0],
+        observer,
     )
 }
 

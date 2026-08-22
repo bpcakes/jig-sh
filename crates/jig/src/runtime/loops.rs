@@ -274,6 +274,9 @@ fn run_until_with_observer(
     let mut ticks = Vec::new();
     let mut status = "max_ticks_reached".to_string();
     for index in 0..request.max_ticks {
+        if observer.cancelled() {
+            bail!("Loop execution was cancelled before the next tick started");
+        }
         let position = PhasePosition::new((index + 1) as usize, request.max_ticks as usize)
             .expect("loop tick progress is within the configured nonzero maximum");
         let phase = ExecutionPhase::start(observer, "loop tick", position);
@@ -322,8 +325,11 @@ fn run_workflow_tick(
     attempt_store: &mut AttemptStore,
     observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
+    if observer.cancelled() {
+        bail!("Loop execution was cancelled before the workflow tick started");
+    }
     match workflow.kind.as_str() {
-        GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx),
+        GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx, observer),
         NOOP_STATUS_KIND => noop_status_tick(ctx),
         PR_MANAGER_KIND => {
             pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store, observer)
