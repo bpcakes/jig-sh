@@ -270,6 +270,49 @@ fn runtime_state_summary_polls_operation_cancellation_during_collection() {
     assert_eq!(error, "status collection was cancelled");
 }
 
+#[test]
+fn runtime_does_not_reclassify_committed_work_as_cancelled() {
+    struct CancelAfterEntry(std::cell::Cell<usize>);
+
+    impl crate::execution::ExecutionObserver for CancelAfterEntry {}
+
+    impl crate::execution::ExecutionCancellation for CancelAfterEntry {
+        fn cancelled(&self) -> bool {
+            let polls = self.0.get() + 1;
+            self.0.set(polls);
+            polls > 1
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterEntry(std::cell::Cell::new(0));
+
+    let output = dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Work(crate::command::WorkCommand::Start(
+            crate::command::WorkStartRequest {
+                title: "Example committed work".into(),
+                body: Some("Regression fixture for the durable commit boundary.".into()),
+                body_file: None,
+            },
+        )),
+        &mut observer,
+    )
+    .unwrap();
+
+    let plan_id = output["plan"]["plan_id"].as_str().unwrap();
+    assert!(
+        crate::state::open_plan_summaries(&ctx)
+            .unwrap()
+            .iter()
+            .any(|plan| plan["plan_id"] == plan_id),
+        "the successful result must identify the committed plan"
+    );
+    assert_eq!(observer.0.get(), 1, "dispatch must not poll after commit");
+}
+
 #[cfg(feature = "dev-proxy")]
 #[test]
 fn dispatch_routes_proxy_list_through_dev_proxy_feature() {

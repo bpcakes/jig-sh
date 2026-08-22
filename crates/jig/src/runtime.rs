@@ -64,7 +64,10 @@ pub(crate) fn dispatch_with_observer(
     if observer.cancelled() {
         bail!("Execution was cancelled");
     }
-    let result = match command {
+    // Each operation owns any cancellation checks after entry so it can stop
+    // before its durable commit point. Re-checking here after a successful
+    // return would turn an already-committed mutation into an apparent failure.
+    match command {
         RuntimeCommand::Bootstrap(opts) => {
             tool_execution::execute_manifest_tool_request_with_observer(
                 ctx,
@@ -94,11 +97,7 @@ pub(crate) fn dispatch_with_observer(
         RuntimeCommand::Work(command) => work::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
-    };
-    if result.is_ok() && observer.cancelled() {
-        bail!("Execution was cancelled");
     }
-    result
 }
 
 fn dispatch_state(
