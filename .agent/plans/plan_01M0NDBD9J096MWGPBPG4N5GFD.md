@@ -10,7 +10,7 @@ Fix the supported-host installer regression, restore the published status-provid
 - [x] (2026-08-22) Supervise schema-check Git probes and add process-directed cancellation coverage.
 - [x] (2026-08-22) Remove residual Windows artifacts and guidance and add a tracked-file inventory guard.
 - [x] (2026-08-22) Run focused validation, the full configured test gate, format, Clippy, contract, and template parity checks.
-- [ ] Review the final diff, record evidence, and close structured work.
+- [x] (2026-08-22) Review the final diff, record evidence, and close structured work.
 
 ## Surprises & Discoveries
 
