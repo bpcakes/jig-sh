@@ -327,3 +327,5 @@ then
   echo "Generated and embedded installer templates drifted." >&2
   exit 1
 fi
+
+"$ROOT_DIR/scripts/check-supported-host-surface.sh"

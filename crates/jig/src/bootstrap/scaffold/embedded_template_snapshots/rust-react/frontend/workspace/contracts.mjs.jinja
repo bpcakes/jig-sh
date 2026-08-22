@@ -200,9 +200,7 @@ async function assertPublicBoundary(explicitArtifacts) {
   const conventionalArtifacts = [
     ...publicFrontendDirs.map((directory) => join(directory, "dist")),
     "target/debug/<<[ package_name ]>>-api",
-    "target/debug/<<[ package_name ]>>-api.exe",
     "target/release/<<[ package_name ]>>-api",
-    "target/release/<<[ package_name ]>>-api.exe",
     "docs/public",
     "public-docs",
   ];
