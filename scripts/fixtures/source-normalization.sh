@@ -47,6 +47,35 @@ write_fake_pre_probe_cargo_installer() {
   chmod +x "$bin_dir/cargo"
 }
 
+validate_resolve_executable_path_without_realpath() {
+  local fake_bin_dir="$TMP_DIR/resolve-executable-path-bin"
+  local target="$TMP_DIR/resolve-executable-path-target"
+  local link="$TMP_DIR/resolve-executable-path-link"
+  local function_source
+  local python_path
+  local resolved
+
+  python_path="$(command -v python3)"
+  mkdir -p "$fake_bin_dir" "$target"
+  ln -s "$python_path" "$fake_bin_dir/python3"
+  ln -s "$target" "$link"
+  function_source="$(awk '
+    /^resolve_executable_path\(\) \{/ { capture = 1 }
+    capture { print }
+    capture && /^}$/ { exit }
+  ' "$ROOT_DIR/scripts/install-jig.sh")"
+
+  resolved="$(
+    PATH="$fake_bin_dir" RESOLVE_EXECUTABLE_PATH_FUNCTION="$function_source" INPUT="$link" \
+      /bin/bash -c '
+        eval "$RESOLVE_EXECUTABLE_PATH_FUNCTION"
+        resolve_executable_path "$INPUT"
+      '
+  )"
+
+  [[ "$resolved" == "$target" ]]
+}
+
 validate_gnu_stat_fallback_rejects_successful_malformed_bsd_output() {
   local fake_bin_dir="$TMP_DIR/gnu-stat-bin"
   local function_source
@@ -1824,6 +1853,7 @@ PY
 }
 
 validate_source_normalization_fixtures() {
+  validate_resolve_executable_path_without_realpath
   validate_gnu_stat_fallback_rejects_successful_malformed_bsd_output
   validate_mutable_source_reminder_requires_matching_cache_lock
   validate_git_local_source_stamp_ignores_diff_helpers_and_rejects_symbolic_links

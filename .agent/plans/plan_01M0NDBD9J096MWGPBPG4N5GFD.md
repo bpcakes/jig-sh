@@ -5,7 +5,7 @@ Fix the supported-host installer regression, restore the published status-provid
 ## Progress
 
 - [x] (2026-08-22) Reproduce and source-trace all six merged review findings.
-- [ ] Repair and behaviorally test the installer path-resolution fallback.
+- [x] (2026-08-22) Repair and behaviorally test the installer path-resolution fallback.
 - [ ] Restore status-provider v1 path compatibility and its conformance regression.
 - [ ] Supervise schema-check Git probes and add process-directed cancellation coverage.
 - [ ] Remove residual Windows artifacts and guidance and add a tracked-file inventory guard.

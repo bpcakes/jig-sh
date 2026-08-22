@@ -1169,6 +1169,7 @@ resolve_executable_path() {
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 -I -c '
+import os
 import sys
 
 print(os.path.realpath(sys.argv[1]))
