@@ -5,7 +5,8 @@ use std::time::Instant;
 
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
-const CLI_PROGRESS_BUFFER_LIMIT: usize = 64 * 1024;
+const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
+const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
 
 /// Command-scoped terminal progress output.
 ///
@@ -187,10 +188,24 @@ fn color_enabled() -> bool {
 
 pub(crate) struct CliExecutionObserver {
     enabled: bool,
-    pending: Vec<u8>,
-    truncated: bool,
+    pending: Vec<ProgressChunk>,
+    output_bytes: usize,
+    structural_bytes: usize,
+    output_truncated: bool,
+    structure_truncated: bool,
     output_needs_newline: bool,
     cancellation: Box<dyn Fn() -> bool>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProgressChunkKind {
+    Output,
+    Structure,
+}
+
+struct ProgressChunk {
+    kind: ProgressChunkKind,
+    bytes: Vec<u8>,
 }
 
 impl CliExecutionObserver {
@@ -199,7 +214,10 @@ impl CliExecutionObserver {
         Self {
             enabled: !json_output,
             pending: Vec::new(),
-            truncated: false,
+            output_bytes: 0,
+            structural_bytes: 0,
+            output_truncated: false,
+            structure_truncated: false,
             output_needs_newline: false,
             cancellation: Box::new(|| false),
         }
@@ -213,28 +231,60 @@ impl CliExecutionObserver {
         Self {
             enabled: !json_output,
             pending: Vec::new(),
-            truncated: false,
+            output_bytes: 0,
+            structural_bytes: 0,
+            output_truncated: false,
+            structure_truncated: false,
             output_needs_newline: false,
             cancellation: Box::new(cancellation),
         }
     }
 
-    fn queue(&mut self, bytes: &[u8]) {
+    fn queue_output(&mut self, bytes: &[u8]) {
         if !self.enabled {
             return;
         }
-        let remaining = CLI_PROGRESS_BUFFER_LIMIT.saturating_sub(self.pending.len());
+        let remaining = CLI_PROGRESS_OUTPUT_LIMIT.saturating_sub(self.output_bytes);
         let retained = remaining.min(bytes.len());
-        self.pending.extend_from_slice(&bytes[..retained]);
-        self.truncated |= retained < bytes.len();
+        self.push_chunk(ProgressChunkKind::Output, &bytes[..retained]);
+        self.output_bytes += retained;
+        self.output_truncated |= retained < bytes.len();
+        if retained > 0 {
+            self.output_needs_newline = bytes[retained - 1] != b'\n';
+        }
+    }
+
+    fn queue_structure(&mut self, bytes: &[u8]) {
+        if !self.enabled {
+            return;
+        }
+        let remaining = CLI_PROGRESS_STRUCTURE_LIMIT.saturating_sub(self.structural_bytes);
+        let retained = remaining.min(bytes.len());
+        self.push_chunk(ProgressChunkKind::Structure, &bytes[..retained]);
+        self.structural_bytes += retained;
+        self.structure_truncated |= retained < bytes.len();
+    }
+
+    fn push_chunk(&mut self, kind: ProgressChunkKind, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(chunk) = self.pending.last_mut().filter(|chunk| chunk.kind == kind) {
+            chunk.bytes.extend_from_slice(bytes);
+        } else {
+            self.pending.push(ProgressChunk {
+                kind,
+                bytes: bytes.to_vec(),
+            });
+        }
     }
 
     fn line(&mut self, line: String) {
         if self.output_needs_newline {
-            self.queue(b"\n");
+            self.queue_structure(b"\n");
             self.output_needs_newline = false;
         }
-        self.queue(format!("{line}\n").as_bytes());
+        self.queue_structure(format!("{line}\n").as_bytes());
     }
 
     pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
@@ -260,12 +310,31 @@ impl CliExecutionObserver {
         if !self.enabled {
             return Ok(());
         }
-        writer.write_all(&self.pending)?;
-        if self.truncated {
-            if self.pending.last().is_some_and(|byte| *byte != b'\n') {
+        for chunk in &self.pending {
+            writer.write_all(&chunk.bytes)?;
+        }
+        if self.output_truncated {
+            if self
+                .pending
+                .last()
+                .and_then(|chunk| chunk.bytes.last())
+                .is_some_and(|byte| *byte != b'\n')
+            {
                 writer.write_all(b"\n")?;
             }
             writer.write_all(b"[..] progress preview truncated after 64 KiB\n")?;
+        }
+        if self.structure_truncated {
+            if !self.output_truncated
+                && self
+                    .pending
+                    .last()
+                    .and_then(|chunk| chunk.bytes.last())
+                    .is_some_and(|byte| *byte != b'\n')
+            {
+                writer.write_all(b"\n")?;
+            }
+            writer.write_all(b"[..] structural progress truncated after 16 KiB\n")?;
         }
         writer.flush()
     }
@@ -281,8 +350,7 @@ impl ExecutionObserver for CliExecutionObserver {
             )),
             ExecutionEvent::Output { stream, bytes } => {
                 let _ = stream;
-                self.queue(bytes);
-                self.output_needs_newline = bytes.last().is_some_and(|byte| *byte != b'\n');
+                self.queue_output(bytes);
             }
             ExecutionEvent::Heartbeat { label, elapsed } => {
                 self.line(format!("[..] {label} reached {}", format_duration(elapsed)))
@@ -314,7 +382,8 @@ mod tests {
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 
     use super::{
-        CLI_PROGRESS_BUFFER_LIMIT, CliExecutionObserver, CliProgress, format_duration, leader,
+        CLI_PROGRESS_OUTPUT_LIMIT, CLI_PROGRESS_STRUCTURE_LIMIT, CliExecutionObserver, CliProgress,
+        format_duration, leader,
     };
 
     #[test]
@@ -352,7 +421,7 @@ mod tests {
         });
         observer.event(ExecutionEvent::Output {
             stream: ExecutionStream::Stdout,
-            bytes: &vec![b'x'; CLI_PROGRESS_BUFFER_LIMIT * 2],
+            bytes: &vec![b'x'; CLI_PROGRESS_OUTPUT_LIMIT * 2],
         });
         observer.event(ExecutionEvent::PhaseFinished {
             label: "fixture",
@@ -360,16 +429,39 @@ mod tests {
             elapsed: Duration::from_millis(1),
         });
 
-        assert_eq!(observer.pending.len(), CLI_PROGRESS_BUFFER_LIMIT);
-        assert!(observer.truncated);
+        assert_eq!(observer.output_bytes, CLI_PROGRESS_OUTPUT_LIMIT);
+        assert!(observer.structural_bytes < CLI_PROGRESS_STRUCTURE_LIMIT);
+        assert!(observer.output_truncated);
+        assert!(!observer.structure_truncated);
         let mut rendered = Vec::new();
         observer.finish_to(&mut rendered).unwrap();
         assert!(rendered.starts_with(b"[..] fixture (1/1)\n"));
+        assert!(
+            String::from_utf8_lossy(&rendered).contains("[ok] fixture (1ms)"),
+            "{}",
+            String::from_utf8_lossy(&rendered)
+        );
         assert!(
             rendered.ends_with(b"\n[..] progress preview truncated after 64 KiB\n"),
             "{}",
             String::from_utf8_lossy(&rendered)
         );
+    }
+
+    #[test]
+    fn structural_progress_has_an_independent_bound() {
+        let mut observer = CliExecutionObserver::for_human_output(false);
+
+        for _ in 0..CLI_PROGRESS_STRUCTURE_LIMIT {
+            observer.event(ExecutionEvent::Heartbeat {
+                label: "fixture",
+                elapsed: Duration::from_secs(1),
+            });
+        }
+
+        assert_eq!(observer.structural_bytes, CLI_PROGRESS_STRUCTURE_LIMIT);
+        assert!(observer.structure_truncated);
+        assert_eq!(observer.output_bytes, 0);
     }
 
     #[test]
@@ -387,7 +479,7 @@ mod tests {
         }
 
         let mut observer = CliExecutionObserver::for_human_output(false);
-        observer.queue(b"pending progress");
+        observer.queue_output(b"pending progress");
         let operation: anyhow::Result<()> = Err(anyhow::anyhow!("fixture operation failed"));
         let error = observer
             .finish_to_with(operation, &mut FailingWriter)
