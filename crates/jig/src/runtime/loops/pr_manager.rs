@@ -78,7 +78,7 @@ pub(super) fn pr_manager_tick(
         }
     }
 
-    Ok(WorkflowTick { observed, actions })
+    Ok(WorkflowTick::from_actions(observed, actions))
 }
 
 enum PrCandidate {

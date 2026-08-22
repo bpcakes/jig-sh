@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{
     Arc,
@@ -44,6 +44,12 @@ pub(super) struct ScheduleOccurrence {
 impl ScheduleOccurrence {
     pub(super) fn is_terminal(&self) -> bool {
         self.status != "running"
+    }
+
+    fn has_retained_worktree(&self) -> bool {
+        self.worktree
+            .as_deref()
+            .is_some_and(|worktree| Path::new(worktree).exists())
     }
 }
 
@@ -398,7 +404,11 @@ fn prune_history(store: &mut ScheduleFile) {
         let mut terminal = store
             .occurrences
             .values()
-            .filter(|record| record.workflow_id == workflow_id && record.is_terminal())
+            .filter(|record| {
+                record.workflow_id == workflow_id
+                    && record.is_terminal()
+                    && !record.has_retained_worktree()
+            })
             .map(|record| (record.scheduled_at_ms, record.occurrence_id.clone()))
             .collect::<Vec<_>>();
         terminal.sort_by_key(|(scheduled_at_ms, _)| std::cmp::Reverse(*scheduled_at_ms));
@@ -506,6 +516,45 @@ mod tests {
             })
             .unwrap();
         assert_eq!(finished.status, "succeeded");
+    }
+
+    #[test]
+    fn pruning_preserves_discoverability_until_retained_worktree_is_removed() {
+        let temp = tempdir().unwrap();
+        let retained = temp.path().join("retained-worktree");
+        std::fs::create_dir(&retained).unwrap();
+        let mut store = ScheduleFile::default();
+        for scheduled_at_ms in 0..=21 {
+            let occurrence_id = occurrence_id("nightly", scheduled_at_ms);
+            store.occurrences.insert(
+                occurrence_id.clone(),
+                ScheduleOccurrence {
+                    occurrence_id,
+                    workflow_id: "nightly".into(),
+                    scheduled_at_ms,
+                    owner: "owner".into(),
+                    claim_expires_at_ms: 0,
+                    started_at_ms: 0,
+                    finished_at_ms: Some(1),
+                    status: "succeeded".into(),
+                    worker_receipt_id: None,
+                    worktree: (scheduled_at_ms == 0).then(|| retained.display().to_string()),
+                    error: None,
+                },
+            );
+        }
+
+        prune_history(&mut store);
+
+        assert_eq!(store.occurrences.len(), 21);
+        assert!(store.occurrences.contains_key("nightly@0"));
+        assert!(!store.occurrences.contains_key("nightly@1"));
+
+        std::fs::remove_dir(&retained).unwrap();
+        prune_history(&mut store);
+
+        assert_eq!(store.occurrences.len(), OCCURRENCE_HISTORY_PER_WORKFLOW);
+        assert!(!store.occurrences.contains_key("nightly@0"));
     }
 
     fn write_loop_fixture_repo(root: &std::path::Path) {

@@ -13,10 +13,35 @@ pub(super) const GITHUB_PR_STATUS_KIND: &str = "github_pr_status";
 pub(super) const NOOP_STATUS_KIND: &str = "noop_status";
 pub(super) const PR_MANAGER_KIND: &str = "pr_manager";
 const WORKFLOW_LEASE_PREFIX: &str = "workflow:";
+const REPO_CHECKOUT_LEASE_KEY: &str = "checkout:repo";
 
 pub(super) struct WorkflowTick {
     pub(super) observed: Value,
     pub(super) actions: Vec<Value>,
+    pub(super) completion: WorkflowCompletion,
+}
+
+impl WorkflowTick {
+    pub(super) fn from_actions(observed: Value, actions: Vec<Value>) -> Self {
+        let completion = WorkflowCompletion::from_actions(&actions);
+        Self {
+            observed,
+            actions,
+            completion,
+        }
+    }
+
+    pub(super) fn with_completion(
+        observed: Value,
+        actions: Vec<Value>,
+        completion: WorkflowCompletion,
+    ) -> Self {
+        Self {
+            observed,
+            actions,
+            completion,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -44,9 +69,10 @@ impl WorkflowCompletion {
     fn from_action(action: &Value) -> Self {
         Self {
             worker_receipt_id: action["worker_receipt_id"].as_str().map(str::to_string),
-            worktree: (action["checkout"]["retained"].as_bool() == Some(true))
-                .then(|| action["checkout"]["path"].as_str().map(str::to_string))
-                .flatten(),
+            worktree: (action["checkout"]["mode"].as_str() == Some("worktree")
+                && action["checkout"]["retained"].as_bool() == Some(true))
+            .then(|| action["checkout"]["path"].as_str().map(str::to_string))
+            .flatten(),
             error: action["error"].as_str().map(str::to_string),
         }
     }
@@ -98,7 +124,10 @@ pub(super) struct CodexTaskSettings {
 
 impl ResolvedWorkflow {
     pub(super) fn lease_key(&self) -> String {
-        format!("{WORKFLOW_LEASE_PREFIX}{}", self.id)
+        match self.codex_task.as_ref().map(|task| task.checkout) {
+            Some(CodexTaskCheckout::Repo) => REPO_CHECKOUT_LEASE_KEY.into(),
+            _ => format!("{WORKFLOW_LEASE_PREFIX}{}", self.id),
+        }
     }
 
     pub(super) fn value(&self) -> Value {
@@ -311,5 +340,50 @@ mod tests {
                 error: Some("worker failed".into()),
             }
         );
+    }
+
+    #[test]
+    fn workflow_completion_does_not_report_repository_as_worktree() {
+        let completion = WorkflowCompletion::from_actions(&[json!({
+            "status": "succeeded",
+            "checkout": {
+                "mode": "repo",
+                "path": "/repo",
+                "retained": true,
+            },
+        })]);
+
+        assert_eq!(completion.worktree, None);
+    }
+
+    #[test]
+    fn repository_checkouts_share_one_execution_lease() {
+        let first = workflow_with_checkout("first", CodexTaskCheckout::Repo);
+        let second = workflow_with_checkout("second", CodexTaskCheckout::Repo);
+        let isolated = workflow_with_checkout("isolated", CodexTaskCheckout::Worktree);
+
+        assert_eq!(first.lease_key(), REPO_CHECKOUT_LEASE_KEY);
+        assert_eq!(second.lease_key(), first.lease_key());
+        assert_eq!(isolated.lease_key(), "workflow:isolated");
+    }
+
+    fn workflow_with_checkout(id: &str, checkout: CodexTaskCheckout) -> ResolvedWorkflow {
+        ResolvedWorkflow {
+            id: id.into(),
+            kind: CODEX_TASK_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 3,
+            backoff_seconds: 60,
+            codex_home_configured: None,
+            schedule: None,
+            codex_task: Some(CodexTaskSettings {
+                prompt_file: "task.md".into(),
+                model: None,
+                sandbox: "read-only".into(),
+                checkout,
+            }),
+        }
     }
 }

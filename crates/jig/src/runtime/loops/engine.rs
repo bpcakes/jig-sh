@@ -87,6 +87,7 @@ fn tick_with_execution(
     let mut release_warning = None;
     let mut observed = Value::Null;
     let mut actions = Vec::new();
+    let mut completion = WorkflowCompletion::default();
     let mut tick_error = None;
 
     if !workflow.enabled {
@@ -115,6 +116,7 @@ fn tick_with_execution(
                     Ok(tick) => {
                         observed = tick.observed;
                         actions = tick.actions;
+                        completion = tick.completion;
                     }
                     Err(error) => {
                         tick_error = Some(format!("{error:#}"));
@@ -167,7 +169,6 @@ fn tick_with_execution(
         status = "waiting";
     }
 
-    let completion = WorkflowCompletion::from_actions(&actions);
     let ended = now_ms();
     let evidence = json!({
         "kind": "loop_tick",

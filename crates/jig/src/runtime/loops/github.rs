@@ -21,10 +21,10 @@ const PR_LIST_FETCH_LIMIT: usize = PR_LIST_LIMIT + 1;
 const REVIEW_THREAD_PAGE_LIMIT: usize = 10;
 
 pub(super) fn github_pr_status_tick(ctx: &RepoContext) -> Result<WorkflowTick> {
-    Ok(WorkflowTick {
-        observed: github_pr_status_snapshot(ctx)?,
-        actions: Vec::new(),
-    })
+    Ok(WorkflowTick::from_actions(
+        github_pr_status_snapshot(ctx)?,
+        Vec::new(),
+    ))
 }
 
 pub(super) fn github_pr_status_snapshot(ctx: &RepoContext) -> Result<Value> {

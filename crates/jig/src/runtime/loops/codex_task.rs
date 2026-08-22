@@ -14,7 +14,7 @@ use crate::runtime::worker_runner::{
 };
 
 use super::state::LOOP_CACHE_DIR;
-use super::workflow::{CodexTaskCheckout, ResolvedWorkflow, WorkflowTick};
+use super::workflow::{CodexTaskCheckout, ResolvedWorkflow, WorkflowCompletion, WorkflowTick};
 
 const MAX_PROMPT_BYTES: u64 = 1024 * 1024;
 const MAX_OUTPUT_CHARS: usize = 16_000;
@@ -65,10 +65,10 @@ pub(super) fn codex_task_tick(
         },
     );
 
-    let action = match worker {
+    let (action, completion) = match worker {
         Ok(worker) => {
             let worker_succeeded = worker.output.status.success();
-            let cleanup = checkout.finish(if worker_succeeded {
+            let checkout = checkout.finish(if worker_succeeded {
                 TaskOutcome::Succeeded
             } else {
                 TaskOutcome::Failed
@@ -79,44 +79,57 @@ pub(super) fn codex_task_tick(
                     worker.output.status.code().unwrap_or(1)
                 )
             });
-            let error = combine_task_errors(worker_error, cleanup.error);
-            json!({
+            let error = combine_task_errors(worker_error, checkout.error);
+            let completion = WorkflowCompletion {
+                worker_receipt_id: Some(worker.worker_receipt_id.clone()),
+                worktree: checkout.report.retained_worktree(),
+                error: error.clone(),
+            };
+            let action = json!({
                 "kind": "codex_task_worker",
                 "status": if error.is_none() { "succeeded" } else { "failed" },
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker.worker_receipt_id,
-                "checkout": cleanup.value,
+                "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": bounded_text(&String::from_utf8_lossy(&worker.output.stdout)),
                 "error": error,
-            })
+            });
+            (action, completion)
         }
         Err(error) => {
             let worker_receipt_id = error.worker_receipt_id().map(str::to_string);
-            let cleanup = checkout.finish(TaskOutcome::Failed);
-            let error = combine_task_errors(Some(format!("{error:#}")), cleanup.error);
-            json!({
+            let checkout = checkout.finish(TaskOutcome::Failed);
+            let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
+            let completion = WorkflowCompletion {
+                worker_receipt_id: worker_receipt_id.clone(),
+                worktree: checkout.report.retained_worktree(),
+                error: error.clone(),
+            };
+            let action = json!({
                 "kind": "codex_task_worker",
                 "status": "failed",
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker_receipt_id,
-                "checkout": cleanup.value,
+                "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": Value::Null,
                 "error": error,
-            })
+            });
+            (action, completion)
         }
     };
 
-    Ok(WorkflowTick {
-        observed: json!({
+    Ok(WorkflowTick::with_completion(
+        json!({
             "kind": "codex_task",
             "prompt_file": settings.prompt_file.display().to_string(),
             "sandbox": settings.sandbox,
             "checkout": settings.checkout.as_str(),
         }),
-        actions: vec![action],
-    })
+        vec![action],
+        completion,
+    ))
 }
 
 fn read_prompt(ctx: &RepoContext, configured: &Path) -> Result<String> {
@@ -168,8 +181,57 @@ enum PreparedCheckout {
 }
 
 struct CheckoutCompletion {
-    value: Value,
+    report: CheckoutReport,
     error: Option<String>,
+}
+
+enum CheckoutReport {
+    Repository {
+        path: PathBuf,
+        dirty: Option<bool>,
+    },
+    Worktree {
+        path: PathBuf,
+        retained: bool,
+        dirty: Option<bool>,
+        head_changed: Option<bool>,
+    },
+}
+
+impl CheckoutReport {
+    fn retained_worktree(&self) -> Option<String> {
+        match self {
+            Self::Worktree {
+                path,
+                retained: true,
+                ..
+            } => Some(path.display().to_string()),
+            Self::Repository { .. } | Self::Worktree { .. } => None,
+        }
+    }
+
+    fn value(&self) -> Value {
+        match self {
+            Self::Repository { path, dirty } => json!({
+                "mode": "repo",
+                "path": path,
+                "retained": true,
+                "dirty": dirty,
+            }),
+            Self::Worktree {
+                path,
+                retained,
+                dirty,
+                head_changed,
+            } => json!({
+                "mode": "worktree",
+                "path": path,
+                "retained": retained,
+                "dirty": dirty,
+                "head_changed": head_changed,
+            }),
+        }
+    }
 }
 
 impl PreparedCheckout {
@@ -183,21 +245,14 @@ impl PreparedCheckout {
         match self {
             Self::Repo { path } => match git_is_dirty(&path) {
                 Ok(dirty) => CheckoutCompletion {
-                    value: json!({
-                        "mode": "repo",
-                        "path": path,
-                        "retained": true,
-                        "dirty": dirty,
-                    }),
+                    report: CheckoutReport::Repository {
+                        path,
+                        dirty: Some(dirty),
+                    },
                     error: None,
                 },
                 Err(error) => CheckoutCompletion {
-                    value: json!({
-                        "mode": "repo",
-                        "path": path,
-                        "retained": true,
-                        "dirty": Value::Null,
-                    }),
+                    report: CheckoutReport::Repository { path, dirty: None },
                     error: Some(format!(
                         "Failed to inspect retained task checkout: {error:#}"
                     )),
@@ -227,13 +282,12 @@ impl PreparedCheckout {
                     errors.push(format!("Failed to remove clean task worktree: {error:#}"));
                 }
                 CheckoutCompletion {
-                    value: json!({
-                        "mode": "worktree",
-                        "path": path,
-                        "retained": retained,
-                        "dirty": dirty,
-                        "head_changed": head_changed,
-                    }),
+                    report: CheckoutReport::Worktree {
+                        path,
+                        retained,
+                        dirty,
+                        head_changed,
+                    },
                     error: (!errors.is_empty()).then(|| errors.join("; ")),
                 }
             }

@@ -19,6 +19,7 @@
 
 ### Fixed
 - Renew workflow and branch leases while long-running loop workers are active
+- Serialize repository-checkout Codex tasks, keep retained task worktrees discoverable until cleanup, and preserve typed scheduled-task evidence
 - Keep dev session cleanup signal-responsive
 - Keep stale missing Codex-home candidates from blocking a unique session resume
 - Recognize supported Codex app-server missing-thread response variants during resume lookup
