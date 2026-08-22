@@ -763,6 +763,11 @@ JSON
     ;;
   "api graphql")
     case "$*" in
+      *ReviewThreadState*)
+        cat <<'JSON'
+{{"data":{{"node":{{"id":"PRRT_1","isResolved":false,"comments":{{"nodes":[]}}}}}}}}
+JSON
+        ;;
       *addPullRequestReviewThreadReply*)
         printf 'reply %s\n' "$*" >> gh-mutations.log
         cat <<'JSON'
@@ -1010,6 +1015,15 @@ JSON
     ;;
   "api graphql")
     case "$*" in
+      *ReviewThreadState*)
+        thread_id=""
+        case "$*" in
+          *threadId=PRRT_1*) thread_id="PRRT_1" ;;
+          *threadId=PRRT_2*) thread_id="PRRT_2" ;;
+          *threadId=PRRT_3*) thread_id="PRRT_3" ;;
+        esac
+        printf '{"data":{"node":{"id":"%s","isResolved":false,"comments":{"nodes":[]}}}}\n' "$thread_id"
+        ;;
       *addPullRequestReviewThreadReply*)
         case "$*" in
           *threadId=PRRT_1*)

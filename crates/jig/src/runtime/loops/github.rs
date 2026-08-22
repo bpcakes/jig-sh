@@ -562,8 +562,18 @@ pub(super) fn gh_json(
     allowed_statuses: &[i32],
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
+    gh_json_with_timeout(ctx, args, allowed_statuses, ctx.command_timeout(), observer)
+}
+
+pub(super) fn gh_json_with_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    allowed_statuses: &[i32],
+    timeout: crate::context::CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
     let command_label = command_label(&args);
-    let output = run_gh(ctx, args, observer)?;
+    let output = run_gh_with_timeout(ctx, args, timeout, observer)?;
     let status = output.status_code.unwrap_or(-1);
     if !allowed_statuses.contains(&status) {
         return Err(ExecutionCommandError::failed(
@@ -578,14 +588,33 @@ fn run_gh(
     args: Vec<OsString>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<GhOutput, ExecutionCommandError> {
+    run_gh_with_timeout(ctx, args, ctx.command_timeout(), observer)
+}
+
+fn run_gh_with_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    timeout: crate::context::CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let gh = std::env::var_os("JIG_GH_BIN").unwrap_or_else(|| OsString::from("gh"));
-    run_gh_with_program(ctx, args, &gh, observer)
+    run_gh_with_program_timeout(ctx, args, &gh, timeout, observer)
 }
 
 fn run_gh_with_program(
     ctx: &RepoContext,
     args: Vec<OsString>,
     gh: &OsStr,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
+    run_gh_with_program_timeout(ctx, args, gh, ctx.command_timeout(), observer)
+}
+
+fn run_gh_with_program_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    gh: &OsStr,
+    timeout: crate::context::CommandTimeout,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let command_label = command_label(&args);
@@ -597,12 +626,8 @@ fn run_gh_with_program(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = run_authoritative_execution_command(
-        &mut command,
-        ctx.command_timeout(),
-        &execution_label,
-        observer,
-    )?;
+    let output =
+        run_authoritative_execution_command(&mut command, timeout, &execution_label, observer)?;
 
     Ok(GhOutput {
         status_code: output.status.code(),

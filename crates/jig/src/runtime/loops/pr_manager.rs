@@ -581,8 +581,9 @@ fn run_pr_repair_steps(
 
     let worker_output = parse_pr_worker_output(&worker.output.stdout)?;
     let push = commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer)?;
+    let repair_version = push["final_head"].as_str().unwrap_or(&item.head_sha);
     let review_thread_posts =
-        post_review_thread_updates(ctx, pull_request, &worker_output, observer);
+        post_review_thread_updates(ctx, pull_request, &worker_output, repair_version, observer);
     let status = if review_thread_posts.cancelled {
         "cancelled_after_commit"
     } else if review_thread_posts.failed {
@@ -703,6 +704,7 @@ fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
     worker_output: &Value,
+    repair_version: &str,
     observer: &mut dyn ExecutionControl,
 ) -> ReviewThreadPostResult {
     let empty = Vec::new();
@@ -758,7 +760,7 @@ fn post_review_thread_updates(
         let reply_response = if body.is_empty() {
             None
         } else {
-            match post_review_thread_reply(ctx, thread_id, body, observer) {
+            match post_review_thread_reply(ctx, thread_id, body, repair_version, observer) {
                 Ok(response) => Some(response),
                 Err(
                     ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
@@ -826,6 +828,11 @@ fn post_review_thread_updates(
                 .and_then(|value| value.pointer("/data/addPullRequestReviewThreadReply/comment/url"))
                 .cloned()
                 .unwrap_or(Value::Null),
+            "reply_reconciled": reply_response
+                .as_ref()
+                .and_then(|value| value.pointer("/_jig/reconciled"))
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
             "reply_error": reply_error,
             "resolved": resolve_response.is_some(),
             "is_resolved": resolve_response
@@ -833,6 +840,11 @@ fn post_review_thread_updates(
                 .and_then(|value| value.pointer("/data/resolveReviewThread/thread/isResolved"))
                 .cloned()
                 .unwrap_or(Value::Null),
+            "resolve_reconciled": resolve_response
+                .as_ref()
+                .and_then(|value| value.pointer("/_jig/reconciled"))
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
             "resolve_error": resolve_error,
             "resolve_skipped": resolve_skipped,
             "resolve_skip_reason": resolve_skip_reason,
@@ -863,9 +875,16 @@ fn post_review_thread_reply(
     ctx: &RepoContext,
     thread_id: &str,
     body: &str,
+    repair_version: &str,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    github::gh_json(
+    let marker = review_thread_reply_marker(thread_id, repair_version);
+    let state = review_thread_state(ctx, thread_id, observer)?;
+    if let Some(comment) = review_thread_comment_with_marker(&state, &marker) {
+        return Ok(reconciled_reply_response(comment));
+    }
+    let body = format!("{body}\n\n{marker}");
+    let result = github::gh_json(
         ctx,
         vec![
             OsString::from("api"),
@@ -880,6 +899,8 @@ fn post_review_thread_reply(
         &[0],
         observer,
     )
+    .and_then(validate_reply_mutation_response);
+    reconcile_reply_mutation(ctx, thread_id, &marker, result)
 }
 
 fn resolve_review_thread(
@@ -887,7 +908,15 @@ fn resolve_review_thread(
     thread_id: &str,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<Value, ExecutionCommandError> {
-    github::gh_json(
+    let state = review_thread_state(ctx, thread_id, observer)?;
+    if state
+        .pointer("/data/node/isResolved")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(reconciled_resolve_response(thread_id));
+    }
+    let result = github::gh_json(
         ctx,
         vec![
             OsString::from("api"),
@@ -900,6 +929,186 @@ fn resolve_review_thread(
         &[0],
         observer,
     )
+    .and_then(validate_resolve_mutation_response);
+    reconcile_resolve_mutation(ctx, thread_id, result)
+}
+
+fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
+    format!("<!-- jig-pr-manager:review-reply:{thread_id}:{repair_version} -->")
+}
+
+fn review_thread_state(
+    ctx: &RepoContext,
+    thread_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let value = github::gh_json(ctx, review_thread_state_args(thread_id), &[0], observer)?;
+    validate_review_thread_state(value, thread_id)
+}
+
+fn review_thread_state_for_reconciliation(
+    ctx: &RepoContext,
+    thread_id: &str,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let mut observer = NoopExecutionObserver;
+    let timeout = CommandTimeout::from_seconds(30).expect("reconciliation timeout is valid");
+    let value = github::gh_json_with_timeout(
+        ctx,
+        review_thread_state_args(thread_id),
+        &[0],
+        timeout,
+        &mut observer,
+    )?;
+    validate_review_thread_state(value, thread_id)
+}
+
+fn review_thread_state_args(thread_id: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("api"),
+        OsString::from("graphql"),
+        OsString::from("-f"),
+        OsString::from(format!("query={}", review_thread_state_query())),
+        OsString::from("-f"),
+        OsString::from(format!("threadId={thread_id}")),
+    ]
+}
+
+fn validate_review_thread_state(
+    value: Value,
+    thread_id: &str,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let observed_id = value.pointer("/data/node/id").and_then(Value::as_str);
+    let is_resolved = value
+        .pointer("/data/node/isResolved")
+        .and_then(Value::as_bool);
+    let comments = value
+        .pointer("/data/node/comments/nodes")
+        .and_then(Value::as_array);
+    if observed_id != Some(thread_id) || is_resolved.is_none() || comments.is_none() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread state query returned an invalid payload for {thread_id}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_reply_mutation_response(
+    value: Value,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let id = value
+        .pointer("/data/addPullRequestReviewThreadReply/comment/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty());
+    let url = value
+        .pointer("/data/addPullRequestReviewThreadReply/comment/url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty());
+    if id.is_none() || url.is_none() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread reply mutation returned an invalid payload"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_resolve_mutation_response(
+    value: Value,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    if value
+        .pointer("/data/resolveReviewThread/thread/isResolved")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread resolve mutation did not report a resolved thread"
+        )));
+    }
+    Ok(value)
+}
+
+fn reconcile_reply_mutation(
+    ctx: &RepoContext,
+    thread_id: &str,
+    marker: &str,
+    result: std::result::Result<Value, ExecutionCommandError>,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let error = match result {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
+        && let Some(comment) = review_thread_comment_with_marker(&state, marker)
+    {
+        return Ok(reconciled_reply_response(comment));
+    }
+    Err(error)
+}
+
+fn reconcile_resolve_mutation(
+    ctx: &RepoContext,
+    thread_id: &str,
+    result: std::result::Result<Value, ExecutionCommandError>,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let error = match result {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
+        && state
+            .pointer("/data/node/isResolved")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        return Ok(reconciled_resolve_response(thread_id));
+    }
+    Err(error)
+}
+
+fn review_thread_comment_with_marker<'a>(state: &'a Value, marker: &str) -> Option<&'a Value> {
+    state
+        .pointer("/data/node/comments/nodes")?
+        .as_array()?
+        .iter()
+        .find(|comment| {
+            let has_marker = comment
+                .get("body")
+                .and_then(Value::as_str)
+                .is_some_and(|body| body.contains(marker));
+            let has_id = comment
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+            let has_url = comment
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty());
+            has_marker && has_id && has_url
+        })
+}
+
+fn reconciled_reply_response(comment: &Value) -> Value {
+    json!({
+        "data": {
+            "addPullRequestReviewThreadReply": {
+                "comment": {
+                    "id": comment.get("id").cloned().unwrap_or(Value::Null),
+                    "url": comment.get("url").cloned().unwrap_or(Value::Null),
+                }
+            }
+        },
+        "_jig": {"reconciled": true},
+    })
+}
+
+fn reconciled_resolve_response(thread_id: &str) -> Value {
+    json!({
+        "data": {
+            "resolveReviewThread": {
+                "thread": {"id": thread_id, "isResolved": true}
+            }
+        },
+        "_jig": {"reconciled": true},
+    })
 }
 
 const fn add_review_thread_reply_mutation() -> &'static str {
@@ -922,6 +1131,26 @@ mutation($threadId: ID!) {
     thread {
       id
       isResolved
+    }
+  }
+}
+"
+}
+
+const fn review_thread_state_query() -> &'static str {
+    r"
+query ReviewThreadState($threadId: ID!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      id
+      isResolved
+      comments(last: 100) {
+        nodes {
+          id
+          url
+          body
+        }
+      }
     }
   }
 }
@@ -1248,6 +1477,16 @@ mod cancellation_tests {
         }
     }
 
+    struct CancelWhenPresent(PathBuf);
+
+    impl crate::execution::ExecutionObserver for CancelWhenPresent {}
+
+    impl crate::execution::ExecutionCancellation for CancelWhenPresent {
+        fn cancelled(&self) -> bool {
+            self.0.exists()
+        }
+    }
+
     #[test]
     fn cancelled_repair_does_not_consume_attempt_budget() {
         let temp = tempdir().unwrap();
@@ -1353,6 +1592,140 @@ mod cancellation_tests {
         assert_eq!(action["attempt"]["last_status"], "attempted");
         let attempts = attempt_store.snapshot().unwrap();
         assert_eq!(attempts[0].item_version.as_deref(), Some("pushed-head"));
+    }
+
+    #[test]
+    fn review_mutations_require_the_expected_success_payload() {
+        let reply_error = validate_reply_mutation_response(json!({"data": {}})).unwrap_err();
+        assert!(reply_error.to_string().contains("invalid payload"));
+
+        let resolve_error = validate_resolve_mutation_response(json!({
+            "data": {"resolveReviewThread": {"thread": {"isResolved": false}}}
+        }))
+        .unwrap_err();
+        assert!(resolve_error.to_string().contains("did not report"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_review_reply_reconciles_the_remote_comment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("gh-reply-reconciliation");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  *ReviewThreadState*)
+    if [ -f remote-reply ]; then
+      cat <<'JSON'
+{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[{"id":"PRRC_REMOTE","url":"https://example.invalid/reply","body":"<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->"}]}}}}
+JSON
+    else
+      cat <<'JSON'
+{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[]}}}}
+JSON
+    fi
+    ;;
+  *addPullRequestReviewThreadReply*)
+    printf 'mutation\n' >> mutation.log
+    : > remote-reply
+    : > mutation-started
+    sleep 60
+    ;;
+  *)
+    echo "unexpected gh arguments: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+
+        let response = post_review_thread_reply(
+            &ctx,
+            "PRRT_1",
+            "Addressed in the pushed repair.",
+            "pushed-head",
+            &mut observer,
+        )
+        .unwrap();
+
+        assert_eq!(response["_jig"]["reconciled"], true);
+        assert_eq!(
+            response["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
+            "PRRC_REMOTE"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("mutation.log")).unwrap(),
+            "mutation\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_review_resolution_reconciles_the_remote_thread() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("gh-resolve-reconciliation");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  *ReviewThreadState*)
+    if [ -f remote-resolved ]; then resolved=true; else resolved=false; fi
+    printf '{"data":{"node":{"id":"PRRT_1","isResolved":%s,"comments":{"nodes":[]}}}}\n' "$resolved"
+    ;;
+  *resolveReviewThread*)
+    printf 'mutation\n' >> mutation.log
+    : > remote-resolved
+    : > mutation-started
+    sleep 60
+    ;;
+  *)
+    echo "unexpected gh arguments: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+
+        let response = resolve_review_thread(&ctx, "PRRT_1", &mut observer).unwrap();
+
+        assert_eq!(response["_jig"]["reconciled"], true);
+        assert_eq!(
+            response["data"]["resolveReviewThread"]["thread"]["isResolved"],
+            true
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("mutation.log")).unwrap(),
+            "mutation\n"
+        );
     }
 
     #[cfg(unix)]
