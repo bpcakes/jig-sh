@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::repository_model::AuthoredRepositoryModel;
+use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
 use super::{
     AnswerOpts, DevApp, FrontendApp, GENERATED_NODE_VERSION, generated_package_manager_spec,
     generated_package_manager_version,
@@ -1196,6 +1196,7 @@ pub(super) fn validate_frontend_apps(apps: &[FrontendApp]) -> Result<()> {
                 app.name
             );
         }
+        frontend_component_id(&app.name)?;
         if !names.insert(app.name.as_str()) {
             bail!("Duplicate frontend app name '{}'", app.name);
         }

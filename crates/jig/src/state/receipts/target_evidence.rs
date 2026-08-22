@@ -44,6 +44,7 @@ pub(super) struct IndexedTargetReceipts {
     required_targets: BTreeSet<TargetId>,
     latest_complete: Option<TargetReceiptGroup>,
     partial_by_run: BTreeMap<String, TargetReceiptGroup>,
+    max_incomplete_groups: Option<usize>,
 }
 
 impl IndexedTargetReceipts {
@@ -52,6 +53,19 @@ impl IndexedTargetReceipts {
             required_targets,
             latest_complete: None,
             partial_by_run: BTreeMap::new(),
+            max_incomplete_groups: Some(MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS),
+        }
+    }
+
+    /// Archive is the recovery path for an overgrown receipt stream, so it
+    /// must be able to identify the exact evidence group to preserve even
+    /// after ordinary gate evaluation reaches its defensive memory bound.
+    pub(super) fn for_archive(required_targets: BTreeSet<TargetId>) -> Self {
+        Self {
+            required_targets,
+            latest_complete: None,
+            partial_by_run: BTreeMap::new(),
+            max_incomplete_groups: None,
         }
     }
 
@@ -61,7 +75,9 @@ impl IndexedTargetReceipts {
         }
         let run_id = receipt.run_id.clone();
         if !self.partial_by_run.contains_key(&run_id)
-            && self.partial_by_run.len() >= MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS
+            && self
+                .max_incomplete_groups
+                .is_some_and(|maximum| self.partial_by_run.len() >= maximum)
         {
             bail!(
                 "work evidence contains more than {MAX_INCOMPLETE_TARGET_RECEIPT_GROUPS} incomplete run groups; archive stale receipts before evaluating this gate"

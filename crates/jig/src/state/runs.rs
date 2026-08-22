@@ -329,7 +329,11 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
     let mut carry = Vec::new();
     let mut events = Vec::new();
     let mut found_queued = false;
-    while cursor > 0 && !found_queued {
+    let canonical_run_id_marker = format!(
+        "\"run_id\":{}",
+        serde_json::to_string(run_id).expect("serializing a run id cannot fail")
+    );
+    while cursor > 0 {
         let read_len = usize::try_from(cursor.min(REVERSE_RUN_READ_CHUNK as u64))
             .unwrap_or(REVERSE_RUN_READ_CHUNK);
         cursor -= read_len as u64;
@@ -351,6 +355,19 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
             if record.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
+            // Jig appends compact serde_json records. Once the newest queued
+            // event has been found, scan the older byte stream for this run's
+            // canonical identity before paying to deserialize unrelated
+            // records. Continuing to the beginning detects duplicated queued
+            // events introduced by union merges without abandoning the cheap
+            // exact-lookup path.
+            if found_queued
+                && !record
+                    .windows(canonical_run_id_marker.len())
+                    .any(|window| window == canonical_run_id_marker.as_bytes())
+            {
+                continue;
+            }
             let raw = RawJsonlRecord {
                 bytes: record,
                 line_number: 0,
@@ -360,11 +377,8 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
             if identity.run_id != run_id {
                 continue;
             }
-            found_queued = identity.event == EVENT_QUEUED;
+            found_queued |= identity.event == EVENT_QUEUED;
             events.push(parse_run_event(raw, path)?);
-            if found_queued {
-                break;
-            }
         }
         carry = chunk[..split_at].to_vec();
     }
@@ -658,6 +672,31 @@ mod tests {
 
         assert_eq!(loaded.result.run_id, started.result.run_id);
         assert_eq!(loaded.plan.selectors[0].len(), REVERSE_RUN_READ_CHUNK * 2);
+    }
+
+    #[test]
+    fn reverse_run_lookup_rejects_an_earlier_duplicate_queued_event() {
+        let (_temp, ctx) = context();
+        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
+        append_event(
+            &ctx,
+            RunEventRecord {
+                id: "run_event_duplicate_queued".into(),
+                run_id: started.result.run_id.clone(),
+                event: EVENT_QUEUED.into(),
+                timestamp_ms: now_ms(),
+                work_plan_id: None,
+                plan: Some(plan()),
+                target: None,
+                result: None,
+                conclusion: None,
+            },
+        )
+        .unwrap();
+
+        let error = run_by_id(&ctx, &started.result.run_id).unwrap_err();
+
+        assert!(error.to_string().contains("more than one queued event"));
     }
 
     #[test]

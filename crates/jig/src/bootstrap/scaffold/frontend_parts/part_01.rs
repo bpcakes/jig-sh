@@ -378,6 +378,7 @@ impl FrontendScaffold {
 
     pub(super) fn from_spec(spec: ScaffoldFrontend) -> Result<Self> {
         validate_scaffold_name("frontend name", &spec.name)?;
+        crate::bootstrap::repository_model::frontend_component_id(&spec.name)?;
         let package_name = normalize_package_name(&spec.name)?;
         let (coverage_threshold, dev_kind) = scaffold_frontend_defaults(spec.kind);
         Ok(Self {
@@ -392,6 +393,7 @@ impl FrontendScaffold {
 
     pub(super) fn from_frontend_app(app: &FrontendApp) -> Result<Self> {
         validate_scaffold_name("frontend app name", &app.name)?;
+        crate::bootstrap::repository_model::frontend_component_id(&app.name)?;
         let kind = match app.role.as_str() {
             "spa" => ScaffoldFrontendKind::Spa,
             "admin" => ScaffoldFrontendKind::Admin,

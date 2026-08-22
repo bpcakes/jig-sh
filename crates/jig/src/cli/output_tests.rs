@@ -39,12 +39,53 @@ fn check_execution_summary_collects_target_failures() {
         "results": [
             {"target": {"component": "api", "action": "test"}, "response": {"result": {"exit_status": 0}}},
             {"target": {"component": "web", "action": "test"}, "response": {"result": {"exit_status": 7}}}
-        ]
+        ],
+        "run": {"targets": [
+            {"target": {"component": "api", "action": "test"}, "conclusion": "success", "exit_code": 0},
+            {"target": {"component": "web", "action": "test"}, "conclusion": "failure", "exit_code": 7}
+        ]}
     }));
 
     assert!(summary.contains("Jig check: failed"));
     assert!(summary.contains("api:test: passed (exit 0)"));
     assert!(summary.contains("web:test: failed (exit 7)"));
+}
+
+#[test]
+fn check_execution_summary_includes_failure_output_and_skipped_reasons() {
+    let summary = format_check_summary(&json!({
+        "ok": false,
+        "executed": true,
+        "plan": {
+            "id": "run-plan_sha256:abc",
+            "targets": [
+                {"target": {"component": "api", "action": "test"}},
+                {"target": {"component": "web", "action": "test"}}
+            ]
+        },
+        "results": [{
+            "target": {"component": "api", "action": "test"},
+            "response": {"result": {"exit_status": 7, "stderr": "assertion failed\nmore detail"}}
+        }],
+        "run": {"targets": [
+            {
+                "target": {"component": "api", "action": "test"},
+                "conclusion": "failure",
+                "exit_code": 7,
+                "findings": [{"message": "target process exited with status 7"}]
+            },
+            {
+                "target": {"component": "web", "action": "test"},
+                "conclusion": "skipped",
+                "findings": [{"message": "a declared target dependency did not succeed"}]
+            }
+        ]}
+    }));
+
+    assert!(summary.contains("api:test: failed (exit 7)"));
+    assert!(summary.contains("Output: assertion failed more detail"));
+    assert!(summary.contains("web:test: skipped"));
+    assert!(summary.contains("Reason: a declared target dependency did not succeed"));
 }
 
 #[test]

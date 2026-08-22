@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
-use crate::repository::RepositoryCatalog;
+use crate::repository::{RepositoryCatalog, target_input_digest};
 use crate::state::{
     ReceiptInput, TargetReceiptMetadata, complete_run, mark_run_running, mark_target_started,
     now_ms, record_target_receipt, record_target_result, run_by_id, start_run,
@@ -75,6 +75,8 @@ pub(in crate::runtime) fn execute_started_check_run(
     let mut compatibility_results = Vec::new();
     let mut failed_targets = Vec::new();
     let mut stop_after_failure = false;
+    let mut source_epoch =
+        ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
     let finisher = TargetFinisher {
         ctx,
         catalog,
@@ -114,12 +116,17 @@ pub(in crate::runtime) fn execute_started_check_run(
 
             let (result, compatibility) = if let Some((conclusion, reason)) = skip_reason {
                 let capture = TargetCapture::not_started(conclusion, reason);
-                finisher.finish(planned, None, capture)?
+                finisher.finish(planned, None, capture, source_epoch.receipt_fingerprint())?
+            } else if let Err(message) = source_epoch.prepare_target(ctx, planned) {
+                let capture = TargetCapture::blocked(message)
+                    .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+                finisher.finish(planned, None, capture, source_epoch.receipt_fingerprint())?
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
                 let started_at_ms = now_ms();
-                let capture = run_target(ctx, catalog, planned, cancelled);
-                finisher.finish(planned, Some(started_at_ms), capture)?
+                let (capture, fingerprint) =
+                    run_target(ctx, catalog, planned, cancelled, &mut source_epoch);
+                finisher.finish(planned, Some(started_at_ms), capture, fingerprint)?
             };
 
             let conclusion = result
@@ -170,15 +177,9 @@ fn run_target(
     catalog: &RepositoryCatalog,
     planned: &PlannedTarget,
     cancelled: &dyn Fn() -> Result<bool>,
-) -> TargetCapture {
+    source_epoch: &mut ExecutionSourceEpoch,
+) -> (TargetCapture, std::result::Result<String, String>) {
     let control = TargetExecutionControl::new(planned, cancelled);
-    let expected_worktree_fingerprint = match read_only_fingerprint_before(ctx, planned) {
-        Ok(fingerprint) => fingerprint,
-        Err(message) => {
-            return TargetCapture::blocked(message)
-                .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-        }
-    };
     let capture = match &planned.runner {
         ActionRunner::Command {
             command,
@@ -196,8 +197,12 @@ fn run_target(
             let timeout = match control.remaining() {
                 Ok(timeout) => timeout,
                 Err(conclusion) => {
-                    return stopped_before_start(planned, conclusion)
-                        .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+                    return (
+                        stopped_before_start(planned, conclusion).with_alias(
+                            catalog.aliases_for_target(&planned.target).first().cloned(),
+                        ),
+                        source_epoch.receipt_fingerprint(),
+                    );
                 }
             };
             match run_native_tool_with_control(
@@ -246,10 +251,101 @@ fn run_target(
     let capture = control
         .enforce_poll_health(capture)
         .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
-    match expected_worktree_fingerprint {
-        Some(expected) => enforce_read_only_worktree(ctx, planned, &expected, capture),
-        None => capture,
+    source_epoch.finish_target(ctx, planned, capture)
+}
+
+struct ExecutionSourceEpoch {
+    fingerprint: std::result::Result<String, String>,
+    validated: bool,
+}
+
+impl ExecutionSourceEpoch {
+    fn from_plan(fingerprint: String) -> Self {
+        Self {
+            fingerprint: Ok(fingerprint),
+            validated: false,
+        }
     }
+
+    fn receipt_fingerprint(&self) -> std::result::Result<String, String> {
+        self.fingerprint.clone()
+    }
+
+    fn prepare_target(
+        &mut self,
+        ctx: &RepoContext,
+        planned: &PlannedTarget,
+    ) -> std::result::Result<(), String> {
+        if !is_read_only(planned) {
+            return Ok(());
+        }
+        if self.validated {
+            return self.fingerprint.as_ref().map(|_| ()).map_err(Clone::clone);
+        }
+
+        let planned_fingerprint = self.fingerprint.clone()?;
+        let current = collect_execution_fingerprint(ctx);
+        self.fingerprint = current.clone();
+        self.validated = true;
+        match current {
+            Ok(current) if current == planned_fingerprint => Ok(()),
+            Ok(current) => Err(format!(
+                "read-only target '{}' could not start because the worktree changed after plan validation (planned {planned_fingerprint}, current {current}); plan again",
+                planned.target
+            )),
+            Err(error) => Err(format!(
+                "could not establish the read-only worktree invariant before target '{}': {error}",
+                planned.target
+            )),
+        }
+    }
+
+    fn finish_target(
+        &mut self,
+        ctx: &RepoContext,
+        planned: &PlannedTarget,
+        capture: TargetCapture,
+    ) -> (TargetCapture, std::result::Result<String, String>) {
+        let current = collect_execution_fingerprint(ctx);
+        let capture = if is_read_only(planned) {
+            match self.fingerprint.as_deref() {
+                Ok(expected) => enforce_read_only_worktree(planned, expected, &current, capture),
+                Err(error) => block_for_unverifiable_read_only(planned, error, capture),
+            }
+        } else {
+            capture
+        };
+        self.fingerprint = current.clone();
+        self.validated = true;
+        (capture, current)
+    }
+}
+
+fn collect_execution_fingerprint(ctx: &RepoContext) -> std::result::Result<String, String> {
+    let current = crate::state::current_worktree_fingerprint(ctx);
+    current.fingerprint.ok_or_else(|| {
+        current
+            .error
+            .unwrap_or_else(|| "worktree fingerprint was unavailable".into())
+    })
+}
+
+fn block_for_unverifiable_read_only(
+    planned: &PlannedTarget,
+    error: &str,
+    mut capture: TargetCapture,
+) -> TargetCapture {
+    let message = format!(
+        "could not verify the read-only worktree invariant for target '{}': {error}",
+        planned.target
+    );
+    capture.stderr.push_str(&format!("{message}\n"));
+    capture.findings.push(finding(message, "effect_policy"));
+    if capture.conclusion == RunConclusion::Success {
+        capture.conclusion = RunConclusion::Blocked;
+        capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+    }
+    capture
 }
 
 struct TargetExecutionControl<'a> {
@@ -361,40 +457,19 @@ fn is_read_only(planned: &PlannedTarget) -> bool {
             .contains(&jig_contract::ActionEffect::Worktree)
 }
 
-fn read_only_fingerprint_before(
-    ctx: &RepoContext,
-    planned: &PlannedTarget,
-) -> std::result::Result<Option<String>, String> {
-    if !is_read_only(planned) {
-        return Ok(None);
-    }
-    let current = crate::state::current_worktree_fingerprint(ctx);
-    current.fingerprint.map(Some).ok_or_else(|| {
-        format!(
-            "could not establish the read-only worktree invariant before target '{}': {}",
-            planned.target,
-            current
-                .error
-                .as_deref()
-                .unwrap_or("worktree fingerprint was unavailable")
-        )
-    })
-}
-
 fn enforce_read_only_worktree(
-    ctx: &RepoContext,
     planned: &PlannedTarget,
     expected: &str,
+    current: &std::result::Result<String, String>,
     mut capture: TargetCapture,
 ) -> TargetCapture {
     debug_assert!(is_read_only(planned));
 
-    let current = crate::state::current_worktree_fingerprint(ctx);
-    match (current.fingerprint.as_deref(), current.error.as_deref()) {
-        (Some(actual), _) if actual == expected => capture,
-        (Some(actual), _) => {
+    match current.as_deref() {
+        Ok(actual) if actual == expected => capture,
+        Ok(actual) => {
             let message = format!(
-                "read-only target '{}' changed the worktree fingerprint from {expected} to {actual}",
+                "the worktree fingerprint changed while read-only target '{}' was running (before {expected}, after {actual})",
                 planned.target
             );
             capture.stderr.push_str(&format!("{message}\n"));
@@ -405,20 +480,7 @@ fn enforce_read_only_worktree(
             }
             capture
         }
-        (None, error) => {
-            let message = format!(
-                "could not verify the read-only worktree invariant for target '{}': {}",
-                planned.target,
-                error.unwrap_or("worktree fingerprint was unavailable")
-            );
-            capture.stderr.push_str(&format!("{message}\n"));
-            capture.findings.push(finding(message, "effect_policy"));
-            if capture.conclusion == RunConclusion::Success {
-                capture.conclusion = RunConclusion::Blocked;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
-            }
-            capture
-        }
+        Err(error) => block_for_unverifiable_read_only(planned, error, capture),
     }
 }
 
@@ -596,9 +658,14 @@ impl TargetFinisher<'_> {
         planned: &PlannedTarget,
         started_at_ms: Option<u64>,
         capture: TargetCapture,
+        worktree_fingerprint: std::result::Result<String, String>,
     ) -> Result<(TargetRunResult, Option<Value>)> {
         let ended_at_ms = now_ms();
         let tool_name = capture.alias.as_deref().unwrap_or(GENERIC_TARGET_TOOL);
+        let input_digest = match &worktree_fingerprint {
+            Ok(fingerprint) => target_input_digest(self.catalog, &planned.target, fingerprint)?,
+            Err(_) => planned.input_digest.clone(),
+        };
         let receipt_id = self
             .record_receipts
             .then(|| {
@@ -621,18 +688,13 @@ impl TargetFinisher<'_> {
                         session_override: None,
                         collect_git_metadata: true,
                         collect_worktree_fingerprint: false,
-                        worktree_fingerprint_override: Some(Ok(self
-                            .run
-                            .plan
-                            .source
-                            .worktree_fingerprint
-                            .clone())),
+                        worktree_fingerprint_override: Some(worktree_fingerprint),
                     },
                     TargetReceiptMetadata {
                         run_id: self.run.result.run_id.clone(),
                         target: planned.target.clone(),
                         config_digest: self.run.plan.config_digest.clone(),
-                        input_digest: planned.input_digest.clone(),
+                        input_digest: input_digest.clone(),
                         findings: capture.findings.clone(),
                     },
                 )
@@ -642,7 +704,7 @@ impl TargetFinisher<'_> {
         let mut result = TargetRunResult::queued(
             planned.target.clone(),
             self.run.plan.config_digest.clone(),
-            planned.input_digest.clone(),
+            input_digest,
         );
         result.status = RunStatus::Completed;
         result.conclusion = Some(capture.conclusion);

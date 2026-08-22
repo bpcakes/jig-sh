@@ -8,6 +8,12 @@ use super::RepositoryCatalog;
 
 pub(super) type TargetSelection = BTreeMap<TargetId, BTreeSet<SelectionReason>>;
 
+/// Checked-in files that define the repository catalog itself. A change to
+/// either file can alter every component, action, profile, dependency, or
+/// runner, so affected selection must treat them as implicit inputs of every
+/// candidate target.
+const REPOSITORY_AUTHORITY_INPUTS: &[&str] = &[".jig.toml", ".agent/jig-contract.json"];
+
 /// Validates the path policy needed by affected selection when a native
 /// repository catalog is constructed. Legacy projections do not declare this
 /// policy and continue to use their compatibility behavior.
@@ -35,13 +41,24 @@ pub(super) fn select_affected_targets(
     changed_paths: &[String],
 ) -> Result<TargetSelection> {
     let paths = normalized_changed_paths(changed_paths)?;
+    let authority_paths = paths
+        .iter()
+        .filter(|path| REPOSITORY_AUTHORITY_INPUTS.contains(&path.as_str()))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let matchers = component_input_matchers(catalog)?;
     let direct = directly_affected_components(catalog, &matchers, &paths);
     let propagated = propagated_components(catalog, &direct);
 
     let mut selected = TargetSelection::new();
     for (target, mut reasons) in candidates {
-        let mut affected = false;
+        let mut affected = !authority_paths.is_empty();
+        reasons.extend(
+            authority_paths
+                .iter()
+                .cloned()
+                .map(|path| SelectionReason::DirectInput { path }),
+        );
         if let Some(paths) = direct.get(&target.component) {
             affected = true;
             reasons.extend(
@@ -461,6 +478,23 @@ mod tests {
             target_names(&selected(&catalog, &["crates/api/src/lib.rs"])),
             ["api:test", "web:test"]
         );
+    }
+
+    #[test]
+    fn affected_repository_authority_inputs_select_every_candidate() {
+        let catalog = generated_root_fixture();
+
+        for path in [".jig.toml", ".agent/jig-contract.json"] {
+            let selection = selected(&catalog, &[path]);
+
+            assert_eq!(
+                target_names(&selection),
+                ["api:test", "repo:contract", "web:test"]
+            );
+            for reasons in selection.values() {
+                assert!(reasons.contains(&SelectionReason::DirectInput { path: path.into() }));
+            }
+        }
     }
 
     #[test]

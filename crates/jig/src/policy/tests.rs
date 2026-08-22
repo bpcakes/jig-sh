@@ -801,6 +801,89 @@ fn schema_check_isolates_unrelated_generator_writes_and_reads_untracked_inputs()
 }
 
 #[test]
+fn schema_check_reads_ignored_dotenv_inputs_in_the_snapshot() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(temp.path(), "cat .env > docs/schema/tables.sql");
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    fs::write(temp.path().join(".gitignore"), ".env\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    fs::write(temp.path().join(".env"), "stable\n").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+    assert_eq!(
+        fs::read_to_string(temp.path().join(".env")).unwrap(),
+        "stable\n"
+    );
+}
+
+#[test]
+fn schema_check_reads_initialized_submodule_worktrees_in_the_snapshot() {
+    let dependency = tempdir().unwrap();
+    fs::write(dependency.path().join("schema-input"), "stable\n").unwrap();
+    init_git(dependency.path());
+    git(dependency.path(), &["add", "."]);
+    git(dependency.path(), &["commit", "-m", "baseline", "-q"]);
+
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "cat vendor/example/schema-input > docs/schema/tables.sql",
+    );
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(
+        temp.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            dependency.path().to_str().unwrap(),
+            "vendor/example",
+        ],
+    );
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+}
+
+#[cfg(unix)]
+#[test]
+fn schema_check_preserves_untracked_symlinks_without_following_them() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(temp.path(), "printf 'stable\\n' > docs/schema/tables.sql");
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    std::os::unix::fs::symlink("missing-target", temp.path().join("unrelated-link")).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+    assert!(
+        fs::symlink_metadata(temp.path().join("unrelated-link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
 fn controlled_native_output_is_bounded() {
     let mut command = Command::new("bash");
     command.args(["-c", "yes x | head -c 2000000"]);

@@ -72,50 +72,9 @@ impl SchemaSandbox {
         deadline: Instant,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Self> {
-        let snapshot = controlled_git_text(
-            repository_root,
-            &["stash", "create", "jig schema freshness snapshot"],
-            deadline,
-            cancelled,
-        )?;
-        let snapshot = if snapshot.trim().is_empty() {
-            controlled_git_text(repository_root, &["rev-parse", "HEAD"], deadline, cancelled)?
-        } else {
-            snapshot
-        };
         let temp = tempfile::tempdir().context("Failed to create schema-check sandbox")?;
         let root = temp.path().join("repository");
-
-        let mut clone = Command::new("git");
-        clone.args(["clone", "--quiet", "--no-checkout", "--shared", "--"]);
-        clone.arg(repository_root).arg(&root);
-        let output = controlled_output(&mut clone, deadline, cancelled)
-            .context("Failed to clone schema-check sandbox")?;
-        if !output.status.success() {
-            bail!(
-                "failed to clone schema-check sandbox with status {}\nstdout:\n{}\nstderr:\n{}",
-                output.status.code().unwrap_or(1),
-                output.stdout,
-                output.stderr
-            );
-        }
-
-        let mut checkout = Command::new("git");
-        checkout
-            .current_dir(&root)
-            .args(["checkout", "--quiet", "--detach", snapshot.trim()]);
-        let output = controlled_output(&mut checkout, deadline, cancelled)
-            .context("Failed to check out schema-check snapshot")?;
-        if !output.status.success() {
-            bail!(
-                "failed to check out schema-check snapshot with status {}\nstdout:\n{}\nstderr:\n{}",
-                output.status.code().unwrap_or(1),
-                output.stdout,
-                output.stderr
-            );
-        }
-
-        copy_untracked_files(repository_root, &root, deadline, cancelled)?;
+        clone_worktree_snapshot(repository_root, &root, deadline, cancelled, 0)?;
         Ok(Self { _temp: temp, root })
     }
 
@@ -124,42 +83,233 @@ impl SchemaSandbox {
     }
 }
 
-fn copy_untracked_files(
+const MAX_SUBMODULE_DEPTH: usize = 32;
+
+/// Materializes the repository state that a local generator can observe without
+/// letting the generator mutate the live checkout. Git supplies tracked and
+/// staged content; explicit overlays supply state that no Git tree can encode.
+fn clone_worktree_snapshot(
+    repository_root: &Path,
+    sandbox_root: &Path,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+    submodule_depth: usize,
+) -> Result<()> {
+    if submodule_depth > MAX_SUBMODULE_DEPTH {
+        bail!("schema-check submodules exceed the supported nesting depth");
+    }
+
+    let snapshot = controlled_git_text(
+        repository_root,
+        &["stash", "create", "jig schema freshness snapshot"],
+        deadline,
+        cancelled,
+    )?;
+    let snapshot = if snapshot.trim().is_empty() {
+        controlled_git_text(repository_root, &["rev-parse", "HEAD"], deadline, cancelled)?
+    } else {
+        snapshot
+    };
+
+    remove_snapshot_path(sandbox_root)?;
+    let mut clone = Command::new("git");
+    clone.args(["clone", "--quiet", "--no-checkout", "--shared", "--"]);
+    clone.arg(repository_root).arg(sandbox_root);
+    let output = controlled_output(&mut clone, deadline, cancelled)
+        .context("Failed to clone schema-check sandbox")?;
+    if !output.status.success() {
+        bail!(
+            "failed to clone schema-check sandbox with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status.code().unwrap_or(1),
+            output.stdout,
+            output.stderr
+        );
+    }
+
+    let mut checkout = Command::new("git");
+    checkout
+        .current_dir(sandbox_root)
+        .args(["checkout", "--quiet", "--detach", snapshot.trim()]);
+    let output = controlled_output(&mut checkout, deadline, cancelled)
+        .context("Failed to check out schema-check snapshot")?;
+    if !output.status.success() {
+        bail!(
+            "failed to check out schema-check snapshot with status {}\nstdout:\n{}\nstderr:\n{}",
+            output.status.code().unwrap_or(1),
+            output.stdout,
+            output.stderr
+        );
+    }
+
+    overlay_worktree_files(repository_root, sandbox_root, deadline, cancelled)?;
+    for relative in initialized_submodules(repository_root, deadline, cancelled)? {
+        clone_worktree_snapshot(
+            &repository_root.join(&relative),
+            &sandbox_root.join(&relative),
+            deadline,
+            cancelled,
+            submodule_depth + 1,
+        )?;
+    }
+    Ok(())
+}
+
+fn overlay_worktree_files(
     repository_root: &Path,
     sandbox_root: &Path,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
-    let paths = controlled_git_text(
+    let untracked = controlled_git_text(
         repository_root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
         deadline,
         cancelled,
     )?;
-    for relative in paths.split('\0').filter(|path| !path.is_empty()) {
+    let ignored_dotenv = controlled_git_text(
+        repository_root,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".env",
+            ".env.*",
+            ":(glob)**/.env",
+            ":(glob)**/.env.*",
+        ],
+        deadline,
+        cancelled,
+    )?;
+
+    let mut paths = untracked
+        .split('\0')
+        .chain(ignored_dotenv.split('\0'))
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths.dedup();
+
+    for relative in paths {
         let relative = normalize_repo_relative_path(Path::new(relative), "untracked path")?;
         let source = repository_root.join(&relative);
         let metadata = fs::symlink_metadata(&source)
             .with_context(|| format!("Failed to inspect untracked file {}", source.display()))?;
-        if !metadata.file_type().is_file() {
-            bail!(
-                "schema check cannot snapshot non-file untracked path {}",
-                relative.display()
-            );
-        }
         let destination = sandbox_root.join(&relative);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create {}", parent.display()))?;
         }
-        fs::copy(&source, &destination).with_context(|| {
-            format!(
-                "Failed to copy untracked file {} into the schema-check sandbox",
-                relative.display()
-            )
-        })?;
+        if metadata.file_type().is_file() {
+            fs::copy(&source, &destination).with_context(|| {
+                format!(
+                    "Failed to copy untracked file {} into the schema-check sandbox",
+                    relative.display()
+                )
+            })?;
+        } else if metadata.file_type().is_symlink() {
+            copy_symlink(&source, &destination)?;
+        }
     }
     Ok(())
+}
+
+fn initialized_submodules(
+    repository_root: &Path,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<PathBuf>> {
+    if !repository_root.join(".gitmodules").is_file() {
+        return Ok(Vec::new());
+    }
+    let mut command = Command::new("git");
+    command.current_dir(repository_root).args([
+        "config",
+        "-z",
+        "--file",
+        ".gitmodules",
+        "--get-regexp",
+        "^submodule\\..*\\.path$",
+    ]);
+    let output = controlled_output(&mut command, deadline, cancelled)
+        .context("Failed to inspect schema-check submodules")?;
+    if !output.status.success() {
+        if output.status.code() == Some(1) {
+            return Ok(Vec::new());
+        }
+        bail!(
+            "failed to inspect schema-check submodules with status {}\nstderr:\n{}",
+            output.status.code().unwrap_or(1),
+            output.stderr
+        );
+    }
+
+    output
+        .stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (_, path) = entry
+                .split_once('\n')
+                .ok_or_else(|| anyhow::anyhow!("git returned a malformed submodule path record"))?;
+            normalize_repo_relative_path(Path::new(path), "submodule path")
+        })
+        .filter_map(|relative| match relative {
+            Ok(relative) if repository_root.join(&relative).join(".git").exists() => {
+                Some(Ok(relative))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+fn remove_snapshot_path(path: &Path) -> Result<()> {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .with_context(|| {
+        format!(
+            "Failed to replace schema-check snapshot path {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(unix)]
+fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
+    let target = fs::read_link(source)
+        .with_context(|| format!("Failed to read untracked symlink {}", source.display()))?;
+    std::os::unix::fs::symlink(&target, destination).with_context(|| {
+        format!(
+            "Failed to copy untracked symlink {} into the schema-check sandbox",
+            source.display()
+        )
+    })
+}
+
+#[cfg(windows)]
+fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
+    let target = fs::read_link(source)
+        .with_context(|| format!("Failed to read untracked symlink {}", source.display()))?;
+    let result = if source.metadata().is_ok_and(|metadata| metadata.is_dir()) {
+        std::os::windows::fs::symlink_dir(&target, destination)
+    } else {
+        std::os::windows::fs::symlink_file(&target, destination)
+    };
+    result.with_context(|| {
+        format!(
+            "Failed to copy untracked symlink {} into the schema-check sandbox",
+            source.display()
+        )
+    })
 }
 
 fn run_schema_drift_check(

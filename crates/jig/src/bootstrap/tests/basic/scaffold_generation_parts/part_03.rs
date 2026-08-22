@@ -572,6 +572,44 @@ fn run_init_rejects_invalid_frontend_package_names_before_writes() {
     assert!(!destination.exists());
 }
 
+#[test]
+fn run_init_rejects_frontend_names_that_cannot_become_component_ids_before_writes() {
+    for supplied_name in ["_web", "web-"] {
+        let temp = tempdir().unwrap();
+        let destination = temp.path().join("repo");
+
+        let error = run_init(InitOpts {
+            path: destination.clone(),
+            scaffold: ScaffoldOpts {
+                preset: Some(ScaffoldPreset::RustReact),
+                db: None,
+                frontends: vec![ScaffoldFrontend {
+                    name: supplied_name.into(),
+                    kind: ScaffoldFrontendKind::Spa,
+                    custom_default_name: false,
+                }],
+                frontend_list: Vec::new(),
+            },
+            template: None,
+            template_mode: None,
+            vcs_ref: None,
+            force: false,
+            defaults: true,
+            no_input: true,
+            no_vault: true,
+            answers: AnswerOpts {
+                repo_name: Some("demo".into()),
+                ..AnswerOpts::default()
+            },
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("Invalid frontend app name"), "{error}");
+        assert!(!destination.exists());
+    }
+}
+
 #[cfg(unix)]
 fn assert_rendered_scaffold_rust_is_formatted(plan: &scaffold::InitScaffoldPlan, case: &str) {
     let rendered = plan.render_files().unwrap();

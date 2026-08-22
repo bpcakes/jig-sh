@@ -571,6 +571,19 @@ fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
         json!({"selectors": ["api:generate", "api:test"]}),
     )
     .unwrap();
+    let planned_fingerprint = planned["plan"]["source"]["worktree_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let planned_test_input_digest = planned["plan"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["target"]["action"] == "test")
+        .unwrap()["input_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let accepted = call_tool(
         &ctx,
         tool::EXECUTE_RUN,
@@ -591,6 +604,78 @@ fn read_only_targets_use_a_fresh_epoch_after_worktree_targets() {
         fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
         "generated"
     );
+    let current_fingerprint = crate::state::current_worktree_fingerprint(&ctx)
+        .fingerprint
+        .unwrap();
+    assert_ne!(planned_fingerprint, current_fingerprint);
+    let test_result = terminal["result"]["run"]["result"]["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["target"]["action"] == "test")
+        .unwrap();
+    assert_ne!(test_result["input_digest"], planned_test_input_digest);
+    let receipt = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|receipt| receipt["target"]["action"] == "test")
+        .unwrap();
+    assert_eq!(receipt["worktree_fingerprint"], current_fingerprint);
+    assert_eq!(receipt["input_digest"], test_result["input_digest"]);
+}
+
+#[test]
+fn read_only_target_rejects_stable_drift_after_plan_validation() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "printf 'api tests passed\\n'",
+        "printf ran > api/target-ran.txt",
+    );
+    fs::write(&config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = crate::repository::plan_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["api:test".into()],
+            profile: None,
+            affected_base: None,
+        },
+    )
+    .unwrap();
+    let (run, _lease) =
+        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+    fs::write(temp.path().join("api/drift.txt"), "stable drift\n").unwrap();
+
+    let execution = crate::runtime::run_execution::execute_started_check_run(
+        &ctx,
+        &catalog,
+        run,
+        crate::runtime::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| Ok(false),
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.run.result.targets[0].conclusion,
+        Some(jig_contract::RunConclusion::Blocked)
+    );
+    assert!(execution.run.result.targets[0].started_at_ms.is_none());
+    assert!(
+        execution.run.result.targets[0].findings[0]
+            .message
+            .contains("worktree changed after plan validation")
+    );
+    assert!(!temp.path().join("api/target-ran.txt").exists());
 }
 
 #[test]

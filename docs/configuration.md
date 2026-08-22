@@ -114,9 +114,13 @@ Contract-v6 roots and input patterns are validated while the repository catalog
 loads. `scripts/jig check --affected BASE` resolves the selected/default profile
 or explicit target candidates, filters them with the Git changes from `BASE`,
 and then adds action dependencies. Direct input and configured component
-propagation reasons appear in `--explain` and JSON output. `.agent/` runtime
-state is excluded from selection, and an unrelated change may produce a valid
-empty plan.
+propagation reasons appear in `--explain` and JSON output. Changes to the two
+repository-model authorities, `.jig.toml` and `.agent/jig-contract.json`, select
+every candidate because they can change any target definition. `.agent/` runtime
+state is otherwise excluded from selection, and an unrelated change may produce
+a valid empty plan. Repository planning and execution require a Git worktree:
+the immutable plan identity, affected-path selection, and evidence freshness all
+derive from Git state rather than a best-effort filesystem snapshot.
 
 Generated frontend commands use `scripts/check-webapps.sh check-one` so `web:test` validates only the `web` component while preserving dependency setup and coverage enforcement. Aggregate `jig.typescript_*` tools remain compatibility actions and are not members of the default profile.
 
@@ -673,8 +677,11 @@ When both `sqlx_enabled` and `schema_dump_enabled` are `true`, it also exposes:
 `scripts/jig check schema` is a read-only freshness gate. It requires
 `SCHEMA_DOCS_DIR` to be clean, reruns `schema_dump_command` in a disposable
 snapshot of the current repository, and reports any drift without letting the
-generator write to the live worktree. Use `scripts/jig sqlx schema dump` to
-apply the generated update.
+generator write to the live worktree. The snapshot includes current tracked and
+staged content, non-ignored untracked files, ignored `.env`/`.env.*` files, and
+the working trees of initialized local submodules; unrelated special untracked
+files are ignored, while untracked symlinks are recreated without following
+them. Use `scripts/jig sqlx schema dump` to apply the generated update.
 `SCHEMA_DOCS_DIR` defaults to `docs/schema`, must remain repository-relative,
 and is included in the generated default verification profile.
 

@@ -173,7 +173,36 @@ fn format_check_summary(value: &serde_json::Value) -> String {
         format!("  Plan: {plan_id}"),
         format!("  Targets: {results}/{targets} executed"),
     ];
-    if let Some(target_results) = value["results"].as_array() {
+    if let Some(target_results) = value["run"]["targets"].as_array() {
+        for result in target_results {
+            let target = structured_target_text(&result["target"]);
+            let conclusion = result["conclusion"].as_str().unwrap_or("unknown");
+            let label = match conclusion {
+                "success" => "passed",
+                "failure" => "failed",
+                other => other,
+            };
+            let exit = result["exit_code"]
+                .as_i64()
+                .map_or_else(String::new, |exit| format!(" (exit {exit})"));
+            lines.push(format!("  - {target}: {label}{exit}"));
+
+            if let Some(response) = check_response_for_target(value, &result["target"])
+                && let Some(preview) = tool_output_preview(response)
+            {
+                lines.push(format!("      Output: {preview}"));
+            } else if conclusion != "success"
+                && let Some(reason) = result["findings"]
+                    .as_array()
+                    .and_then(|findings| findings.first())
+                    .and_then(|finding| finding["message"].as_str())
+            {
+                lines.push(format!("      Reason: {}", concise_preview(reason, 180)));
+            }
+        }
+    } else if let Some(target_results) = value["results"].as_array() {
+        // Contract-v6 runtimes always include the canonical run result. Keep
+        // this compatibility projection readable for older aggregate values.
         for result in target_results {
             let target = structured_target_text(&result["target"]);
             let exit = result["response"]["result"]["exit_status"]
@@ -187,6 +216,16 @@ fn format_check_summary(value: &serde_json::Value) -> String {
     }
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn check_response_for_target<'a>(
+    value: &'a serde_json::Value,
+    target: &serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    value["results"]
+        .as_array()?
+        .iter()
+        .find_map(|result| (result["target"] == *target).then_some(&result["response"]))
 }
 
 fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
@@ -395,7 +434,10 @@ fn tool_output_preview(value: &serde_json::Value) -> Option<String> {
     value_str(result, "stderr")
         .filter(|text| !text.trim().is_empty())
         .or_else(|| value_str(result, "stdout").filter(|text| !text.trim().is_empty()))
-        .map(|text| concise_preview(text, 180))
+        .map(|text| {
+            let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            concise_preview(&one_line, 180)
+        })
 }
 
 pub(super) fn format_agent_map_generate_summary(value: &serde_json::Value) -> String {

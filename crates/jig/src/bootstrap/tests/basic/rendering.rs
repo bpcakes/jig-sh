@@ -55,6 +55,8 @@ coverage_threshold = 80
 
     for (value, expected) in [
         ("bad/name:web:40", "Invalid frontend app name"),
+        ("_web:web:40", "Invalid frontend app name"),
+        ("web-:web:40", "Invalid frontend app name"),
         ("frontend:/outside:40", "must be relative"),
         ("frontend:web:40:unknown", "Invalid frontend app kind"),
         ("frontend:web:40:vite:unknown", "Invalid frontend app role"),

@@ -527,13 +527,16 @@ fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
     Ok(component)
 }
 
-fn frontend_component_id(name: &str) -> Result<ComponentId> {
+pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
     let normalized = name.to_ascii_lowercase();
-    if normalized.len() <= 64 {
-        return component_id(&normalized);
-    }
-    let digest = format!("{:x}", Sha256::digest(normalized.as_bytes()));
-    component_id(&format!("{}-{}", &normalized[..51], &digest[..12]))
+    let value = if normalized.len() <= 64 {
+        normalized
+    } else {
+        let digest = format!("{:x}", Sha256::digest(normalized.as_bytes()));
+        format!("{}-{}", &normalized[..51], &digest[..12])
+    };
+    component_id(&value)
+        .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
 }
 
 fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
@@ -549,6 +552,7 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
         .collect::<Vec<_>>();
     resolved.extend(
         [
+            "scripts/check-webapps.sh",
             "package.json",
             "bun.lock",
             "bun.lockb",
@@ -712,6 +716,14 @@ schema_dump_command = "scripts/dump-schema.sh"
                 .effects
                 .contains(&jig_contract::ActionEffect::Worktree)
         );
+    }
+
+    #[test]
+    fn frontend_actions_depend_on_their_shared_runner() {
+        let inputs = frontend_inputs("apps/web", &["src/**"]);
+
+        assert!(inputs.contains(&"apps/web/src/**".to_owned()));
+        assert!(inputs.contains(&"scripts/check-webapps.sh".to_owned()));
     }
 
     #[test]

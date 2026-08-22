@@ -41,7 +41,11 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
     let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
     let check_gate_tools = BTreeSet::from([tool::TEST.to_string()]);
     let review_gate_ids = BTreeSet::from(["rust-review".to_string()]);
-    let mut index = ReceiptProtectionIndex::default();
+    let evidence_targets = BTreeMap::from([(
+        "api-tests".to_string(),
+        BTreeSet::from(["api:test".parse().unwrap()]),
+    )]);
+    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
     let mut target = test_receipt(
         "receipt_target",
         "plan_open",
@@ -97,6 +101,52 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
             "receipt_direct".to_string(),
             "receipt_review".to_string(),
             "receipt_target".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overflow() {
+    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
+    let evidence_targets = BTreeMap::from([(
+        "verify".to_string(),
+        BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
+    )]);
+    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+
+    for sequence in 0..=1024 {
+        let mut partial = test_receipt(
+            &format!("receipt_partial_{sequence}"),
+            "plan_open",
+            "jig.target_run",
+            sequence,
+            json!({}),
+        );
+        partial.run_id = Some(format!("run_partial_{sequence}"));
+        partial.target = Some("api:lint".parse().unwrap());
+        index.observe(&partial, &open_plan_ids, &BTreeSet::new(), &BTreeSet::new());
+    }
+    for (receipt_id, target) in [
+        ("receipt_complete_lint", "api:lint"),
+        ("receipt_complete_test", "api:test"),
+    ] {
+        let mut complete =
+            test_receipt(receipt_id, "plan_open", "jig.target_run", 2_000, json!({}));
+        complete.run_id = Some("run_complete".into());
+        complete.target = Some(target.parse().unwrap());
+        index.observe(
+            &complete,
+            &open_plan_ids,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+    }
+
+    assert_eq!(
+        index.protected_receipt_ids(),
+        BTreeSet::from([
+            "receipt_complete_lint".to_string(),
+            "receipt_complete_test".to_string(),
         ])
     );
 }
