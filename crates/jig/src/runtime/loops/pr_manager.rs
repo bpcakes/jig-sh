@@ -25,6 +25,7 @@ pub(super) fn pr_manager_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkflowTick> {
     let codex_home = workflow
         .codex_home_configured
@@ -40,6 +41,12 @@ pub(super) fn pr_manager_tick(
         .pointer("/repository/default_branch")
         .and_then(Value::as_str)
         .unwrap_or_else(|| ctx.default_branch());
+    let execution = PrManagerExecution {
+        ctx,
+        workflow,
+        codex_home: codex_home.as_deref(),
+        cancelled,
+    };
 
     let mut actions = Vec::new();
     for pull_request in pull_requests {
@@ -56,13 +63,11 @@ pub(super) fn pr_manager_tick(
             PrCandidate::Pending(item) => actions.push(pending_checks_action(&item)),
             PrCandidate::Actionable(item) => {
                 let action = handle_actionable_pr(
-                    ctx,
-                    workflow,
+                    &execution,
                     lease_store,
                     attempt_store,
                     &item,
                     pull_request,
-                    codex_home.as_deref(),
                 )?;
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
@@ -106,6 +111,13 @@ struct PrPendingItem {
     head_ref: String,
     head_sha: String,
     pending_checks: u64,
+}
+
+struct PrManagerExecution<'a> {
+    ctx: &'a RepoContext,
+    workflow: &'a ResolvedWorkflow,
+    codex_home: Option<&'a Path>,
+    cancelled: &'a dyn Fn() -> bool,
 }
 
 fn classify_pull_request(pull_request: &Value, default_branch: &str) -> PrCandidate {
@@ -302,14 +314,16 @@ fn pr_manager_action_consumed_tick(action: &Value) -> bool {
 }
 
 fn handle_actionable_pr(
-    ctx: &RepoContext,
-    workflow: &ResolvedWorkflow,
+    execution: &PrManagerExecution<'_>,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
     item: &PrWorkItem,
     pull_request: &Value,
-    codex_home: Option<&Path>,
 ) -> Result<Value> {
+    let ctx = execution.ctx;
+    let workflow = execution.workflow;
+    let codex_home = execution.codex_home;
+    let cancelled = execution.cancelled;
     if let Some(action) = attempt_blocking_action(workflow, attempt_store, item)? {
         return Ok(action);
     }
@@ -337,19 +351,17 @@ fn handle_actionable_pr(
         workflow.lease_ttl_seconds,
     )?;
 
-    let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease, codex_home);
-    let release_result = lease_guard.finish();
-    let action_result = match release_result {
-        Ok(()) => action_result,
-        Err(release_error) => {
-            return match action_result {
-                Err(action_error) => Err(action_error.context(format!(
-                    "Branch lease renewal or release also failed: {release_error:#}"
-                ))),
-                Ok(_) => Err(release_error.context("Branch lease renewal or release failed")),
-            };
-        }
-    };
+    let worker_cancelled = || cancelled() || lease_guard.renewal_failed();
+    let action_result = run_pr_repair(
+        ctx,
+        workflow,
+        item,
+        pull_request,
+        &lease,
+        codex_home,
+        &worker_cancelled,
+    );
+    let release_error = lease_guard.finish().err();
     match action_result {
         Ok(action) => {
             let item_version = action
@@ -368,7 +380,10 @@ fn handle_actionable_pr(
                 item_version,
                 attempt_status,
             )?;
-            Ok(with_attempt(action, attempt))
+            Ok(with_branch_lease_result(
+                with_attempt(action, attempt),
+                release_error.as_ref(),
+            ))
         }
         Err(error) => {
             let attempt = attempt_store.record_attempt_for_version(
@@ -387,7 +402,12 @@ fn handle_actionable_pr(
                 "lease": lease,
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "attempt": attempt,
-                "error": format!("{error:#}"),
+                "error": release_error.map_or_else(
+                    || format!("{error:#}"),
+                    |release_error| format!(
+                        "{error:#}; branch lease renewal or release also failed: {release_error:#}"
+                    ),
+                ),
             }))
         }
     }
@@ -445,6 +465,7 @@ fn run_pr_repair(
     pull_request: &Value,
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<Value> {
     let worktree = prepare_worktree(ctx, workflow, item)?;
     let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;
@@ -468,6 +489,7 @@ fn run_pr_repair(
             extra_args: Vec::new(),
             output_schema: Some(&output_schema),
             prompt: CodexPrompt::Stdin(&prompt),
+            cancelled: Some(cancelled),
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
                 plan_id: None,
@@ -927,6 +949,18 @@ fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
     action
 }
 
+fn with_branch_lease_result(mut action: Value, release_error: Option<&anyhow::Error>) -> Value {
+    if let Some(release_error) = release_error {
+        action["completed_status"] = action["status"].clone();
+        action["status"] = json!("failed");
+        action["lease_error"] = json!(format!("{release_error:#}"));
+        action["error"] = json!(format!(
+            "Branch repair completed, but lease renewal or release failed: {release_error:#}"
+        ));
+    }
+    action
+}
+
 fn sanitize_path_component(value: &str) -> String {
     value
         .chars()
@@ -1128,5 +1162,24 @@ mod tests {
                 panic!("expected pending PR candidate")
             }
         }
+    }
+
+    #[test]
+    fn completed_pr_action_keeps_attempt_evidence_when_lease_cleanup_fails() {
+        let action = json!({
+            "status": "attempted",
+            "push": { "final_head": "abc123" },
+            "attempt": { "attempts": 1, "last_status": "attempted" },
+        });
+        let error = anyhow!("injected lease renewal failure");
+
+        let action = with_branch_lease_result(action, Some(&error));
+
+        assert_eq!(action["status"], "failed");
+        assert_eq!(action["completed_status"], "attempted");
+        assert_eq!(action["push"]["final_head"], "abc123");
+        assert_eq!(action["attempt"]["attempts"], 1);
+        assert_eq!(action["attempt"]["last_status"], "attempted");
+        assert_eq!(action["lease_error"], "injected lease renewal failure");
     }
 }

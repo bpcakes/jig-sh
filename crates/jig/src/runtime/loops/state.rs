@@ -3,6 +3,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -18,6 +22,11 @@ use crate::state::now_ms;
 use super::workflow::ResolvedWorkflow;
 
 pub(super) const LOOP_CACHE_DIR: &str = ".agent/.cache/loop";
+
+pub(super) fn renewal_interval(ttl_seconds: u64) -> Duration {
+    let ttl_ms = ttl_seconds.saturating_mul(1_000);
+    Duration::from_millis((ttl_ms / 3).max(1))
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct LeaseRecord {
@@ -146,6 +155,7 @@ pub(super) struct LeaseGuard {
     owner: String,
     stop: Option<Sender<()>>,
     renewal: Option<JoinHandle<Result<()>>>,
+    renewal_failed: Arc<AtomicBool>,
 }
 
 impl LeaseGuard {
@@ -159,7 +169,9 @@ impl LeaseGuard {
         let mut renewal_store = store.clone();
         let renewal_key = key.to_string();
         let renewal_owner = lease.owner.clone();
-        let interval = Duration::from_secs((ttl_seconds / 3).max(1));
+        let interval = renewal_interval(ttl_seconds);
+        let renewal_failed = Arc::new(AtomicBool::new(false));
+        let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let renewal = thread::Builder::new()
             .name(format!("jig-loop-lease-{}", lease.owner))
             .spawn(move || {
@@ -167,19 +179,42 @@ impl LeaseGuard {
                     match receiver.recv_timeout(interval) {
                         Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
                         Err(RecvTimeoutError::Timeout) => {
-                            renewal_store.renew(&renewal_key, &renewal_owner, ttl_seconds)?;
+                            if let Err(error) =
+                                renewal_store.renew(&renewal_key, &renewal_owner, ttl_seconds)
+                            {
+                                renewal_failed_in_thread.store(true, Ordering::Release);
+                                return Err(error);
+                            }
                         }
                     }
                 }
-            })
-            .context("Failed to start loop lease renewal thread")?;
+            });
+        let renewal = match renewal {
+            Ok(renewal) => renewal,
+            Err(error) => {
+                let mut store = store;
+                let release_error = store.release(key, &lease.owner).err();
+                let mut message = format!("Failed to start loop lease renewal thread: {error}");
+                if let Some(release_error) = release_error {
+                    message.push_str(&format!(
+                        "; failed to release acquired lease: {release_error:#}"
+                    ));
+                }
+                return Err(anyhow!(message));
+            }
+        };
         Ok(Self {
             store,
             key: key.to_string(),
             owner: lease.owner.clone(),
             stop: Some(stop),
             renewal: Some(renewal),
+            renewal_failed,
         })
+    }
+
+    pub(super) fn renewal_failed(&self) -> bool {
+        self.renewal_failed.load(Ordering::Acquire)
     }
 
     pub(super) fn finish(mut self) -> Result<()> {
@@ -554,6 +589,44 @@ mod tests {
             store.acquire("workflow:slow", 3).unwrap(),
             LeaseAcquire::Acquired(_)
         ));
+    }
+
+    #[test]
+    fn one_second_lease_renews_before_expiry() {
+        assert!(renewal_interval(1) < Duration::from_secs(1));
+
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:short", 1).unwrap() else {
+            panic!("expected lease acquisition");
+        };
+        let guard = LeaseGuard::start(store.clone(), "workflow:short", &lease, 1).unwrap();
+
+        std::thread::sleep(Duration::from_millis(1_200));
+        let LeaseAcquire::Held(renewed) = store.acquire("workflow:short", 1).unwrap() else {
+            panic!("one-second lease must renew before another owner can acquire it");
+        };
+        assert_eq!(renewed.owner, lease.owner);
+        guard.finish().unwrap();
+    }
+
+    #[test]
+    fn lease_guard_reports_renewal_failure() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = LeaseStore::new(&ctx);
+        let LeaseAcquire::Acquired(lease) = store.acquire("workflow:lost", 1).unwrap() else {
+            panic!("expected lease acquisition");
+        };
+        let guard = LeaseGuard::start(store.clone(), "workflow:lost", &lease, 1).unwrap();
+        store.release("workflow:lost", &lease.owner).unwrap();
+
+        std::thread::sleep(Duration::from_millis(400));
+        let error = guard.finish().unwrap_err().to_string();
+        assert!(error.contains("Loop lease is no longer held"), "{error}");
     }
 
     #[test]

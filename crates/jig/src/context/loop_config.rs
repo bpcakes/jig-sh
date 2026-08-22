@@ -4,7 +4,11 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use croner::parser::{CronParser, Seconds, Year};
+use chrono::{Datelike, NaiveDate};
+use croner::{
+    Cron,
+    parser::{CronParser, Seconds, Year},
+};
 use serde::Deserialize;
 
 const DEFAULT_LEASE_TTL_SECONDS: u64 = 15 * 60;
@@ -148,18 +152,8 @@ fn validate_schedule_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
     if schedule.trim().is_empty() {
         bail!("loop workflow '{}' schedule must not be empty", workflow.id);
     }
-    CronParser::builder()
-        .seconds(Seconds::Disallowed)
-        .year(Year::Disallowed)
-        .build()
-        .parse(schedule)
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "loop workflow '{}' has invalid five-field cron schedule '{}': {error}",
-                workflow.id,
-                schedule
-            )
-        })?;
+    parse_five_field_cron(schedule)
+        .map_err(|error| anyhow::anyhow!("loop workflow '{}' has {error}", workflow.id))?;
     let timezone = workflow.timezone.as_deref().unwrap_or("UTC");
     timezone.parse::<chrono_tz::Tz>().map_err(|_| {
         anyhow::anyhow!(
@@ -169,6 +163,45 @@ fn validate_schedule_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
         )
     })?;
     Ok(())
+}
+
+pub(crate) fn parse_five_field_cron(expression: &str) -> Result<Cron> {
+    let cron = CronParser::builder()
+        .seconds(Seconds::Disallowed)
+        .year(Year::Disallowed)
+        .build()
+        .parse(expression)
+        .map_err(|error| {
+            anyhow::anyhow!("invalid five-field cron schedule '{expression}': {error}")
+        })?;
+    if !cron_has_calendar_occurrence(&cron)? {
+        bail!("five-field cron schedule '{expression}' has no possible calendar occurrence");
+    }
+    Ok(cron)
+}
+
+fn cron_has_calendar_occurrence(cron: &Cron) -> Result<bool> {
+    let mut date =
+        NaiveDate::from_ymd_opt(2_000, 1, 1).expect("the Gregorian cycle start is a valid date");
+    let end =
+        NaiveDate::from_ymd_opt(2_400, 1, 1).expect("the Gregorian cycle end is a valid date");
+    while date < end {
+        if cron
+            .pattern
+            .month_match(date.month())
+            .map_err(|error| anyhow::anyhow!("failed to validate cron month: {error}"))?
+            && cron
+                .pattern
+                .day_match(date.year(), date.month(), date.day())
+                .map_err(|error| anyhow::anyhow!("failed to validate cron day: {error}"))?
+        {
+            return Ok(true);
+        }
+        date = date
+            .succ_opt()
+            .expect("the bounded Gregorian cycle has a successor");
+    }
+    Ok(false)
 }
 
 fn validate_codex_task_fields(workflow: &LoopWorkflowConfig) -> Result<()> {

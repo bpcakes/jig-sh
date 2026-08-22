@@ -8,7 +8,8 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use crate::command::{
-    LoopClearAttemptRequest, LoopCommand, LoopRunRequest, LoopStatusRequest, LoopTickRequest,
+    LoopClearAttemptRequest, LoopCommand, LoopDispatchRequest, LoopRunRequest, LoopStatusRequest,
+    LoopTickRequest,
 };
 #[cfg(unix)]
 use crate::runtime::tests::common::write_codex_stub;
@@ -182,6 +183,368 @@ printf 'task complete\n'
     assert_eq!(
         fs::read_to_string(prompt_log).unwrap(),
         "Review the repository.\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_task_retains_clean_worktree_when_worker_commits() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Update the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-update"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+sandbox = "workspace-write"
+"#
+        ),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    let initial_head = git_stdout(temp.path(), ["rev-parse", "HEAD"]);
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+cat >/dev/null
+printf 'committed task output\n' > committed-task-output.txt
+git add committed-task-output.txt
+git commit -m 'scheduled task change' >/dev/null
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("nightly-update".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+
+    assert_eq!(output["actions"][0]["status"], "succeeded", "{output:#}");
+    assert_eq!(output["actions"][0]["checkout"]["retained"], true);
+    assert_eq!(output["actions"][0]["checkout"]["dirty"], false);
+    assert_eq!(output["actions"][0]["checkout"]["head_changed"], true);
+    let worktree = Path::new(output["actions"][0]["checkout"]["path"].as_str().unwrap());
+    assert!(worktree.exists());
+    assert_ne!(git_stdout(worktree, ["rev-parse", "HEAD"]), initial_head);
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_task_reports_checkout_cleanup_failure_without_losing_worker_result() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Review the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-review"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+"#
+        ),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    let git_failure_flag = temp.path().join("fail-worktree-git");
+    let git_path = temp.path().join("git-task-stub.sh");
+    write_codex_stub(
+        &git_path,
+        r#"#!/bin/sh
+case "$PWD" in
+  */.agent/.cache/loop/worktrees/tasks/*)
+    if [ -f "$JIG_TEST_GIT_FAILURE_FLAG" ]; then
+      echo 'injected worktree git failure' >&2
+      exit 93
+    fi
+    ;;
+esac
+exec git "$@"
+"#,
+    );
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+cat >/dev/null
+touch "$JIG_TEST_GIT_FAILURE_FLAG"
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _git = EnvVarGuard::set("JIG_GIT_BIN", git_path.as_os_str());
+    let _git_failure = EnvVarGuard::set("JIG_TEST_GIT_FAILURE_FLAG", &git_failure_flag);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("nightly-review".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap();
+
+    let action = &output["actions"][0];
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(action["status"], "failed");
+    assert!(action["worker_receipt_id"].is_string());
+    assert_eq!(action["output"], "task complete\n");
+    assert_eq!(action["checkout"]["retained"], true);
+    assert!(action["checkout"]["dirty"].is_null());
+    assert!(
+        action["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Failed to inspect task worktree status")),
+        "{output:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_task_cannot_succeed_after_workflow_lease_renewal_fails() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Review the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-review"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+checkout = "repo"
+lease_ttl_seconds = 1
+"#
+        ),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    let completion_marker = temp.path().join("worker-completed");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+cat >/dev/null
+rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/leases.json"
+sleep 1
+touch "$JIG_TEST_TASK_COMPLETION_MARKER"
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let _completion = EnvVarGuard::set(
+        "JIG_TEST_TASK_COMPLETION_MARKER",
+        completion_marker.as_os_str(),
+    );
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+            workflow: Some("nightly-review".into()),
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Loop workflow lease renewal or release failed"),
+        "{error}"
+    );
+    assert!(
+        !completion_marker.exists(),
+        "worker should be terminated as soon as lease renewal fails"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn scheduled_codex_invocation_failure_links_worker_receipt() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Review the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "nightly-review"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+"#
+        ),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    let missing_codex = temp.path().join("missing-codex");
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", missing_codex.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["ok"], false, "{output:#}");
+    let occurrence_receipt = output["actions"][0]["occurrence"]["worker_receipt_id"]
+        .as_str()
+        .expect("failed occurrence must link its worker receipt");
+    assert_eq!(
+        output["actions"][0]["tick"]["actions"][0]["worker_receipt_id"],
+        occurrence_receipt
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn scheduled_dispatch_continues_after_occurrence_renewal_failure() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(
+        temp.path().join("tasks/nightly.md"),
+        "Review the repository.\n",
+    )
+    .unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "broken-state"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+checkout = "repo"
+lease_ttl_seconds = 1
+
+[[loop.workflows]]
+id = "healthy-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+"#
+        ),
+    )
+    .unwrap();
+    git_ok(temp.path(), ["init"]);
+    git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
+    git_ok(temp.path(), ["config", "user.name", "Fixture"]);
+    git_ok(temp.path(), ["add", "."]);
+    git_ok(temp.path(), ["commit", "-m", "fixture"]);
+    let codex_path = temp.path().join("codex-task-stub.sh");
+    let completion_marker = temp.path().join("scheduled-worker-completed");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+cat >/dev/null
+rm -f "$JIG_TEST_TASK_REPO/.agent/.cache/loop/schedule.json"
+sleep 1
+touch "$JIG_TEST_TASK_COMPLETION_MARKER"
+printf 'task complete\n'
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _repo = EnvVarGuard::set("JIG_TEST_TASK_REPO", temp.path().as_os_str());
+    let _completion = EnvVarGuard::set(
+        "JIG_TEST_TASK_COMPLETION_MARKER",
+        completion_marker.as_os_str(),
+    );
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Dispatch(LoopDispatchRequest {})),
+    )
+    .unwrap();
+
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["failed_count"], 1, "{output:#}");
+    assert_eq!(output["executed_count"], 2, "{output:#}");
+    assert_eq!(output["actions"][0]["workflow_id"], "broken-state");
+    assert_eq!(output["actions"][0]["status"], "failed");
+    assert!(
+        output["actions"][0]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("Failed to finish scheduled occurrence")),
+        "{output:#}"
+    );
+    assert_eq!(output["actions"][1]["workflow_id"], "healthy-noop");
+    assert_eq!(output["actions"][1]["status"], "succeeded");
+    assert!(
+        !completion_marker.exists(),
+        "worker should be terminated as soon as occurrence renewal fails"
     );
 }
 
@@ -1133,7 +1496,8 @@ exit 2
     )
     .unwrap();
 
-    assert_eq!(output["ok"], true, "{output:#}");
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["status"], "failed", "{output:#}");
     assert_eq!(output["workflow"]["codex_home_configured"], Value::Null);
     assert_eq!(output["actions"][0]["status"], "failed", "{output:#}");
     assert_eq!(output["actions"][0]["codex_home_resolved"], Value::Null);

@@ -253,6 +253,48 @@ prompt_file = ".agent/tasks/nightly.md"
 }
 
 #[test]
+fn loop_config_rejects_schedule_without_a_calendar_occurrence() {
+    let impossible: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "impossible"
+kind = "codex_task"
+schedule = "0 0 31 6 *"
+timezone = "UTC"
+prompt_file = ".agent/tasks/impossible.md"
+"#,
+    )
+    .unwrap();
+
+    let error = validate_config(&impossible).unwrap_err().to_string();
+    assert!(error.contains("has no possible calendar occurrence"));
+
+    let leap_day: RepoConfig = toml::from_str(
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "demo"
+default_branch = "main"
+jig_version = "0.2.0-beta.1"
+
+[[loop.workflows]]
+id = "leap-day"
+kind = "codex_task"
+schedule = "0 0 29 2 *"
+timezone = "UTC"
+prompt_file = ".agent/tasks/leap-day.md"
+"#,
+    )
+    .unwrap();
+
+    validate_config(&leap_day).unwrap();
+}
+
+#[test]
 fn loop_config_requires_safe_codex_task_fields() {
     let missing_prompt: RepoConfig = toml::from_str(
         r#"_src_path = "/tmp/template"

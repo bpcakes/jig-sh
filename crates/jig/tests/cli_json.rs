@@ -52,6 +52,30 @@ fn json_mode_wraps_usage_and_pre_output_command_errors() {
     assert_eq!(command["exit_status"], 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn failed_loop_tick_and_dispatch_exit_nonzero_after_json_output() {
+    for args in [
+        vec!["loop", "tick", "--workflow", "failing-task", "--json"],
+        vec!["loop", "dispatch", "--json"],
+    ] {
+        let repo = tempdir().unwrap();
+        write_failing_loop_repo(repo.path());
+        let output = jig()
+            .current_dir(repo.path())
+            .env("JIG_CODEX_BIN", repo.path().join("missing-codex"))
+            .args(args)
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["ok"], false, "{value:#}");
+        assert_eq!(value["status"], "failed", "{value:#}");
+    }
+}
+
 #[test]
 fn json_mode_classifies_output_mode_conflicts_as_usage_errors() {
     for args in [
@@ -813,6 +837,47 @@ marketplaces = []
         .unwrap(),
     )
     .unwrap();
+}
+
+#[cfg(unix)]
+fn write_failing_loop_repo(root: &Path) {
+    write_info_commands_repo(root);
+    fs::create_dir_all(root.join("tasks")).unwrap();
+    fs::write(root.join("tasks/task.md"), "Review the repository.\n").unwrap();
+    let config = fs::read_to_string(root.join(".jig.toml")).unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "failing-task"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/task.md"
+checkout = "repo"
+"#
+        ),
+    )
+    .unwrap();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "fixture@example.com"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["add", "."],
+        vec!["commit", "-m", "fixture"],
+    ] {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn write_test_launcher(root: &Path) {

@@ -19,6 +19,39 @@ pub(super) struct WorkflowTick {
     pub(super) actions: Vec<Value>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct WorkflowCompletion {
+    pub(super) worker_receipt_id: Option<String>,
+    pub(super) worktree: Option<String>,
+    pub(super) error: Option<String>,
+}
+
+impl WorkflowCompletion {
+    pub(super) fn from_actions(actions: &[Value]) -> Self {
+        actions
+            .iter()
+            .find(|action| action["status"].as_str() == Some("failed"))
+            .or_else(|| {
+                actions.iter().find(|action| {
+                    action["worker_receipt_id"].is_string()
+                        || action["checkout"]["retained"].as_bool() == Some(true)
+                })
+            })
+            .or_else(|| actions.first())
+            .map_or_else(Self::default, Self::from_action)
+    }
+
+    fn from_action(action: &Value) -> Self {
+        Self {
+            worker_receipt_id: action["worker_receipt_id"].as_str().map(str::to_string),
+            worktree: (action["checkout"]["retained"].as_bool() == Some(true))
+                .then(|| action["checkout"]["path"].as_str().map(str::to_string))
+                .flatten(),
+            error: action["error"].as_str().map(str::to_string),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct TuningOverrides {
     pub(super) lease_ttl_seconds: Option<u64>,
@@ -250,4 +283,33 @@ fn validate_tuning(lease_ttl_seconds: u64, max_attempts: u32, backoff_seconds: u
         bail!("backoff_seconds must be greater than zero");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_completion_prefers_failed_action_with_receipt() {
+        let completion = WorkflowCompletion::from_actions(&[
+            json!({
+                "status": "skipped",
+                "worker_receipt_id": null,
+            }),
+            json!({
+                "status": "failed",
+                "worker_receipt_id": "receipt_failed",
+                "error": "worker failed",
+            }),
+        ]);
+
+        assert_eq!(
+            completion,
+            WorkflowCompletion {
+                worker_receipt_id: Some("receipt_failed".into()),
+                worktree: None,
+                error: Some("worker failed".into()),
+            }
+        );
+    }
 }

@@ -35,6 +35,7 @@ pub(super) fn run_codex_review(
             extra_args: review_scope_args(gate)?,
             output_schema: Some(schema),
             prompt: CodexPrompt::Argument(prompt),
+            cancelled: None,
             receipt: WorkerReceiptRequest {
                 purpose: "work_review",
                 plan_id: Some(plan_id),
@@ -71,6 +72,7 @@ pub(super) fn run_codex_refine(
             extra_args: Vec::new(),
             output_schema: None,
             prompt: CodexPrompt::Stdin(prompt),
+            cancelled: None,
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
                 plan_id: Some(plan_id),

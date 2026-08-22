@@ -1,11 +1,12 @@
 use std::env;
 use std::ffi::{OsStr, OsString};
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -77,6 +78,7 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) extra_args: Vec<OsString>,
     pub(crate) output_schema: Option<&'a Value>,
     pub(crate) prompt: CodexPrompt<'a>,
+    pub(crate) cancelled: Option<&'a dyn Fn() -> bool>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
 }
 
@@ -86,10 +88,30 @@ pub(crate) struct CodexExecOutput {
     pub(crate) worker_receipt_id: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct CodexExecFailure {
+    worker_receipt_id: Option<String>,
+    message: String,
+}
+
+impl CodexExecFailure {
+    pub(crate) fn worker_receipt_id(&self) -> Option<&str> {
+        self.worker_receipt_id.as_deref()
+    }
+}
+
+impl fmt::Display for CodexExecFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CodexExecFailure {}
+
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
     request: CodexExecRequest<'_>,
-) -> Result<CodexExecOutput> {
+) -> std::result::Result<CodexExecOutput, CodexExecFailure> {
     let started = now_ms();
     let result = run_codex_exec_inner(&request);
     let ended = now_ms();
@@ -108,7 +130,11 @@ pub(crate) fn run_codex_exec(
                     stderr: &run.provider_stderr,
                     error: None,
                 },
-            )?;
+            )
+            .map_err(|error| CodexExecFailure {
+                worker_receipt_id: None,
+                message: format!("Failed to record completed Codex worker receipt: {error:#}"),
+            })?;
             Ok(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
@@ -128,8 +154,17 @@ pub(crate) fn run_codex_exec(
                     stderr: &message,
                     error: Some(&message),
                 },
-            )?;
-            bail!("Codex worker invocation failed; receipt {receipt_id}: {message}");
+            )
+            .map_err(|receipt_error| CodexExecFailure {
+                worker_receipt_id: None,
+                message: format!(
+                    "Codex worker invocation failed: {message}; failed to record worker receipt: {receipt_error:#}"
+                ),
+            })?;
+            Err(CodexExecFailure {
+                worker_receipt_id: Some(receipt_id.clone()),
+                message: format!("Codex worker invocation failed; receipt {receipt_id}: {message}"),
+            })
         }
     }
 }
@@ -164,7 +199,11 @@ fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput
         schema_file.as_ref().map(NamedTempFile::path),
         output_file.as_ref().map(NamedTempFile::path),
     );
-    let output = run_worker_command(&mut command, request.prompt.stdin_prompt())?;
+    let output = run_worker_command(
+        &mut command,
+        request.prompt.stdin_prompt(),
+        request.cancelled,
+    )?;
     let provider_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let provider_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let mut output = output;
@@ -233,7 +272,11 @@ fn build_codex_command(
     command
 }
 
-fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Result<Output> {
+fn run_worker_command(
+    command: &mut Command,
+    stdin_prompt: Option<String>,
+    cancelled: Option<&dyn Fn() -> bool>,
+) -> Result<Output> {
     let stdout_file = NamedTempFile::new().context("Failed to create worker stdout file")?;
     let stderr_file = NamedTempFile::new().context("Failed to create worker stderr file")?;
     command
@@ -266,16 +309,28 @@ fn run_worker_command(command: &mut Command, stdin_prompt: Option<String>) -> Re
     };
 
     let timeout = codex_timeout()?;
-    let Some(status) = child
-        .wait_timeout(timeout)
-        .context("Failed to wait for worker process")?
-    else {
-        terminate_worker_process(&mut child);
-        let _ = child.wait();
-        bail!(
-            "Worker process timed out after {} seconds",
-            timeout.as_secs()
-        );
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if cancelled.is_some_and(|cancelled| cancelled()) {
+            terminate_worker_process(&mut child);
+            let _ = child.wait();
+            bail!("Worker process cancelled because its execution lease was lost");
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            terminate_worker_process(&mut child);
+            let _ = child.wait();
+            bail!(
+                "Worker process timed out after {} seconds",
+                timeout.as_secs()
+            );
+        }
+        if let Some(status) = child
+            .wait_timeout(remaining.min(Duration::from_millis(100)))
+            .context("Failed to wait for worker process")?
+        {
+            break status;
+        }
     };
 
     if let Some(writer) = writer {
@@ -437,6 +492,7 @@ mod tests {
             extra_args: Vec::new(),
             output_schema: None,
             prompt: CodexPrompt::Stdin("fix this"),
+            cancelled: None,
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
                 plan_id: Some("plan_1"),
@@ -504,7 +560,7 @@ wait
 
         let mut command = Command::new(&script);
         command.arg(&marker);
-        let error = run_worker_command(&mut command, None)
+        let error = run_worker_command(&mut command, None, None)
             .unwrap_err()
             .to_string();
 

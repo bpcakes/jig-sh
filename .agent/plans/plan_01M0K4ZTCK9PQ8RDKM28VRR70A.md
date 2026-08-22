@@ -1,0 +1,1 @@
+Refactor checkout, lease, tick outcome, and dispatch boundaries before fixing the comprehensive-review findings. Add regression coverage for committed worktrees, renewal timing/failure, CLI exit status, unsatisfiable schedules, multi-action receipts, and PR repair cleanup failures.

@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,7 +14,9 @@ use ulid::Ulid;
 use crate::context::RepoContext;
 use crate::state::now_ms;
 
-use super::state::{LOOP_CACHE_DIR, read_json_or_default_with_cancellation, with_json_cache_lock};
+use super::state::{
+    LOOP_CACHE_DIR, read_json_or_default_with_cancellation, renewal_interval, with_json_cache_lock,
+};
 
 const SCHEDULE_SCHEMA_VERSION: u32 = 1;
 const OCCURRENCE_HISTORY_PER_WORKFLOW: usize = 20;
@@ -82,6 +87,7 @@ pub(super) struct OccurrenceGuard {
     owner: String,
     stop: Option<Sender<()>>,
     renewal: Option<JoinHandle<Result<()>>>,
+    renewal_failed: Arc<AtomicBool>,
 }
 
 impl OccurrenceGuard {
@@ -96,7 +102,9 @@ impl OccurrenceGuard {
         let renewal_occurrence_id = occurrence_id.clone();
         let owner = occurrence.owner.clone();
         let renewal_owner = owner.clone();
-        let interval = Duration::from_secs((ttl_seconds / 3).max(1));
+        let interval = renewal_interval(ttl_seconds);
+        let renewal_failed = Arc::new(AtomicBool::new(false));
+        let renewal_failed_in_thread = Arc::clone(&renewal_failed);
         let renewal = thread::Builder::new()
             .name(format!("jig-loop-occurrence-{owner}"))
             .spawn(move || {
@@ -104,11 +112,14 @@ impl OccurrenceGuard {
                     match receiver.recv_timeout(interval) {
                         Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
                         Err(RecvTimeoutError::Timeout) => {
-                            renewal_store.renew(
+                            if let Err(error) = renewal_store.renew(
                                 &renewal_occurrence_id,
                                 &renewal_owner,
                                 ttl_seconds,
-                            )?;
+                            ) {
+                                renewal_failed_in_thread.store(true, Ordering::Release);
+                                return Err(error);
+                            }
                         }
                     }
                 }
@@ -122,7 +133,12 @@ impl OccurrenceGuard {
             owner,
             stop: Some(stop),
             renewal: Some(renewal),
+            renewal_failed,
         })
+    }
+
+    pub(super) fn renewal_failed(&self) -> bool {
+        self.renewal_failed.load(Ordering::Acquire)
     }
 
     pub(super) fn finish(mut self, finish: OccurrenceFinish<'_>) -> Result<ScheduleOccurrence> {
@@ -467,6 +483,29 @@ mod tests {
             panic!("stale occurrence must not be reclaimed");
         };
         assert_eq!(existing.status, "needs_attention");
+    }
+
+    #[test]
+    fn one_second_occurrence_claim_renews_before_expiry() {
+        let temp = tempdir().unwrap();
+        write_loop_fixture_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut store = OccurrenceStore::new(&ctx);
+        let OccurrenceClaim::Acquired(claim) = store.claim("nightly", 100, 1).unwrap() else {
+            panic!("expected occurrence claim");
+        };
+        let guard = OccurrenceGuard::start(store.clone(), &claim, 1).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        let finished = guard
+            .finish(OccurrenceFinish {
+                status: "succeeded",
+                worker_receipt_id: None,
+                worktree: None,
+                error: None,
+            })
+            .unwrap();
+        assert_eq!(finished.status, "succeeded");
     }
 
     fn write_loop_fixture_repo(root: &std::path::Path) {

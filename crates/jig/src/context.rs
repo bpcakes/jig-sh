@@ -16,7 +16,7 @@ mod work_config;
 
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
 
-pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
+pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,

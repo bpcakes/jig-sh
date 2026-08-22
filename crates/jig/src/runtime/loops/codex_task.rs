@@ -27,6 +27,7 @@ pub(super) fn codex_task_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     execution: CodexTaskExecution<'_>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkflowTick> {
     let settings = workflow
         .codex_task
@@ -42,7 +43,7 @@ pub(super) fn codex_task_tick(
     let worker = run_codex_exec(
         ctx,
         CodexExecRequest {
-            root: &checkout.path,
+            root: checkout.path(),
             codex_home: codex_home.as_deref(),
             mode: CodexExecMode::Exec,
             model: settings.model.as_deref(),
@@ -52,6 +53,7 @@ pub(super) fn codex_task_tick(
             extra_args: Vec::new(),
             output_schema: None,
             prompt: CodexPrompt::Stdin(&prompt),
+            cancelled: Some(cancelled),
             receipt: WorkerReceiptRequest {
                 purpose: "scheduled_codex_task",
                 plan_id: None,
@@ -65,37 +67,43 @@ pub(super) fn codex_task_tick(
 
     let action = match worker {
         Ok(worker) => {
-            let succeeded = worker.output.status.success();
-            let cleanup = checkout.finish(succeeded)?;
+            let worker_succeeded = worker.output.status.success();
+            let cleanup = checkout.finish(if worker_succeeded {
+                TaskOutcome::Succeeded
+            } else {
+                TaskOutcome::Failed
+            });
+            let worker_error = (!worker_succeeded).then(|| {
+                format!(
+                    "Codex task worker exited with status {}",
+                    worker.output.status.code().unwrap_or(1)
+                )
+            });
+            let error = combine_task_errors(worker_error, cleanup.error);
             json!({
                 "kind": "codex_task_worker",
-                "status": if succeeded { "succeeded" } else { "failed" },
+                "status": if error.is_none() { "succeeded" } else { "failed" },
                 "item_key": execution.item_key,
                 "worker_receipt_id": worker.worker_receipt_id,
-                "checkout": cleanup,
+                "checkout": cleanup.value,
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": bounded_text(&String::from_utf8_lossy(&worker.output.stdout)),
-                "error": if succeeded {
-                    Value::Null
-                } else {
-                    Value::String(format!(
-                        "Codex task worker exited with status {}",
-                        worker.output.status.code().unwrap_or(1)
-                    ))
-                },
+                "error": error,
             })
         }
         Err(error) => {
-            let cleanup = checkout.finish(false)?;
+            let worker_receipt_id = error.worker_receipt_id().map(str::to_string);
+            let cleanup = checkout.finish(TaskOutcome::Failed);
+            let error = combine_task_errors(Some(format!("{error:#}")), cleanup.error);
             json!({
                 "kind": "codex_task_worker",
                 "status": "failed",
                 "item_key": execution.item_key,
-                "worker_receipt_id": Value::Null,
-                "checkout": cleanup,
+                "worker_receipt_id": worker_receipt_id,
+                "checkout": cleanup.value,
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
                 "output": Value::Null,
-                "error": format!("{error:#}"),
+                "error": error,
             })
         }
     };
@@ -142,33 +150,105 @@ fn read_prompt(ctx: &RepoContext, configured: &Path) -> Result<String> {
         .with_context(|| format!("Failed to read UTF-8 Codex task prompt {}", path.display()))
 }
 
-struct PreparedCheckout {
-    repo_root: PathBuf,
-    path: PathBuf,
-    isolated: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TaskOutcome {
+    Succeeded,
+    Failed,
+}
+
+enum PreparedCheckout {
+    Repo {
+        path: PathBuf,
+    },
+    Worktree {
+        repo_root: PathBuf,
+        path: PathBuf,
+        initial_head: String,
+    },
+}
+
+struct CheckoutCompletion {
+    value: Value,
+    error: Option<String>,
 }
 
 impl PreparedCheckout {
-    fn finish(self, succeeded: bool) -> Result<Value> {
-        if !self.isolated {
-            return Ok(json!({
-                "mode": "repo",
-                "path": self.path,
-                "retained": true,
-                "dirty": git_is_dirty(&self.path)?,
-            }));
+    fn path(&self) -> &Path {
+        match self {
+            Self::Repo { path } | Self::Worktree { path, .. } => path,
         }
-        let dirty = git_is_dirty(&self.path)?;
-        let retain = !succeeded || dirty;
-        if !retain {
-            remove_worktree(&self.repo_root, &self.path, false)?;
+    }
+
+    fn finish(self, outcome: TaskOutcome) -> CheckoutCompletion {
+        match self {
+            Self::Repo { path } => match git_is_dirty(&path) {
+                Ok(dirty) => CheckoutCompletion {
+                    value: json!({
+                        "mode": "repo",
+                        "path": path,
+                        "retained": true,
+                        "dirty": dirty,
+                    }),
+                    error: None,
+                },
+                Err(error) => CheckoutCompletion {
+                    value: json!({
+                        "mode": "repo",
+                        "path": path,
+                        "retained": true,
+                        "dirty": Value::Null,
+                    }),
+                    error: Some(format!(
+                        "Failed to inspect retained task checkout: {error:#}"
+                    )),
+                },
+            },
+            Self::Worktree {
+                repo_root,
+                path,
+                initial_head,
+            } => {
+                let dirty = git_is_dirty(&path);
+                let final_head = git_stdout(&path, ["rev-parse", "HEAD"]);
+                let mut errors = Vec::new();
+                if let Err(error) = &dirty {
+                    errors.push(format!("Failed to inspect task worktree status: {error:#}"));
+                }
+                if let Err(error) = &final_head {
+                    errors.push(format!("Failed to inspect task worktree HEAD: {error:#}"));
+                }
+                let dirty = dirty.ok();
+                let head_changed = final_head.ok().map(|head| head != initial_head);
+                let mut retained = outcome == TaskOutcome::Failed
+                    || dirty.unwrap_or(true)
+                    || head_changed.unwrap_or(true);
+                if !retained && let Err(error) = remove_worktree(&repo_root, &path, false) {
+                    retained = true;
+                    errors.push(format!("Failed to remove clean task worktree: {error:#}"));
+                }
+                CheckoutCompletion {
+                    value: json!({
+                        "mode": "worktree",
+                        "path": path,
+                        "retained": retained,
+                        "dirty": dirty,
+                        "head_changed": head_changed,
+                    }),
+                    error: (!errors.is_empty()).then(|| errors.join("; ")),
+                }
+            }
         }
-        Ok(json!({
-            "mode": "worktree",
-            "path": self.path,
-            "retained": retain,
-            "dirty": dirty,
-        }))
+    }
+}
+
+fn combine_task_errors(primary: Option<String>, cleanup: Option<String>) -> Option<String> {
+    match (primary, cleanup) {
+        (Some(primary), Some(cleanup)) => Some(format!(
+            "{primary}; checkout cleanup also failed: {cleanup}"
+        )),
+        (Some(primary), None) => Some(primary),
+        (None, Some(cleanup)) => Some(cleanup),
+        (None, None) => None,
     }
 }
 
@@ -179,10 +259,8 @@ fn prepare_checkout(
     checkout: CodexTaskCheckout,
 ) -> Result<PreparedCheckout> {
     if checkout == CodexTaskCheckout::Repo {
-        return Ok(PreparedCheckout {
-            repo_root: ctx.root().to_path_buf(),
+        return Ok(PreparedCheckout::Repo {
             path: ctx.root().to_path_buf(),
-            isolated: false,
         });
     }
 
@@ -208,6 +286,7 @@ fn prepare_checkout(
             )
         })?;
     }
+    let initial_head = git_stdout(ctx.root(), ["rev-parse", "HEAD"])?;
     let output = git_output(
         ctx.root(),
         [
@@ -215,7 +294,7 @@ fn prepare_checkout(
             OsString::from("add"),
             OsString::from("--detach"),
             path.as_os_str().to_os_string(),
-            OsString::from("HEAD"),
+            OsString::from(&initial_head),
         ],
     )?;
     if !output.status.success() {
@@ -223,10 +302,10 @@ fn prepare_checkout(
         let _ = remove_worktree(ctx.root(), &path, true);
         return Err(error);
     }
-    Ok(PreparedCheckout {
+    Ok(PreparedCheckout::Worktree {
         repo_root: ctx.root().to_path_buf(),
         path,
-        isolated: true,
+        initial_head,
     })
 }
 
@@ -239,6 +318,20 @@ fn git_is_dirty(worktree: &Path) -> Result<bool> {
         return Err(git_error("Failed to inspect Codex task worktree", output));
     }
     Ok(!output.stdout.is_empty())
+}
+
+fn git_stdout<I, S>(cwd: &Path, args: I) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = git_output(cwd, args)?;
+    if !output.status.success() {
+        return Err(git_error("Git command failed", output));
+    }
+    String::from_utf8(output.stdout)
+        .context("Git command returned non-UTF-8 output")
+        .map(|output| output.trim().to_string())
 }
 
 fn remove_worktree(repo_root: &Path, worktree: &Path, force: bool) -> Result<()> {

@@ -1,22 +1,19 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
-use croner::{
-    Cron,
-    parser::{CronParser, Seconds, Year},
-};
+use croner::Cron;
 use serde_json::{Value, json};
 
 use crate::command::{LoopDispatchRequest, LoopRunRequest, LoopTickRequest};
-use crate::context::RepoContext;
+use crate::context::{RepoContext, parse_five_field_cron};
 use crate::state::{ReceiptInput, now_ms, record_receipt};
 use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
-use super::engine::{tick, tick_scheduled};
+use super::engine::{ScheduledTick, tick, tick_scheduled};
 use super::occurrence::{
     OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStore, ScheduleOccurrence,
 };
-use super::workflow::list_workflows;
+use super::workflow::{ResolvedWorkflow, list_workflows};
 
 #[derive(Clone, Debug)]
 pub(super) struct ScheduleSpec {
@@ -32,16 +29,39 @@ pub(super) struct ScheduleWindow {
     pub(super) next_at_ms: u64,
 }
 
+#[derive(Default)]
+struct DispatchStep {
+    action: Option<Value>,
+    due_count: u64,
+    executed_count: u64,
+    skipped_count: u64,
+    failed_count: u64,
+}
+
+impl DispatchStep {
+    fn action(action: Value) -> Self {
+        Self {
+            action: Some(action),
+            ..Self::default()
+        }
+    }
+
+    fn failure(workflow_id: &str, error: impl std::fmt::Display) -> Self {
+        Self {
+            action: Some(json!({
+                "workflow_id": workflow_id,
+                "status": "failed",
+                "error": error.to_string(),
+            })),
+            failed_count: 1,
+            ..Self::default()
+        }
+    }
+}
+
 impl ScheduleSpec {
     pub(super) fn parse(expression: &str, timezone_name: Option<&str>) -> Result<Self> {
-        let cron = CronParser::builder()
-            .seconds(Seconds::Disallowed)
-            .year(Year::Disallowed)
-            .build()
-            .parse(expression)
-            .map_err(|error| {
-                anyhow::anyhow!("Invalid five-field cron schedule '{expression}': {error}")
-            })?;
+        let cron = parse_five_field_cron(expression)?;
         let timezone_name = timezone_name.unwrap_or("UTC");
         let timezone = timezone_name
             .parse::<Tz>()
@@ -151,100 +171,19 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
     let mut failed_count = 0_u64;
 
     for workflow in workflows {
-        let Some(schedule) = workflow.schedule.as_ref() else {
-            continue;
-        };
-        if !workflow.enabled {
-            actions.push(json!({
-                "workflow_id": workflow.id,
-                "status": "disabled",
-            }));
-            continue;
-        }
-        let latest = OccurrenceStore::latest_for_workflow(&known_occurrences, &workflow.id);
-        let window = schedule.window(
+        let step = dispatch_workflow(
+            ctx,
+            &mut occurrences,
+            &known_occurrences,
+            &workflow,
             dispatch_at_ms,
-            latest.as_ref().map(|record| record.scheduled_at_ms),
-        )?;
-        let Some(due_at_ms) = window.due_at_ms else {
-            actions.push(json!({
-                "workflow_id": workflow.id,
-                "status": "not_due",
-                "next_at_ms": window.next_at_ms,
-            }));
-            continue;
-        };
-        due_count += 1;
-        match occurrences.claim(&workflow.id, due_at_ms, workflow.lease_ttl_seconds)? {
-            OccurrenceClaim::AlreadyRecorded(record) => {
-                skipped_count += 1;
-                actions.push(json!({
-                    "workflow_id": workflow.id,
-                    "occurrence": record,
-                    "status": "already_recorded",
-                    "next_at_ms": window.next_at_ms,
-                }));
-            }
-            OccurrenceClaim::Acquired(claim) => {
-                executed_count += 1;
-                let guard = match OccurrenceGuard::start(
-                    occurrences.clone(),
-                    &claim,
-                    workflow.lease_ttl_seconds,
-                ) {
-                    Ok(guard) => guard,
-                    Err(error) => {
-                        let error = format!("Failed to renew scheduled occurrence: {error:#}");
-                        let record = occurrences.finish(
-                            &claim.occurrence_id,
-                            &claim.owner,
-                            OccurrenceFinish {
-                                status: "failed",
-                                worker_receipt_id: None,
-                                worktree: None,
-                                error: Some(&error),
-                            },
-                        )?;
-                        failed_count += 1;
-                        actions.push(dispatch_action(&record, "failed", window.next_at_ms, None));
-                        continue;
-                    }
-                };
-                let tick = tick_scheduled(ctx, &workflow.id, &claim.occurrence_id);
-                if tick
-                    .as_ref()
-                    .is_ok_and(|tick| tick["lease_acquired"].as_bool() == Some(false))
-                {
-                    let abandoned = guard.abandon()?;
-                    executed_count = executed_count.saturating_sub(1);
-                    skipped_count += 1;
-                    actions.push(json!({
-                        "workflow_id": workflow.id,
-                        "occurrence": abandoned,
-                        "status": "deferred",
-                        "reason": "workflow_lease_held",
-                        "next_at_ms": window.next_at_ms,
-                        "tick": tick.ok(),
-                    }));
-                    continue;
-                }
-                let (status, worker_receipt_id, worktree, error) = terminal_details(&tick);
-                let record = guard.finish(OccurrenceFinish {
-                    status,
-                    worker_receipt_id: worker_receipt_id.as_deref(),
-                    worktree: worktree.as_deref(),
-                    error: error.as_deref(),
-                })?;
-                if status == "failed" {
-                    failed_count += 1;
-                }
-                actions.push(dispatch_action(
-                    &record,
-                    status,
-                    window.next_at_ms,
-                    tick.ok(),
-                ));
-            }
+        );
+        due_count += step.due_count;
+        executed_count += step.executed_count;
+        skipped_count += step.skipped_count;
+        failed_count += step.failed_count;
+        if let Some(action) = step.action {
+            actions.push(action);
         }
     }
 
@@ -307,23 +246,185 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
     }))
 }
 
+fn dispatch_workflow(
+    ctx: &RepoContext,
+    occurrences: &mut OccurrenceStore,
+    known_occurrences: &[ScheduleOccurrence],
+    workflow: &ResolvedWorkflow,
+    dispatch_at_ms: u64,
+) -> DispatchStep {
+    let Some(schedule) = workflow.schedule.as_ref() else {
+        return DispatchStep::default();
+    };
+    if !workflow.enabled {
+        return DispatchStep::action(json!({
+            "workflow_id": workflow.id,
+            "status": "disabled",
+        }));
+    }
+    let latest = OccurrenceStore::latest_for_workflow(known_occurrences, &workflow.id);
+    let window = match schedule.window(
+        dispatch_at_ms,
+        latest.as_ref().map(|record| record.scheduled_at_ms),
+    ) {
+        Ok(window) => window,
+        Err(error) => return DispatchStep::failure(&workflow.id, format!("{error:#}")),
+    };
+    let Some(due_at_ms) = window.due_at_ms else {
+        return DispatchStep::action(json!({
+            "workflow_id": workflow.id,
+            "status": "not_due",
+            "next_at_ms": window.next_at_ms,
+        }));
+    };
+    let mut step = DispatchStep {
+        due_count: 1,
+        ..DispatchStep::default()
+    };
+    let claim = match occurrences.claim(&workflow.id, due_at_ms, workflow.lease_ttl_seconds) {
+        Ok(claim) => claim,
+        Err(error) => {
+            step.failed_count = 1;
+            step.action = DispatchStep::failure(&workflow.id, format!("{error:#}")).action;
+            return step;
+        }
+    };
+    let claim = match claim {
+        OccurrenceClaim::AlreadyRecorded(record) => {
+            step.skipped_count = 1;
+            step.action = Some(json!({
+                "workflow_id": workflow.id,
+                "occurrence": record,
+                "status": "already_recorded",
+                "next_at_ms": window.next_at_ms,
+            }));
+            return step;
+        }
+        OccurrenceClaim::Acquired(claim) => claim,
+    };
+
+    step.executed_count = 1;
+    let guard =
+        match OccurrenceGuard::start(occurrences.clone(), &claim, workflow.lease_ttl_seconds) {
+            Ok(guard) => guard,
+            Err(error) => {
+                let error = format!("Failed to renew scheduled occurrence: {error:#}");
+                step.failed_count = 1;
+                step.action = Some(
+                    match occurrences.finish(
+                        &claim.occurrence_id,
+                        &claim.owner,
+                        OccurrenceFinish {
+                            status: "failed",
+                            worker_receipt_id: None,
+                            worktree: None,
+                            error: Some(&error),
+                        },
+                    ) {
+                        Ok(record) => dispatch_action(&record, "failed", window.next_at_ms, None),
+                        Err(finish_error) => dispatch_state_failure(
+                            workflow,
+                            &claim,
+                            window.next_at_ms,
+                            None,
+                            format!("{error}; recording the failure also failed: {finish_error:#}"),
+                        ),
+                    },
+                );
+                return step;
+            }
+        };
+    let cancelled = || guard.renewal_failed();
+    let tick = tick_scheduled(ctx, &workflow.id, &claim.occurrence_id, &cancelled);
+    if tick
+        .as_ref()
+        .is_ok_and(|tick| tick.value["lease_acquired"].as_bool() == Some(false))
+    {
+        return match guard.abandon() {
+            Ok(abandoned) => {
+                step.executed_count = 0;
+                step.skipped_count = 1;
+                step.action = Some(json!({
+                    "workflow_id": workflow.id,
+                    "occurrence": abandoned,
+                    "status": "deferred",
+                    "reason": "workflow_lease_held",
+                    "next_at_ms": window.next_at_ms,
+                    "tick": tick.ok().map(|tick| tick.value),
+                }));
+                step
+            }
+            Err(error) => {
+                step.failed_count = 1;
+                step.action = Some(dispatch_state_failure(
+                    workflow,
+                    &claim,
+                    window.next_at_ms,
+                    tick.ok().map(|tick| tick.value),
+                    format!("Failed to abandon deferred occurrence: {error:#}"),
+                ));
+                step
+            }
+        };
+    }
+    let (status, worker_receipt_id, worktree, error) = terminal_details(&tick);
+    match guard.finish(OccurrenceFinish {
+        status,
+        worker_receipt_id: worker_receipt_id.as_deref(),
+        worktree: worktree.as_deref(),
+        error: error.as_deref(),
+    }) {
+        Ok(record) => {
+            step.failed_count = u64::from(status == "failed");
+            step.action = Some(dispatch_action(
+                &record,
+                status,
+                window.next_at_ms,
+                tick.ok().map(|tick| tick.value),
+            ));
+        }
+        Err(finish_error) => {
+            step.failed_count = 1;
+            step.action = Some(dispatch_state_failure(
+                workflow,
+                &claim,
+                window.next_at_ms,
+                tick.ok().map(|tick| tick.value),
+                format!("Failed to finish scheduled occurrence: {finish_error:#}"),
+            ));
+        }
+    }
+    step
+}
+
+fn dispatch_state_failure(
+    workflow: &ResolvedWorkflow,
+    occurrence: &ScheduleOccurrence,
+    next_at_ms: u64,
+    tick: Option<Value>,
+    error: impl std::fmt::Display,
+) -> Value {
+    json!({
+        "workflow_id": workflow.id,
+        "occurrence": occurrence,
+        "status": "failed",
+        "next_at_ms": next_at_ms,
+        "tick": tick,
+        "error": error.to_string(),
+    })
+}
+
 fn terminal_details(
-    tick: &Result<Value>,
+    tick: &Result<ScheduledTick>,
 ) -> (&'static str, Option<String>, Option<String>, Option<String>) {
     match tick {
         Ok(tick) => {
-            let action = &tick["actions"][0];
-            let failed = tick["status"].as_str() == Some("failed");
-            let worker_receipt_id = action["worker_receipt_id"].as_str().map(str::to_string);
-            let worktree = (action["checkout"]["retained"].as_bool() == Some(true))
-                .then(|| action["checkout"]["path"].as_str().map(str::to_string))
-                .flatten();
-            let error = action["error"].as_str().map(str::to_string);
+            let failed = tick.value["status"].as_str() == Some("failed");
             (
                 if failed { "failed" } else { "succeeded" },
-                worker_receipt_id,
-                worktree,
-                error,
+                tick.completion.worker_receipt_id.clone(),
+                tick.completion.worktree.clone(),
+                tick.completion.error.clone(),
             )
         }
         Err(error) => ("failed", None, None, Some(format!("{error:#}"))),
@@ -385,7 +486,7 @@ pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Va
     }
 
     Ok(json!({
-        "ok": true,
+        "ok": status != "failed",
         "command": "loop run",
         "until": request.until,
         "status": status,
