@@ -61,15 +61,22 @@ fn run_setup_with_progress(
     mut dispatch: impl FnMut(RuntimeCommand) -> Result<Value>,
     mut progress: impl FnMut(usize, usize, &str),
 ) -> Result<Value> {
-    const PHASES: usize = 7;
-    progress(1, PHASES, "doctor before");
+    const SETUP_PHASE_COUNT: usize = 7;
+    let mut current_phase = 0;
+    let mut next_phase = |label| {
+        current_phase += 1;
+        progress(current_phase, SETUP_PHASE_COUNT, label);
+    };
+
+    next_phase("doctor before");
     let doctor_before = run_doctor()?;
-    progress(2, PHASES, "bootstrap");
+    next_phase("bootstrap");
     let bootstrap = dispatch(RuntimeCommand::Bootstrap(ToolRequest::default()))?;
 
-    progress(3, PHASES, "agent readiness");
+    next_phase("agent readiness");
     let agent_before = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
     let mut registrations = Vec::new();
+    let mut registration_sources = Vec::new();
     if agent_before["codex"]["required"].as_bool().unwrap_or(false) {
         if agent_before["codex"]["available"].as_bool() != Some(true) {
             let next_step = agent_before["next_steps"]
@@ -79,22 +86,23 @@ fn run_setup_with_progress(
                 .unwrap_or("Install or update Codex, then rerun scripts/jig setup.");
             bail!("Agent tooling setup requires Codex marketplace support. {next_step}");
         }
-        for source in unregistered_marketplace_sources(&agent_before)? {
-            progress(4, PHASES, "marketplace registration");
-            registrations.push(dispatch(RuntimeCommand::Agent(AgentCommand::Bootstrap(
-                AgentBootstrapRequest {
-                    marketplace: Some(source),
-                },
-            )))?);
-        }
+        registration_sources = unregistered_marketplace_sources(&agent_before)?;
     }
-    progress(5, PHASES, "agent verification");
+    next_phase("marketplace registration");
+    for source in registration_sources {
+        registrations.push(dispatch(RuntimeCommand::Agent(AgentCommand::Bootstrap(
+            AgentBootstrapRequest {
+                marketplace: Some(source),
+            },
+        )))?);
+    }
+    next_phase("agent verification");
     let agent_after = dispatch(RuntimeCommand::Agent(AgentCommand::Doctor))?;
-    progress(6, PHASES, "contract verification");
+    next_phase("contract verification");
     let contract = dispatch(RuntimeCommand::Check(CheckCommand::Contract(
         ToolRequest::default(),
     )))?;
-    progress(7, PHASES, "doctor after");
+    next_phase("doctor after");
     let doctor_after = run_doctor()?;
     let ok = bootstrap["ok"].as_bool().unwrap_or(false)
         && agent_after["ok"].as_bool().unwrap_or(false)
@@ -216,5 +224,68 @@ mod tests {
         .to_string();
 
         assert!(error.contains("without a source"));
+    }
+
+    #[test]
+    fn setup_progress_keeps_registration_items_in_one_monotonic_phase() {
+        let agent_doctor_calls = std::cell::Cell::new(0);
+        let mut registered = Vec::new();
+        let mut phases = Vec::new();
+
+        let output = run_setup_with_progress(
+            || Ok(json!({ "ok": true })),
+            |command| {
+                Ok(match command {
+                    RuntimeCommand::Bootstrap(_) => json!({ "ok": true }),
+                    RuntimeCommand::Agent(AgentCommand::Doctor) => {
+                        let call = agent_doctor_calls.get();
+                        agent_doctor_calls.set(call + 1);
+                        if call == 0 {
+                            json!({
+                                "ok": false,
+                                "codex": { "required": true, "available": true },
+                                "marketplaces": [
+                                    {
+                                        "source": "example-org/example-skills-a",
+                                        "registered": false,
+                                    },
+                                    {
+                                        "source": "example-org/example-skills-b",
+                                        "registered": false,
+                                    },
+                                ],
+                            })
+                        } else {
+                            json!({ "ok": true })
+                        }
+                    }
+                    RuntimeCommand::Agent(AgentCommand::Bootstrap(request)) => {
+                        registered.push(request.marketplace.unwrap());
+                        json!({ "ok": true })
+                    }
+                    RuntimeCommand::Check(CheckCommand::Contract(_)) => json!({ "ok": true }),
+                    _ => panic!("unexpected setup command"),
+                })
+            },
+            |current, total, label| phases.push((current, total, label.to_string())),
+        )
+        .unwrap();
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(
+            registered,
+            [
+                "example-org/example-skills-a",
+                "example-org/example-skills-b"
+            ]
+        );
+        assert_eq!(
+            phases
+                .iter()
+                .map(|(current, total, _)| (*current, *total))
+                .collect::<Vec<_>>(),
+            (1..=7).map(|current| (current, 7)).collect::<Vec<_>>()
+        );
+        assert_eq!(phases[3], (4, 7, "marketplace registration".to_string()));
     }
 }

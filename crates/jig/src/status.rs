@@ -162,7 +162,7 @@ fn run_provider_tasks(
         .map(|_| None)
         .collect::<Vec<Option<ProviderRun>>>();
     let mut phases_started = vec![false; providers.len()];
-    let mut worker_panic = None;
+    let mut worker_panics = Vec::new();
     let mut externally_cancelled = false;
     std::thread::scope(|scope| -> Result<()> {
         let (sender, receiver) = mpsc::channel();
@@ -262,10 +262,7 @@ fn run_provider_tasks(
                         elapsed: duration,
                     });
                     phases_started[index] = false;
-                    worker_panic = Some(anyhow!(
-                        "Status provider '{}' worker panicked: {message}",
-                        providers[index].id
-                    ));
+                    worker_panics.push((index, message));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -282,8 +279,19 @@ fn run_provider_tasks(
     if externally_cancelled {
         return Err(status_collection_cancellation());
     }
-    if let Some(error) = worker_panic {
-        return Err(error);
+    if !worker_panics.is_empty() {
+        worker_panics.sort_by_key(|(index, _)| *index);
+        let diagnostics = worker_panics
+            .into_iter()
+            .map(|(index, message)| {
+                format!(
+                    "Status provider '{}' worker panicked: {message}",
+                    providers[index].id
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(anyhow!("Status provider workers panicked: {diagnostics}"));
     }
     debug_assert!(phases_started.iter().all(|started| !started));
     ensure_collection_active(cancelled)?;
@@ -513,7 +521,11 @@ fn work_snapshot(
         .filter_map(|plan| plan["plan_id"].as_str())
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    let gate_snapshots = open_plan_gate_snapshots_with_cancellation(ctx, &open_plan_ids, cancelled);
+    let gate_snapshots = if open_plan_ids.is_empty() {
+        Ok(BTreeMap::new())
+    } else {
+        open_plan_gate_snapshots_with_cancellation(ctx, &open_plan_ids, cancelled)
+    };
     let mut gates = Vec::with_capacity(open_plan_ids.len());
     for plan_id in open_plan_ids {
         ensure_collection_active(cancelled)?;

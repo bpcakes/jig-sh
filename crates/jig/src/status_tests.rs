@@ -368,6 +368,32 @@ fn provider_scheduler_balances_a_panicked_phase() {
     );
 }
 
+#[test]
+fn provider_scheduler_preserves_every_concurrent_panic_diagnostic() {
+    let providers = scheduler_providers(STATUS_PROVIDER_CONCURRENCY);
+    let barrier = std::sync::Barrier::new(STATUS_PROVIDER_CONCURRENCY);
+    let mut observer = LifecycleObserver::default();
+
+    let error = run_provider_tasks(
+        Path::new("."),
+        &providers,
+        &|| false,
+        &mut observer,
+        &|_, provider, _| {
+            barrier.wait();
+            panic!("fixture panic from {}", provider.id);
+        },
+    )
+    .unwrap_err()
+    .to_string();
+
+    for provider in &providers {
+        assert!(error.contains(&provider.id), "{error}");
+    }
+    assert_eq!(observer.started.len(), providers.len());
+    assert_eq!(observer.finished.len(), providers.len());
+}
+
 #[cfg(unix)]
 #[test]
 fn runner_maps_timeout_non_utf8_and_bounded_output_failures() {

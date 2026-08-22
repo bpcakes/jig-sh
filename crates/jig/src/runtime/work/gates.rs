@@ -634,6 +634,9 @@ pub(super) fn open_plan_snapshots_with_cancellation(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<BTreeMap<String, Value>> {
     ensure_gate_collection_active(cancelled)?;
+    if plan_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
     let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
     let work_gates = ctx.work_gates();
     let mut check_tools = BTreeSet::new();

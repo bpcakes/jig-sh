@@ -9,7 +9,7 @@ This work closes the remaining review findings in the execution-supervision chan
 - [x] Introduce a typed repository command-supervision result and migrate configured commands, native schema dumps, and GitHub loop commands.
 - [x] Check cancellation at orchestration boundaries before native work starts.
 - [x] Separate structural progress capacity from lossy child-output preview capacity.
-- [ ] Remove zero-plan status work, preserve concurrent panic diagnostics, and make setup phases monotonic.
+- [x] Remove zero-plan status work, preserve concurrent panic diagnostics, and make setup phases monotonic.
 - [ ] Run focused checks and every configured repository gate through the development binary.
 
 ## Surprises & Discoveries
@@ -27,6 +27,7 @@ This work closes the remaining review findings in the execution-supervision chan
 - Keep `jig-owned-process` repository-agnostic. Repository timeout, progress, and error translation belong in `crates/jig/src/execution.rs`.
 - Preserve the documented fatal 4 MiB policy for authoritative configured-command output; configurability is a product choice, not a correctness repair in this plan.
 - Give structural progress a distinct bounded allocation rather than letting arbitrary output consume it.
+- Treat marketplace registration as one setup phase containing zero or more registration items; this keeps the phase total knowable before setup starts and prevents item count from changing lifecycle positions.
 
 ## Outcomes & Retrospective
 

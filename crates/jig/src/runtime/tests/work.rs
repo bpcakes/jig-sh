@@ -967,6 +967,26 @@ fn work_gates_reports_missing_and_passing_required_gates() {
 }
 
 #[test]
+fn empty_open_plan_gate_batch_skips_fingerprint_collection() {
+    use std::cell::Cell;
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let cancellation_checks = Cell::new(0);
+
+    let snapshots = super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &[], &|| {
+        let current = cancellation_checks.get();
+        cancellation_checks.set(current + 1);
+        current > 0
+    })
+    .unwrap();
+
+    assert!(snapshots.is_empty());
+    assert_eq!(cancellation_checks.get(), 1);
+}
+
+#[test]
 fn work_evidence_defaults_to_single_open_plan_and_reports_latest_passing_gate() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
