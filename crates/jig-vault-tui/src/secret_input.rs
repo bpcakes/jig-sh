@@ -5,17 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use jig_vault::{MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, SecretBytes};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-#[cfg(windows)]
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-
-#[cfg(windows)]
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-};
-
-use jig_vault::{MAX_SECRET_VALUE_LEN, MIN_MASTER_PASSPHRASE_LEN, SecretBytes};
 use zeroize::Zeroizing;
 
 /// A bounded, non-cloneable protected editor backed by preallocated zeroizing
@@ -301,8 +293,6 @@ fn open_value_file(path: &Path) -> std::io::Result<File> {
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    #[cfg(windows)]
-    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options.open(path)
 }
 
@@ -324,17 +314,7 @@ fn is_no_follow_error(_error: &std::io::Error) -> bool {
 }
 
 fn is_real_regular_file(metadata: &std::fs::Metadata) -> bool {
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-    }
-    #[cfg(not(windows))]
-    {
-        true
-    }
+    metadata.is_file() && !metadata.file_type().is_symlink()
 }
 
 #[cfg(all(test, unix))]

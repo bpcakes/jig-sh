@@ -41,12 +41,7 @@ impl ProcessPipe {
         Ok(())
     }
 
-    #[cfg(windows)]
-    fn prepare(&self) -> io::Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn prepare(&self) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -62,50 +57,7 @@ impl ProcessPipe {
         }
     }
 
-    #[cfg(windows)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, HANDLE};
-        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-
-        let handle = match self {
-            Self::Stdout(reader) => reader.as_raw_handle(),
-            Self::Stderr(reader) => reader.as_raw_handle(),
-        } as HANDLE;
-        let mut available = 0_u32;
-        // SAFETY: handle is a live anonymous-pipe read handle and the only
-        // output pointer names a writable u32. This call copies no bytes.
-        let peeked = unsafe {
-            PeekNamedPipe(
-                handle,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if peeked == 0 {
-            let error = io::Error::last_os_error();
-            if matches!(
-                error.raw_os_error(),
-                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32
-            ) {
-                return Ok(0);
-            }
-            return Err(error);
-        }
-        if available == 0 {
-            return Err(io::Error::from(io::ErrorKind::WouldBlock));
-        }
-        let read_limit = buffer.len().min(available as usize);
-        match self {
-            Self::Stdout(reader) => reader.read(&mut buffer[..read_limit]),
-            Self::Stderr(reader) => reader.read(&mut buffer[..read_limit]),
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn read_available(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

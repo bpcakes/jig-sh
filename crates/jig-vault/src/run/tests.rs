@@ -3,8 +3,6 @@ use super::process::*;
 use super::process_linux::*;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 use super::process_unix::*;
-#[cfg(windows)]
-use super::process_windows::*;
 use super::*;
 use std::fs;
 #[cfg(unix)]
@@ -21,18 +19,7 @@ const PIPE_ESCAPE_DONE_VAR: &str = "JIG_VAULT_PIPE_ESCAPE_DONE";
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const PIPE_ESCAPE_HELPER_TEST: &str = "run::tests::execution::brokered_run_pipe_escape_helper";
 
-#[cfg(windows)]
-const WINDOWS_JOB_MODE_VAR: &str = "JIG_VAULT_WINDOWS_JOB_MODE";
-#[cfg(windows)]
-const WINDOWS_JOB_READY_VAR: &str = "JIG_VAULT_WINDOWS_JOB_READY";
-#[cfg(windows)]
-const WINDOWS_JOB_RELEASE_VAR: &str = "JIG_VAULT_WINDOWS_JOB_RELEASE";
-#[cfg(windows)]
-const WINDOWS_JOB_LEAK_VAR: &str = "JIG_VAULT_WINDOWS_JOB_LEAK";
-#[cfg(windows)]
-const WINDOWS_JOB_HELPER_TEST: &str = "run::tests::process::windows_brokered_job_descendant_helper";
-
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn test_env_mapping(var: &str, secret_name: &str, value: &[u8]) -> ResolvedBrokeredEnv {
     ResolvedBrokeredEnv {
         var: EnvVarName::parse(var).unwrap(),
@@ -41,7 +28,7 @@ fn test_env_mapping(var: &str, secret_name: &str, value: &[u8]) -> ResolvedBroke
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn wait_for_path(path: &std::path::Path, timeout: Duration) {
     let deadline = Instant::now().checked_add(timeout).unwrap();
     while !path.exists() {
@@ -54,7 +41,7 @@ fn wait_for_path(path: &std::path::Path, timeout: Duration) {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_path_stays_absent(path: &std::path::Path, duration: Duration) {
     let deadline = Instant::now().checked_add(duration).unwrap();
     while Instant::now() < deadline {

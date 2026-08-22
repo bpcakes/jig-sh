@@ -22,8 +22,6 @@ mod process;
 mod process_linux;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 mod process_unix;
-#[cfg(windows)]
-mod process_windows;
 mod secret_files;
 
 use process::{BrokeredProcess, wait_for_capped_output};
