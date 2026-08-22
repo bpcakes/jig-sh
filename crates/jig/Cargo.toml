@@ -73,9 +73,6 @@ ulid.workspace = true
 wait-timeout.workspace = true
 zeroize.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
-
 [dev-dependencies]
 jig-vault = { workspace = true, features = ["test-utils"] }
 

@@ -34,7 +34,6 @@ fn sqlx_cli_version_check(
         ctx.root(),
         &program,
         environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
     ) else {
         return Some(
             check(
@@ -322,7 +321,6 @@ fn node_runtime_check(
         ctx.root(),
         "node",
         environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
     ) else {
         return Some(
             check(
@@ -570,7 +568,6 @@ fn version_probe_stdout(
         .env("NO_COLOR", "1")
         .env("LC_ALL", "C")
         .env("HOME", home)
-        .env("USERPROFILE", home)
         .env("TMPDIR", temp.path())
         .env("TMP", temp.path())
         .env("TEMP", temp.path())
@@ -579,11 +576,6 @@ fn version_probe_stdout(
         .stderr(Stdio::piped());
     if let Some(path) = sanitized_probe_search_path(root, executable) {
         command.env("PATH", path);
-    }
-    #[cfg(windows)]
-    if let Some(path_extensions) = sanitized_windows_pathext(environment.path_extensions.as_deref())
-    {
-        command.env("PATHEXT", path_extensions);
     }
     for (key, value) in &environment.probe_environment {
         command.env(key, value);

@@ -199,7 +199,6 @@ fn resolve_program(
     command_cwd: &Path,
     program: &str,
     search_path: Option<&OsStr>,
-    path_extensions: Option<&OsStr>,
 ) -> Option<ProgramResolution> {
     if program_has_explicit_path(program) {
         let path = PathBuf::from(program);
@@ -208,10 +207,7 @@ fn resolve_program(
         } else {
             command_cwd.join(path)
         };
-        return executable_candidates(&path, path_extensions)
-            .into_iter()
-            .find(|path| executable_exists(path))
-            .map(|path| ProgramResolution {
+        return executable_exists(&path).then_some(ProgramResolution {
                 path,
                 origin: ProgramOrigin::ExplicitPath,
             });
@@ -224,11 +220,8 @@ fn resolve_program(
         } else {
             command_cwd.join(&entry)
         };
-        if let Some(path) =
-            search_path_executable_candidates(&directory.join(program), path_extensions)
-                .into_iter()
-                .find(|path| executable_exists(path))
-        {
+        let path = directory.join(program);
+        if executable_exists(&path) {
             return Some(ProgramResolution {
                 path,
                 origin: ProgramOrigin::SearchPath { entry },
@@ -243,106 +236,8 @@ fn program_has_explicit_path(program: &str) -> bool {
     path.is_absolute()
         || path.components().count() > 1
         || program.contains('/')
-        || cfg!(windows) && program.contains('\\')
 }
 
-fn executable_candidates(path: &Path, path_extensions: Option<&OsStr>) -> Vec<PathBuf> {
-    #[cfg(windows)]
-    {
-        windows_executable_candidates(path, path_extensions)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path_extensions;
-        vec![path.to_path_buf()]
-    }
-}
-
-fn search_path_executable_candidates(path: &Path, path_extensions: Option<&OsStr>) -> Vec<PathBuf> {
-    #[cfg(windows)]
-    {
-        windows_search_path_executable_candidates(path, path_extensions)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = path_extensions;
-        vec![path.to_path_buf()]
-    }
-}
-
-#[cfg(any(windows, test))]
-fn windows_executable_candidates(path: &Path, path_extensions: Option<&OsStr>) -> Vec<PathBuf> {
-    let mut candidates = vec![path.to_path_buf()];
-    if path.extension().is_some() {
-        return candidates;
-    }
-    candidates.extend(
-        validated_windows_path_extensions(path_extensions)
-            .into_iter()
-            .map(|extension| {
-                let mut candidate = path.as_os_str().to_os_string();
-                candidate.push(extension);
-                PathBuf::from(candidate)
-            }),
-    );
-    candidates
-}
-
-#[cfg(any(windows, test))]
-fn windows_search_path_executable_candidates(
-    path: &Path,
-    path_extensions: Option<&OsStr>,
-) -> Vec<PathBuf> {
-    if path.extension().is_some() {
-        return vec![path.to_path_buf()];
-    }
-    let mut candidates = validated_windows_path_extensions(path_extensions)
-        .into_iter()
-        .map(|extension| {
-            let mut candidate = path.as_os_str().to_os_string();
-            candidate.push(extension);
-            PathBuf::from(candidate)
-        })
-        .collect::<Vec<_>>();
-    // `Command`-style bare-name lookup follows PATHEXT on Windows. Retain an
-    // extensionless fallback for executable files, but do not let unrelated
-    // extensionless data shadow an adjacent `.exe`/`.cmd` program.
-    candidates.push(path.to_path_buf());
-    candidates
-}
-
-#[cfg(any(windows, test))]
-fn validated_windows_path_extensions(path_extensions: Option<&OsStr>) -> Vec<String> {
-    const DEFAULT: &str = ".COM;.EXE;.BAT;.CMD";
-    let configured = path_extensions
-        .and_then(OsStr::to_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(DEFAULT);
-    let mut seen = HashSet::new();
-    let mut extensions = configured
-        .split(';')
-        .map(str::trim)
-        .filter(|extension| {
-            extension.len() > 1
-                && extension.starts_with('.')
-                && extension[1..].chars().all(|ch| ch.is_ascii_alphanumeric())
-        })
-        .filter_map(|extension| {
-            let normalized = extension.to_ascii_uppercase();
-            seen.insert(normalized.clone()).then_some(normalized)
-        })
-        .collect::<Vec<_>>();
-    if extensions.is_empty() {
-        extensions = DEFAULT.split(';').map(str::to_string).collect();
-    }
-    extensions
-}
-
-#[cfg(windows)]
-fn sanitized_windows_pathext(path_extensions: Option<&OsStr>) -> Option<OsString> {
-    let extensions = validated_windows_path_extensions(path_extensions);
-    (!extensions.is_empty()).then(|| extensions.join(";").into())
-}
 
 fn trusted_sqlx_probe_executable(
     root: &Path,
@@ -373,13 +268,6 @@ fn trusted_bare_path_executable(root: &Path, resolution: &ProgramResolution) -> 
     let executable = fs::canonicalize(&resolution.path).ok()?;
     if entry.starts_with(&root) || executable.starts_with(&root) {
         return None;
-    }
-    #[cfg(windows)]
-    {
-        let extension = executable.extension()?.to_str()?;
-        if !matches!(extension.to_ascii_lowercase().as_str(), "exe" | "com") {
-            return None;
-        }
     }
     Some(executable)
 }
@@ -518,24 +406,8 @@ fn shell_command_changes_cargo_dispatch_environment(words: &[ShellWord]) -> bool
 }
 
 fn cargo_dispatch_environment_name(name: &str) -> bool {
-    const NAMES: [&str; 6] = [
-        "CARGO_ALIAS_SQLX",
-        "CARGO_HOME",
-        "HOME",
-        "USERPROFILE",
-        "HOMEDRIVE",
-        "HOMEPATH",
-    ];
-    #[cfg(windows)]
-    {
-        NAMES
-            .iter()
-            .any(|candidate| name.eq_ignore_ascii_case(candidate))
-    }
-    #[cfg(not(windows))]
-    {
-        NAMES.contains(&name)
-    }
+    const NAMES: [&str; 3] = ["CARGO_ALIAS_SQLX", "CARGO_HOME", "HOME"];
+    NAMES.contains(&name)
 }
 
 fn cargo_sqlx_command_has_inline_config(command: &str) -> bool {
@@ -720,15 +592,6 @@ fn path_has_symlink_or_reparse_component(path: &Path) -> Option<bool> {
     Some(false)
 }
 
-#[cfg(windows)]
-fn metadata_is_symlink_or_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
 fn metadata_is_symlink_or_reparse_point(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
@@ -737,16 +600,7 @@ fn bare_sqlx_probe_program(program: &str) -> bool {
     if program_has_explicit_path(program) {
         return false;
     }
-    #[cfg(windows)]
-    {
-        executable_basename(program).is_some_and(|basename| {
-            basename.eq_ignore_ascii_case("sqlx") || basename.eq_ignore_ascii_case("cargo-sqlx")
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        matches!(program, "sqlx" | "cargo-sqlx")
-    }
+    matches!(program, "sqlx" | "cargo-sqlx")
 }
 
 fn sanitized_probe_search_path(root: &Path, executable: &Path) -> Option<OsString> {

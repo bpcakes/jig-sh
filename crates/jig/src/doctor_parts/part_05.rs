@@ -1,19 +1,9 @@
 
 fn proxy_list_failure_context(launcher: &Path) -> String {
-    #[cfg(windows)]
-    {
-        format!(
-            "Failed to run proxy diagnostics through {} with Bash; run Jig from Git Bash or WSL and ensure `bash` is on PATH",
-            launcher.display()
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        format!(
-            "Failed to run proxy diagnostics through {}",
-            launcher.display()
-        )
-    }
+    format!(
+        "Failed to run proxy diagnostics through {}",
+        launcher.display()
+    )
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

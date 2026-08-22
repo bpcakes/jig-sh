@@ -153,14 +153,7 @@ fn apply_database_url_assignment(
 }
 
 fn database_url_name(name: &str) -> bool {
-    #[cfg(windows)]
-    {
-        name.eq_ignore_ascii_case("DATABASE_URL")
-    }
-    #[cfg(not(windows))]
-    {
-        name == "DATABASE_URL"
-    }
+    name == "DATABASE_URL"
 }
 
 fn exec_wrapper_clears_environment(
@@ -623,14 +616,7 @@ fn getopts_mutates_variable(
 }
 
 fn path_variable_name(name: &str) -> bool {
-    #[cfg(windows)]
-    {
-        name.eq_ignore_ascii_case("PATH")
-    }
-    #[cfg(not(windows))]
-    {
-        name == "PATH"
-    }
+    name == "PATH"
 }
 
 fn env_assignment_name(value: &str) -> Option<&str> {

@@ -1,19 +1,19 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{process::Stdio, time::Duration};
 
 use jig_contract::status_provider::v1::Input;
 use jig_owned_process::format_exit_status;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use jig_owned_process::{ProcessOutputLimits, run_owned_process_tree_with_output_limits};
 use serde::Serialize;
 
 use super::sanitize_observer_environment;
 
 const GIT_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const GIT_STDERR_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug)]
@@ -166,7 +166,7 @@ struct GitOutput {
     stdout_truncated: bool,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_output_with_cancellation(
     path: &Path,
     args: &[&str],
@@ -238,7 +238,7 @@ fn git_output_with_cancellation(
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_output_with_cancellation(
     path: &Path,
     args: &[&str],

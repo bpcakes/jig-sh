@@ -420,42 +420,7 @@ fn independent_stderr_writer() -> io::Result<std::fs::File> {
     Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
 }
 
-#[cfg(windows)]
-fn independent_stderr_writer() -> io::Result<std::fs::File> {
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
-    use windows_sys::Win32::System::Threading::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, GetCurrentProcess,
-    };
-
-    // SAFETY: the standard-error handle is borrowed, `DuplicateHandle` creates
-    // a separately owned handle, and successful ownership transfers exactly
-    // once to `File` below.
-    let source = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
-    if source.is_null() || source == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error());
-    }
-    let process = unsafe { GetCurrentProcess() };
-    let mut duplicate = std::ptr::null_mut();
-    let duplicated = unsafe {
-        DuplicateHandle(
-            process,
-            source,
-            process,
-            &mut duplicate,
-            0,
-            0,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
-    if duplicated == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(unsafe { std::fs::File::from_raw_handle(duplicate) })
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn independent_stderr_writer() -> io::Result<io::Stderr> {
     Ok(io::stderr())
 }

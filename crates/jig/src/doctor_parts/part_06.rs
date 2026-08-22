@@ -639,20 +639,11 @@ fn sqlx_invocation(words: &[ShellWord], program_index: usize) -> Option<SqlxInvo
 }
 
 fn executable_basename(program: &str) -> Option<&str> {
-    let basename = Path::new(program).file_name()?.to_str()?;
-    if let Some(suffix_start) = basename.len().checked_sub(4) {
-        if basename
-            .get(suffix_start..)
-            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".exe"))
-        {
-            return basename.get(..suffix_start);
-        }
-    }
-    Some(basename)
+    Path::new(program).file_name()?.to_str()
 }
 
 fn executable_is_named(program: &str, expected: &str) -> bool {
-    executable_basename(program).is_some_and(|basename| basename.eq_ignore_ascii_case(expected))
+    executable_basename(program) == Some(expected)
 }
 
 fn sqlx_probe_style(program: &str) -> Option<SqlxProbeStyle> {

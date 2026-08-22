@@ -582,12 +582,6 @@ fn dependency_readiness_usage_is_legacy(stderr: &str) -> bool {
     stderr.contains("Usage: scripts/check-webapps.sh") && !stderr.contains("dependencies-ready")
 }
 
-#[cfg(windows)]
-fn bash_requirement_hint() -> &'static str {
-    "Bash is required for generated web-app checks; run Jig from Git Bash or WSL and ensure `bash` is on PATH."
-}
-
-#[cfg(not(windows))]
 const fn bash_requirement_hint() -> &'static str {
     "Bash is required for generated web-app checks; install Bash and ensure `bash` is on PATH."
 }

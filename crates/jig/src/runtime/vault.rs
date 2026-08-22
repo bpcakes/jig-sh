@@ -1,8 +1,6 @@
 use std::io::{ErrorKind, IsTerminal, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -713,11 +711,7 @@ fn trusted_repo_scope_dir(scope: &VaultRepoScope) -> Result<String> {
     digest.update(b"jig-vault-repo-scope-v2\0");
     #[cfg(unix)]
     digest.update(repo_root.as_os_str().as_bytes());
-    #[cfg(windows)]
-    for unit in repo_root.as_os_str().encode_wide() {
-        digest.update(unit.to_le_bytes());
-    }
-    #[cfg(all(not(unix), not(windows)))]
+    #[cfg(not(unix))]
     digest.update(repo_root.to_string_lossy().as_bytes());
     digest.update(b"\0");
     digest.update(scope.scope_id.as_bytes());

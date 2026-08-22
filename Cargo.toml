@@ -103,6 +103,5 @@ ulid = "1.2.1"
 # uses Unicode 15.1 width data instead of unicode-width 0.2.2's Unicode 17 data.
 unicode-width = "=0.2.0"
 wait-timeout = "0.2.1"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 x509-parser = { version = "0.18.1", features = ["verify"] }
 zeroize = "1.8.2"

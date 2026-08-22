@@ -248,7 +248,6 @@ fn doctor_environment(bin: &Path, database_url: Option<&str>) -> DoctorEnvironme
     let bin = fs::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
     DoctorEnvironment {
         search_path: Some(bin.into_os_string()),
-        path_extensions: None,
         database_url: database_url.map(OsString::from),
         cargo_alias_sqlx: None,
         cargo_home: None,

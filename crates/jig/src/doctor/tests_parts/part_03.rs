@@ -510,9 +510,9 @@ fn sqlx_driver_discovery_preserves_literal_dotenv_dollars() {
 }
 
 #[test]
-fn dotenv_database_url_uses_the_platform_key_matching_rule() {
+fn dotenv_database_url_key_matching_is_case_sensitive() {
     assert!(dotenv_database_url_key("DATABASE_URL"));
-    assert_eq!(dotenv_database_url_key("database_url"), cfg!(windows));
+    assert!(!dotenv_database_url_key("database_url"));
 
     let temp = tempdir().unwrap();
     fs::write(
@@ -521,12 +521,6 @@ fn dotenv_database_url_uses_the_platform_key_matching_rule() {
     )
     .unwrap();
     let database_url = database_url_from_dotenv(&temp.path().join(".env")).unwrap();
-    #[cfg(windows)]
-    assert_eq!(
-        database_url,
-        Some(DotenvDatabaseUrl::Literal("sqlite:first.db".into()))
-    );
-    #[cfg(not(windows))]
     assert_eq!(
         database_url,
         Some(DotenvDatabaseUrl::Literal(
@@ -587,41 +581,6 @@ fn sqlx_driver_discovery_normalizes_postgresql_alias() {
         SqlxDriver::from_database_url("mysql://localhost/demo"),
         None
     );
-}
-
-#[test]
-fn windows_executable_candidates_honor_validated_pathext_order() {
-    let candidates = windows_executable_candidates(
-        Path::new("/tools/cargo"),
-        Some(OsStr::new(".exe;.CMD;../BAD;.Exe;.PS1")),
-    );
-    assert_eq!(
-        candidates,
-        vec![
-            PathBuf::from("/tools/cargo"),
-            PathBuf::from("/tools/cargo.EXE"),
-            PathBuf::from("/tools/cargo.CMD"),
-            PathBuf::from("/tools/cargo.PS1"),
-        ]
-    );
-    assert_eq!(
-        windows_search_path_executable_candidates(
-            Path::new("/tools/cargo"),
-            Some(OsStr::new(".exe;.CMD;../BAD;.Exe;.PS1")),
-        ),
-        vec![
-            PathBuf::from("/tools/cargo.EXE"),
-            PathBuf::from("/tools/cargo.CMD"),
-            PathBuf::from("/tools/cargo.PS1"),
-            PathBuf::from("/tools/cargo"),
-        ]
-    );
-    assert_eq!(
-        validated_windows_path_extensions(None),
-        vec![".COM", ".EXE", ".BAT", ".CMD"]
-    );
-    assert!(executable_is_named("SQLX.ExE", "sqlx"));
-    assert!(executable_is_named("cargo-sqlx.EXE", "cargo-sqlx"));
 }
 
 #[test]

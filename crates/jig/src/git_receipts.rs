@@ -2,19 +2,19 @@ use std::fs;
 use std::io::{Read, Write, copy};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::NamedTempFile;
 
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use jig_owned_process::{
     ProcessOutputLimits, format_exit_status, require_success, run_checked_output_with_context,
     run_owned_process_tree_with_output_limits,
@@ -529,7 +529,7 @@ fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
     )
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_output_with_cancellation(
     root: &Path,
     args: &[&str],
@@ -555,7 +555,7 @@ fn git_output_with_cancellation(
     Ok(output)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_output_with_cancellation(
     root: &Path,
     args: &[&str],
@@ -568,7 +568,7 @@ fn git_output_with_cancellation(
     Ok(output)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_git_command_with_cancellation(
     root: &Path,
     command: &mut Command,
@@ -654,7 +654,7 @@ fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_hash_object_with_cancellation(
     root: &Path,
     input: &[u8],
@@ -705,7 +705,7 @@ fn write_fingerprint_hash_input(
     collection.ensure_active()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_hash_object_with_cancellation(
     root: &Path,
     input: &[u8],
@@ -756,7 +756,7 @@ fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_hash_file_with_cancellation(
     root: &Path,
     full_path: &Path,
@@ -784,7 +784,7 @@ fn git_hash_file_with_cancellation(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_hash_file_with_cancellation(
     root: &Path,
     full_path: &Path,
@@ -849,7 +849,7 @@ mod tests {
         );
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn cancellation_before_fingerprint_git_spawn_remains_typed() {
         let temp = tempdir().unwrap();

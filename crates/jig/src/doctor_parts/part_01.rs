@@ -196,14 +196,7 @@ pub(crate) fn program_available_on_path(program: &str) -> bool {
     let Some(search_path) = env::var_os("PATH") else {
         return false;
     };
-    let path_extensions = env::var_os("PATHEXT");
-    resolve_program(
-        &command_cwd,
-        program,
-        Some(&search_path),
-        path_extensions.as_deref(),
-    )
-    .is_some()
+    resolve_program(&command_cwd, program, Some(&search_path)).is_some()
 }
 
 fn output(repo: Option<Value>, checks: Vec<DoctorCheck>) -> Value {
@@ -456,7 +449,6 @@ impl ShellEnvironmentIssue {
 #[derive(Clone, Debug, Default)]
 struct DoctorEnvironment {
     search_path: Option<OsString>,
-    path_extensions: Option<OsString>,
     database_url: Option<OsString>,
     cargo_alias_sqlx: Option<OsString>,
     cargo_home: Option<OsString>,
@@ -517,18 +509,11 @@ impl DoctorEnvironment {
         );
         Self {
             search_path: env::var_os("PATH"),
-            path_extensions: env::var_os("PATHEXT"),
             database_url: env::var_os("DATABASE_URL"),
             cargo_alias_sqlx: env::var_os("CARGO_ALIAS_SQLX"),
             cargo_home: env::var_os("CARGO_HOME"),
-            home: env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
-            probe_environment: [
-                "SystemRoot",
-                "WINDIR",
-                "COMSPEC",
-                "RUSTUP_HOME",
-                "RUSTUP_TOOLCHAIN",
-            ]
+            home: env::var_os("HOME"),
+            probe_environment: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"]
             .into_iter()
             .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
             .collect(),

@@ -71,21 +71,10 @@ fn program_resolution_distinguishes_unset_and_explicitly_empty_path() {
     let program = "doctor-empty-path-tool";
     #[cfg(unix)]
     write_test_executable(&repo.path().join(program), "#!/bin/sh\nexit 0\n");
-    #[cfg(windows)]
-    fs::write(repo.path().join(format!("{program}.CMD")), "@exit /b 0\r\n").unwrap();
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fs::write(repo.path().join(program), "executable\n").unwrap();
-    #[cfg(windows)]
-    let path_extensions = Some(OsStr::new(".CMD"));
-    #[cfg(not(windows))]
-    let path_extensions = None;
-
-    assert_eq!(
-        resolve_program(repo.path(), program, None, path_extensions),
-        None
-    );
-    let resolution =
-        resolve_program(repo.path(), program, Some(OsStr::new("")), path_extensions).unwrap();
+    assert_eq!(resolve_program(repo.path(), program, None), None);
+    let resolution = resolve_program(repo.path(), program, Some(OsStr::new(""))).unwrap();
     assert!(resolution.path.starts_with(repo.path()));
     assert!(!resolution.path.starts_with(invocation.path()));
     assert_eq!(
@@ -565,7 +554,6 @@ fn required_programs_do_not_resolve_cwd_sensitive_paths_from_the_repo_root() {
             .path_lookup,
         ProgramPathLookup::Unverifiable,
     );
-    #[cfg(not(windows))]
     for command in ["env -C sub /usr/bin/tool", "cd sub && /usr/bin/tool"] {
         let discovery = required_command_programs_for_shell(command);
         assert_eq!(
@@ -574,42 +562,15 @@ fn required_programs_do_not_resolve_cwd_sensitive_paths_from_the_repo_root() {
             "{command:?}",
         );
     }
-    #[cfg(windows)]
-    for command in [
-        "env -C sub C:/Windows/System32/cmd.exe",
-        "cd sub && C:/Windows/System32/cmd.exe",
-    ] {
-        let discovery = required_command_programs_for_shell(command);
-        assert_eq!(
-            discovery.programs.last().unwrap().path_lookup,
-            ProgramPathLookup::Explicit,
-            "{command:?}",
-        );
-    }
-    #[cfg(not(windows))]
-    {
-        assert!(search_path_is_cwd_independent(Some(OsStr::new(
-            "/usr/bin:/bin"
-        ))));
-        assert!(!search_path_is_cwd_independent(Some(OsStr::new(
-            "bin:/usr/bin"
-        ))));
-        assert!(!search_path_is_cwd_independent(Some(OsStr::new(
-            ":/usr/bin"
-        ))));
-    }
-    #[cfg(windows)]
-    {
-        assert!(search_path_is_cwd_independent(Some(OsStr::new(
-            r"C:\Windows;D:\bin"
-        ))));
-        assert!(!search_path_is_cwd_independent(Some(OsStr::new(
-            r"bin;C:\Windows"
-        ))));
-        assert!(!search_path_is_cwd_independent(Some(OsStr::new(
-            r";C:\Windows"
-        ))));
-    }
+    assert!(search_path_is_cwd_independent(Some(OsStr::new(
+        "/usr/bin:/bin"
+    ))));
+    assert!(!search_path_is_cwd_independent(Some(OsStr::new(
+        "bin:/usr/bin"
+    ))));
+    assert!(!search_path_is_cwd_independent(Some(OsStr::new(
+        ":/usr/bin"
+    ))));
 }
 
 #[test]
@@ -636,9 +597,9 @@ fn required_programs_treat_env_null_with_a_utility_as_ambiguous() {
 }
 
 #[test]
-fn executable_basename_is_utf8_boundary_safe() {
+fn executable_basename_preserves_utf8_names() {
     assert_eq!(executable_basename("💩a"), Some("💩a"));
-    assert_eq!(executable_basename("💩.EXE"), Some("💩"));
+    assert_eq!(executable_basename("💩.tool"), Some("💩.tool"));
     let discovery = required_command_programs_for_shell("💩a --version");
     assert_eq!(discovery.programs[0].program, "💩a");
 }
