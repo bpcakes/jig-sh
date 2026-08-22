@@ -41,8 +41,8 @@ and, over MCP:
 - [x] (2026-08-21 23:26Z) Slice 6: added exact target/profile evidence gates, same-run profile proof, contract/input/worktree freshness, one-run configured work checks, strict selector validation, compatible legacy tool gates, and focused evidence/index modules.
 - [x] (2026-08-22 00:03Z) Slice 7: replaced v6 per-action MCP discovery with four strictly schema-bound repository operations, immediate durable run handles, typed catalog/run inspection, background execution, cross-process durable cancellation observation, terminal worker-error recovery, and v2–v5 compatibility.
 - [x] (2026-08-22 00:55Z) Slice 8: added deterministic Git-base affected selection, validated repository-relative inputs/roots, explainable direct and component propagation, post-filter action dependencies, source-complete freshness, CLI/MCP acceptance coverage, and no artifact cache.
-- [ ] Run focused acceptance fixtures, full formatting, strict Clippy, workspace tests, generated-template checks, contract checks, and structured-work gates through a fresh development binary.
-- [ ] Audit every acceptance item against code and test evidence, update this plan, and finish structured work.
+- [x] (2026-08-22 01:34Z) Ran focused acceptance fixtures, formatting, workspace-wide all-feature strict Clippy, the configured workspace test partitions, generated-template checks, contract checks, and structured-work gates through the fresh development binary.
+- [x] (2026-08-22 01:35Z) Audited every acceptance item against code and test evidence, updated this plan, and finished structured work with both required gates fresh and passing.
 
 ## Surprises & Discoveries
 
@@ -99,6 +99,9 @@ and, over MCP:
 
 - Observation: `globset` 0.4.20 raises its Rust floor to 1.88 while this workspace supports Rust 1.85.
   Evidence: workspace dependency resolution pins 0.4.19; its resolved `bstr` dependency declares Rust 1.65 compatibility, strict Clippy and the complete tests pass.
+
+- Observation: allocating a PTY to the outer `work check` process can perturb the nested vault PTY integration test and make its resize clear-screen assertion time out even though the controlled preview completes and the UI returns.
+  Evidence: the PTY-wrapped acceptance attempt passed all 2,262 primary and 436 vault tests but failed one final TUI assertion; the unchanged test then passed three consecutive focused non-PTY nextest runs and the complete non-PTY structured-work batch. No source correction was retained.
 
 ## Decision Log
 
@@ -180,7 +183,11 @@ and, over MCP:
 
 ## Outcomes & Retrospective
 
-Implementation is in progress. This section will summarize the final contract cutover, compatibility evidence, acceptance fixture results, gate status, and any deliberately deferred work after all eight slices are complete.
+All eight migration slices are complete. The design, executable plan, and each slice were committed independently. Contract v6 now gives Jig one stack-neutral repository catalog, component/action/profile targets, deterministic inspectable plans, durable target-attributed runs and evidence, exact target/profile gates, four bounded MCP operations, and explainable Git-base affected selection. Rust, Go, and TypeScript contribute adapters to the same model, and generated multi-component repositories preserve authored topology during update rather than collapsing through a singular backend answer.
+
+Contracts 2 through 5 retain their legacy tool names, CLI response shapes, MCP calls, receipts, and work gates through the synthetic `repo` projection. The generated Go-plus-TypeScript v6 smoke repository proved distinct `api:test` and `web:test` targets, direct and propagated affected reasons, and bounded MCP inspection. No artifact cache or affected-based evidence reuse was added; freshness remains conservatively tied to the checked-out commit and complete non-state worktree identity.
+
+Final acceptance passed formatting, workspace-wide all-target/all-feature Clippy with warnings denied, 2,262 primary workspace tests, 436 isolated vault tests, both vault TUI integrations, generated-template equality, contract validation, and both required structured-work gates. The exact successful batch receipt is `receipt_01M0KHKWGJFNYJMFRJT628R7FN`; it proves a clean worktree and supplies fresh evidence for `jig.contract_check` and `jig.test`. MCP Resources and Tasks-extension projections, per-target content hashing, and artifact caching remain deliberate later product decisions rather than incomplete pieces of this cutover.
 
 ## Context and Orientation
 
@@ -459,3 +466,24 @@ Slice 8 complete: affected planning is a deterministic selector/profile filter o
 
 
 Slice 8 complete: deterministic Git-base affected selection now filters normal target candidates through validated repo-relative inputs and explicit component propagation, then expands action dependencies. CLI/MCP fixtures, strict Clippy, generated Go+TypeScript smoke, and the complete composite test gate pass; the full gate also exposed and closed three stale v6 migration fixtures.
+
+Final acceptance evidence:
+
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    # both passed
+
+    JIG_DEV_BIN=target/debug/jig scripts/jig work check --plan-id plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8
+    # contract passed
+    # primary workspace partition: 2,262 passed
+    # vault partition: 436 passed
+    # vault TUI partition: 2 passed
+    # aggregate receipt: receipt_01M0KHKWGJFNYJMFRJT628R7FN
+
+    JIG_DEV_BIN=target/debug/jig scripts/jig work gates --plan-id plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8
+    JIG_DEV_BIN=target/debug/jig scripts/jig work evidence --plan-id plan_01M0JZ6Z8M48Y1JSFQ6C8MYXC8
+    # both required gates passed with fresh evidence and no missing, stale, unknown,
+    # failed, or unsupported required gates
+
+
+Final acceptance complete: formatting, workspace-wide all-feature strict Clippy, 2,700 configured tests across primary/vault/TUI partitions, generated-template equality, contract validation, and both required gates pass with fresh exact-batch evidence in receipt_01M0KHKWGJFNYJMFRJT628R7FN.
