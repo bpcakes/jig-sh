@@ -375,12 +375,7 @@ impl ProcessPipe {
         Ok(())
     }
 
-    #[cfg(windows)]
-    fn prepare(&self) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn prepare(&self) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -396,51 +391,7 @@ impl ProcessPipe {
         }
     }
 
-    #[cfg(windows)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, HANDLE};
-        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-
-        let handle = match self {
-            Self::Stdout(reader) => reader.as_raw_handle(),
-            Self::Stderr(reader) => reader.as_raw_handle(),
-        } as HANDLE;
-        let mut available = 0_u32;
-        // SAFETY: `handle` is a live anonymous-pipe read handle and the only
-        // output pointer names a writable u32. No bytes are copied by this
-        // availability-only call.
-        let peeked = unsafe {
-            PeekNamedPipe(
-                handle,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if peeked == 0 {
-            let error = std::io::Error::last_os_error();
-            if matches!(
-                error.raw_os_error(),
-                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32
-            ) {
-                return Ok(0);
-            }
-            return Err(error);
-        }
-        if available == 0 {
-            return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
-        }
-        let read_limit = buffer.len().min(available as usize);
-        match self {
-            Self::Stdout(reader) => reader.read(&mut buffer[..read_limit]),
-            Self::Stderr(reader) => reader.read(&mut buffer[..read_limit]),
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn read_available(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -459,8 +410,6 @@ struct OwnedProcess {
     child: Child,
     #[cfg(unix)]
     process_group: Option<PinnedProcessGroup>,
-    #[cfg(windows)]
-    job: std::os::windows::io::OwnedHandle,
     reaped_status: Option<ExitStatus>,
     cleanup_complete: bool,
     cleanup_finalized: bool,
@@ -618,8 +567,6 @@ impl Drop for OwnedProcess {
 enum OwnedProcessWait {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     ExitedUnreaped,
-    #[cfg(windows)]
-    ExitedReaped(ExitStatus),
     TimedOut,
     Cancelled,
     OutputLimitExceeded(OwnedProcessOutputStream),
@@ -710,14 +657,7 @@ fn terminate_owned_process_fallback(process: &mut OwnedProcess) -> std::io::Resu
     }
 }
 
-#[cfg(windows)]
-fn terminate_owned_process_fallback(process: &mut OwnedProcess) -> std::io::Result<()> {
-    // `Child` retains the exact process HANDLE even if Job Object termination
-    // or confirmation failed, so this fallback cannot target a recycled PID.
-    process.child.kill()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -725,42 +665,7 @@ fn terminate_owned_process_fallback(_process: &mut OwnedProcess) -> std::io::Res
     ))
 }
 
-#[cfg(windows)]
-fn wait_for_owned_process(
-    process: &mut OwnedProcess,
-    timeout: Duration,
-    overflow_policy: ProcessOutputOverflowPolicy,
-    observer: &mut dyn OwnedProcessObserver,
-    drains: &mut OwnedProcessOutputDrains,
-) -> std::io::Result<OwnedProcessWait> {
-    let started = Instant::now();
-    let deadline = ProcessDeadline::after(timeout);
-    loop {
-        let output_poll = drains.poll(observer);
-        if overflow_policy == ProcessOutputOverflowPolicy::Error
-            && let Some(stream) = output_poll.overflow
-        {
-            return Ok(OwnedProcessWait::OutputLimitExceeded(stream));
-        }
-        observer.poll(started.elapsed());
-        if observer.cancelled() {
-            return Ok(OwnedProcessWait::Cancelled);
-        }
-        let remaining = match deadline.remaining() {
-            ProcessDeadlineRemaining::Time(remaining) => remaining,
-            ProcessDeadlineRemaining::Elapsed => return Ok(OwnedProcessWait::TimedOut),
-            ProcessDeadlineRemaining::Unbounded => Duration::from_millis(10),
-        };
-        if let Some(status) = process
-            .child
-            .wait_timeout(remaining.min(Duration::from_millis(10)))?
-        {
-            return Ok(OwnedProcessWait::ExitedReaped(status));
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn wait_for_owned_process(
     _process: &mut OwnedProcess,
     _timeout: Duration,
@@ -779,24 +684,9 @@ fn finish_owned_process_wait(
     process: &mut OwnedProcess,
     wait_result: std::io::Result<OwnedProcessWait>,
 ) -> std::result::Result<ExitStatus, OwnedProcessTreeError> {
-    #[cfg(windows)]
-    let wait_result = match wait_result {
-        Ok(OwnedProcessWait::ExitedReaped(status)) => {
-            // A Windows Job Object remains a stable tree identity after its
-            // leader exits. Cache the consumed status, terminate the owned
-            // job, and only then mark cleanup complete.
-            process.reaped_status = Some(status);
-            return process
-                .terminate_and_reap()
-                .map_err(|_| OwnedProcessTreeError::Cleanup);
-        }
-        other => other,
-    };
     let outcome = match wait_result {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         Ok(OwnedProcessWait::ExitedUnreaped) => None,
-        #[cfg(windows)]
-        Ok(OwnedProcessWait::ExitedReaped(status)) => Some(Ok(status)),
         Ok(OwnedProcessWait::TimedOut) => Some(Err(OwnedProcessTreeError::TimedOut)),
         Ok(OwnedProcessWait::Cancelled) => Some(Err(OwnedProcessTreeError::Cancelled)),
         Ok(OwnedProcessWait::OutputLimitExceeded(stream)) => {
@@ -850,7 +740,7 @@ fn spawn_owned_process(command: &mut Command) -> std::io::Result<OwnedProcess> {
     })
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn spawn_owned_process(_command: &mut Command) -> std::io::Result<OwnedProcess> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -1381,7 +1271,7 @@ fn owned_process_cleanup_timeout(phase: &str) -> std::io::Error {
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn terminate_owned_process_tree(
     _process: &mut OwnedProcess,
     _deadline: Instant,
@@ -1390,217 +1280,6 @@ fn terminate_owned_process_tree(
         std::io::ErrorKind::Unsupported,
         "owned process-tree supervision is unavailable on this platform",
     ))
-}
-
-#[cfg(windows)]
-fn spawn_owned_process(command: &mut Command) -> std::io::Result<OwnedProcess> {
-    use std::os::windows::io::AsRawHandle;
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-
-    let job = create_owned_process_job()?;
-    command.creation_flags(windows_owned_process_creation_flags());
-    let mut child = command.spawn()?;
-    // SAFETY: both handles are live handles owned by `job` and `child`.
-    let assigned = unsafe {
-        AssignProcessToJobObject(
-            job.as_raw_handle() as HANDLE,
-            child.as_raw_handle() as HANDLE,
-        )
-    };
-    if assigned == 0 || resume_owned_process(child.id()).is_err() {
-        let deadline = Instant::now()
-            .checked_add(OWNED_PROCESS_TREE_CLEANUP_TIMEOUT)
-            .unwrap_or_else(Instant::now);
-        let _ = terminate_windows_job(&job, deadline);
-        terminate_spawn_failure_child(&mut child, deadline);
-        return Err(std::io::Error::other(
-            "could not isolate the owned process tree",
-        ));
-    }
-    Ok(OwnedProcess {
-        child,
-        job,
-        reaped_status: None,
-        cleanup_complete: false,
-        cleanup_finalized: false,
-        cleanup_error: None,
-        cleanup_deadline: None,
-    })
-}
-
-#[cfg(windows)]
-const fn windows_owned_process_creation_flags() -> u32 {
-    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED};
-
-    CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP
-}
-
-#[cfg(windows)]
-fn create_owned_process_job() -> std::io::Result<std::os::windows::io::OwnedHandle> {
-    use std::ffi::c_void;
-    use std::mem::size_of;
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::System::JobObjects::{
-        CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JobObjectExtendedLimitInformation, SetInformationJobObject,
-    };
-
-    // SAFETY: null attributes and name request a private unnamed Job Object.
-    let raw_job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-    if raw_job.is_null() {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `raw_job` is a newly created owned handle and is transferred
-    // exactly once into `OwnedHandle`.
-    let job = unsafe { OwnedHandle::from_raw_handle(raw_job as RawHandle) };
-    let mut information = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // SAFETY: the information pointer and byte length describe a live value of
-    // the class requested, and the Job Object handle remains owned by `job`.
-    let configured = unsafe {
-        SetInformationJobObject(
-            job.as_raw_handle() as HANDLE,
-            JobObjectExtendedLimitInformation,
-            (&raw const information).cast::<c_void>(),
-            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        )
-    };
-    if configured == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(job)
-}
-
-#[cfg(windows)]
-fn resume_owned_process(pid: u32) -> std::io::Result<()> {
-    use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-    };
-    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
-
-    // SAFETY: the snapshot call has no borrowed pointer arguments.
-    let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if raw_snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: `raw_snapshot` is a newly created owned handle.
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(raw_snapshot as RawHandle) };
-    let mut entry = THREADENTRY32 {
-        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
-        ..THREADENTRY32::default()
-    };
-    // SAFETY: `entry` is initialized with the required size and remains valid
-    // for the duration of the snapshot enumeration.
-    let mut has_entry = unsafe { Thread32First(raw_snapshot, &mut entry) } != 0;
-    while has_entry {
-        if entry.th32OwnerProcessID == pid {
-            // SAFETY: the enumerated thread ID belongs to the suspended child;
-            // no handle is inherited by the resumed process.
-            let raw_thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if raw_thread.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            // SAFETY: `raw_thread` is a newly opened owned handle.
-            let thread = unsafe { OwnedHandle::from_raw_handle(raw_thread as RawHandle) };
-            // SAFETY: `thread` names the initial thread created suspended by
-            // `CREATE_SUSPENDED` and remains live for this call.
-            let previous_count = unsafe { ResumeThread(raw_thread) };
-            drop(thread);
-            drop(snapshot);
-            if previous_count == u32::MAX {
-                return Err(std::io::Error::last_os_error());
-            }
-            return Ok(());
-        }
-        // SAFETY: same initialized entry and live snapshot as above.
-        has_entry = unsafe { Thread32Next(raw_snapshot, &mut entry) } != 0;
-    }
-    Err(std::io::Error::other(
-        "could not find the suspended owned process thread",
-    ))
-}
-
-#[cfg(windows)]
-fn terminate_windows_job(
-    job: &std::os::windows::io::OwnedHandle,
-    deadline: Instant,
-) -> std::io::Result<()> {
-    use std::ffi::c_void;
-    use std::mem::size_of;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::System::JobObjects::{
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
-        QueryInformationJobObject, TerminateJobObject,
-    };
-
-    // SAFETY: `job` is a live Job Object owned by the caller.
-    let result = unsafe { TerminateJobObject(job.as_raw_handle() as HANDLE, 1) };
-    if result == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    wait_for_no_active_processes_until(deadline, || {
-        let mut information = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-        // SAFETY: the Job Object handle is live, the output pointer names a
-        // correctly sized accounting value, and no return-length is needed.
-        let queried = unsafe {
-            QueryInformationJobObject(
-                job.as_raw_handle() as HANDLE,
-                JobObjectBasicAccountingInformation,
-                (&raw mut information).cast::<c_void>(),
-                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
-                std::ptr::null_mut(),
-            )
-        };
-        if queried == 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(information.ActiveProcesses)
-        }
-    })
-}
-
-#[cfg(windows)]
-fn terminate_owned_process_tree(
-    process: &mut OwnedProcess,
-    deadline: Instant,
-) -> std::io::Result<()> {
-    terminate_windows_job(&process.job, deadline)
-}
-
-#[cfg(test)]
-fn wait_for_no_active_processes(
-    timeout: Duration,
-    active_processes: impl FnMut() -> std::io::Result<u32>,
-) -> std::io::Result<()> {
-    let deadline = std::time::Instant::now()
-        .checked_add(timeout)
-        .unwrap_or_else(std::time::Instant::now);
-    wait_for_no_active_processes_until(deadline, active_processes)
-}
-
-#[cfg(any(windows, test))]
-fn wait_for_no_active_processes_until(
-    deadline: Instant,
-    mut active_processes: impl FnMut() -> std::io::Result<u32>,
-) -> std::io::Result<()> {
-    loop {
-        if active_processes()? == 0 {
-            return Ok(());
-        }
-        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "owned process tree cleanup timed out",
-            ));
-        };
-        std::thread::sleep(remaining.min(Duration::from_millis(10)));
-    }
 }
 
 #[cfg(test)]

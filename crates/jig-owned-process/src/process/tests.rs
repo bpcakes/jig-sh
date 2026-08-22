@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
-#[cfg(windows)]
-use std::fs;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::Path;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
@@ -41,7 +39,7 @@ fn owned_process_descendant_helper() {
     std::thread::sleep(Duration::from_secs(30));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn owned_process_max_timeout_helper() {
     if std::env::var_os("JIG_OWNED_PROCESS_MAX_TIMEOUT_HELPER").is_some() {
@@ -151,7 +149,7 @@ fn fatal_output_overflow_terminates_the_owned_tree_immediately() {
     );
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn fatal_output_policy_rejects_overflow_discovered_after_wait() {
     let status = Command::new(std::env::current_exe().unwrap())
@@ -194,7 +192,7 @@ fn fatal_output_policy_rejects_overflow_discovered_after_wait() {
     assert!(output.stdout.unwrap().truncated);
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn owned_process_timeout_overflow_remains_unbounded() {
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -215,19 +213,6 @@ fn owned_process_timeout_overflow_remains_unbounded() {
     assert!(output.status.success());
     assert!(output.stdout.unwrap().complete);
     assert!(output.stderr.unwrap().complete);
-}
-
-#[cfg(windows)]
-fn wait_for_test_file(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        path.exists(),
-        "test marker {} was not published",
-        path.display()
-    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -894,79 +879,4 @@ fn owned_process_wait_errors_only_release_identity_after_echild() {
         0
     );
     process.child.wait().unwrap();
-}
-
-#[test]
-fn windows_job_active_process_poll_is_bounded_and_propagates_query_errors() {
-    let mut active = VecDeque::from([2, 1, 0]);
-    wait_for_no_active_processes(Duration::from_secs(1), || {
-        Ok(active.pop_front().unwrap_or(0))
-    })
-    .unwrap();
-    assert!(active.is_empty());
-
-    let error = wait_for_no_active_processes(Duration::from_secs(1), || {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "injected query failure",
-        ))
-    })
-    .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-
-    let started = std::time::Instant::now();
-    let error = wait_for_no_active_processes(Duration::from_millis(20), || Ok(1)).unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-    assert!(started.elapsed() < Duration::from_secs(1));
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_owned_process_starts_suspended_in_a_new_process_group() {
-    use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED};
-
-    let flags = windows_owned_process_creation_flags();
-    assert_eq!(flags, CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
-    assert_ne!(flags & CREATE_SUSPENDED, 0);
-    assert_ne!(flags & CREATE_NEW_PROCESS_GROUP, 0);
-}
-
-#[cfg(windows)]
-#[test]
-fn owned_process_windows_job_reaps_descendants() {
-    let temp = tempdir().unwrap();
-    let marker = temp.path().join("windows-descendant");
-    let ready = temp.path().join("windows-ready");
-    let script = temp.path().join("owned-process-tree.cmd");
-    fs::write(
-            &script,
-            format!(
-                "@echo off\r\nif \"%~1\"==\"child\" goto child\r\nstart \"\" /b cmd.exe /d /c call \"%~f0\" child\r\n>\"{}\" echo ready\r\nping.exe -n 30 127.0.0.1 >nul\r\nexit /b\r\n:child\r\nping.exe -n 3 127.0.0.1 >nul\r\n>\"{}\" echo leaked\r\nexit /b\r\n",
-                ready.display(),
-                marker.display(),
-            ),
-        )
-        .unwrap();
-    let mut command = Command::new("cmd.exe");
-    command
-        .args(["/d", "/c"])
-        .arg(&script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut process = spawn_owned_process(&mut command).unwrap();
-    wait_for_test_file(&ready);
-    assert!(matches!(
-        finish_owned_process_wait(
-            &mut process,
-            Err(std::io::Error::other("injected wait failure")),
-        ),
-        Err(OwnedProcessTreeError::Await)
-    ));
-
-    std::thread::sleep(Duration::from_millis(2_500));
-    assert!(
-        !marker.exists(),
-        "Windows Job Object left a descendant running"
-    );
 }
