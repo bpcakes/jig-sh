@@ -601,6 +601,7 @@ fn run_gh_with_timeout(
     run_gh_with_program_timeout(ctx, args, &gh, timeout, observer)
 }
 
+#[cfg(test)]
 fn run_gh_with_program(
     ctx: &RepoContext,
     args: Vec<OsString>,

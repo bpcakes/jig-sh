@@ -681,6 +681,12 @@ fn dispatch_runtime_command(
 ) -> Result<()> {
     let ctx = RepoContext::load()?;
     #[cfg(all(unix, not(test)))]
+    if command.signal_policy() == crate::command::RuntimeSignalPolicy::Native {
+        let output = runtime::dispatch(&ctx, command)?;
+        emit(json_output, human_output, &output)?;
+        return finish_after_json_output(require_json_ok(require_ok, &output), json_output);
+    }
+    #[cfg(all(unix, not(test)))]
     let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
         anyhow::anyhow!("Command was not started because signal supervision is unavailable")
     })?;
