@@ -12,7 +12,7 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 - [x] (2026-08-22T23:55:02+02:00) Opened structured work as `plan_01M0NQB6M2VB6J444TDDK592ET` and built the development `jig` binary.
 - [x] (2026-08-22T23:58:59+02:00) Committed this plan and its append-only work records as the planning slice.
 - [x] (2026-08-23T00:18:09+02:00) Made Git-backed receipt finalization cooperative without sacrificing durable cancellation receipts; the full `jig-sh` library and signal-policy integration tests passed before committing the slice.
-- [ ] Monitor the Codex authoritative result file during execution, terminate the owned process tree at the configured limit, add regression coverage, and commit the slice.
+- [x] (2026-08-23T00:22:00+02:00) Monitored the Codex authoritative result file during execution, terminated the owned process tree at the configured limit, preserved external cancellation semantics, and passed all worker-runner regressions before committing the slice.
 - [ ] Make the supported-host source inventory fail closed and match only actual Windows path components; add regression coverage and commit the slice.
 - [ ] Decouple the timeout test fixture, correct pull-request diagnostics, cover included Rust fragments with the format gate, format those fragments, and commit the cleanup slice.
 - [ ] Run targeted checks, then the full configured test suite and remaining repository gates through the development binary.
@@ -186,3 +186,5 @@ The policy script must remain Bash 3.2 compatible and depend only on existing re
 Plan revision note (2026-08-22): Expanded the structured-work stub into a self-contained implementation and validation plan after tracing each review finding to its owning lifecycle or policy abstraction.
 
 Plan revision note (2026-08-23): Marked the cancellation-safe receipt milestone complete after 1,570 library tests and both runtime signal-policy tests passed, and recorded unrelated Rust 1.97 Clippy drift for the later gate-cleanup slice.
+
+Plan revision note (2026-08-23): Marked the authoritative worker-output milestone complete after proving prompt overflow termination, descendant cleanup, post-exit race defense, and external cancellation precedence.

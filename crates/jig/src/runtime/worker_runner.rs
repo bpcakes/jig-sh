@@ -3,10 +3,12 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_owned_process::{
-    BoundedProcessOutput, OwnedProcessTreeError, ProcessOutputLimits, ProcessOutputOverflowPolicy,
+    BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,
+    ProcessOutputLimits, ProcessOutputOverflowPolicy,
     run_owned_process_tree_with_output_policy_and_observer,
 };
 use serde_json::{Value, json};
@@ -258,6 +260,7 @@ fn run_codex_exec_inner(
         codex_timeout(ctx)?,
         request.receipt.purpose,
         request.transcript_overflow_policy,
+        Some(output_file.path()),
         observer,
     )?;
     let provider_stdout = String::from_utf8_lossy(&output.output.stdout).into_owned();
@@ -343,6 +346,7 @@ fn run_worker_command(
     timeout: CommandTimeout,
     label: &str,
     transcript_overflow_policy: ProcessOutputOverflowPolicy,
+    authoritative_output_path: Option<&Path>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<WorkerCommandOutput, ExecutionCommandError> {
     let prompt_file = stdin_prompt
@@ -357,7 +361,11 @@ fn run_worker_command(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    let output = run_owned_process_tree_with_output_policy_and_observer(
+    let mut process_observer = WorkerProcessObserver::new(
+        ProcessExecutionObserver::new(observer, label),
+        authoritative_output_path,
+    );
+    let process_result = run_owned_process_tree_with_output_policy_and_observer(
         command,
         timeout.duration(),
         ProcessOutputLimits {
@@ -365,9 +373,18 @@ fn run_worker_command(
             stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
         },
         transcript_overflow_policy,
-        &mut ProcessExecutionObserver::new(observer, label),
-    )
-    .map_err(|error| worker_process_error(error, timeout))?;
+        &mut process_observer,
+    );
+    let result_file_failure = process_observer.take_result_file_failure();
+    let output = match (process_result, result_file_failure) {
+        (Ok(_), Some(failure))
+        | (
+            Err(OwnedProcessTreeError::CancelledBeforeStart | OwnedProcessTreeError::Cancelled),
+            Some(failure),
+        ) => return Err(failure.into_execution_error()),
+        (Ok(output), None) => output,
+        (Err(error), _) => return Err(worker_process_error(error, timeout)),
+    };
 
     let stdout = complete_worker_output(output.stdout, "stdout")?;
     let stderr = complete_worker_output(output.stderr, "stderr")?;
@@ -380,6 +397,87 @@ fn run_worker_command(
         stdout_truncated: stdout.truncated,
         stderr_truncated: stderr.truncated,
     })
+}
+
+struct WorkerProcessObserver<'a> {
+    execution: ProcessExecutionObserver<'a>,
+    authoritative_output_path: Option<&'a Path>,
+    result_file_failure: Option<WorkerResultFileFailure>,
+}
+
+impl<'a> WorkerProcessObserver<'a> {
+    fn new(
+        execution: ProcessExecutionObserver<'a>,
+        authoritative_output_path: Option<&'a Path>,
+    ) -> Self {
+        Self {
+            execution,
+            authoritative_output_path,
+            result_file_failure: None,
+        }
+    }
+
+    fn take_result_file_failure(&mut self) -> Option<WorkerResultFileFailure> {
+        self.result_file_failure.take()
+    }
+
+    fn inspect_authoritative_output(&mut self) -> bool {
+        let Some(path) = self.authoritative_output_path else {
+            return false;
+        };
+        let failure = match path.metadata() {
+            Ok(metadata) if !metadata.is_file() => Some(WorkerResultFileFailure::Inspection(
+                "Codex output path is not a regular file".into(),
+            )),
+            Ok(metadata) if metadata.len() > EXECUTION_OUTPUT_CAPTURE_LIMIT as u64 => {
+                Some(WorkerResultFileFailure::CaptureLimitExceeded)
+            }
+            Ok(_) => None,
+            Err(error) => Some(WorkerResultFileFailure::Inspection(format!(
+                "Failed to inspect Codex output file: {error}"
+            ))),
+        };
+        if let Some(failure) = failure {
+            self.result_file_failure = Some(failure);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl OwnedProcessObserver for WorkerProcessObserver<'_> {
+    fn cancelled(&mut self) -> bool {
+        self.execution.cancelled()
+            || self.result_file_failure.is_some()
+            || self.inspect_authoritative_output()
+    }
+
+    fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        self.execution.output(stream, bytes);
+    }
+
+    fn poll(&mut self, elapsed: Duration) {
+        self.execution.poll(elapsed);
+    }
+}
+
+#[derive(Debug)]
+enum WorkerResultFileFailure {
+    CaptureLimitExceeded,
+    Inspection(String),
+}
+
+impl WorkerResultFileFailure {
+    fn into_execution_error(self) -> ExecutionCommandError {
+        let error = match self {
+            Self::CaptureLimitExceeded => anyhow!(
+                "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            ),
+            Self::Inspection(message) => anyhow!(message),
+        };
+        ExecutionCommandError::failed(error)
+    }
 }
 
 #[derive(Debug)]
@@ -546,7 +644,7 @@ mod tests {
     #[cfg(unix)]
     use std::thread;
     #[cfg(unix)]
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[cfg(unix)]
     use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
@@ -699,6 +797,7 @@ mod tests {
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
             ProcessOutputOverflowPolicy::Error,
+            None,
             &mut control,
         )
         .unwrap();
@@ -710,9 +809,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn worker_supervision_preserves_cancellation_as_control_flow() {
+    fn worker_supervision_preserves_cancellation_with_result_monitor() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "sleep 30"]);
+        let output_file = NamedTempFile::new().unwrap();
 
         let error = run_worker_command(
             &mut command,
@@ -720,6 +820,7 @@ mod tests {
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
             ProcessOutputOverflowPolicy::Error,
+            Some(output_file.path()),
             &mut CancelledControl,
         )
         .unwrap_err();
@@ -742,6 +843,7 @@ mod tests {
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
             ProcessOutputOverflowPolicy::Error,
+            None,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()
@@ -770,6 +872,7 @@ mod tests {
             CommandTimeout::from_seconds(5).unwrap(),
             "test worker",
             ProcessOutputOverflowPolicy::Truncate,
+            None,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap();
@@ -778,6 +881,54 @@ mod tests {
         assert_eq!(output.output.stdout.len(), EXECUTION_OUTPUT_CAPTURE_LIMIT);
         assert!(output.stdout_truncated);
         assert!(!output.stderr_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_result_file_limit_terminates_process_group_while_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("escaped-result-writer");
+        let output_file = NamedTempFile::new().unwrap();
+        let script = format!(
+            "(sleep 1; printf leaked > \"$1\") & head -c {} /dev/zero > \"$2\"; wait",
+            EXECUTION_OUTPUT_CAPTURE_LIMIT + 1
+        );
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg("worker")
+            .arg(&marker)
+            .arg(output_file.path());
+
+        let started = Instant::now();
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Truncate,
+            Some(output_file.path()),
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "result-file overflow was checked only after the worker exited"
+        );
+        thread::sleep(Duration::from_millis(1250));
+        assert!(
+            !marker.exists(),
+            "result-file overflow killed the child process but left its process group running"
+        );
     }
 
     #[cfg(unix)]
@@ -879,6 +1030,7 @@ wait
             CommandTimeout::from_seconds(1).unwrap(),
             "test worker",
             ProcessOutputOverflowPolicy::Error,
+            None,
             &mut crate::execution::NoopExecutionObserver,
         )
         .unwrap_err()
