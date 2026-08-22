@@ -5,17 +5,19 @@ This work classifies and fixes the current comprehensive-review findings at the 
 ## Progress
 
 - [x] Read the repository and crate ownership guides and register structured work.
-- [ ] Make progress delivery abandonable without retaining shared stderr ownership.
-- [ ] Model PR repair commit boundaries and reconcile ambiguous GitHub mutations.
-- [ ] Make signal supervision an exhaustive runtime-command policy.
-- [ ] Move configured-command output capacity into validated repository configuration.
-- [ ] Restore semantic test coverage and exact launcher argument coverage.
+- [x] Make progress delivery abandonable without retaining shared stderr ownership.
+- [x] Model PR repair commit boundaries and reconcile ambiguous GitHub mutations.
+- [x] Make signal supervision an exhaustive runtime-command policy.
+- [x] Move configured-command output capacity into validated repository configuration.
+- [x] Restore semantic test coverage and exact launcher argument coverage.
 - [ ] Run all configured gates, inspect evidence, and close the work.
 
 ## Surprises & Discoveries
 
 - The findings share a contract-shape problem: timeout, cancellation, and capture limits exist, but the interfaces still let callers forget the post-timeout or post-commit obligation.
 - The existing `Fix comprehensive review findings` plan is historical and its body describes an earlier launcher-hardening pass, so this pass uses a new plan with precise acceptance criteria.
+- A production-binary test with a deliberately constrained stderr pipe reproduces the former shutdown hang and proves later error handling does not write behind an abandoned progress delivery.
+- The same missing-policy pattern appeared in signal handling and output capture; exhaustive command policy and typed capture capacity make those choices visible at call sites.
 
 ## Decision Log
 
