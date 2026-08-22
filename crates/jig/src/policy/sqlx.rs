@@ -12,7 +12,7 @@ use crate::policy::SqlxTodoInput;
 const DEFAULT_SQLX_TODO_PATH: &str = "docs/sqlx-unchecked-queries-todo.md";
 
 pub(super) fn generate_todo(ctx: &RepoContext, opts: &SqlxTodoInput) -> Result<Value> {
-    let output = super::normalize_repo_relative_path(
+    let output = crate::repository_path::normalize_repo_relative_path(
         &opts
             .output
             .clone()

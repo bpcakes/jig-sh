@@ -8,10 +8,12 @@ use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
 use crate::context::RepoContext;
-
-use super::{
-    NativeToolOutput, controlled_git_text, controlled_output, normalize_repo_relative_path,
+use crate::repository_path::normalize_repo_relative_path;
+use crate::source_projection::{
+    IGNORED_DOTENV_PATHSPECS, MAX_SUBMODULE_DEPTH, initialized_submodule_paths,
 };
+
+use super::{NativeToolOutput, controlled_git_text, controlled_output};
 
 #[cfg(test)]
 pub(super) fn check(ctx: &RepoContext) -> Result<NativeToolOutput> {
@@ -82,8 +84,6 @@ impl SchemaSandbox {
         &self.root
     }
 }
-
-const MAX_SUBMODULE_DEPTH: usize = 32;
 
 /// Materializes the repository state that a local generator can observe without
 /// letting the generator mutate the live checkout. Git supplies tracked and
@@ -166,23 +166,17 @@ fn overlay_worktree_files(
         deadline,
         cancelled,
     )?;
-    let ignored_dotenv = controlled_git_text(
-        repository_root,
-        &[
-            "ls-files",
-            "--others",
-            "--ignored",
-            "--exclude-standard",
-            "-z",
-            "--",
-            ".env",
-            ".env.*",
-            ":(glob)**/.env",
-            ":(glob)**/.env.*",
-        ],
-        deadline,
-        cancelled,
-    )?;
+    let mut ignored_dotenv_args = vec![
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ];
+    ignored_dotenv_args.extend_from_slice(IGNORED_DOTENV_PATHSPECS);
+    let ignored_dotenv =
+        controlled_git_text(repository_root, &ignored_dotenv_args, deadline, cancelled)?;
 
     let mut paths = untracked
         .split('\0')
@@ -246,24 +240,7 @@ fn initialized_submodules(
         );
     }
 
-    output
-        .stdout
-        .split('\0')
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| {
-            let (_, path) = entry
-                .split_once('\n')
-                .ok_or_else(|| anyhow::anyhow!("git returned a malformed submodule path record"))?;
-            normalize_repo_relative_path(Path::new(path), "submodule path")
-        })
-        .filter_map(|relative| match relative {
-            Ok(relative) if repository_root.join(&relative).join(".git").exists() => {
-                Some(Ok(relative))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect()
+    initialized_submodule_paths(repository_root, output.stdout.as_bytes())
 }
 
 fn remove_snapshot_path(path: &Path) -> Result<()> {

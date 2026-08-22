@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,7 @@ use jig_owned_process::{
 use serde_json::{Value, json};
 
 use crate::context::{RepoContext, WorkGate};
+use crate::repository_path::validate_repository_directory_path;
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -298,18 +299,18 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     if !ctx.migration_policy_enabled() {
         bail!("migration add requires a configured SQLx or Go/PostgreSQL migration backend");
     }
-    let migration_dir = ctx.migration_dir();
-    if migration_dir.trim().is_empty() {
-        bail!("migration_dir is empty and no legacy rust_migration_dir fallback is configured");
-    }
+    let migration_dir = ctx
+        .migration_relative_dir()
+        .context("migration_dir is empty, unsafe, or has no legacy rust_migration_dir fallback")?;
     let slug = slugify(name);
     if slug.is_empty() {
         bail!("Migration name {name:?} must contain at least one alphanumeric character.");
     }
     let timestamp = utc_timestamp();
+    validate_repository_directory_path(ctx.root(), &migration_dir)?;
     let base = ctx
         .root()
-        .join(migration_dir)
+        .join(&migration_dir)
         .join(format!("{timestamp}_{slug}"));
     if ctx.is_go_backend() {
         return goose_migration_add(&base, &slug);
@@ -443,32 +444,6 @@ pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
 
 pub(crate) fn render_agent_map(root: &Path, map_path: &Path) -> Result<Vec<u8>> {
     agent_map::render(root, map_path)
-}
-
-pub(super) fn normalize_repo_relative_path(path: &Path, label: &str) -> Result<PathBuf> {
-    if path.is_absolute() {
-        bail!("{label} must be repository-relative: {}", path.display());
-    }
-
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!(
-                    "{label} must stay inside the repository: {}",
-                    path.display()
-                )
-            }
-        }
-    }
-
-    if normalized.as_os_str().is_empty() {
-        bail!("{label} must not be empty");
-    }
-
-    Ok(normalized)
 }
 
 fn check_no_mod_rs(ctx: &RepoContext) -> Result<Value> {

@@ -72,6 +72,64 @@ inputs = ["api/**"]
     .unwrap();
 }
 
+fn add_v6_mutating_effect_action(root: &std::path::Path, action: &str, effect: &str) {
+    let command_key = format!("{}_command", action.replace('-', "_"));
+    let output_path = format!("{action}-mutation.txt");
+    let effects = if effect == "process" {
+        vec![effect]
+    } else {
+        vec![effect, "process"]
+    };
+    let toml_effects = effects
+        .iter()
+        .map(|effect| format!("\"{effect}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            &format!(
+                "api_test_command = \"printf 'api tests passed\\n'\"\n{command_key} = \"printf mutated > {output_path}\""
+            ),
+        )
+        .replace(
+            "[[repository.profiles]]",
+            &format!(
+                r#"[[repository.actions]]
+target = {{ component = "api", action = "{action}" }}
+intent = "operate"
+effects = [{toml_effects}]
+runner = {{ kind = "command", command = "{command_key}" }}
+inputs = ["api/**"]
+
+[[repository.profiles]]"#
+            ),
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!(command_key));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": action},
+        "intent": "operate",
+        "effects": effects,
+        "runner": {"kind": "command", "command": command_key},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 fn add_v6_native_schema_action(root: &std::path::Path, command: &str, timeout_seconds: u64) {
     let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
     let config_path = root.join(".jig.toml");
@@ -676,6 +734,105 @@ fn read_only_target_rejects_stable_drift_after_plan_validation() {
             .contains("worktree changed after plan validation")
     );
     assert!(!temp.path().join("api/target-ran.txt").exists());
+}
+
+#[test]
+fn worktree_target_rejects_stable_drift_before_it_starts() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_generate_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan = crate::repository::plan_action_run(
+        &ctx,
+        &catalog,
+        crate::repository::PlanRunRequest {
+            selectors: vec!["api:generate".into()],
+            profile: None,
+            affected_base: None,
+        },
+        Default::default(),
+    )
+    .unwrap();
+    let (run, _lease) =
+        crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+    fs::write(temp.path().join("api/drift.txt"), "stable drift\n").unwrap();
+
+    let execution = crate::runtime::run_execution::execute_started_check_run(
+        &ctx,
+        &catalog,
+        run,
+        crate::runtime::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: true,
+            fail_fast: false,
+        },
+        &|| Ok(false),
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.run.result.targets[0].conclusion,
+        Some(jig_contract::RunConclusion::Blocked)
+    );
+    assert!(execution.run.result.targets[0].started_at_ms.is_none());
+    assert!(!temp.path().join("generated.txt").exists());
+}
+
+#[test]
+fn targets_without_a_worktree_effect_cannot_mutate_the_repository() {
+    for (action, effect) in [
+        ("external-operation", "external"),
+        ("process-operation", "process"),
+    ] {
+        let temp = tempdir().unwrap();
+        write_v6_evidence_fixture_repo(temp.path(), "");
+        add_v6_mutating_effect_action(temp.path(), action, effect);
+        init_git_repo(temp.path());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+        let plan = crate::repository::plan_action_run(
+            &ctx,
+            &catalog,
+            crate::repository::PlanRunRequest {
+                selectors: vec![format!("api:{action}")],
+                profile: None,
+                affected_base: None,
+            },
+            Default::default(),
+        )
+        .unwrap();
+        let (run, _lease) =
+            crate::runtime::run_execution::start_check_run(&ctx, &catalog, plan, None).unwrap();
+
+        let execution = crate::runtime::run_execution::execute_started_check_run(
+            &ctx,
+            &catalog,
+            run,
+            crate::runtime::run_execution::ExecuteCheckRunRequest {
+                work_plan_id: None,
+                record_receipts: true,
+                fail_fast: false,
+            },
+            &|| Ok(false),
+        )
+        .unwrap();
+
+        assert_eq!(
+            execution.run.result.targets[0].conclusion,
+            Some(jig_contract::RunConclusion::Failure),
+            "{action}"
+        );
+        assert!(
+            execution.run.result.targets[0]
+                .findings
+                .iter()
+                .any(|finding| finding.source.as_deref() == Some("effect_policy")),
+            "{action}"
+        );
+        assert!(temp.path().join(format!("{action}-mutation.txt")).exists());
+    }
 }
 
 #[test]

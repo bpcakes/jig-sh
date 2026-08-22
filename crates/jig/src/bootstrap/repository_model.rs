@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::FrontendApp;
 use super::answers::RenderAnswers;
+use super::source_inputs::FRONTEND_SHARED_INPUTS;
 
 const REPO_COMPONENT: &str = "repo";
 const BACKEND_COMPONENT: &str = "api";
@@ -284,11 +285,7 @@ impl<'a> ModelBuilder<'a> {
             let mut action = ActionSpec::new(target.clone(), descriptor.intent, runner);
             action.description = Some(descriptor.description.into());
             action.effects = descriptor.effects.to_vec();
-            action.inputs = descriptor
-                .inputs
-                .iter()
-                .map(|input| (*input).into())
-                .collect();
+            action.inputs = self.adapter_inputs(descriptor);
             if let Some(alias) = descriptor.legacy_alias {
                 action.legacy_aliases.push(alias.into());
                 self.insert_tool(alias, descriptor.description, command_key.as_deref())?;
@@ -304,6 +301,22 @@ impl<'a> ModelBuilder<'a> {
             self.insert_action(action)?;
         }
         Ok(())
+    }
+
+    fn adapter_inputs(&self, descriptor: &jig_contract::AdapterActionDescriptor) -> Vec<String> {
+        if matches!(
+            descriptor.runner,
+            AdapterRunnerDescriptor::Native(jig_contract::tool::MIGRATION_ADD)
+        ) && let Some(migration_dir) = self.answers.migration_dir()
+        {
+            return vec![format!("{}/**", migration_dir.trim_end_matches('/'))];
+        }
+
+        descriptor
+            .inputs
+            .iter()
+            .map(|input| (*input).into())
+            .collect()
     }
 
     fn add_typescript_actions(&mut self, component: &str, app: &FrontendApp) -> Result<()> {
@@ -551,17 +564,9 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
         })
         .collect::<Vec<_>>();
     resolved.extend(
-        [
-            "scripts/check-webapps.sh",
-            "package.json",
-            "bun.lock",
-            "bun.lockb",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "yarn.lock",
-        ]
-        .into_iter()
-        .map(str::to_owned),
+        FRONTEND_SHARED_INPUTS
+            .iter()
+            .map(|input| (*input).to_owned()),
     );
     resolved.sort();
     resolved.dedup();
@@ -647,6 +652,15 @@ role = "admin"
                 "missing {target}"
             );
         }
+        let migration = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == "api:migration-add")
+            .unwrap();
+        assert_eq!(
+            migration.inputs,
+            ["internal/database/migrations/**".to_owned()]
+        );
         assert!(model.required_commands.contains(&"web_test_command".into()));
         assert!(
             model
@@ -724,6 +738,56 @@ schema_dump_command = "scripts/dump-schema.sh"
 
         assert!(inputs.contains(&"apps/web/src/**".to_owned()));
         assert!(inputs.contains(&"scripts/check-webapps.sh".to_owned()));
+        assert!(inputs.contains(&"scripts/contracts.mjs".to_owned()));
+        assert!(inputs.contains(&"scripts/enforce-coverage.cjs".to_owned()));
+        assert!(inputs.contains(&"scripts/web-node.cjs".to_owned()));
+        assert!(inputs.contains(&"openapi/**".to_owned()));
+        assert!(inputs.contains(&"packages/*-api-client/**".to_owned()));
+        assert!(inputs.contains(&"pnpm-workspace.yaml".to_owned()));
+    }
+
+    #[test]
+    fn generated_migration_action_uses_the_effective_configured_directory() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("answers.toml");
+        fs::write(
+            &path,
+            r#"repo_name = "ExampleProject"
+sqlx_enabled = true
+migration_dir = "database/changes"
+"#,
+        )
+        .unwrap();
+        let answers = RenderAnswers::from_answers_file(&path).unwrap();
+
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+        let migration = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == "api:migration-add")
+            .unwrap();
+
+        assert_eq!(migration.inputs, ["database/changes/**".to_owned()]);
+    }
+
+    #[test]
+    fn generated_migration_action_rejects_the_repository_root_as_its_directory() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("answers.toml");
+        fs::write(
+            &path,
+            r#"repo_name = "ExampleProject"
+sqlx_enabled = true
+migration_dir = "."
+"#,
+        )
+        .unwrap();
+
+        let error = RenderAnswers::from_answers_file(&path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("below the repository root"), "{error}");
     }
 
     #[test]

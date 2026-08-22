@@ -299,14 +299,14 @@ fn changed_paths_digest(paths: &[String]) -> String {
 }
 
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, FingerprintCollection::Blocking)
+    repo_worktree_fingerprint_inner(root, FingerprintCollection::Blocking, 0)
 }
 
 pub(crate) fn repo_worktree_fingerprint_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled))
+    repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled), 0)
 }
 
 pub(crate) fn is_worktree_fingerprint_cancellation(error: &anyhow::Error) -> bool {
@@ -378,7 +378,11 @@ impl std::error::Error for WorktreeFingerprintCancelled {}
 fn repo_worktree_fingerprint_inner(
     root: &Path,
     collection: FingerprintCollection<'_>,
+    submodule_depth: usize,
 ) -> Result<String> {
+    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
+        bail!("worktree fingerprint submodules exceed the supported nesting depth");
+    }
     collection.ensure_active()?;
     let committed_source_tree = committed_source_tree_identity(root, collection)?;
     collection.ensure_active()?;
@@ -416,6 +420,10 @@ fn repo_worktree_fingerprint_inner(
     )?;
     collection.ensure_active()?;
     let untracked = untracked_file_contents(root, &status.stdout, collection)?;
+    collection.ensure_active()?;
+    let ignored_dotenv = ignored_dotenv_contents(root, collection)?;
+    collection.ensure_active()?;
+    let submodules = initialized_submodule_fingerprints(root, collection, submodule_depth)?;
 
     let mut input = Vec::new();
     input.extend_from_slice(b"committed-source-tree\0");
@@ -428,6 +436,10 @@ fn repo_worktree_fingerprint_inner(
     input.extend_from_slice(&staged.stdout);
     input.extend_from_slice(b"\0untracked\0");
     input.extend_from_slice(&untracked);
+    input.extend_from_slice(b"\0ignored-dotenv\0");
+    input.extend_from_slice(&ignored_dotenv);
+    input.extend_from_slice(b"\0initialized-submodules\0");
+    input.extend_from_slice(&submodules);
 
     collection.ensure_active()?;
     collection.git_hash_object(root, &input)
@@ -502,22 +514,46 @@ fn untracked_file_contents(
     status_stdout: &[u8],
     collection: FingerprintCollection<'_>,
 ) -> Result<Vec<u8>> {
+    let paths = parse_porcelain_status_z(status_stdout)?
+        .into_iter()
+        .filter(|entry| entry.status == "??")
+        .map(|entry| entry.path)
+        .collect::<Vec<_>>();
+    path_fingerprint_contents(root, paths, collection)
+}
+
+fn ignored_dotenv_contents(root: &Path, collection: FingerprintCollection<'_>) -> Result<Vec<u8>> {
+    let mut args = vec![
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "-z",
+        "--",
+    ];
+    args.extend_from_slice(crate::source_projection::IGNORED_DOTENV_PATHSPECS);
+    let output = collection.git_output(root, &args, "git ls-files for ignored dotenv files")?;
+    path_fingerprint_contents(root, parse_name_only_z(&output.stdout)?, collection)
+}
+
+fn path_fingerprint_contents(
+    root: &Path,
+    paths: Vec<PathBuf>,
+    collection: FingerprintCollection<'_>,
+) -> Result<Vec<u8>> {
     let mut contents = Vec::new();
     let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
-    for entry in parse_porcelain_status_z(status_stdout)? {
+    for path in paths {
         collection.ensure_active()?;
-        if entry.status != "??" {
-            continue;
-        }
-        let full_path = root.join(&entry.path);
+        let full_path = root.join(&path);
         let metadata = fs::symlink_metadata(&full_path).with_context(|| {
             format!(
-                "Failed to read untracked path metadata {}",
+                "Failed to read observable path metadata {}",
                 full_path.display()
             )
         })?;
 
-        contents.extend_from_slice(entry.path.as_os_str().as_encoded_bytes());
+        contents.extend_from_slice(path.as_os_str().as_encoded_bytes());
         contents.push(0);
         append_untracked_path_fingerprint(
             &mut contents,
@@ -531,6 +567,56 @@ fn untracked_file_contents(
     }
     collection.ensure_active()?;
     Ok(contents)
+}
+
+fn initialized_submodule_fingerprints(
+    root: &Path,
+    collection: FingerprintCollection<'_>,
+    submodule_depth: usize,
+) -> Result<Vec<u8>> {
+    if !root.join(".gitmodules").is_file() {
+        return Ok(Vec::new());
+    }
+    let output = collection.git_output_unchecked(
+        root,
+        &[
+            "config",
+            "-z",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            "^submodule\\..*\\.path$",
+        ],
+        "git config for worktree fingerprint submodules",
+    )?;
+    let mut paths = match output.status.code() {
+        Some(0) => crate::source_projection::initialized_submodule_paths(root, &output.stdout)?,
+        Some(1) => return Ok(Vec::new()),
+        _ => {
+            bail!(
+                "git config for worktree fingerprint submodules failed with {}.\nstdout:\n{}\nstderr:\n{}",
+                format_exit_status(&output.status),
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        }
+    };
+    paths.sort();
+
+    let mut fingerprints = Vec::new();
+    for relative in paths {
+        collection.ensure_active()?;
+        let fingerprint = repo_worktree_fingerprint_inner(
+            &root.join(&relative),
+            collection,
+            submodule_depth + 1,
+        )?;
+        fingerprints.extend_from_slice(relative.as_os_str().as_encoded_bytes());
+        fingerprints.push(0);
+        fingerprints.extend_from_slice(fingerprint.as_bytes());
+        fingerprints.push(0);
+    }
+    Ok(fingerprints)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1393,6 +1479,71 @@ mod tests {
         let first = repo_worktree_fingerprint(temp.path()).unwrap();
         std::fs::write(temp.path().join("new.txt"), "two").unwrap();
         let second = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn worktree_fingerprint_changes_when_ignored_dotenv_content_changes() {
+        let _env = crate::test_env::lock_env();
+        let temp = tempdir().unwrap();
+        run_git(temp.path(), &["init"]);
+        run_git(
+            temp.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(temp.path(), &["config", "user.name", "Fixture"]);
+        std::fs::write(temp.path().join(".gitignore"), ".env\n").unwrap();
+        run_git(temp.path(), &["add", ".gitignore"]);
+        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
+        std::fs::write(temp.path().join(".env"), "EXAMPLE_VALUE=one\n").unwrap();
+        let first = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        std::fs::write(temp.path().join(".env"), "EXAMPLE_VALUE=two\n").unwrap();
+        let second = repo_worktree_fingerprint(temp.path()).unwrap();
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn worktree_fingerprint_observes_successive_dirty_submodule_edits() {
+        let _env = crate::test_env::lock_env();
+        let submodule = tempdir().unwrap();
+        run_git(submodule.path(), &["init"]);
+        run_git(
+            submodule.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(submodule.path(), &["config", "user.name", "Fixture"]);
+        std::fs::write(submodule.path().join("source.txt"), "committed\n").unwrap();
+        run_git(submodule.path(), &["add", "source.txt"]);
+        run_git(submodule.path(), &["commit", "-m", "submodule fixture"]);
+
+        let repository = tempdir().unwrap();
+        run_git(repository.path(), &["init"]);
+        run_git(
+            repository.path(),
+            &["config", "user.email", "fixture@example.com"],
+        );
+        run_git(repository.path(), &["config", "user.name", "Fixture"]);
+        run_git(
+            repository.path(),
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                submodule.path().to_str().unwrap(),
+                "vendor/example",
+            ],
+        );
+        run_git(repository.path(), &["commit", "-am", "parent fixture"]);
+
+        let submodule_source = repository.path().join("vendor/example/source.txt");
+        std::fs::write(&submodule_source, "first dirty value\n").unwrap();
+        let first = repo_worktree_fingerprint(repository.path()).unwrap();
+        std::fs::write(&submodule_source, "second dirty value\n").unwrap();
+        let second = repo_worktree_fingerprint(repository.path()).unwrap();
 
         assert_ne!(first, second);
     }

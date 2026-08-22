@@ -285,6 +285,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         answers: AnswerOpts {
             repo_name: Some("go-contract-workflow".into()),
             go_module: Some("example.com/go-contract-workflow".into()),
+            ci_github_runner: Some("macos-14".into()),
             ..AnswerOpts::default()
         },
     })
@@ -298,7 +299,11 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         r#"- "openapi/**""#,
         r#"- "packages/public-api-client/**""#,
     ] {
-        assert_eq!(workflow.matches(path).count(), 2, "missing {path}");
+        assert_eq!(
+            workflow.matches(path).count(),
+            2,
+            "missing {path} in:\n{workflow}"
+        );
     }
     assert!(workflow.contains("node scripts/contracts.mjs client-check"));
     let build_step = workflow.find("Run build").unwrap();
@@ -350,7 +355,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             .count(),
         2
     );
-    assert!(go_tests.contains("postgres-integration:\n    runs-on: ubuntu-latest"));
+    assert_eq!(go_tests.matches("runs-on: \"macos-14\"").count(), 2);
+    assert!(!go_tests.contains("runs-on: ubuntu-latest"));
     assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
     assert!(!destination.join(".go-version").exists());
 

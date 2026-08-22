@@ -90,6 +90,7 @@ mod renderer;
 mod repository_model;
 mod runtime_config;
 mod scaffold;
+mod source_inputs;
 pub(crate) use scaffold::{default_go_module, validate_go_module};
 mod staged_render;
 mod sync;

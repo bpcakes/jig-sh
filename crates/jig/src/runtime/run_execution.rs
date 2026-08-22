@@ -255,20 +255,20 @@ fn run_target(
 }
 
 struct ExecutionSourceEpoch {
-    fingerprint: std::result::Result<String, String>,
-    validated: bool,
+    trusted_fingerprint: std::result::Result<String, String>,
+    observed_fingerprint: std::result::Result<String, String>,
 }
 
 impl ExecutionSourceEpoch {
     fn from_plan(fingerprint: String) -> Self {
         Self {
-            fingerprint: Ok(fingerprint),
-            validated: false,
+            trusted_fingerprint: Ok(fingerprint.clone()),
+            observed_fingerprint: Ok(fingerprint),
         }
     }
 
     fn receipt_fingerprint(&self) -> std::result::Result<String, String> {
-        self.fingerprint.clone()
+        self.observed_fingerprint.clone()
     }
 
     fn prepare_target(
@@ -276,25 +276,17 @@ impl ExecutionSourceEpoch {
         ctx: &RepoContext,
         planned: &PlannedTarget,
     ) -> std::result::Result<(), String> {
-        if !is_read_only(planned) {
-            return Ok(());
-        }
-        if self.validated {
-            return self.fingerprint.as_ref().map(|_| ()).map_err(Clone::clone);
-        }
-
-        let planned_fingerprint = self.fingerprint.clone()?;
+        let trusted_fingerprint = self.trusted_fingerprint.clone()?;
         let current = collect_execution_fingerprint(ctx);
-        self.fingerprint = current.clone();
-        self.validated = true;
+        self.observed_fingerprint = current.clone();
         match current {
-            Ok(current) if current == planned_fingerprint => Ok(()),
+            Ok(current) if current == trusted_fingerprint => Ok(()),
             Ok(current) => Err(format!(
-                "read-only target '{}' could not start because the worktree changed after plan validation (planned {planned_fingerprint}, current {current}); plan again",
+                "target '{}' could not start because the worktree changed after plan validation or the last declared worktree effect (expected {trusted_fingerprint}, current {current}); plan again",
                 planned.target
             )),
             Err(error) => Err(format!(
-                "could not establish the read-only worktree invariant before target '{}': {error}",
+                "could not establish the worktree effect invariant before target '{}': {error}",
                 planned.target
             )),
         }
@@ -307,16 +299,16 @@ impl ExecutionSourceEpoch {
         capture: TargetCapture,
     ) -> (TargetCapture, std::result::Result<String, String>) {
         let current = collect_execution_fingerprint(ctx);
-        let capture = if is_read_only(planned) {
-            match self.fingerprint.as_deref() {
-                Ok(expected) => enforce_read_only_worktree(planned, expected, &current, capture),
-                Err(error) => block_for_unverifiable_read_only(planned, error, capture),
-            }
-        } else {
-            capture
+        self.observed_fingerprint = current.clone();
+        if allows_worktree_mutation(planned) {
+            self.trusted_fingerprint = current.clone();
+            return (capture, current);
+        }
+
+        let capture = match self.trusted_fingerprint.as_deref() {
+            Ok(expected) => enforce_declared_worktree_effect(planned, expected, &current, capture),
+            Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
         };
-        self.fingerprint = current.clone();
-        self.validated = true;
         (capture, current)
     }
 }
@@ -330,13 +322,13 @@ fn collect_execution_fingerprint(ctx: &RepoContext) -> std::result::Result<Strin
     })
 }
 
-fn block_for_unverifiable_read_only(
+fn block_for_unverifiable_effect_policy(
     planned: &PlannedTarget,
     error: &str,
     mut capture: TargetCapture,
 ) -> TargetCapture {
     let message = format!(
-        "could not verify the read-only worktree invariant for target '{}': {error}",
+        "could not verify the worktree effect invariant for target '{}': {error}",
         planned.target
     );
     capture.stderr.push_str(&format!("{message}\n"));
@@ -346,6 +338,39 @@ fn block_for_unverifiable_read_only(
         capture.receipt_exit_status = capture.receipt_exit_status.max(1);
     }
     capture
+}
+
+fn allows_worktree_mutation(planned: &PlannedTarget) -> bool {
+    planned
+        .effects
+        .contains(&jig_contract::ActionEffect::Worktree)
+}
+
+fn enforce_declared_worktree_effect(
+    planned: &PlannedTarget,
+    expected: &str,
+    current: &std::result::Result<String, String>,
+    mut capture: TargetCapture,
+) -> TargetCapture {
+    debug_assert!(!allows_worktree_mutation(planned));
+
+    match current.as_deref() {
+        Ok(actual) if actual == expected => capture,
+        Ok(actual) => {
+            let message = format!(
+                "the worktree fingerprint changed while target '{}' was running without a declared worktree effect (before {expected}, after {actual})",
+                planned.target
+            );
+            capture.stderr.push_str(&format!("{message}\n"));
+            capture.findings.push(finding(message, "effect_policy"));
+            if capture.conclusion == RunConclusion::Success {
+                capture.conclusion = RunConclusion::Failure;
+                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+            }
+            capture
+        }
+        Err(error) => block_for_unverifiable_effect_policy(planned, error, capture),
+    }
 }
 
 struct TargetExecutionControl<'a> {
@@ -445,42 +470,6 @@ fn stopped_before_start(planned: &PlannedTarget, stop: TargetStop) -> TargetCapt
             "target '{}' could not start because {message}",
             planned.target
         )),
-    }
-}
-
-fn is_read_only(planned: &PlannedTarget) -> bool {
-    planned
-        .effects
-        .contains(&jig_contract::ActionEffect::ReadOnly)
-        && !planned
-            .effects
-            .contains(&jig_contract::ActionEffect::Worktree)
-}
-
-fn enforce_read_only_worktree(
-    planned: &PlannedTarget,
-    expected: &str,
-    current: &std::result::Result<String, String>,
-    mut capture: TargetCapture,
-) -> TargetCapture {
-    debug_assert!(is_read_only(planned));
-
-    match current.as_deref() {
-        Ok(actual) if actual == expected => capture,
-        Ok(actual) => {
-            let message = format!(
-                "the worktree fingerprint changed while read-only target '{}' was running (before {expected}, after {actual})",
-                planned.target
-            );
-            capture.stderr.push_str(&format!("{message}\n"));
-            capture.findings.push(finding(message, "effect_policy"));
-            if capture.conclusion == RunConclusion::Success {
-                capture.conclusion = RunConclusion::Failure;
-                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
-            }
-            capture
-        }
-        Err(error) => block_for_unverifiable_read_only(planned, error, capture),
     }
 }
 

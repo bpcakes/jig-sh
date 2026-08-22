@@ -710,47 +710,11 @@ fn e2e_workflow_paths_for_backend(
         paths.push(format!("{sqlx_metadata_dir}/**"));
     }
     paths.extend(
-        [
-            "package.json",
-            "**/package.json",
-            "**/package.json5",
-            "**/package.yaml",
-            "**/*.patch",
-            "**/*.diff",
-            ".node-version",
-            ".npmrc",
-            "**/.node-version",
-            "**/.npmrc",
-            ".pnpmfile.cjs",
-            "pnpmfile.cjs",
-            ".yarnrc",
-            ".yarnrc.yml",
-            ".yarn/**",
-            "**/.yarnrc",
-            "**/.yarnrc.yml",
-            "**/.yarn/**",
-            ".pnp.cjs",
-            ".pnp.data.json",
-            ".pnp.js",
-            ".pnp.loader.mjs",
-            "patches/**",
-            "bunfig.toml",
-            "bun.lock",
-            "bun.lockb",
-            "npm-shrinkwrap.json",
-            "package-lock.json",
-            "pnpm-lock.yaml",
-            "pnpm-workspace.yaml",
-            "yarn.lock",
-            "scripts/check-webapps.sh",
-            "scripts/contracts.mjs",
-            "eslint.config.shared.mjs",
-            "openapi/**",
-            "packages/public-api-client/**",
-            ".github/workflows/e2e.yml",
-        ]
-        .map(str::to_owned),
+        crate::bootstrap::source_inputs::FRONTEND_SHARED_INPUTS
+            .iter()
+            .map(|input| (*input).to_owned()),
     );
+    paths.push(".github/workflows/e2e.yml".into());
     let mut seen = std::collections::BTreeSet::new();
     paths.retain(|path| seen.insert(path.clone()));
     paths

@@ -16,10 +16,12 @@ use crate::backend::{
 };
 use crate::context::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
-    config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
-    validate_web_package_manager,
+    config_app_dirs_match, default_codex_marketplace_plugins, validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
+use crate::repository_path::{
+    normalize_portable_repo_path, normalize_portable_repository_directory,
+};
 use crate::shell::quote as shell_quote;
 
 mod dev;
@@ -486,6 +488,12 @@ impl RenderAnswers {
         self.schema_dump_enabled
     }
 
+    pub(super) fn migration_dir(&self) -> Option<&str> {
+        self.migration_dir
+            .as_deref()
+            .or(self.rust_migration_dir.as_deref())
+    }
+
     pub(super) fn web_package_manager(&self) -> &str {
         &self.web_package_manager
     }
@@ -833,7 +841,7 @@ impl RawAnswers {
     fn normalize_app_dirs(&mut self) -> Result<()> {
         if let Some(frontend_apps) = self.frontend_apps.as_mut() {
             for app in frontend_apps {
-                app.dir = normalize_config_app_dir(
+                app.dir = normalize_portable_repo_path(
                     &app.dir,
                     &format!("frontend app '{}' dir", app.name),
                 )?;
@@ -842,7 +850,8 @@ impl RawAnswers {
         if let Some(dev_apps) = self.dev.as_mut().and_then(|dev| dev.apps.as_mut()) {
             for app in dev_apps {
                 if let Some(dir) = app.dir.as_mut() {
-                    *dir = normalize_config_app_dir(dir, &format!("dev app '{}' dir", app.name))?;
+                    *dir =
+                        normalize_portable_repo_path(dir, &format!("dev app '{}' dir", app.name))?;
                 }
             }
         }
@@ -952,12 +961,20 @@ impl RawAnswers {
                 "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
             );
         }
-        let migration_dir_answer = self.migration_dir.filter(|value| !value.is_empty());
-        let legacy_rust_migration_dir = self.rust_migration_dir.filter(|value| !value.is_empty());
+        let migration_dir_answer = self
+            .migration_dir
+            .filter(|value| !value.is_empty())
+            .map(|value| normalize_portable_repository_directory(&value, "migration_dir"))
+            .transpose()?;
+        let legacy_rust_migration_dir = self
+            .rust_migration_dir
+            .filter(|value| !value.is_empty())
+            .map(|value| normalize_portable_repository_directory(&value, "rust_migration_dir"))
+            .transpose()?;
         if sqlx_enabled
             && let (Some(migration_dir), Some(rust_migration_dir)) =
                 (&migration_dir_answer, &legacy_rust_migration_dir)
-            && Path::new(migration_dir) != Path::new(rust_migration_dir)
+            && migration_dir != rust_migration_dir
         {
             bail!(
                 "migration_dir = {migration_dir:?} and rust_migration_dir = {rust_migration_dir:?} must identify the same SQLx migration directory; keep migration_dir canonical and remove or synchronize rust_migration_dir"

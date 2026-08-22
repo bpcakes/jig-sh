@@ -625,6 +625,35 @@ migration_dir = "database/migrations"
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn migration_add_rejects_a_symlinked_migration_directory() {
+    use std::os::unix::fs::symlink;
+
+    let repository = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    TestRepoBuilder::new(repository.path())
+        .config(
+            r#"
+sqlx_enabled = true
+migration_dir = "database/migrations"
+"#,
+        )
+        .write();
+    fs::create_dir(repository.path().join("database")).unwrap();
+    symlink(
+        outside.path(),
+        repository.path().join("database/migrations"),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(repository.path()).unwrap();
+
+    let error = migration_add(&ctx, "Create Users").unwrap_err().to_string();
+
+    assert!(error.contains("is a symlink"), "{error}");
+    assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
 #[test]
 fn migration_add_creates_a_goose_migration_for_go_postgres() {
     let temp = tempdir().unwrap();

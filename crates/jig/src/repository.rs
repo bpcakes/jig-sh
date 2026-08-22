@@ -538,13 +538,21 @@ fn unique_legacy_action_id(tool_name: &str, occupied: &BTreeSet<ActionId>) -> Re
         return Ok(candidate);
     }
 
-    let suffix = short_digest(tool_name);
-    let max_base_len = 64 - suffix.len() - 1;
-    let shortened = base
-        .get(..base.len().min(max_base_len))
-        .unwrap_or(&base)
-        .trim_end_matches(['-', '_']);
-    Ok(ActionId::parse(format!("{shortened}-{suffix}"))?)
+    let digest = full_digest(tool_name);
+    for suffix_len in (12..=60).step_by(4) {
+        let suffix = &digest[..suffix_len];
+        let max_base_len = 64 - suffix.len() - 1;
+        let shortened = base
+            .get(..base.len().min(max_base_len))
+            .unwrap_or(&base)
+            .trim_end_matches(['-', '_']);
+        let candidate = ActionId::parse(format!("{shortened}-{suffix}"))?;
+        if !occupied.contains(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
+    bail!("legacy tool '{tool_name}' exhausted deterministic action-id collision fallbacks")
 }
 
 fn known_legacy_action_id(tool_name: &str) -> Option<&'static str> {
@@ -600,21 +608,25 @@ fn sanitize_legacy_action_id(tool_name: &str) -> String {
 }
 
 fn short_digest(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    format!("{digest:x}")[..12].to_owned()
+    full_digest(value)[..12].to_owned()
+}
+
+fn full_digest(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use jig_contract::{
-        ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
+        ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
         ManifestTool, ProfileId, ProfileSpec, TargetId, kind,
     };
+    use std::collections::BTreeSet;
     use tempfile::tempdir;
 
     use crate::{context::RepoContext, test_env::TestRepoBuilder};
 
-    use super::RepositoryCatalog;
+    use super::{RepositoryCatalog, unique_legacy_action_id};
 
     fn command_tool(name: &str, command: &str) -> ManifestTool {
         ManifestTool::new(name, kind::COMMAND, format!("Run {name}.")).with_command(command)
@@ -673,6 +685,19 @@ checks = ["jig.test"]
             first.target_for_alias("jig.foo_bar"),
             first.target_for_alias("jig.foo-bar")
         );
+    }
+
+    #[test]
+    fn legacy_action_id_fallback_never_returns_an_occupied_digest_candidate() {
+        let base = ActionId::parse("foo-bar").unwrap();
+        let mut occupied = BTreeSet::from([base]);
+        let first_fallback = unique_legacy_action_id("jig.foo-bar", &occupied).unwrap();
+        occupied.insert(first_fallback.clone());
+
+        let second_fallback = unique_legacy_action_id("jig.foo-bar", &occupied).unwrap();
+
+        assert_ne!(first_fallback, second_fallback);
+        assert!(!occupied.contains(&second_fallback));
     }
 
     #[test]

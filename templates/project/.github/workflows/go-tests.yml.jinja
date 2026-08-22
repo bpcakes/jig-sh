@@ -66,7 +66,7 @@ jobs:
 [% endif %]
 [% if go_database == "postgres" %]
   postgres-integration:
-    runs-on: ubuntu-latest
+    runs-on: <<[ ci_github_runner | tojson ]>>
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

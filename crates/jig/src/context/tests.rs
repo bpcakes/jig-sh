@@ -140,6 +140,32 @@ rust_migration_dir = "legacy-migrations"
 }
 
 #[test]
+fn migration_directories_must_be_portable_repository_relative_paths() {
+    for (key, value) in [
+        ("migration_dir", "../outside"),
+        ("migration_dir", "/tmp/outside"),
+        ("migration_dir", "."),
+        ("rust_migration_dir", "C:/outside"),
+        ("rust_migration_dir", "nested\\outside"),
+    ] {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(format!("{key} = {value:?}"))
+            .write();
+
+        let error = RepoContext::load_from(temp.path()).unwrap_err().to_string();
+
+        assert!(error.contains(key), "{key}={value:?}: {error}");
+        assert!(
+            error.contains("repository-relative")
+                || error.contains("stay inside")
+                || error.contains("below the repository root"),
+            "{key}={value:?}: {error}"
+        );
+    }
+}
+
+#[test]
 fn backend_selectors_reject_unknown_config_values() {
     for (selector, expected) in [
         ("backend_language = \"ruby\"", "unknown variant `ruby`"),

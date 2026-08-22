@@ -12,6 +12,10 @@ use sha2::{Digest, Sha256};
 
 use crate::backend::{BackendLanguage, GoDatabase};
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
+use crate::repository_path::{
+    normalize_portable_repo_path, normalize_portable_repository_directory,
+    normalize_repo_relative_path,
+};
 
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
 
@@ -514,6 +518,10 @@ impl RepoContext {
         }
     }
 
+    pub(crate) fn migration_relative_dir(&self) -> Result<PathBuf> {
+        normalize_repo_relative_path(Path::new(self.migration_dir()), "migration_dir")
+    }
+
     pub(crate) fn migration_policy_enabled(&self) -> bool {
         if self.contract_version() >= 6 {
             self.has_component_adapter("sqlx") || self.has_component_adapter("go-postgres")
@@ -838,10 +846,21 @@ fn validate_backend_config(config: &RepoConfig) -> Result<()> {
             "backend_language = \"go\" cannot be combined with sqlx_enabled = true in .jig.toml; Go repositories use go_database and Goose/sqlc, while SQLx is owned by the Rust backend"
         );
     }
+    let migration_dir = (!config.migration_dir.trim().is_empty())
+        .then(|| normalize_portable_repository_directory(&config.migration_dir, "migration_dir"))
+        .transpose()?;
+    let rust_migration_dir = (!config.rust_migration_dir.trim().is_empty())
+        .then(|| {
+            normalize_portable_repository_directory(
+                &config.rust_migration_dir,
+                "legacy rust_migration_dir",
+            )
+        })
+        .transpose()?;
     if config.sqlx_enabled
-        && !config.migration_dir.trim().is_empty()
-        && !config.rust_migration_dir.trim().is_empty()
-        && Path::new(&config.migration_dir) != Path::new(&config.rust_migration_dir)
+        && let (Some(migration_dir), Some(rust_migration_dir)) =
+            (&migration_dir, &rust_migration_dir)
+        && migration_dir != rust_migration_dir
     {
         bail!(
             "migration_dir = {:?} and legacy rust_migration_dir = {:?} must identify the same SQLx migration directory in .jig.toml; keep migration_dir as the canonical value and synchronize the compatibility key",
@@ -854,7 +873,7 @@ fn validate_backend_config(config: &RepoConfig) -> Result<()> {
 
 fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
     for app in &config.frontend_apps {
-        normalize_config_app_dir(
+        normalize_portable_repo_path(
             &app.dir,
             &format!("dir for frontend app '{}' in [[frontend_apps]]", app.name),
         )?;
@@ -948,7 +967,7 @@ fn validate_dev_config(config: &RepoConfig) -> Result<()> {
     let mut app_names = HashSet::new();
     for app in &config.dev.apps {
         if let Some(dir) = app.dir.as_deref() {
-            normalize_config_app_dir(
+            normalize_portable_repo_path(
                 dir,
                 &format!("dir for dev app '{}' in [[dev.apps]]", app.name),
             )?;
@@ -1013,43 +1032,11 @@ fn validate_dev_config(config: &RepoConfig) -> Result<()> {
 
 pub(crate) fn config_app_dirs_match(left: &str, right: &str) -> bool {
     match (
-        normalize_config_app_dir(left, "configured app dir"),
-        normalize_config_app_dir(right, "configured app dir"),
+        normalize_portable_repo_path(left, "configured app dir"),
+        normalize_portable_repo_path(right, "configured app dir"),
     ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
-    }
-}
-
-pub(crate) fn normalize_config_app_dir(value: &str, label: &str) -> Result<String> {
-    let bytes = value.as_bytes();
-    if value.is_empty() {
-        bail!("{label} must not be empty");
-    }
-    if value.starts_with('/')
-        || value.starts_with('\\')
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
-    {
-        bail!("{label} must be a portable repository-relative path: {value}");
-    }
-    if value.contains('\\') {
-        bail!("{label} must use portable '/' separators and stay repository-relative: {value}");
-    }
-
-    let mut normalized = Vec::new();
-    for component in value.split('/') {
-        match component {
-            "" | "." => {}
-            ".." => {
-                bail!("{label} must not contain '..' and must stay inside the repository: {value}")
-            }
-            component => normalized.push(component),
-        }
-    }
-    if normalized.is_empty() {
-        Ok(".".into())
-    } else {
-        Ok(normalized.join("/"))
     }
 }
 

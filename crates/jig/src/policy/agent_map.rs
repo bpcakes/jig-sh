@@ -185,7 +185,7 @@ fn validate(root: &Path, map_path: &Path) -> Result<CheckResult> {
 }
 
 fn normalize_map_path(map_path: &Path) -> Result<PathBuf> {
-    super::normalize_repo_relative_path(map_path, "agent map path")
+    crate::repository_path::normalize_repo_relative_path(map_path, "agent map path")
 }
 
 fn list_guides(root: &Path) -> Result<Vec<String>> {
