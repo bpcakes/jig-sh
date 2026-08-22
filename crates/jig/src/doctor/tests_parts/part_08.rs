@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 #[test]
 fn required_tools_redacts_every_command_body_and_generic_credential_token() {

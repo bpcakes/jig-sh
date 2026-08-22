@@ -1,4 +1,3 @@
-
 fn proxy_list_failure_context(launcher: &Path) -> String {
     format!(
         "Failed to run proxy diagnostics through {}",

@@ -1,4 +1,3 @@
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn proxy_list_output_executes_the_launcher_through_a_clean_bash_environment() {

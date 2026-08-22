@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 #[test]
 fn required_tools_reports_explicit_cargo_wrapper_without_subcommand_probe() {

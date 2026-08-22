@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorContextChecks) {
     if ctx.sqlx_enabled()
@@ -610,11 +609,8 @@ fn rust_runtime_check(
             );
         }
     };
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        "rustc",
-        environment.search_path.as_deref(),
-    ) else {
+    let Some(resolution) = resolve_program(ctx.root(), "rustc", environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "rust_runtime",

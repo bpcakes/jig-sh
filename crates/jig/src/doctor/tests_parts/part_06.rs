@@ -1,4 +1,3 @@
-
 #[test]
 fn required_tools_downgrades_dynamic_and_complex_shell_commands() {
     for command in [

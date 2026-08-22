@@ -1,4 +1,3 @@
-
 fn configured_sqlx_driver(
     root: &Path,
     command: &str,

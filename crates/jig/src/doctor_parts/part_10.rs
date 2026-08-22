@@ -1,4 +1,3 @@
-
 fn program_presence(root: &Path, program: &str, resolved: Option<&Path>) -> (bool, String) {
     match resolved {
         Some(_) => (true, format!("{program} is available")),

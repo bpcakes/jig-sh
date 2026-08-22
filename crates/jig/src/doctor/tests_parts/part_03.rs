@@ -1,4 +1,3 @@
-
 #[test]
 fn shell_parser_preserves_assignment_name_and_io_number_provenance() {
     let temp = tempdir().unwrap();

@@ -1,4 +1,3 @@
-
 fn shell_command_name(words: &[ShellWord]) -> ShellCommandName {
     let mut index = 0;
     let mut ambiguous_wrapper = false;

@@ -1,4 +1,3 @@
-
 #[test]
 fn required_programs_track_path_lookup_scope() {
     let lookups = |command: &str| {

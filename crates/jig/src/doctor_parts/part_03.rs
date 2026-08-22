@@ -1,4 +1,3 @@
-
 fn sqlx_cli_version_check(
     ctx: &RepoContext,
     environment: &DoctorEnvironment,
@@ -30,11 +29,9 @@ fn sqlx_cli_version_check(
     };
     let command = ctx.command_for_key("sqlx_check_command").ok()?;
     let (program, style) = sqlx_cli_version_program(ctx.root(), command)?;
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        &program,
-        environment.search_path.as_deref(),
-    ) else {
+    let Some(resolution) =
+        resolve_program(ctx.root(), &program, environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "sqlx_cli",
@@ -317,11 +314,8 @@ fn node_runtime_check(
             );
         }
     };
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        "node",
-        environment.search_path.as_deref(),
-    ) else {
+    let Some(resolution) = resolve_program(ctx.root(), "node", environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "node_runtime",

@@ -1,4 +1,3 @@
-
 fn resolve_literal_cd(root: &Path, cwd: &Path, words: &[ShellWord]) -> Option<PathBuf> {
     if shell_word_value(words.first()?) != "cd" {
         return None;
@@ -208,9 +207,9 @@ fn resolve_program(
             command_cwd.join(path)
         };
         return executable_exists(&path).then_some(ProgramResolution {
-                path,
-                origin: ProgramOrigin::ExplicitPath,
-            });
+            path,
+            origin: ProgramOrigin::ExplicitPath,
+        });
     }
 
     let search_path = search_path?;
@@ -233,11 +232,8 @@ fn resolve_program(
 
 fn program_has_explicit_path(program: &str) -> bool {
     let path = Path::new(program);
-    path.is_absolute()
-        || path.components().count() > 1
-        || program.contains('/')
+    path.is_absolute() || path.components().count() > 1 || program.contains('/')
 }
-
 
 fn trusted_sqlx_probe_executable(
     root: &Path,

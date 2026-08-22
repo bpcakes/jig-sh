@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 #[test]
 fn sqlx_driver_probe_invokes_shim_safely_and_times_out() {

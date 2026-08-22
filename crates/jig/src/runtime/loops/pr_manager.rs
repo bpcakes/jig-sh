@@ -592,10 +592,7 @@ fn run_pr_repair_steps(
         "attempted"
     };
     let error = if review_thread_posts.cancelled {
-        Value::String(format!(
-            "PR manager repair was cancelled after pushing {}; follow-up review thread updates are incomplete",
-            push["final_head"]
-        ))
+        Value::String(post_commit_cancellation_error(repair_version))
     } else if review_thread_posts.failed {
         Value::String("one or more review thread update intents failed".into())
     } else {
@@ -620,6 +617,12 @@ fn run_pr_repair_steps(
         "review_thread_posts": review_thread_posts.posts,
         "error": error,
     })))
+}
+
+fn post_commit_cancellation_error(repair_version: &str) -> String {
+    format!(
+        "PR manager repair was cancelled after pushing {repair_version}; follow-up review thread updates are incomplete"
+    )
 }
 
 fn pr_worker_output_schema() -> Value {
@@ -1382,6 +1385,9 @@ fn reconcile_remote_push(
             PushReconciliation {
                 confirmed: observed == Some(final_head),
                 detail: match observed {
+                    Some(observed) if observed == final_head => {
+                        format!("remote {remote_ref} confirmed at {observed}")
+                    }
                     Some(observed) => {
                         format!("remote {remote_ref} resolved to {observed}; expected {final_head}")
                     }
@@ -1592,6 +1598,14 @@ mod cancellation_tests {
         assert_eq!(action["attempt"]["last_status"], "attempted");
         let attempts = attempt_store.snapshot().unwrap();
         assert_eq!(attempts[0].item_version.as_deref(), Some("pushed-head"));
+    }
+
+    #[test]
+    fn post_commit_cancellation_message_formats_the_head_as_text() {
+        assert_eq!(
+            post_commit_cancellation_error("pushed-head"),
+            "PR manager repair was cancelled after pushing pushed-head; follow-up review thread updates are incomplete"
+        );
     }
 
     #[test]
@@ -1857,7 +1871,7 @@ esac
             push["reconciliation"]
                 .as_str()
                 .unwrap()
-                .contains("resolved to")
+                .contains("confirmed at")
         );
     }
 

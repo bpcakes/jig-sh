@@ -63,8 +63,20 @@ rust_test_command = "cargo test"
         .write();
 }
 
-fn write_schema_policy_repo(root: &Path, schema_dump_command: &str) {
+fn write_schema_policy_repo(
+    root: &Path,
+    schema_dump_command: &str,
+    command_timeout_seconds: Option<u64>,
+) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
+    let execution_config = command_timeout_seconds.map_or_else(String::new, |seconds| {
+        format!(
+            r#"
+[execution]
+command_timeout_seconds = {seconds}
+"#
+        )
+    });
     TestRepoBuilder::new(root)
         .config(format!(
             r#"
@@ -73,13 +85,12 @@ schema_dump_enabled = true
 rust_migration_dir = "migrations"
 schema_dump_command = "{}"
 rust_test_command = "cargo test"
-
-[execution]
-command_timeout_seconds = 1
+{}
 "#,
             schema_dump_command
                 .replace('\\', "\\\\")
-                .replace('"', "\\\"")
+                .replace('"', "\\\""),
+            execution_config,
         ))
         .contract_version(2)
         .required_commands(["rust_test_command"])
@@ -558,6 +569,7 @@ fn schema_check_reports_stale_schema_dump() {
     write_schema_policy_repo(
         temp.path(),
         "mkdir -p docs/schema && printf 'changed\\n' > docs/schema/tables.sql",
+        None,
     );
     fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
     fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
@@ -580,6 +592,7 @@ fn schema_check_supervises_timeout_and_descendant_cleanup() {
     write_schema_policy_repo(
         temp.path(),
         &format!("(sleep 2; printf survived > '{}') & wait", marker.display()),
+        Some(1),
     );
     init_git(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
@@ -607,7 +620,7 @@ fn schema_check_preserves_pre_start_cancellation() {
     }
 
     let temp = tempdir().unwrap();
-    write_schema_policy_repo(temp.path(), "exit 99");
+    write_schema_policy_repo(temp.path(), "exit 99", None);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
     let error = schema_check_with_observer(&ctx, &mut Cancelled).unwrap_err();

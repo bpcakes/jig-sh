@@ -1,4 +1,3 @@
-
 fn command_database_url_scope(
     words: &[ShellWord],
     program_index: usize,

@@ -514,9 +514,9 @@ impl DoctorEnvironment {
             cargo_home: env::var_os("CARGO_HOME"),
             home: env::var_os("HOME"),
             probe_environment: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"]
-            .into_iter()
-            .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
-            .collect(),
+                .into_iter()
+                .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
+                .collect(),
             shell_environment_issue,
         }
     }
