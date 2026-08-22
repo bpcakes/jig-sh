@@ -72,6 +72,92 @@ inputs = ["api/**"]
     .unwrap();
 }
 
+fn add_v6_native_schema_action(root: &std::path::Path, command: &str, timeout_seconds: u64) {
+    let escaped_command = command.replace('\\', "\\\\").replace('"', "\\\"");
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            &format!("default_branch = \"main\"\nschema_dump_command = \"{escaped_command}\""),
+        )
+        .replace(
+            "[[repository.profiles]]",
+            &format!(
+                r#"[[repository.actions]]
+target = {{ component = "api", action = "schema" }}
+intent = "check"
+effects = ["worktree", "process"]
+runner = {{ kind = "native", operation = "jig.schema_check" }}
+inputs = ["api/**"]
+timeout_seconds = {timeout_seconds}
+
+[[repository.profiles]]"#
+            ),
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "schema"},
+        "intent": "check",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.schema_check"},
+        "inputs": ["api/**"],
+        "timeout_seconds": timeout_seconds
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn add_v6_native_migration_action(root: &std::path::Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "default_branch = \"main\"",
+            "default_branch = \"main\"\nmigration_dir = \"migrations\"",
+        )
+        .replace(
+            "adapters = [\"go\"]",
+            "adapters = [\"go\", \"go-postgres\"]",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "migration-add" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "native", operation = "jig.migration_add" }
+inputs = ["migrations/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["components"][0]["adapters"] = json!(["go", "go-postgres"]);
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "migration-add"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.migration_add"},
+        "inputs": ["migrations/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn mcp_v6_advertises_bounded_repository_tools_and_v5_keeps_manifest_tools() {
     let v6 = tempdir().unwrap();
@@ -197,6 +283,36 @@ fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
 }
 
 #[test]
+fn mcp_inspect_reconciles_a_run_whose_worker_lease_disappeared() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    let plan: jig_contract::RunPlan = serde_json::from_value(planned["plan"].clone()).unwrap();
+    let abandoned = crate::state::start_run(&ctx, plan, None).unwrap();
+
+    let inspected = call_tool(
+        &ctx,
+        tool::INSPECT,
+        json!({"kind": "run", "run_id": abandoned.result.run_id}),
+    )
+    .unwrap();
+
+    assert_eq!(inspected["result"]["run"]["result"]["status"], "completed");
+    assert_eq!(
+        inspected["result"]["run"]["result"]["conclusion"],
+        "blocked"
+    );
+    assert!(
+        inspected["result"]["run"]["result"]["targets"][0]["findings"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("worker lease is no longer held")
+    );
+}
+
+#[test]
 fn mcp_repository_effectful_action_requires_exact_plan_approval() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -226,10 +342,66 @@ fn mcp_repository_effectful_action_requires_exact_plan_approval() {
     )
     .unwrap();
     let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
-    assert_eq!(terminal["result"]["run"]["result"]["conclusion"], "success");
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "success",
+        "{terminal:#}"
+    );
     assert_eq!(
         fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
         "generated"
+    );
+}
+
+#[test]
+fn mcp_repository_arguments_round_trip_from_wire_keys_into_native_actions() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_native_migration_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let planned = call_tool(
+        &ctx,
+        tool::PLAN_RUN,
+        json!({
+            "selectors": ["api:migration-add"],
+            "arguments": {
+                "api:migration-add": {"name": "create_examples"}
+            }
+        }),
+    )
+    .unwrap();
+
+    assert_repository_output_schema(&ctx, tool::PLAN_RUN, &planned);
+    assert_eq!(
+        planned["plan"]["targets"][0]["arguments"]["name"],
+        "create_examples"
+    );
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "success",
+        "{terminal:#}"
+    );
+    let migrations = fs::read_dir(temp.path().join("migrations"))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(migrations.len(), 1);
+    assert!(
+        migrations[0]
+            .file_name()
+            .to_string_lossy()
+            .contains("create_examples")
     );
 }
 
@@ -297,6 +469,38 @@ fn mcp_repository_failures_are_structured_terminal_conclusions() {
 
     assert_eq!(accepted["ok"], true);
     assert_eq!(terminal["result"]["run"]["result"]["conclusion"], "failure");
+}
+
+#[test]
+fn repository_execution_fails_a_read_only_action_that_mutates_the_worktree() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "printf 'api tests passed\\n'",
+        "printf mutated > unexpected-mutation.txt",
+    );
+    fs::write(&config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(terminal["result"]["run"]["result"]["conclusion"], "failure");
+    assert!(
+        terminal["result"]["run"]["result"]["targets"][0]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["source"] == "effect_policy")
+    );
 }
 
 #[test]
@@ -380,6 +584,73 @@ fn mcp_repository_worker_observes_a_durable_external_cancel_request() {
     );
     thread::sleep(Duration::from_millis(100));
     assert!(!temp.path().join("api-finished.txt").exists());
+}
+
+#[test]
+fn mcp_native_schema_action_honors_timeout_and_cleans_its_process_tree() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_native_schema_action(
+        temp.path(),
+        "sleep 30; printf finished > schema-finished.txt",
+        1,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:schema"]})).unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "timed_out",
+        "{terminal:#}"
+    );
+    thread::sleep(Duration::from_millis(100));
+    assert!(!temp.path().join("schema-finished.txt").exists());
+}
+
+#[test]
+fn mcp_native_schema_action_honors_cancellation() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_native_schema_action(
+        temp.path(),
+        "sleep 30; printf finished > schema-finished.txt",
+        30,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:schema"]})).unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+    let run_id = accepted["run_id"].as_str().unwrap();
+
+    let cancelled = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    assert_eq!(cancelled["cancellation_requested"], true);
+    let terminal = wait_for_repository_run(&ctx, run_id);
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"], "cancelled",
+        "{terminal:#}"
+    );
+    thread::sleep(Duration::from_millis(100));
+    assert!(!temp.path().join("schema-finished.txt").exists());
 }
 
 #[test]

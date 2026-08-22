@@ -18,6 +18,21 @@ fn run_repository_target(ctx: &RepoContext, selector: &str) -> Value {
     .unwrap()
 }
 
+#[test]
+fn repository_command_actions_capture_bounded_process_output() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = run_repository_target(&ctx, "api:test");
+
+    assert_eq!(
+        output["results"][0]["response"]["result"]["stdout"],
+        "api tests passed\n"
+    );
+}
+
 fn work_gates(ctx: &RepoContext) -> Value {
     dispatch(
         ctx,
@@ -243,4 +258,75 @@ tool = "jig.custom_check"
     assert_eq!(gates["overall"], "passed", "{gates:#}");
     assert_eq!(gates["gates"][0]["kind"], "check");
     assert_eq!(gates["gates"][0]["tool"], "jig.custom_check");
+}
+
+#[test]
+fn failing_legacy_gate_does_not_prevent_evidence_targets_from_running() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "legacy"
+kind = "check"
+tool = "jig.failing_check"
+
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap()
+        .replace(
+            "web_test_command = \"printf 'web tests passed\\n'\"",
+            "web_test_command = \"printf 'web tests passed\\n'\"\nfailing_check_command = \"printf 'legacy failed\\n' >&2; exit 7\"",
+        )
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf evidence > evidence-target-ran.txt\"",
+        );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("failing_check_command"));
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.failing_check",
+        "kind": "command",
+        "description": "Fail the legacy check.",
+        "command": "failing_check_command"
+    }));
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("jig.failing_check failed with status 7"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(temp.path().join("evidence-target-ran.txt")).unwrap(),
+        "evidence"
+    );
+    let receipts = fs::read_to_string(temp.path().join(".agent/state/receipts.jsonl")).unwrap();
+    assert!(receipts.contains(r#""target":{"component":"api","action":"test"}"#));
 }

@@ -125,7 +125,7 @@ fn inspect(ctx: &RepoContext, args: RepositoryInspectArgs) -> Result<Value> {
             catalog_inspection(ctx, InspectRequest::Profile(id))?
         }
         RepositoryInspectArgs::Run { run_id } => {
-            let run = crate::state::run_by_id(ctx, &run_id)?;
+            let run = crate::state::recover_abandoned_run(ctx, &run_id)?;
             RepositoryInspectResult::Run(RunInspection { run })
         }
     };
@@ -148,6 +148,16 @@ fn catalog_inspection(
 
 fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
     let catalog = RepositoryCatalog::from_context(ctx)?;
+    let arguments = args
+        .arguments
+        .into_iter()
+        .map(|(target, arguments)| {
+            let target = target.parse().with_context(|| {
+                format!("Invalid target key {target:?} in jig.plan_run arguments")
+            })?;
+            Ok((target, arguments))
+        })
+        .collect::<Result<_>>()?;
     let plan = crate::repository::plan_action_run(
         ctx,
         &catalog,
@@ -156,7 +166,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
             profile: args.profile,
             affected_base: args.affected_base,
         },
-        args.arguments,
+        arguments,
     )?;
     serialize_output(PlanRunOutput {
         ok: true,
@@ -197,6 +207,20 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
             {
                 Ok(run) => run,
                 Err(error) => {
+                    let _ = started_tx.send(Err(error));
+                    return;
+                }
+            };
+            let _lease = match crate::state::acquire_run_lease(&worker_ctx, &run.result.run_id) {
+                Ok(lease) => lease,
+                Err(error) => {
+                    let message =
+                        format!("repository run worker could not acquire its lease: {error:#}");
+                    let _ = crate::state::block_nonterminal_run(
+                        &worker_ctx,
+                        &run.result.run_id,
+                        &message,
+                    );
                     let _ = started_tx.send(Err(error));
                     return;
                 }
@@ -258,7 +282,12 @@ fn cancel(ctx: &RepoContext, args: CancelRunArgs) -> Result<Value> {
     if args.run_id.trim().is_empty() {
         bail!("jig.cancel_run requires a nonblank run_id");
     }
-    let run = crate::state::request_run_cancel(ctx, &args.run_id)?;
+    let reconciled = crate::state::recover_abandoned_run(ctx, &args.run_id)?;
+    let run = if reconciled.result.status == RunStatus::Completed {
+        reconciled
+    } else {
+        crate::state::request_run_cancel(ctx, &args.run_id)?
+    };
     let worker_signalled =
         run.result.status != RunStatus::Completed && signal_live_run(ctx, &args.run_id);
     serialize_output(CancelRunOutput {

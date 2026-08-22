@@ -21,24 +21,30 @@ pub(super) fn check(ctx: &RepoContext, opts: WorkCheckRequest) -> Result<Value> 
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     if opts.tools.is_empty() {
-        check_configured_with_failure_mode(ctx, &opts.plan_id, true)
+        check_configured(ctx, &opts.plan_id, CheckFailureMode::ReportError)
     } else {
         check_tools(ctx, &opts.plan_id, selected_tools(ctx, &opts.tools)?)
     }
 }
 
 pub(super) fn check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<Value> {
-    check_tools_with_failure_mode(ctx, plan_id, tools, true)
+    run_check_tools(ctx, plan_id, tools)?.require_success()
 }
 
 pub(super) fn check_configured_collect_failures(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
-    check_configured_with_failure_mode(ctx, plan_id, false)
+    check_configured(ctx, plan_id, CheckFailureMode::Collect)
 }
 
-fn check_configured_with_failure_mode(
+#[derive(Clone, Copy)]
+enum CheckFailureMode {
+    ReportError,
+    Collect,
+}
+
+fn check_configured(
     ctx: &RepoContext,
     plan_id: &str,
-    fail_on_check_error: bool,
+    failure_mode: CheckFailureMode,
 ) -> Result<Value> {
     let tools = ctx.work_check_tools();
     let catalog = RepositoryCatalog::from_context(ctx)?;
@@ -49,20 +55,30 @@ fn check_configured_with_failure_mode(
         );
     }
 
-    let mut result = if tools.is_empty() {
-        json!({
-            "ok": true,
-            "plan_id": plan_id,
-            "checks": [],
-            "receipt_id": null,
-        })
+    let check_batch = if tools.is_empty() {
+        CheckBatch {
+            result: json!({
+                "ok": true,
+                "plan_id": plan_id,
+                "checks": [],
+                "receipt_id": null,
+            }),
+            failure: None,
+        }
     } else {
-        check_tools_with_failure_mode(ctx, plan_id, tools, fail_on_check_error)?
+        run_check_tools(ctx, plan_id, tools)?
     };
 
     if targets.is_empty() {
-        return Ok(result);
+        return match failure_mode {
+            CheckFailureMode::ReportError => check_batch.require_success(),
+            CheckFailureMode::Collect => Ok(check_batch.result),
+        };
     }
+    let CheckBatch {
+        mut result,
+        failure: legacy_failure,
+    } = check_batch;
     let plan = plan_run(
         ctx,
         &catalog,
@@ -93,19 +109,23 @@ fn check_configured_with_failure_mode(
     let object = result
         .as_object_mut()
         .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
-    let legacy_ok = object["checks"].as_array().is_none_or(|checks| {
-        checks
-            .iter()
-            .all(|check| check["ok"].as_bool() != Some(false))
-    });
+    let legacy_ok = legacy_failure.is_none();
     object.insert("ok".into(), json!(legacy_ok && evidence_ok));
     object.insert("plan".into(), json!(plan));
     object.insert("run".into(), json!(execution.run.result));
     object.insert("results".into(), json!(execution.results));
     object.insert("failed_targets".into(), json!(execution.failed_targets));
 
-    if fail_on_check_error && !evidence_ok {
-        bail!("Work evidence targets failed: [{failed_target_labels}]");
+    if matches!(failure_mode, CheckFailureMode::ReportError) {
+        match (legacy_failure, evidence_ok) {
+            (Some(failure), false) => bail!(
+                "{}\nWork evidence targets also failed: [{failed_target_labels}]",
+                failure.message
+            ),
+            (Some(failure), true) => bail!("{}", failure.message),
+            (None, false) => bail!("Work evidence targets failed: [{failed_target_labels}]"),
+            (None, true) => {}
+        }
     }
     Ok(result)
 }
@@ -124,12 +144,26 @@ fn configured_evidence_targets(
     Ok(targets)
 }
 
-fn check_tools_with_failure_mode(
-    ctx: &RepoContext,
-    plan_id: &str,
-    tools: Vec<String>,
-    fail_on_tool_error: bool,
-) -> Result<Value> {
+struct CheckFailure {
+    exit_status: i32,
+    message: String,
+}
+
+struct CheckBatch {
+    result: Value,
+    failure: Option<CheckFailure>,
+}
+
+impl CheckBatch {
+    fn require_success(self) -> Result<Value> {
+        if let Some(failure) = self.failure {
+            bail!("{}", failure.message);
+        }
+        Ok(self.result)
+    }
+}
+
+fn run_check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<CheckBatch> {
     let started = now_ms();
     let before_fingerprint = current_worktree_fingerprint(ctx);
     for name in &tools {
@@ -137,28 +171,21 @@ fn check_tools_with_failure_mode(
     }
 
     let mut results = Vec::with_capacity(tools.len());
-    let mut check_failure = None;
+    let mut check_failure = None::<CheckFailure>;
     for name in &tools {
-        let result = match execute_manifest_tool_result_without_worktree_fingerprint(
+        let result = execute_manifest_tool_result_without_worktree_fingerprint(
             ctx,
             name,
             json!({}),
             Some(plan_id.to_string()),
-        ) {
-            Ok(result) => result,
-            Err(error) if fail_on_tool_error => {
-                check_failure = Some((1, error));
-                break;
-            }
-            Err(error) => return Err(error),
-        };
-        let result_failure = fail_on_tool_error
-            .then(|| manifest_tool_result_failure(&result))
-            .transpose()?
-            .flatten();
+        )?;
+        let result_failure = manifest_tool_result_failure(&result)?;
         results.push(result);
         if let Some((exit_status, message)) = result_failure {
-            check_failure = Some((exit_status, anyhow!(message)));
+            check_failure = Some(CheckFailure {
+                exit_status,
+                message,
+            });
             break;
         }
     }
@@ -184,7 +211,7 @@ fn check_tools_with_failure_mode(
             ended_at_ms: now_ms(),
             exit_status: check_failure
                 .as_ref()
-                .map_or(0, |(exit_status, _)| *exit_status),
+                .map_or(0, |failure| failure.exit_status),
             stdout: "",
             stderr: "",
             evidence: None,
@@ -195,24 +222,28 @@ fn check_tools_with_failure_mode(
         },
     );
 
-    if let Some((_, check_error)) = check_failure {
-        return match receipt_result {
-            Ok(_) => Err(check_error),
-            Err(receipt_error) => {
+    let receipt_id = match receipt_result {
+        Ok(receipt_id) => receipt_id,
+        Err(receipt_error) => {
+            if let Some(check_error) = &check_failure {
                 bail!(
-                    "{check_error:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}"
-                )
+                    "{}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
+                    check_error.message
+                );
             }
-        };
-    }
-    let receipt_id = receipt_result?;
+            return Err(receipt_error);
+        }
+    };
 
-    Ok(json!({
-        "ok": true,
-        "plan_id": plan_id,
-        "checks": results,
-        "receipt_id": receipt_id,
-    }))
+    Ok(CheckBatch {
+        result: json!({
+            "ok": check_failure.is_none(),
+            "plan_id": plan_id,
+            "checks": results,
+            "receipt_id": receipt_id,
+        }),
+        failure: check_failure,
+    })
 }
 
 fn work_check_fingerprint_evidence(

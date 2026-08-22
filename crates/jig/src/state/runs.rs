@@ -1,5 +1,12 @@
+use std::fs::{self, File, OpenOptions};
+use std::io;
+
 use anyhow::{Context, Result, bail};
-use jig_contract::{RunConclusion, RunPlan, RunResult, RunStatus, TargetId, TargetRunResult};
+use fs4::fs_std::FileExt;
+use jig_contract::{
+    Finding, FindingSeverity, RunConclusion, RunPlan, RunResult, RunStatus, TargetId,
+    TargetRunResult,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +19,7 @@ use super::records::RunEventRecord;
 use super::support::{ensure_state_layout, new_id, now_ms};
 
 const RUNS_FILE: &str = "runs.jsonl";
+const RUN_LEASE_DIR: &str = ".agent/.cache/run-leases";
 const EVENT_QUEUED: &str = "queued";
 const EVENT_RUNNING: &str = "running";
 const EVENT_TARGET_STARTED: &str = "target_started";
@@ -31,6 +39,16 @@ pub(crate) struct DurableRun {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RunEventCursor(u64);
+
+pub(crate) struct RunLease {
+    file: File,
+}
+
+impl Drop for RunLease {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
 
 #[derive(Deserialize)]
 struct RunEventIdentity {
@@ -113,6 +131,56 @@ pub(crate) fn start_run(
     })
 }
 
+pub(crate) fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
+    let file = open_run_lease(ctx, run_id)?;
+    file.lock_exclusive()
+        .with_context(|| format!("Failed to acquire worker lease for run '{run_id}'"))?;
+    Ok(RunLease { file })
+}
+
+pub(crate) fn recover_abandoned_run(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
+    let run = run_by_id(ctx, run_id)?;
+    if run.result.status == RunStatus::Completed {
+        return Ok(run);
+    }
+
+    let file = open_run_lease(ctx, run_id)?;
+    match file.try_lock_exclusive() {
+        Ok(true) => {
+            let _lease = RunLease { file };
+            let current = run_by_id(ctx, run_id)?;
+            if current.result.status != RunStatus::Completed {
+                block_nonterminal_run(
+                    ctx,
+                    run_id,
+                    "repository run worker lease is no longer held; the worker process likely exited",
+                )?;
+            }
+            run_by_id(ctx, run_id)
+        }
+        Ok(false) => Ok(run),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(run),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to inspect worker lease for run '{run_id}'"))
+        }
+    }
+}
+
+fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
+    ensure_state_layout(ctx)?;
+    let lease_dir = ctx.root().join(RUN_LEASE_DIR);
+    fs::create_dir_all(&lease_dir)
+        .with_context(|| format!("Failed to create {}", lease_dir.display()))?;
+    let path = lease_dir.join(format!("{run_id}.lock"));
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("Failed to open run lease {}", path.display()))
+}
+
 pub(crate) fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
     append_simple_event(ctx, run_id, EVENT_RUNNING, None, None)
 }
@@ -148,6 +216,29 @@ pub(crate) fn complete_run(
     conclusion: RunConclusion,
 ) -> Result<()> {
     append_simple_event(ctx, run_id, EVENT_COMPLETED, None, Some(conclusion))
+}
+
+pub(crate) fn block_nonterminal_run(ctx: &RepoContext, run_id: &str, message: &str) -> Result<()> {
+    let run = run_by_id(ctx, run_id)?;
+    if run.result.status == RunStatus::Completed {
+        return Ok(());
+    }
+
+    for mut target in run
+        .result
+        .targets
+        .into_iter()
+        .filter(|target| target.status != RunStatus::Completed)
+    {
+        target.status = RunStatus::Completed;
+        target.conclusion = Some(RunConclusion::Blocked);
+        target.ended_at_ms = Some(super::support::now_ms());
+        let mut finding = Finding::new(FindingSeverity::Error, message);
+        finding.source = Some("jig".into());
+        target.findings.push(finding);
+        record_target_result(ctx, run_id, target)?;
+    }
+    complete_run(ctx, run_id, RunConclusion::Blocked)
 }
 
 pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {

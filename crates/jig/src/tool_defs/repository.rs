@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use jig_contract::{ActionArguments, ActionEffect, RunPlan, RunResult, RunStatus, TargetId};
+use jig_contract::{ActionArguments, ActionEffect, RunPlan, RunResult, RunStatus};
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -48,7 +48,7 @@ impl RepositoryTool {
     const fn description(self) -> &'static str {
         match self {
             Self::Inspect => {
-                "Inspect the repository catalog or the durable state of one repository run."
+                "Inspect the repository catalog or the durable state of one repository run, reconciling a nonterminal run whose worker lease has disappeared."
             }
             Self::PlanRun => {
                 "Resolve selectors or a profile, including closed action arguments, into an immutable, explainable repository run plan."
@@ -141,7 +141,7 @@ pub(crate) struct PlanRunArgs {
     #[serde(default)]
     pub(crate) affected_base: Option<String>,
     #[serde(default)]
-    pub(crate) arguments: BTreeMap<TargetId, ActionArguments>,
+    pub(crate) arguments: BTreeMap<String, ActionArguments>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -303,5 +303,23 @@ mod tests {
                 tool.name()
             );
         }
+    }
+
+    #[test]
+    fn plan_arguments_use_canonical_target_strings_on_the_wire() {
+        let value = json!({
+            "selectors": ["api:migration-add"],
+            "arguments": {
+                "api:migration-add": {"name": "create_examples"}
+            }
+        });
+        let schema = RepositoryTool::PlanRun.descriptor()["inputSchema"].clone();
+
+        assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&value));
+        let parsed = serde_json::from_value::<PlanRunArgs>(value).unwrap();
+        assert_eq!(
+            parsed.arguments["api:migration-add"].name.as_deref(),
+            Some("create_examples")
+        );
     }
 }

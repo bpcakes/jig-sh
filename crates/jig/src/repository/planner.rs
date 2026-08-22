@@ -470,7 +470,7 @@ fn validate_check_actions<'a>(
             || action.effects.contains(&ActionEffect::External)
         {
             bail!(
-                "target '{target}' is not a read-only check; use the action-specific command or `jig run` for {:?} actions with {:?} effects",
+                "target '{target}' is not a read-only check; use the action-specific command or plan and execute it through the MCP repository tools for {:?} actions with {:?} effects",
                 action.intent,
                 action.effects
             );

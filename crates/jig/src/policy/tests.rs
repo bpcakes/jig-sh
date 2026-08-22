@@ -116,6 +116,28 @@ fn init_git(root: &Path) {
 }
 
 #[test]
+fn controlled_output_text_rejects_missing_and_incomplete_captures() {
+    assert!(
+        controlled_output_text(None, "stdout")
+            .unwrap_err()
+            .to_string()
+            .contains("not captured")
+    );
+    let incomplete = BoundedProcessOutput {
+        bytes: b"partial".to_vec(),
+        truncated: false,
+        complete: false,
+    };
+
+    assert!(
+        controlled_output_text(Some(incomplete), "stderr")
+            .unwrap_err()
+            .to_string()
+            .contains("did not complete")
+    );
+}
+
+#[test]
 fn contract_check_allows_minimal_footprint_to_omit_launcher_files() {
     let temp = tempdir().unwrap();
     write_footprint_contract_repo(temp.path(), "minimal");
@@ -682,6 +704,23 @@ fn schema_check_reports_stale_schema_dump() {
     assert_eq!(output.exit_status, 1);
     assert!(output.stderr.contains("Schema dump is stale"));
     assert!(output.stderr.contains("docs/schema"));
+}
+
+#[test]
+fn controlled_native_output_is_bounded() {
+    let mut command = Command::new("bash");
+    command.args(["-c", "yes x | head -c 2000000"]);
+
+    let output = controlled_output(
+        &mut command,
+        Instant::now() + Duration::from_secs(10),
+        &|| false,
+    )
+    .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.contains("[output truncated by Jig]"));
+    assert!(output.stdout.len() < 2_000_000);
 }
 
 #[test]

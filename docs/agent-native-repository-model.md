@@ -142,9 +142,9 @@ Every action declares an intent and effects independently:
 
 `jig check` can select only read-only check actions. A generator or autofix
 produces a reviewable changeset and never silently edits the worktree through a
-read-only check. Long-running services use `jig dev`. `jig run` is the advanced
-surface for other declared actions and must expose their effects before
-execution.
+read-only check. Long-running services use `jig dev`. Other declared actions
+use an action-specific command or the MCP `jig.plan_run` and `jig.execute_run`
+tools, which expose and require approval for their effects before execution.
 
 A runner is an implementation detail of an action. Initial runner kinds are a
 configured argv command and a Jig-native operation. Command runners declare
@@ -180,10 +180,11 @@ Affected planning is available only to component-native contract-v6
 repositories, where the required inputs and propagation policy are inspectable.
 The same request and reasons are available through CLI JSON and `jig.plan_run`.
 
-Independent checks run concurrently and collect all failures by default so a
-developer or agent can repair a complete batch. `--fail-fast` is an explicit
-override. CI does not silently choose different targets; it selects a checked-
-in profile or the same explicit selectors.
+Independent checks are grouped into dependency layers and currently run in a
+deterministic sequence within each layer. All failures are collected by default
+so a developer or agent can repair a complete batch; `--fail-fast` is an
+explicit override. CI does not silently choose different targets; it selects a
+checked-in profile or the same explicit selectors.
 
 `jig info` is the static discovery surface for workspace, component, action,
 target, profile, and configuration provenance. `jig status` is the dynamic
@@ -196,7 +197,9 @@ The MCP server exposes a small, stable tool surface rather than one tool for
 every target:
 
 - `jig.inspect` reads workspace, component, target, profile, and durable run
-  information. Bounded `jig.work_*` tools own work lifecycle information.
+  information. Inspecting a nonterminal run also reconciles it to a blocked
+  terminal result when its process-owned worker lease has disappeared. Bounded
+  `jig.work_*` tools own work lifecycle information.
 - `jig.plan_run` resolves selectors and closed per-target arguments, then
   returns an immutable run plan without executing it. Effectful actions require
   explicit selectors.

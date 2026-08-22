@@ -121,6 +121,31 @@ fn named_v6_check_uses_aggregate_output_and_exits_unsuccessfully() {
 }
 
 #[test]
+fn external_check_selectors_accept_global_json_and_help_after_the_selector() {
+    let repo = tempdir().unwrap();
+    write_v6_failing_test_repo(repo.path());
+
+    let json_output = jig()
+        .current_dir(repo.path())
+        .args(["check", "api:test", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(json_output.status.code(), Some(1));
+    let payload: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(payload["run"]["conclusion"], "failure");
+
+    let help = jig()
+        .current_dir(repo.path())
+        .args(["check", "api:test", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("Run configured project checks"), "{help}");
+    assert!(!help.contains("unknown check option"), "{help}");
+}
+
+#[test]
 fn json_mode_wraps_usage_and_pre_output_command_errors() {
     let usage = jig().args(["work", "check", "--json"]).output().unwrap();
     assert_eq!(usage.status.code(), Some(2));

@@ -669,7 +669,7 @@ fn dispatch_runtime_command(
 }
 
 fn parse_cli() -> Cli {
-    let args = std::env::args_os().collect::<Vec<_>>();
+    let args = normalize_external_check_global_flags(std::env::args_os().collect());
     let command_args = || args.iter().skip(1).cloned();
     let report_json_errors = args_request_json(command_args()) && !args_target_mcp(command_args());
 
@@ -682,6 +682,92 @@ fn parse_cli() -> Cli {
         }
         Err(error) => exit_with_cli_error(error, report_json_errors),
     }
+}
+
+fn normalize_external_check_global_flags(mut args: Vec<OsString>) -> Vec<OsString> {
+    let Some(check_index) = args
+        .iter()
+        .position(|arg| arg == tool_defs::cli_command::CHECK)
+    else {
+        return args;
+    };
+    let separator_index = args
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len());
+    if check_index >= separator_index {
+        return args;
+    }
+
+    let external_selector = check_external_selector(&args[check_index + 1..separator_index]);
+    let mut moved_json = Vec::new();
+    let mut moved_help = Vec::new();
+    let mut index = check_index + 1;
+    while index < args.len() && args[index] != "--" {
+        if args[index] == "--json" {
+            moved_json.push(args.remove(index));
+        } else if external_selector && matches!(args[index].to_str(), Some("--help" | "-h")) {
+            moved_help.push(args.remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    for flag in moved_json.into_iter().rev() {
+        args.insert(1, flag);
+    }
+    if !moved_help.is_empty() {
+        let check_index = args
+            .iter()
+            .position(|arg| arg == tool_defs::cli_command::CHECK)
+            .expect("check command remains present after normalization");
+        for flag in moved_help.into_iter().rev() {
+            args.insert(check_index + 1, flag);
+        }
+    }
+    args
+}
+
+fn check_external_selector(args: &[OsString]) -> bool {
+    const VALUE_OPTIONS: &[&str] = &["--plan-id", "--profile", "--affected"];
+    const KNOWN_COMMANDS: &[&str] = &[
+        "fmt",
+        "lint",
+        "clippy",
+        "test",
+        "test-locked",
+        "typescript-lint",
+        "typescript-typecheck",
+        "typescript-build",
+        "typescript-coverage",
+        "sqlx",
+        "sqlc",
+        "schema",
+        "contract",
+        "agent-map",
+        "agent-guides",
+        "rust-file-loc",
+        "no-mod-rs",
+        "migration-immutability",
+        "sqlx-unchecked-non-test",
+    ];
+
+    let mut skip_value = false;
+    for arg in args {
+        let arg = arg.to_string_lossy();
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if VALUE_OPTIONS.contains(&arg.as_ref()) {
+            skip_value = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        return !KNOWN_COMMANDS.contains(&arg.as_ref());
+    }
+    false
 }
 
 fn post_parse_usage_error(cli: &Cli) -> Option<clap::Error> {

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -21,7 +21,7 @@ use crate::state::{
     now_ms, record_target_receipt, record_target_result, run_by_id, start_run,
 };
 
-use super::tool_execution::run_native_tool;
+use super::tool_execution::run_native_tool_with_control;
 
 const DEFAULT_TARGET_TIMEOUT_SECONDS: u64 = 30 * 60;
 const GENERIC_TARGET_TOOL: &str = "jig.target_run";
@@ -47,6 +47,7 @@ pub(in crate::runtime) fn execute_check_run(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
     let run = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
+    let _lease = crate::state::acquire_run_lease(ctx, &run.result.run_id)?;
     execute_started_check_run(ctx, catalog, run, request, cancelled)
 }
 
@@ -116,7 +117,13 @@ pub(in crate::runtime) fn execute_started_check_run(
             } else {
                 mark_target_started(ctx, &run_id, target_id.clone())?;
                 let started_at_ms = now_ms();
-                let capture = run_target(ctx, catalog, planned, cancelled);
+                let capture = run_target(
+                    ctx,
+                    catalog,
+                    planned,
+                    &run.plan.source.worktree_fingerprint,
+                    cancelled,
+                );
                 finisher.finish(planned, Some(started_at_ms), capture)?
             };
 
@@ -152,25 +159,8 @@ pub(in crate::runtime) fn block_started_check_run(
     run_id: &str,
     error: &anyhow::Error,
 ) -> Result<()> {
-    let run = run_by_id(ctx, run_id)?;
-    if run.result.status == RunStatus::Completed {
-        return Ok(());
-    }
-
     let message = format!("repository run worker stopped unexpectedly: {error:#}");
-    for mut target in run
-        .result
-        .targets
-        .into_iter()
-        .filter(|target| target.status != RunStatus::Completed)
-    {
-        target.status = RunStatus::Completed;
-        target.conclusion = Some(RunConclusion::Blocked);
-        target.ended_at_ms = Some(now_ms());
-        target.findings.push(finding(message.clone(), "jig"));
-        record_target_result(ctx, run_id, target)?;
-    }
-    complete_run(ctx, run_id, RunConclusion::Blocked)
+    crate::state::block_nonterminal_run(ctx, run_id, &message)
 }
 
 fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a PlannedTarget> {
@@ -184,9 +174,10 @@ fn run_target(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
     planned: &PlannedTarget,
+    expected_worktree_fingerprint: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> TargetCapture {
-    match &planned.runner {
+    let capture = match &planned.runner {
         ActionRunner::Command {
             command,
             working_directory,
@@ -200,19 +191,48 @@ fn run_target(
             cancelled,
         ),
         ActionRunner::Native { operation } => {
-            if cancelled() {
-                return TargetCapture::not_started(
-                    RunConclusion::Cancelled,
-                    "run cancellation was requested before the native operation started",
-                );
-            }
-            match run_native_tool(ctx, operation, &json!(planned.arguments)) {
+            let timeout = Duration::from_secs(
+                planned
+                    .timeout_seconds
+                    .unwrap_or(DEFAULT_TARGET_TIMEOUT_SECONDS)
+                    .max(1),
+            );
+            match run_native_tool_with_control(
+                ctx,
+                operation,
+                &json!(planned.arguments),
+                timeout,
+                cancelled,
+            ) {
                 Ok(output) => TargetCapture::from_process(
                     output.exit_status,
                     output.stdout,
                     output.stderr,
                     planned.result_parser,
                 ),
+                Err(error)
+                    if error
+                        .downcast_ref::<OwnedProcessTreeError>()
+                        .is_some_and(|error| matches!(error, OwnedProcessTreeError::TimedOut)) =>
+                {
+                    TargetCapture::not_started(
+                        RunConclusion::TimedOut,
+                        format!(
+                            "native target '{}' exceeded its {timeout:?} timeout",
+                            planned.target
+                        ),
+                    )
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<OwnedProcessTreeError>()
+                        .is_some_and(|error| matches!(error, OwnedProcessTreeError::Cancelled)) =>
+                {
+                    TargetCapture::not_started(
+                        RunConclusion::Cancelled,
+                        format!("native target '{}' was cancelled", planned.target),
+                    )
+                }
                 Err(error) => TargetCapture::blocked(format!(
                     "native runner '{operation}' for target '{}' could not start: {error:#}",
                     planned.target
@@ -220,7 +240,57 @@ fn run_target(
             }
         }
     }
-    .with_alias(catalog.aliases_for_target(&planned.target).first().cloned())
+    .with_alias(catalog.aliases_for_target(&planned.target).first().cloned());
+    enforce_read_only_worktree(ctx, planned, expected_worktree_fingerprint, capture)
+}
+
+fn enforce_read_only_worktree(
+    ctx: &RepoContext,
+    planned: &PlannedTarget,
+    expected: &str,
+    mut capture: TargetCapture,
+) -> TargetCapture {
+    if !planned
+        .effects
+        .contains(&jig_contract::ActionEffect::ReadOnly)
+        || planned
+            .effects
+            .contains(&jig_contract::ActionEffect::Worktree)
+    {
+        return capture;
+    }
+
+    let current = crate::state::current_worktree_fingerprint(ctx);
+    match (current.fingerprint.as_deref(), current.error.as_deref()) {
+        (Some(actual), _) if actual == expected => capture,
+        (Some(actual), _) => {
+            let message = format!(
+                "read-only target '{}' changed the worktree fingerprint from {expected} to {actual}",
+                planned.target
+            );
+            capture.stderr.push_str(&format!("{message}\n"));
+            capture.findings.push(finding(message, "effect_policy"));
+            if capture.conclusion == RunConclusion::Success {
+                capture.conclusion = RunConclusion::Failure;
+                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+            }
+            capture
+        }
+        (None, error) => {
+            let message = format!(
+                "could not verify the read-only worktree invariant for target '{}': {}",
+                planned.target,
+                error.unwrap_or("worktree fingerprint was unavailable")
+            );
+            capture.stderr.push_str(&format!("{message}\n"));
+            capture.findings.push(finding(message, "effect_policy"));
+            if capture.conclusion == RunConclusion::Success {
+                capture.conclusion = RunConclusion::Blocked;
+                capture.receipt_exit_status = capture.receipt_exit_status.max(1);
+            }
+            capture
+        }
+    }
 }
 
 fn run_command_target(
@@ -264,7 +334,9 @@ fn run_command_target(
         .current_dir(working_directory)
         .arg("-c")
         .arg(command_text)
-        .envs(environment);
+        .envs(environment)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let timeout = Duration::from_secs(
         planned
             .timeout_seconds
@@ -277,13 +349,26 @@ fn run_command_target(
         ProcessOutputLimits::default(),
         cancelled,
     ) {
-        Ok(output) => TargetCapture::from_process(
-            output.status.code().unwrap_or(1),
-            bounded_output(output.stdout),
-            bounded_output(output.stderr),
-            planned.result_parser,
-        )
-        .with_command_key(command_key),
+        Ok(output) => {
+            let exit_status = output.status.code().unwrap_or(1);
+            let captured = bounded_output(output.stdout, "stdout").and_then(|stdout| {
+                bounded_output(output.stderr, "stderr").map(|stderr| (stdout, stderr))
+            });
+            match captured {
+                Ok((stdout, stderr)) => TargetCapture::from_process(
+                    exit_status,
+                    stdout,
+                    stderr,
+                    planned.result_parser,
+                )
+                .with_command_key(command_key),
+                Err(error) => TargetCapture::blocked(format!(
+                    "command runner '{command_key}' for target '{}' did not produce a complete bounded capture: {error:#}",
+                    planned.target
+                ))
+                .with_command_key(command_key),
+            }
+        }
         Err(OwnedProcessTreeError::TimedOut) => TargetCapture::not_started(
             RunConclusion::TimedOut,
             format!(
@@ -305,14 +390,19 @@ fn run_command_target(
     }
 }
 
-fn bounded_output(output: Option<jig_owned_process::BoundedProcessOutput>) -> String {
-    output.map_or_else(String::new, |output| {
-        let mut value = output.to_string_lossy();
-        if output.truncated {
-            value.push_str("\n[output truncated by Jig]\n");
-        }
-        value
-    })
+fn bounded_output(
+    output: Option<jig_owned_process::BoundedProcessOutput>,
+    stream: &str,
+) -> Result<String> {
+    let output = output.with_context(|| format!("{stream} was not captured"))?;
+    if !output.complete {
+        bail!("{stream} capture did not complete");
+    }
+    let mut value = output.to_string_lossy();
+    if output.truncated {
+        value.push_str("\n[output truncated by Jig]\n");
+    }
+    Ok(value)
 }
 
 fn resolve_working_directory(root: &Path, configured: Option<&str>) -> Result<PathBuf> {
@@ -493,8 +583,11 @@ impl TargetCapture {
         stderr: String,
         parser: ResultParser,
     ) -> Self {
-        let mut findings = parse_findings(parser, &stdout);
-        let conclusion = if exit_status == 0 && findings_parse_succeeded(&findings) {
+        let ParsedFindings {
+            mut findings,
+            succeeded: findings_parse_succeeded,
+        } = parse_findings(parser, &stdout);
+        let conclusion = if exit_status == 0 && findings_parse_succeeded {
             RunConclusion::Success
         } else {
             if exit_status != 0 {
@@ -551,28 +644,36 @@ impl TargetCapture {
     }
 }
 
-fn parse_findings(parser: ResultParser, stdout: &str) -> Vec<Finding> {
-    if parser == ResultParser::ExitCode {
-        return Vec::new();
-    }
-    stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<Finding>(line).unwrap_or_else(|error| {
-                finding(
-                    format!("result parser rejected JSON line: {error}"),
-                    "result_parser",
-                )
-            })
-        })
-        .collect()
+struct ParsedFindings {
+    findings: Vec<Finding>,
+    succeeded: bool,
 }
 
-fn findings_parse_succeeded(findings: &[Finding]) -> bool {
-    findings
-        .iter()
-        .all(|finding| finding.source.as_deref() != Some("result_parser"))
+fn parse_findings(parser: ResultParser, stdout: &str) -> ParsedFindings {
+    if parser == ResultParser::ExitCode {
+        return ParsedFindings {
+            findings: Vec::new(),
+            succeeded: true,
+        };
+    }
+    let mut findings = Vec::new();
+    let mut succeeded = true;
+    for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str::<Finding>(line) {
+            Ok(parsed) => findings.push(parsed),
+            Err(error) => {
+                succeeded = false;
+                findings.push(finding(
+                    format!("result parser rejected JSON line: {error}"),
+                    "result_parser",
+                ));
+            }
+        }
+    }
+    ParsedFindings {
+        findings,
+        succeeded,
+    }
 }
 
 fn finding(message: impl Into<String>, source: &str) -> Finding {
@@ -601,12 +702,45 @@ mod tests {
     #[test]
     fn json_lines_parser_normalizes_findings_and_rejects_bad_lines() {
         let valid = r#"{"severity":"warning","message":"unused","source":"lint"}"#;
-        let findings = parse_findings(ResultParser::JsonLines, valid);
-        assert_eq!(findings[0].severity, FindingSeverity::Warning);
-        assert!(findings_parse_succeeded(&findings));
+        let parsed = parse_findings(ResultParser::JsonLines, valid);
+        assert_eq!(parsed.findings[0].severity, FindingSeverity::Warning);
+        assert!(parsed.succeeded);
 
-        let findings = parse_findings(ResultParser::JsonLines, "not-json");
-        assert!(!findings_parse_succeeded(&findings));
+        let parsed = parse_findings(ResultParser::JsonLines, "not-json");
+        assert!(!parsed.succeeded);
+    }
+
+    #[test]
+    fn tool_findings_cannot_spoof_result_parser_failure() {
+        let valid =
+            r#"{"severity":"warning","message":"named like the parser","source":"result_parser"}"#;
+        let capture =
+            TargetCapture::from_process(0, valid.into(), String::new(), ResultParser::JsonLines);
+
+        assert_eq!(capture.conclusion, RunConclusion::Success);
+        assert_eq!(capture.findings[0].source.as_deref(), Some("result_parser"));
+    }
+
+    #[test]
+    fn bounded_output_rejects_missing_and_incomplete_captures() {
+        assert!(
+            bounded_output(None, "stdout")
+                .unwrap_err()
+                .to_string()
+                .contains("not captured")
+        );
+        let incomplete = jig_owned_process::BoundedProcessOutput {
+            bytes: b"partial".to_vec(),
+            truncated: false,
+            complete: false,
+        };
+
+        assert!(
+            bounded_output(Some(incomplete), "stderr")
+                .unwrap_err()
+                .to_string()
+                .contains("did not complete")
+        );
     }
 
     #[test]

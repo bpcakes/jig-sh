@@ -6,9 +6,12 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use jig_owned_process::require_success;
+use jig_owned_process::{
+    BoundedProcessOutput, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RepoContext, WorkGate};
@@ -358,7 +361,16 @@ fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
     })
 }
 
+#[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+    schema_check_with_control(ctx, Duration::from_secs(30 * 60), &|| false)
+}
+
+pub(crate) fn schema_check_with_control(
+    ctx: &RepoContext,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<NativeToolOutput> {
     let command_text = ctx.schema_dump_command();
     if command_text.trim().is_empty() {
         bail!("schema_dump_command is empty");
@@ -366,28 +378,33 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
     let schema_docs_dir = env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
     // A check intentionally reruns the configured dump command, then fails if
     // the dump output path has uncommitted changes.
-    let output = Command::new("bash")
-        .current_dir(ctx.root())
-        .arg("-c")
-        .arg(command_text)
-        .output()
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| anyhow::anyhow!("schema check timeout is too large"))?;
+    let mut dump = Command::new("bash");
+    dump.current_dir(ctx.root()).arg("-c").arg(command_text);
+    let output = controlled_output(&mut dump, deadline, cancelled)
         .context("Failed to run schema_dump_command")?;
-    require_success(&output, |_| {
-        format!(
+    if !output.status.success() {
+        bail!(
             "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
             output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-    let status = git_text(
+            output.stdout,
+            output.stderr
+        );
+    }
+    let status = controlled_git_text(
         ctx.root(),
         &["status", "--porcelain", "--", schema_docs_dir.as_str()],
+        deadline,
+        cancelled,
     )?;
     if !status.trim().is_empty() {
-        let diff = git_text(
+        let diff = controlled_git_text(
             ctx.root(),
             &["--no-pager", "diff", "--", schema_docs_dir.as_str()],
+            deadline,
+            cancelled,
         )?;
         return Ok(NativeToolOutput {
             exit_status: 1,
@@ -402,6 +419,69 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
         stdout: "Schema dump is up to date.\n".into(),
         stderr: String::new(),
     })
+}
+
+struct ControlledOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn controlled_output(
+    command: &mut Command,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledOutput> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
+    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let output = run_owned_process_tree_with_output_limits(
+        command,
+        remaining,
+        ProcessOutputLimits::default(),
+        cancelled,
+    )?;
+    let stdout = controlled_output_text(output.stdout, "stdout")?;
+    let stderr = controlled_output_text(output.stderr, "stderr")?;
+    Ok(ControlledOutput {
+        status: output.status,
+        stdout,
+        stderr,
+    })
+}
+
+fn controlled_output_text(output: Option<BoundedProcessOutput>, stream: &str) -> Result<String> {
+    let output = output.with_context(|| format!("{stream} was not captured"))?;
+    if !output.complete {
+        bail!("{stream} capture did not complete");
+    }
+    let mut text = output.to_string_lossy();
+    if output.truncated {
+        text.push_str("\n[output truncated by Jig]\n");
+    }
+    Ok(text)
+}
+
+fn controlled_git_text(
+    root: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args);
+    let output = controlled_output(&mut command, deadline, cancelled)?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            output.stderr
+        );
+    }
+    Ok(output.stdout)
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {

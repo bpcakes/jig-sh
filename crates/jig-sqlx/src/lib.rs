@@ -19,6 +19,7 @@ const NATIVE_TOOLS: &[NativeToolDescriptor] = &[NativeToolDescriptor::new(
     NativeToolKind::SchemaCheck,
 )];
 const CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::ReadOnly, ActionEffect::Process];
+const SCHEMA_CHECK_EFFECTS: &[ActionEffect] = &[ActionEffect::Worktree, ActionEffect::Process];
 const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
     AdapterActionDescriptor::new(
         "sqlx",
@@ -39,7 +40,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         "schema",
         "Check committed schema output for drift.",
         ActionIntent::Check,
-        CHECK_EFFECTS,
+        SCHEMA_CHECK_EFFECTS,
         AdapterRunnerDescriptor::Native(tool::SCHEMA_CHECK),
         &["**/*.sql", "**/*.rs"],
         Some(tool::SCHEMA_CHECK),
@@ -106,5 +107,21 @@ fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option
             "{tool_name} is not available because sqlx_enabled = false in .jig.toml. Enable SQLx, then run `jig update --recopy`, or remove this command/gate."
         )),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_check_declares_its_possible_worktree_mutation() {
+        let schema = ADAPTER_ACTIONS
+            .iter()
+            .find(|action| action.id == "schema")
+            .unwrap();
+
+        assert!(schema.effects.contains(&ActionEffect::Worktree));
+        assert!(!schema.effects.contains(&ActionEffect::ReadOnly));
     }
 }

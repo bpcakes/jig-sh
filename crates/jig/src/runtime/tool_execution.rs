@@ -1,4 +1,5 @@
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_contract::{ManifestTool, NativeToolKind};
@@ -184,6 +185,26 @@ pub(in crate::runtime) fn run_native_tool(
     tool_name: &str,
     args_value: &Value,
 ) -> Result<NativeToolOutput> {
+    run_native_tool_with_control(
+        ctx,
+        tool_name,
+        args_value,
+        Duration::from_secs(30 * 60),
+        &|| false,
+    )
+}
+
+pub(in crate::runtime) fn run_native_tool_with_control(
+    ctx: &RepoContext,
+    tool_name: &str,
+    args_value: &Value,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<NativeToolOutput> {
+    if cancelled() {
+        return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
+    }
+    let started = Instant::now();
     match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
@@ -195,9 +216,20 @@ pub(in crate::runtime) fn run_native_tool(
                 .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
             crate::policy::migration_add(ctx, name)
         }
-        NativeToolKind::SchemaCheck => crate::policy::schema_check(ctx),
+        NativeToolKind::SchemaCheck => {
+            crate::policy::schema_check_with_control(ctx, timeout, cancelled)
+        }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
     }
+    .and_then(|output| {
+        if cancelled() {
+            Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into())
+        } else if started.elapsed() >= timeout {
+            Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into())
+        } else {
+            Ok(output)
+        }
+    })
 }
 
 fn execute_native_tool(
