@@ -338,17 +338,19 @@ pub(crate) fn schema_check_with_observer(
     if observer.cancelled() {
         return Err(ExecutionCommandError::Cancelled);
     }
-    let status = git_text(
-        ctx.root(),
+    let status = schema_git_text(
+        ctx,
         &["status", "--porcelain", "--", schema_docs_dir.as_str()],
-    )
-    .map_err(ExecutionCommandError::failed)?;
+        "Schema Git status",
+        observer,
+    )?;
     if !status.trim().is_empty() {
-        let diff = git_text(
-            ctx.root(),
+        let diff = schema_git_text(
+            ctx,
             &["--no-pager", "diff", "--", schema_docs_dir.as_str()],
-        )
-        .map_err(ExecutionCommandError::failed)?;
+            "Schema Git diff",
+            observer,
+        )?;
         return Ok(NativeToolOutput {
             exit_status: 1,
             stdout: String::new(),
@@ -362,6 +364,37 @@ pub(crate) fn schema_check_with_observer(
         stdout: "Schema dump is up to date.\n".into(),
         stderr: String::new(),
     })
+}
+
+fn schema_git_text(
+    ctx: &RepoContext,
+    args: &[&str],
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<String, ExecutionCommandError> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(ctx.root())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        ctx.command_timeout(),
+        ctx.command_output_limit(),
+        label,
+        observer,
+    )?;
+    if !output.status.success() {
+        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
