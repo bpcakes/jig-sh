@@ -23,7 +23,7 @@ test-utils = []
 [dependencies]
 # Direct dependency for byte-only leftmost-longest streaming redaction. The
 # existing Redactor is whole-buffer/lossy-output oriented; aho-corasick 1.1.x is
-# MIT OR Unlicense and declares Rust 1.60, below this workspace's Rust 1.85 MSRV.
+# MIT OR Unlicense and declares Rust 1.60, below this workspace's Rust 1.88 MSRV.
 aho-corasick.workspace = true
 anyhow.workspace = true
 argon2.workspace = true

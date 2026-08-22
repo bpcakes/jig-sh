@@ -23,7 +23,7 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 **Supported hosts:** Linux and macOS. See [Platform Support](docs/platform-support.md) for feature-specific limits.
 
-**Prerequisites:** Rust 1.85+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
+**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
 
 ```sh
 cargo install jig-sh

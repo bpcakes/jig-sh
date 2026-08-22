@@ -270,26 +270,22 @@ fn resolve_onepassword_value(
 
     if stdout_pump.overflowed {
         bail!(
-            "1Password value for variable '{}' exceeds the {MAX_SECRET_VALUE_LEN} byte limit",
-            variable
+            "1Password value for variable '{variable}' exceeds the {MAX_SECRET_VALUE_LEN} byte limit"
         );
     }
     if stderr_pump.overflowed {
         bail!(
-            "1Password CLI diagnostic for variable '{}' exceeded the {MAX_OP_STDERR_LEN} byte safety limit; diagnostic text was suppressed",
-            variable
+            "1Password CLI diagnostic for variable '{variable}' exceeded the {MAX_OP_STDERR_LEN} byte safety limit; diagnostic text was suppressed"
         );
     }
     if let Some(kind) = stdout_pump.failure {
         bail!(
-            "failed to read bounded 1Password stdout for variable '{}' ({kind:?}); captured bytes were discarded",
-            variable
+            "failed to read bounded 1Password stdout for variable '{variable}' ({kind:?}); captured bytes were discarded"
         );
     }
     if let Some(kind) = stderr_pump.failure {
         bail!(
-            "failed to read bounded 1Password stderr for variable '{}' ({kind:?}); captured bytes were discarded",
-            variable
+            "failed to read bounded 1Password stderr for variable '{variable}' ({kind:?}); captured bytes were discarded"
         );
     }
     let status = match wait_outcome {
@@ -323,13 +319,10 @@ fn resolve_onepassword_value(
     }
     drop(stderr_pump.bytes);
     if std::str::from_utf8(stdout_pump.bytes.as_slice()).is_err() {
-        bail!(
-            "1Password value for variable '{}' is not valid UTF-8",
-            variable
-        );
+        bail!("1Password value for variable '{variable}' is not valid UTF-8");
     }
     if stdout_pump.bytes.as_slice().contains(&0) {
-        bail!("1Password value for variable '{}' contains NUL", variable);
+        bail!("1Password value for variable '{variable}' contains NUL");
     }
     Ok(stdout_pump.bytes)
 }

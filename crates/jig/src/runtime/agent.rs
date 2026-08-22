@@ -206,6 +206,7 @@ fn bootstrap(
     observer: &mut dyn ExecutionControl,
 ) -> Result<JsonValue> {
     let progress = CliProgress::new("agent bootstrap");
+    progress.header("install Codex marketplace");
     progress.info("repo", ctx.root().display());
     let codex_bin = crate::codex::codex_bin();
     let codex_bin_display = codex_bin.to_string_lossy().into_owned();

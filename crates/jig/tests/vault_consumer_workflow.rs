@@ -96,13 +96,12 @@ set -eu
 if [ "${{JIG_VAULT_PASSPHRASE+set}}" = set ] || [ "${{JIG_VAULT_NEW_PASSPHRASE+set}}" = set ]; then
   exit 86
 fi
-if [ "$#" -ne 3 ] || [ "$1" != read ] || [ "$2" != --no-newline ] || [ "$3" != '{}' ]; then
+if [ "$#" -ne 3 ] || [ "$1" != read ] || [ "$2" != --no-newline ] || [ "$3" != '{OP_REFERENCE}' ]; then
   exit 87
 fi
 printf 'arg=<%s>\n' "$1" "$2" "$3" >> "$OP_TEST_LOG"
-printf '%s' '{}'
-"#,
-            OP_REFERENCE, CONCEALED_VALUE
+printf '%s' '{CONCEALED_VALUE}'
+"#
         ),
     )
     .unwrap();

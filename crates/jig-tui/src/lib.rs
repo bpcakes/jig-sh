@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn cooperative_worker_reports_panics() {
-        let mut worker = CooperativeWorker::spawn("test-panic", |_| -> () {
+        let mut worker = CooperativeWorker::spawn("test-panic", |_| {
             panic!("expected worker panic");
         })
         .unwrap();

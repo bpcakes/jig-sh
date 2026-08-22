@@ -207,8 +207,7 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     let result = vault.import_fields(&passphrase, imported.mutations, request.replace)?;
     if let Err(error) = prepared.install() {
         bail!(
-            "vault import succeeded, but destination installation failed: {error}. Safe rerun: {}",
-            recovery_command
+            "vault import succeeded, but destination installation failed: {error}. Safe rerun: {recovery_command}"
         );
     }
 
