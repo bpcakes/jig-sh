@@ -9,8 +9,8 @@ pub use repository::{
     FieldProvenance, ProfileId, ProfileSpec, ResultParser, TargetId,
 };
 pub use run::{
-    EvidenceReference, Finding, FindingLocation, FindingSeverity, PlannedTarget, RunConclusion,
-    RunPlan, RunResult, RunStatus, SelectionReason, SourceIdentity, TargetRunResult,
+    ActionArguments, EvidenceReference, Finding, FindingLocation, FindingSeverity, PlannedTarget,
+    RunConclusion, RunPlan, RunResult, RunStatus, SelectionReason, SourceIdentity, TargetRunResult,
 };
 
 pub mod kind {

@@ -67,15 +67,6 @@ impl CheckOpts {
             && !self.explain
             && !self.fail_fast
     }
-
-    pub(crate) fn uses_repository_plan(&self) -> bool {
-        self.command.is_none()
-            || matches!(self.command, Some(CheckCommand::Selectors(_)))
-            || self.profile.is_some()
-            || self.affected.is_some()
-            || self.explain
-            || self.fail_fast
-    }
 }
 
 #[derive(Debug, Subcommand)]

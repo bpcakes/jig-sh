@@ -43,7 +43,7 @@ pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
-    WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg,
+    WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg, parse_work_gate,
 };
 
 pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 6;

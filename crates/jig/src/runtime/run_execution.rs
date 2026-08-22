@@ -206,7 +206,7 @@ fn run_target(
                     "run cancellation was requested before the native operation started",
                 );
             }
-            match run_native_tool(ctx, operation, &json!({})) {
+            match run_native_tool(ctx, operation, &json!(planned.arguments)) {
                 Ok(output) => TargetCapture::from_process(
                     output.exit_status,
                     output.stdout,

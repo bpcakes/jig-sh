@@ -30,6 +30,48 @@ fn assert_repository_output_schema(ctx: &RepoContext, name: &str, output: &Value
     );
 }
 
+fn add_v6_generate_action(root: &std::path::Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf 'api tests passed\\n'\"\ngenerate_command = \"printf generated > generated.txt\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "generate" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "generate_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]"#,
+        );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("generate_command"));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "generate"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "command", "command": "generate_command"},
+        "inputs": ["api/**"]
+    }));
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn mcp_v6_advertises_bounded_repository_tools_and_v5_keeps_manifest_tools() {
     let v6 = tempdir().unwrap();
@@ -152,6 +194,43 @@ fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
     assert_eq!(terminal_cancel["cancellation_requested"], false);
     assert_eq!(terminal_cancel["worker_signalled"], false);
     assert_eq!(terminal_cancel["run"]["conclusion"], "success");
+}
+
+#[test]
+fn mcp_repository_effectful_action_requires_exact_plan_approval() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_generate_action(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
+    assert_eq!(planned["plan"]["effects"], json!(["worktree", "process"]));
+
+    let error = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("approved_effects {Worktree}"), "{error}");
+
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({
+            "plan": planned["plan"].clone(),
+            "approved_effects": ["worktree"]
+        }),
+    )
+    .unwrap();
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+    assert_eq!(terminal["result"]["run"]["result"]["conclusion"], "success");
+    assert_eq!(
+        fs::read_to_string(temp.path().join("generated.txt")).unwrap(),
+        "generated"
+    );
 }
 
 #[test]

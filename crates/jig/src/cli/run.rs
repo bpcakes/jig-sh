@@ -303,18 +303,12 @@ fn run_command(cli: Cli) -> Result<()> {
         ),
         CommandKind::Setup => run_setup_command(json_output),
         CommandKind::Check(command) => {
-            let human_output = if command.uses_repository_plan() {
-                HumanOutput::Check
-            } else {
-                HumanOutput::ToolExecution
-            };
             let command: crate::command::CheckCommand = command.try_into()?;
-            let require_ok = check_command_reports_failure_with_ok(&command);
             dispatch_runtime_command(
                 crate::command::RuntimeCommand::Check(command),
-                require_ok,
+                true,
                 json_output,
-                human_output,
+                HumanOutput::Check,
             )
         }
         CommandKind::Migration(MigrationCommand::Add(opts)) => run_migration_add(opts, json_output),
@@ -615,19 +609,6 @@ pub(super) const fn test_command_reports_failure_with_ok(command: &CommandKind) 
 
 const fn agent_command_reports_failure_with_ok(command: &AgentCommand) -> bool {
     matches!(command, AgentCommand::Doctor)
-}
-
-const fn check_command_reports_failure_with_ok(command: &crate::command::CheckCommand) -> bool {
-    matches!(
-        command,
-        crate::command::CheckCommand::Repository(_)
-            | crate::command::CheckCommand::AgentMap(_)
-            | crate::command::CheckCommand::AgentGuides
-            | crate::command::CheckCommand::RustFileLoc(_)
-            | crate::command::CheckCommand::NoModRs
-            | crate::command::CheckCommand::MigrationImmutability(_)
-            | crate::command::CheckCommand::SqlxUncheckedNonTest,
-    )
 }
 
 const fn agent_human_output(command: &AgentCommand) -> HumanOutput {

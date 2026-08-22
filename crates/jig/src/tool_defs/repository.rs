@@ -1,4 +1,6 @@
-use jig_contract::{RunPlan, RunResult, RunStatus};
+use std::collections::BTreeMap;
+
+use jig_contract::{ActionArguments, ActionEffect, RunPlan, RunResult, RunStatus, TargetId};
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -49,10 +51,10 @@ impl RepositoryTool {
                 "Inspect the repository catalog or the durable state of one repository run."
             }
             Self::PlanRun => {
-                "Resolve selectors or a profile into an immutable, explainable repository run plan."
+                "Resolve selectors or a profile, including closed action arguments, into an immutable, explainable repository run plan."
             }
             Self::ExecuteRun => {
-                "Validate an exact run plan, start it in the background, and return its durable run handle immediately."
+                "Validate an exact run plan and its explicit worktree/external effect approvals, start it in the background, and return its durable run handle immediately."
             }
             Self::CancelRun => {
                 "Request cooperative cancellation of a run and return its current durable state."
@@ -138,6 +140,8 @@ pub(crate) struct PlanRunArgs {
     pub(crate) profile: Option<String>,
     #[serde(default)]
     pub(crate) affected_base: Option<String>,
+    #[serde(default)]
+    pub(crate) arguments: BTreeMap<TargetId, ActionArguments>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -150,6 +154,8 @@ pub(crate) struct ExecuteRunArgs {
     pub(crate) record_receipts: bool,
     #[serde(default)]
     pub(crate) fail_fast: bool,
+    #[serde(default)]
+    pub(crate) approved_effects: Vec<ActionEffect>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]

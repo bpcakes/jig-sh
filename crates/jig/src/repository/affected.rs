@@ -165,7 +165,7 @@ fn directly_affected_components(
             .map(|(component, _)| component.clone())
             .collect::<BTreeSet<_>>();
         let matched_components = if matched_components.is_empty() {
-            most_specific_component_roots(catalog, path)
+            most_specific_component_roots(catalog, matchers, path)
         } else {
             matched_components
         };
@@ -176,11 +176,22 @@ fn directly_affected_components(
     direct
 }
 
-fn most_specific_component_roots(catalog: &RepositoryCatalog, path: &str) -> BTreeSet<ComponentId> {
+fn most_specific_component_roots(
+    catalog: &RepositoryCatalog,
+    matchers: &BTreeMap<ComponentId, Vec<GlobMatcher>>,
+    path: &str,
+) -> BTreeSet<ComponentId> {
     let mut matches = Vec::new();
     let mut maximum_depth = None;
     for component in catalog.components() {
         if !root_contains(&component.root, path) {
+            continue;
+        }
+        if component.root == "."
+            && matchers
+                .get(&component.id)
+                .is_some_and(|patterns| !patterns.is_empty())
+        {
             continue;
         }
         let depth = root_depth(&component.root);
@@ -302,6 +313,39 @@ mod tests {
         .unwrap()
     }
 
+    fn generated_root_fixture() -> RepositoryCatalog {
+        let repo = ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".");
+        let mut api = ComponentSpec::new(ComponentId::parse("api").unwrap(), ".");
+        api.propagate_affected_to_dependents = true;
+        let mut web = ComponentSpec::new(ComponentId::parse("web").unwrap(), "apps/web");
+        web.depends_on.push(api.id.clone());
+
+        let repo_target: TargetId = "repo:contract".parse().unwrap();
+        let api_target: TargetId = "api:test".parse().unwrap();
+        let web_target: TargetId = "web:test".parse().unwrap();
+        let mut repo_action = check_action(repo_target.clone(), "contract_command");
+        repo_action.inputs.push(".jig.toml".into());
+        let mut api_action = check_action(api_target.clone(), "api_test_command");
+        api_action.inputs.push("crates/**/*.rs".into());
+        let mut web_action = check_action(web_target.clone(), "web_test_command");
+        web_action.inputs.push("apps/web/**/*.ts".into());
+
+        let profile_id = ProfileId::parse("verify").unwrap();
+        let profile = ProfileSpec::new(
+            profile_id.clone(),
+            vec![repo_target, api_target, web_target],
+        );
+        RepositoryCatalog::from_native(
+            6,
+            "sha256:config",
+            &[repo, api, web],
+            &[repo_action, api_action, web_action],
+            &[profile],
+            Some(&profile_id),
+        )
+        .unwrap()
+    }
+
     fn check_action(target: TargetId, command: &str) -> ActionSpec {
         let mut action =
             ActionSpec::new(target, ActionIntent::Check, ActionRunner::command(command));
@@ -406,6 +450,17 @@ mod tests {
         let catalog = affected_fixture();
 
         assert!(selected(&catalog, &["notes/todo.txt"]).is_empty());
+    }
+
+    #[test]
+    fn affected_unmatched_path_does_not_select_explicit_root_components() {
+        let catalog = generated_root_fixture();
+
+        assert!(selected(&catalog, &["docs/guide.md"]).is_empty());
+        assert_eq!(
+            target_names(&selected(&catalog, &["crates/api/src/lib.rs"])),
+            ["api:test", "web:test"]
+        );
     }
 
     #[test]

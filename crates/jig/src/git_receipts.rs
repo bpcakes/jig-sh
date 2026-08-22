@@ -435,7 +435,7 @@ fn committed_source_tree_identity(
             collection.ensure_active()?;
             let tree = collection.git_output(
                 root,
-                &["ls-tree", "-r", "-z", "--full-tree", object_id],
+                &["ls-tree", "-z", "--full-tree", object_id],
                 "git ls-tree HEAD for worktree fingerprint",
             )?;
             committed_source_tree_without_agent_state(&tree.stdout, collection)

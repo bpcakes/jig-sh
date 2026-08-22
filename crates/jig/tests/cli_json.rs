@@ -27,6 +27,99 @@ fn jig() -> Command {
     command
 }
 
+fn write_v6_failing_test_repo(root: &Path) {
+    fs::create_dir_all(root.join(".agent")).unwrap();
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::write(root.join("api/example.rs"), "pub fn example() {}\n").unwrap();
+    fs::write(
+        root.join(".jig.toml"),
+        r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+
+[commands]
+api_test_command = "printf 'tests failed\n' >&2; exit 7"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "api"
+
+[[repository.actions]]
+target = { component = "api", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+
+[[repository.profiles]]
+id = "verify"
+targets = [{ component = "api", action = "test" }]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".agent/jig-contract.json"),
+        serde_json::to_vec_pretty(&json!({
+            "contract_version": 6,
+            "tool_namespace": "jig",
+            "required_commands": ["api_test_command"],
+            "tools": [],
+            "components": [{"id": "api", "root": "api"}],
+            "actions": [{
+                "target": {"component": "api", "action": "test"},
+                "intent": "check",
+                "effects": ["read_only", "process"],
+                "runner": {"kind": "command", "command": "api_test_command"},
+                "inputs": ["api/**"]
+            }],
+            "profiles": [{
+                "id": "verify",
+                "targets": [{"component": "api", "action": "test"}]
+            }],
+            "default_check_profile": "verify"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for args in [
+        &["init"][..],
+        &["config", "user.email", "fixture@example.com"],
+        &["config", "user.name", "Fixture"],
+        &["add", "."],
+        &["commit", "-m", "fixture"],
+    ] {
+        assert!(
+            Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+}
+
+#[test]
+fn named_v6_check_uses_aggregate_output_and_exits_unsuccessfully() {
+    let repo = tempdir().unwrap();
+    write_v6_failing_test_repo(repo.path());
+
+    let output = jig()
+        .current_dir(repo.path())
+        .args(["check", "test"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Jig check: failed"), "{stdout}");
+    assert!(stdout.contains("api:test: failed (exit 7)"), "{stdout}");
+}
+
 #[test]
 fn json_mode_wraps_usage_and_pre_output_command_errors() {
     let usage = jig().args(["work", "check", "--json"]).output().unwrap();

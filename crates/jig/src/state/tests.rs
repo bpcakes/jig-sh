@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use super::jsonl::{
-    read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
-    read_receipt_window_with_bytes, receipts_for_plan_with_lock, state_lock_path,
-    with_jsonl_write_lock, write_jsonl_locked,
+    jsonl_end_offset, read_jsonl_with_cancellation, read_jsonl_with_data_lock, read_jsonl_with_io,
+    read_receipt_window_with_bytes, receipts_for_plan_with_lock, scan_jsonl_raw_from,
+    state_lock_path, with_jsonl_write_lock, write_jsonl_locked,
 };
 use super::records::SessionEvent;
 use super::*;
@@ -37,6 +37,29 @@ fn appends_jsonl_records() {
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["id"], 1);
     assert_eq!(items[1]["id"], 2);
+}
+
+#[test]
+fn jsonl_cursor_scans_only_records_appended_after_the_cursor() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("events.jsonl");
+    let history = (0..1_000)
+        .map(|id| format!("{{\"id\":{id}}}\n"))
+        .collect::<String>();
+    fs::write(&path, history).unwrap();
+    let cursor = jsonl_end_offset(&path).unwrap();
+    append_jsonl(&path, &json!({"id": "new"})).unwrap();
+
+    let mut records = Vec::new();
+    let (next, stats) = scan_jsonl_raw_from(&path, cursor, |record| {
+        records.push(serde_json::from_slice::<Value>(record.bytes)?);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(records, [json!({"id": "new"})]);
+    assert_eq!(stats.records, 1);
+    assert_eq!(next, fs::metadata(path).unwrap().len());
 }
 
 #[test]

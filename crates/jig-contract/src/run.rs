@@ -3,6 +3,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ActionEffect, ActionIntent, ActionRunner, ProfileId, ResultParser, TargetId};
 
+/// Closed arguments accepted by repository action runners.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionArguments {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl ActionArguments {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.name.is_none()
+    }
+}
+
 /// The exact Git and worktree state against which a plan was resolved.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +71,8 @@ pub struct PlannedTarget {
     pub intent: ActionIntent,
     pub effects: Vec<ActionEffect>,
     pub runner: ActionRunner,
+    #[serde(default, skip_serializing_if = "ActionArguments::is_empty")]
+    pub arguments: ActionArguments,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -81,6 +98,7 @@ impl PlannedTarget {
             intent,
             effects: Vec::new(),
             runner,
+            arguments: ActionArguments::default(),
             inputs: Vec::new(),
             depends_on: Vec::new(),
             timeout_seconds: None,

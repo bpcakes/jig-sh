@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn full_readoption_preserves_required_on_an_unchanged_generated_evidence_gate() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, false)).unwrap();
+    let config_path = repo.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let verify = config["work"]["gates"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|gate| gate["id"].as_str() == Some("verify"))
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+    verify.insert("required".into(), toml::Value::Boolean(false));
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
+
+    let updated = toml::from_str::<toml::Value>(&fs::read_to_string(config_path).unwrap()).unwrap();
+    let verify = updated["work"]["gates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|gate| gate["id"].as_str() == Some("verify"))
+        .unwrap();
+    assert_eq!(verify["required"].as_bool(), Some(false));
+}
+
+#[test]
 fn full_readoption_reconciles_work_config_against_the_new_contract() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -56,6 +91,12 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
         ("fail_on".into(), toml::Value::String("warning".into())),
         ("scope".into(), toml::Value::String("uncommitted".into())),
         ("model".into(), toml::Value::String("gpt-5".into())),
+    ])));
+    gates.push(toml::Value::Table(toml::Table::from_iter([
+        ("id".into(), toml::Value::String("project-evidence".into())),
+        ("kind".into(), toml::Value::String("evidence".into())),
+        ("profile".into(), toml::Value::String("verify".into())),
+        ("required".into(), toml::Value::Boolean(false)),
     ])));
     work.insert(
         "refinements".into(),
@@ -114,6 +155,8 @@ fn full_readoption_reconciles_work_config_against_the_new_contract() {
         gate("project-review")["kind"].as_str(),
         Some("codex_review")
     );
+    assert_eq!(gate("project-evidence")["kind"].as_str(), Some("evidence"));
+    assert_eq!(gate("project-evidence")["required"].as_bool(), Some(false));
     assert_eq!(
         config["work"]["refinements"][0]["id"].as_str(),
         Some("project-refinement")

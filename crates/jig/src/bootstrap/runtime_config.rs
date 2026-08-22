@@ -270,27 +270,26 @@ fn reconcile_work_gates(
     let mut seen_ids = BTreeSet::new();
 
     for mut generated in rendered_gates {
+        let generated_gate =
+            crate::context::parse_work_gate(&generated).context("Rendered work gate is invalid")?;
         let generated_table = generated
             .as_table_mut()
             .ok_or_else(|| anyhow::anyhow!("Rendered work gate is not a TOML table"))?;
-        let generated_id = work_gate_string(generated_table, "id", "rendered")?.to_string();
-        let generated_kind = work_gate_string(generated_table, "kind", "rendered")?;
-        let generated_tool = generated_table.get("tool").and_then(toml::Value::as_str);
+        let generated_id = generated_gate.id().to_string();
 
-        if generated_kind == "check" {
-            if let Some(generated_tool) = generated_tool {
-                let required = existing_gates.iter().find_map(|gate| {
-                    let gate = gate.as_table()?;
-                    (gate.get("id").and_then(toml::Value::as_str) == Some(&generated_id)
-                        && gate.get("kind").and_then(toml::Value::as_str) == Some("check")
-                        && gate.get("tool").and_then(toml::Value::as_str) == Some(generated_tool))
-                    .then(|| gate.get("required").and_then(toml::Value::as_bool))
-                    .flatten()
-                });
-                if let Some(required) = required {
-                    generated_table.insert("required".into(), toml::Value::Boolean(required));
-                }
-            }
+        let required = existing_gates.iter().find_map(|value| {
+            let existing_gate = crate::context::parse_work_gate(value).ok()?;
+            (existing_gate.id() == generated_id && existing_gate.same_definition(&generated_gate))
+                .then(|| {
+                    value
+                        .as_table()
+                        .and_then(|table| table.get("required"))
+                        .and_then(toml::Value::as_bool)
+                })
+                .flatten()
+        });
+        if let Some(required) = required {
+            generated_table.insert("required".into(), toml::Value::Boolean(required));
         }
 
         seen_ids.insert(generated_id);
@@ -298,39 +297,29 @@ fn reconcile_work_gates(
     }
 
     for existing_gate in existing_gates {
-        let Some(table) = existing_gate.as_table() else {
+        let Ok(gate) = crate::context::parse_work_gate(&existing_gate) else {
             continue;
         };
-        let Some(id) = table.get("id").and_then(toml::Value::as_str) else {
-            continue;
-        };
-        if seen_ids.contains(id) || !schema_valid_work_entry("gates", &existing_gate) {
+        if seen_ids.contains(gate.id()) || !schema_valid_work_entry("gates", &existing_gate) {
             continue;
         }
-        let keep = match table.get("kind").and_then(toml::Value::as_str) {
-            Some("check") => table
-                .get("tool")
-                .and_then(toml::Value::as_str)
-                .and_then(|tool| staged_context.tool_spec(tool))
+        let keep = match &gate {
+            crate::context::WorkGate::Check(check) => staged_context
+                .tool_spec(&check.tool)
                 .is_some_and(tool_defs::is_no_arg_execution_tool),
-            Some("codex_review") => true,
-            _ => false,
+            crate::context::WorkGate::Evidence(_) | crate::context::WorkGate::CodexReview(_) => {
+                true
+            }
+            crate::context::WorkGate::Unsupported(_) => false,
         };
         if keep {
-            seen_ids.insert(id.to_string());
+            seen_ids.insert(gate.id().to_string());
             reconciled.push(existing_gate);
         }
     }
 
     rendered.insert("gates".into(), toml::Value::Array(reconciled));
     Ok(())
-}
-
-fn work_gate_string<'a>(table: &'a toml::Table, key: &str, label: &str) -> Result<&'a str> {
-    table
-        .get(key)
-        .and_then(toml::Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("{label} work gate is missing string {key}"))
 }
 
 fn reconcile_work_refinements(existing: &toml::Table, rendered: &mut toml::Table) {

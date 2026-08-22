@@ -1,11 +1,13 @@
 use anyhow::{Context, Result, bail};
 use jig_contract::{RunConclusion, RunPlan, RunResult, RunStatus, TargetId, TargetRunResult};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::context::RepoContext;
 
-use super::jsonl::{RawJsonlRecord, append_jsonl, scan_jsonl_raw};
+use super::jsonl::{
+    RawJsonlRecord, append_jsonl, jsonl_end_offset, scan_jsonl_raw, scan_jsonl_raw_from,
+};
 use super::records::RunEventRecord;
 use super::support::{ensure_state_layout, new_id, now_ms};
 
@@ -25,6 +27,46 @@ pub(crate) struct DurableRun {
     pub(crate) work_plan_id: Option<String>,
     pub(crate) result: RunResult,
     pub(crate) cancel_requested: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RunEventCursor(u64);
+
+#[derive(Deserialize)]
+struct RunEventIdentity {
+    run_id: String,
+    event: String,
+}
+
+pub(crate) fn run_event_cursor(ctx: &RepoContext) -> Result<RunEventCursor> {
+    ensure_state_layout(ctx)?;
+    Ok(RunEventCursor(jsonl_end_offset(
+        &ctx.state_file(RUNS_FILE),
+    )?))
+}
+
+pub(crate) fn run_cancel_requested_since(
+    ctx: &RepoContext,
+    run_id: &str,
+    cursor: &mut RunEventCursor,
+) -> Result<bool> {
+    let path = ctx.state_file(RUNS_FILE);
+    let mut requested = false;
+    let (offset, _) = scan_jsonl_raw_from(&path, cursor.0, |raw| {
+        let event = serde_json::from_slice::<RunEventIdentity>(raw.bytes).with_context(|| {
+            format!(
+                "Failed to parse run event identity {} in {}",
+                raw.line_number,
+                path.display()
+            )
+        })?;
+        if event.run_id == run_id && event.event == EVENT_CANCEL_REQUESTED {
+            requested = true;
+        }
+        Ok(())
+    })?;
+    cursor.0 = offset;
+    Ok(requested)
 }
 
 pub(crate) fn start_run(

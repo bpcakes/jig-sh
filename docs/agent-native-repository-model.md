@@ -197,8 +197,11 @@ every target:
 
 - `jig.inspect` reads workspace, component, target, profile, and durable run
   information. Bounded `jig.work_*` tools own work lifecycle information.
-- `jig.plan_run` resolves selectors and returns a run plan without executing it.
-- `jig.execute_run` executes an unchanged plan and returns a durable run handle.
+- `jig.plan_run` resolves selectors and closed per-target arguments, then
+  returns an immutable run plan without executing it. Effectful actions require
+  explicit selectors.
+- `jig.execute_run` executes an unchanged plan and returns a durable run handle;
+  worktree and external effects require exact `approved_effects` acknowledgement.
 - `jig.cancel_run` requests cancellation of a running execution.
 - Structured work lifecycle tools remain a separate, bounded `jig.work_*`
   namespace.
@@ -227,9 +230,10 @@ Tasks-extension projection can reuse that id without changing the underlying
 repository or run model.
 
 Every effectful call is constrained by the checked-in action contract. Plans
-include effect and approval metadata, and execution verifies the plan's
-contract digest and source identity before starting. Jig never exposes a
-general agent-supplied shell command.
+include closed runner arguments and declared effects, and execution verifies
+the plan's contract digest, source identity, and explicit worktree/external
+effect approvals before starting. Jig never exposes a general agent-supplied
+shell command.
 
 ## Authored configuration and resolved contract
 

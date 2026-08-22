@@ -48,6 +48,24 @@ fn check_execution_summary_collects_target_failures() {
 }
 
 #[test]
+fn check_output_selects_the_formatter_from_the_runtime_response() {
+    let repository = format_check_output(&json!({
+        "ok": true,
+        "executed": false,
+        "plan": {"id": "run-plan_sha256:abc", "targets": []}
+    }));
+    assert!(repository.contains("Check plan: run-plan_sha256:abc"));
+
+    let legacy = format_check_output(&json!({
+        "ok": false,
+        "tool": "jig.test",
+        "result": {"exit_status": 1, "stderr": "failed"}
+    }));
+    assert!(legacy.contains("jig.test: failed"));
+    assert!(legacy.contains("Exit: 1"));
+}
+
+#[test]
 fn repository_info_summary_renders_structured_target_addresses() {
     let summary = format_info_summary(&json!({
         "ok": true,

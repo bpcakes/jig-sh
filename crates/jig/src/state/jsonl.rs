@@ -548,6 +548,64 @@ pub(super) fn scan_jsonl_raw(
     }
 }
 
+pub(super) fn jsonl_end_offset(path: &Path) -> Result<u64> {
+    match File::open(path) {
+        Ok(file) => {
+            FileExt::lock_shared(&file)
+                .with_context(|| format!("Failed to shared-lock {}", path.display()))?;
+            let offset = file
+                .metadata()
+                .map(|metadata| metadata.len())
+                .with_context(|| format!("Failed to inspect {}", path.display()));
+            let unlock = FileExt::unlock(&file)
+                .with_context(|| format!("Failed to unlock {}", path.display()));
+            match (offset, unlock) {
+                (Ok(offset), Ok(())) => Ok(offset),
+                (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).with_context(|| format!("Failed to open {}", path.display())),
+    }
+}
+
+pub(super) fn scan_jsonl_raw_from(
+    path: &Path,
+    offset: u64,
+    mut visitor: impl FnMut(RawJsonlRecord<'_>) -> Result<()>,
+) -> Result<(u64, JsonlScanStats)> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok((0, JsonlScanStats::default()));
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+        }
+    };
+    FileExt::lock_shared(&file)
+        .with_context(|| format!("Failed to shared-lock {}", path.display()))?;
+    let file_len = file.metadata()?.len();
+    let start = if offset <= file_len { offset } else { 0 };
+    file.seek(SeekFrom::Start(start))?;
+    let result = scan_jsonl_reader(
+        BufReader::with_capacity(JSONL_READ_CHUNK, &file),
+        path,
+        &|| false,
+        &mut visitor,
+    );
+    let unlock = FileExt::unlock(&file);
+    let stats = result?;
+    unlock.with_context(|| format!("Failed to unlock {}", path.display()))?;
+    if stats.unterminated_final_record {
+        bail!(
+            "Refusing to advance a JSONL cursor past an unterminated record in {}",
+            path.display()
+        );
+    }
+    Ok((start + stats.file_bytes, stats))
+}
+
 pub(super) fn scan_jsonl_raw_locked(
     _guard: &JsonlWriteGuard,
     path: &Path,

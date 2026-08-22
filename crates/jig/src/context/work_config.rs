@@ -43,7 +43,7 @@ struct WorkGateConfig {
     required: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WorkGate {
     Check(WorkCheckGate),
     Evidence(WorkEvidenceGate),
@@ -51,7 +51,7 @@ pub(crate) enum WorkGate {
     Unsupported(UnsupportedWorkGate),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkCheckGate {
     pub(crate) id: String,
     pub(crate) tool: String,
@@ -64,7 +64,7 @@ pub(crate) enum WorkEvidenceSelector {
     Profile(ProfileId),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkEvidenceGate {
     pub(crate) id: String,
     pub(crate) selector: WorkEvidenceSelector,
@@ -72,7 +72,7 @@ pub(crate) struct WorkEvidenceGate {
     pub(crate) required: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorkReviewGate {
     pub(crate) id: String,
     pub(crate) skill: String,
@@ -82,7 +82,7 @@ pub(crate) struct WorkReviewGate {
     pub(crate) required: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct UnsupportedWorkGate {
     pub(crate) id: String,
     pub(crate) kind: String,
@@ -291,6 +291,45 @@ impl WorkConfig {
 
         Ok(())
     }
+}
+
+impl WorkGate {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Check(gate) => &gate.id,
+            Self::Evidence(gate) => &gate.id,
+            Self::CodexReview(gate) => &gate.id,
+            Self::Unsupported(gate) => &gate.id,
+        }
+    }
+
+    pub(crate) fn same_definition(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Check(left), Self::Check(right)) => left.tool == right.tool,
+            (Self::Evidence(left), Self::Evidence(right)) => {
+                left.selector == right.selector && left.conclusion == right.conclusion
+            }
+            (Self::CodexReview(left), Self::CodexReview(right)) => {
+                left.skill == right.skill
+                    && left.threshold == right.threshold
+                    && left.scope == right.scope
+                    && left.model == right.model
+            }
+            (Self::Unsupported(left), Self::Unsupported(right)) => left.kind == right.kind,
+            _ => false,
+        }
+    }
+}
+
+pub(crate) fn parse_work_gate(value: &toml::Value) -> Result<WorkGate> {
+    let gate = value.clone().try_into::<WorkGateConfig>()?;
+    let config = WorkConfig {
+        checks: Vec::new(),
+        gates: vec![gate.clone()],
+        refinements: Vec::new(),
+    };
+    config.validate()?;
+    Ok(resolve_work_gate(gate))
 }
 
 fn resolve_work_gate(gate: WorkGateConfig) -> WorkGate {

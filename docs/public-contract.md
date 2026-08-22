@@ -205,7 +205,9 @@ merge base with `HEAD`, unions staged, unstaged, and untracked paths, excludes
 `.agent/`, and sorts the result. Repository-relative action input globs identify
 directly affected components, including explicit inputs outside a component
 root; when no input matches a path, the most-specific containing component root
-is used. Reverse component dependencies propagate only under the checked-in
+is used. A `.` component with explicit action inputs is not a catch-all owner
+for paths outside those inputs; a root component without inputs may still own
+the repository fallback. Reverse component dependencies propagate only under the checked-in
 `propagate_affected_to_dependents` policy. Action dependencies expand afterward.
 Every retained target records its candidate and affected reasons, and an
 unrelated change produces a valid empty plan. Contracts 2 through 5 reject
@@ -239,12 +241,17 @@ action:
   one durable run. Its `kind` discriminator determines whether `id` or `run_id`
   is required.
 - `jig.plan_run` resolves explicit `selectors`, a mutually exclusive `profile`,
-  and optional `affected_base` through the same deterministic planner as the
-  CLI. It does not execute or write run state.
+  optional `affected_base`, and closed per-target `arguments` through the same
+  deterministic planner as the CLI. Effectful actions require explicit
+  selectors. Native actions that need a name bind it into the immutable plan;
+  unsupported or unselected-target arguments are rejected. Planning does not
+  execute or write run state.
 - `jig.execute_run` accepts the exact returned plan plus optional
-  `work_plan_id`, `record_receipts`, and `fail_fast` controls. It validates the
-  plan again, creates durable queued state, and returns an accepted run handle
-  without waiting for target execution.
+  `work_plan_id`, `record_receipts`, and `fail_fast` controls. Plans containing
+  `worktree` or `external` effects also require an exact `approved_effects`
+  acknowledgement. It validates the plan and approvals again, creates durable
+  queued state, and returns an accepted run handle without waiting for target
+  execution.
 - `jig.cancel_run` durably records an idempotent cancellation request. The
   owning worker observes that event even when it came from another MCP process;
   an in-process registry also signals the owned process tree immediately.

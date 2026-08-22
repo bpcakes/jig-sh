@@ -122,7 +122,7 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::WorkFinish => format_work_finish_summary(value),
         HumanOutput::WorkReceipts => format_work_receipts_summary(value),
         HumanOutput::WorkStatus => format_work_status_summary(value),
-        HumanOutput::Check => format_check_summary(value),
+        HumanOutput::Check => format_check_output(value),
         HumanOutput::ToolExecution => format_tool_execution_summary(value),
         HumanOutput::AgentMapGenerate => format_agent_map_generate_summary(value),
         HumanOutput::MigrationAdd => format_migration_add_summary(value),
@@ -141,6 +141,14 @@ fn render_human(human_output: HumanOutput, value: &serde_json::Value) -> Result<
         HumanOutput::DevStop => format_dev_stop_summary(value),
         HumanOutput::Proxy => format_proxy_summary(value),
     })
+}
+
+fn format_check_output(value: &serde_json::Value) -> String {
+    if value.get("plan").is_some() {
+        format_check_summary(value)
+    } else {
+        format_tool_execution_summary(value)
+    }
 }
 
 fn format_check_summary(value: &serde_json::Value) -> String {

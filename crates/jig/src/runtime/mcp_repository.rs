@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_contract::RunStatus;
+use jig_contract::{ActionEffect, RunStatus};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -49,15 +49,17 @@ struct RunCancellationProbe {
     run_id: String,
     signalled: Arc<AtomicBool>,
     last_durable_check: Mutex<Option<Instant>>,
+    event_cursor: Mutex<crate::state::RunEventCursor>,
 }
 
 impl RunCancellationProbe {
-    fn new(ctx: RepoContext, run_id: String) -> Self {
+    fn new(ctx: RepoContext, run_id: String, event_cursor: crate::state::RunEventCursor) -> Self {
         Self {
             ctx,
             run_id,
             signalled: Arc::new(AtomicBool::new(false)),
             last_durable_check: Mutex::new(None),
+            event_cursor: Mutex::new(event_cursor),
         }
     }
 
@@ -83,8 +85,13 @@ impl RunCancellationProbe {
         *last_check = Some(now);
         drop(last_check);
 
+        let mut cursor = self
+            .event_cursor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let requested =
-            crate::state::run_by_id(&self.ctx, &self.run_id).is_ok_and(|run| run.cancel_requested);
+            crate::state::run_cancel_requested_since(&self.ctx, &self.run_id, &mut cursor)
+                .unwrap_or(false);
         if requested {
             self.signal();
         }
@@ -141,7 +148,7 @@ fn catalog_inspection(
 
 fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
     let catalog = RepositoryCatalog::from_context(ctx)?;
-    let plan = crate::repository::plan_run(
+    let plan = crate::repository::plan_action_run(
         ctx,
         &catalog,
         PlanRunRequest {
@@ -149,6 +156,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
             profile: args.profile,
             affected_base: args.affected_base,
         },
+        args.arguments,
     )?;
     serialize_output(PlanRunOutput {
         ok: true,
@@ -160,6 +168,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
 fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     let catalog = RepositoryCatalog::from_context(ctx)?;
     crate::repository::validate_run_plan(ctx, &catalog, &args.plan)?;
+    validate_effect_approval(&args.plan.effects, &args.approved_effects)?;
     if let Some(plan_id) = args.work_plan_id.as_deref() {
         crate::state::ensure_plan_is_open(ctx, plan_id)?;
     }
@@ -177,6 +186,13 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     thread::Builder::new()
         .name("jig-repository-run".into())
         .spawn(move || {
+            let event_cursor = match crate::state::run_event_cursor(&worker_ctx) {
+                Ok(cursor) => cursor,
+                Err(error) => {
+                    let _ = started_tx.send(Err(error));
+                    return;
+                }
+            };
             let run = match start_check_run(&worker_ctx, &worker_catalog, worker_plan, work_plan_id)
             {
                 Ok(run) => run,
@@ -185,8 +201,11 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
                     return;
                 }
             };
-            let cancellation =
-                RunCancellationProbe::new(worker_ctx.clone(), run.result.run_id.clone());
+            let cancellation = RunCancellationProbe::new(
+                worker_ctx.clone(),
+                run.result.run_id.clone(),
+                event_cursor,
+            );
             let _guard =
                 register_live_run(&worker_ctx, &run.result.run_id, &cancellation.signalled);
             if started_tx.send(Ok(run.clone())).is_err() {
@@ -214,6 +233,25 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
         status: run.result.status,
         run: run.result,
     })
+}
+
+fn validate_effect_approval(planned: &[ActionEffect], approved: &[ActionEffect]) -> Result<()> {
+    let requires_approval = planned
+        .iter()
+        .copied()
+        .filter(|effect| matches!(effect, ActionEffect::Worktree | ActionEffect::External))
+        .collect::<std::collections::BTreeSet<_>>();
+    let approved = approved
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    if approved != requires_approval {
+        bail!(
+            "jig.execute_run requires approved_effects {:?} for this exact plan",
+            requires_approval
+        );
+    }
+    Ok(())
 }
 
 fn cancel(ctx: &RepoContext, args: CancelRunArgs) -> Result<Value> {

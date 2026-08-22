@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use jig_contract::{
-    ActionEffect, ActionId, ActionIntent, PlannedTarget, ProfileId, RunPlan, SelectionReason,
-    SourceIdentity, TargetId,
+    ActionArguments, ActionEffect, ActionId, ActionIntent, ActionRunner, PlannedTarget, ProfileId,
+    RunPlan, SelectionReason, SourceIdentity, TargetId,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -23,10 +23,47 @@ pub(crate) struct PlanRunRequest {
     pub(crate) affected_base: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlanningPolicy {
+    ChecksOnly,
+    DeclaredActions,
+}
+
 pub(crate) fn plan_run(
     ctx: &RepoContext,
     catalog: &RepositoryCatalog,
+    request: PlanRunRequest,
+) -> Result<RunPlan> {
+    plan_run_with_policy(
+        ctx,
+        catalog,
+        request,
+        BTreeMap::new(),
+        PlanningPolicy::ChecksOnly,
+    )
+}
+
+pub(crate) fn plan_action_run(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    request: PlanRunRequest,
+    arguments: BTreeMap<TargetId, ActionArguments>,
+) -> Result<RunPlan> {
+    plan_run_with_policy(
+        ctx,
+        catalog,
+        request,
+        arguments,
+        PlanningPolicy::DeclaredActions,
+    )
+}
+
+fn plan_run_with_policy(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
     mut request: PlanRunRequest,
+    arguments: BTreeMap<TargetId, ActionArguments>,
+    policy: PlanningPolicy,
 ) -> Result<RunPlan> {
     normalize_affected_base(&mut request.affected_base)?;
     if request.affected_base.is_some() && catalog.contract_version() < 6 {
@@ -41,7 +78,14 @@ pub(crate) fn plan_run(
     if changed_paths.is_some() && current_source_identity(ctx)? != source {
         bail!("repository source changed while resolving affected paths; plan again");
     }
-    plan_run_with_source_and_paths(catalog, request, source, changed_paths.as_deref())
+    plan_run_with_source_and_paths(
+        catalog,
+        request,
+        source,
+        changed_paths.as_deref(),
+        arguments,
+        policy,
+    )
 }
 
 fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
@@ -72,7 +116,23 @@ pub(crate) fn validate_run_plan(
             plan.id
         );
     }
-    let expected = plan_run(
+    let policy = if plan.targets.iter().all(|target| {
+        target.intent == ActionIntent::Check
+            && target.effects.contains(&ActionEffect::ReadOnly)
+            && !target.effects.contains(&ActionEffect::Worktree)
+            && !target.effects.contains(&ActionEffect::External)
+    }) {
+        PlanningPolicy::ChecksOnly
+    } else {
+        PlanningPolicy::DeclaredActions
+    };
+    let arguments = plan
+        .targets
+        .iter()
+        .filter(|target| !target.arguments.is_empty())
+        .map(|target| (target.target.clone(), target.arguments.clone()))
+        .collect();
+    let expected = plan_run_with_policy(
         ctx,
         catalog,
         PlanRunRequest {
@@ -80,6 +140,8 @@ pub(crate) fn validate_run_plan(
             profile: plan.profile.as_ref().map(ToString::to_string),
             affected_base: plan.affected_base.clone(),
         },
+        arguments,
+        policy,
     )?;
     if expected != *plan {
         bail!(
@@ -112,7 +174,14 @@ fn plan_run_with_source(
     request: PlanRunRequest,
     source: SourceIdentity,
 ) -> Result<RunPlan> {
-    plan_run_with_source_and_paths(catalog, request, source, None)
+    plan_run_with_source_and_paths(
+        catalog,
+        request,
+        source,
+        None,
+        BTreeMap::new(),
+        PlanningPolicy::ChecksOnly,
+    )
 }
 
 fn plan_run_with_source_and_paths(
@@ -120,6 +189,8 @@ fn plan_run_with_source_and_paths(
     mut request: PlanRunRequest,
     source: SourceIdentity,
     changed_paths: Option<&[String]>,
+    arguments: BTreeMap<TargetId, ActionArguments>,
+    policy: PlanningPolicy,
 ) -> Result<RunPlan> {
     normalize_affected_base(&mut request.affected_base)?;
     normalize_selectors(&mut request.selectors)?;
@@ -167,7 +238,13 @@ fn plan_run_with_source_and_paths(
         selected = select_affected_targets(catalog, selected, changed_paths)?;
     }
     expand_action_dependencies(catalog, &mut selected)?;
-    validate_check_actions(catalog, selected.keys())?;
+    match policy {
+        PlanningPolicy::ChecksOnly => validate_check_actions(catalog, selected.keys())?,
+        PlanningPolicy::DeclaredActions => {
+            validate_declared_action_selection(catalog, &request, selected.keys())?;
+        }
+    }
+    let arguments = bind_action_arguments(catalog, selected.keys(), arguments)?;
 
     let execution_layers = execution_layers(catalog, selected.keys())?;
     let mut effects = BTreeSet::new();
@@ -183,6 +260,7 @@ fn plan_run_with_source_and_paths(
             action.runner.clone(),
             action_input_digest(action, &source.worktree_fingerprint),
         );
+        planned.arguments = arguments.get(&planned.target).cloned().unwrap_or_default();
         planned.effects.clone_from(&action.effects);
         planned.inputs.clone_from(&action.inputs);
         planned.depends_on.clone_from(&action.depends_on);
@@ -222,12 +300,65 @@ fn normalize_selectors(selectors: &mut Vec<String>) -> Result<()> {
     for selector in selectors.iter_mut() {
         *selector = selector.trim().to_owned();
         if selector.is_empty() {
-            bail!("check selectors must not be empty");
+            bail!("repository selectors must not be empty");
         }
     }
     selectors.sort();
     selectors.dedup();
     Ok(())
+}
+
+fn validate_declared_action_selection<'a>(
+    catalog: &RepositoryCatalog,
+    request: &PlanRunRequest,
+    targets: impl Iterator<Item = &'a TargetId>,
+) -> Result<()> {
+    let has_effectful_action = targets.into_iter().any(|target| {
+        let action = catalog
+            .action(target)
+            .expect("selected targets must exist in the repository catalog");
+        action.intent != ActionIntent::Check
+            || action.effects.contains(&ActionEffect::Worktree)
+            || action.effects.contains(&ActionEffect::External)
+    });
+    if has_effectful_action && request.selectors.is_empty() {
+        bail!("effectful repository actions require explicit selectors");
+    }
+    Ok(())
+}
+
+fn bind_action_arguments<'a>(
+    catalog: &RepositoryCatalog,
+    targets: impl Iterator<Item = &'a TargetId>,
+    mut arguments: BTreeMap<TargetId, ActionArguments>,
+) -> Result<BTreeMap<TargetId, ActionArguments>> {
+    let targets = targets.cloned().collect::<BTreeSet<_>>();
+    if let Some(target) = arguments.keys().find(|target| !targets.contains(*target)) {
+        bail!("arguments were provided for unselected target '{target}'");
+    }
+    for target in &targets {
+        let action = catalog
+            .action(target)
+            .expect("selected targets must exist in the repository catalog");
+        let requires_name = matches!(
+            &action.runner,
+            ActionRunner::Native { operation }
+                if jig_features::native_tool_requires_name(operation)
+        );
+        let supplied = arguments.get(target).and_then(|args| args.name.as_deref());
+        if requires_name {
+            let name = supplied.ok_or_else(|| {
+                anyhow::anyhow!("target '{target}' requires string argument 'name'")
+            })?;
+            if name.trim().is_empty() || name.starts_with('-') {
+                bail!("target '{target}' has invalid argument 'name'");
+            }
+        } else if supplied.is_some() {
+            bail!("target '{target}' does not accept argument 'name'");
+        }
+    }
+    arguments.retain(|_, value| !value.is_empty());
+    Ok(arguments)
 }
 
 fn select_explicit(
@@ -444,12 +575,16 @@ fn plan_digest(plan: &RunPlan) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use jig_contract::{
-        ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
-        ProfileId, ProfileSpec, SelectionReason, SourceIdentity, TargetId,
+        ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId,
+        ComponentSpec, ProfileId, ProfileSpec, SelectionReason, SourceIdentity, TargetId,
     };
 
-    use super::{PlanRunRequest, plan_run_with_source, plan_run_with_source_and_paths};
+    use super::{
+        PlanRunRequest, PlanningPolicy, plan_run_with_source, plan_run_with_source_and_paths,
+    };
     use crate::repository::RepositoryCatalog;
 
     fn fixture() -> RepositoryCatalog {
@@ -659,6 +794,8 @@ mod tests {
             },
             source(),
             Some(&["api/main.go".into()]),
+            BTreeMap::new(),
+            PlanningPolicy::ChecksOnly,
         )
         .unwrap();
 
@@ -701,6 +838,8 @@ mod tests {
             },
             source(),
             Some(&["docs/guide.md".into()]),
+            BTreeMap::new(),
+            PlanningPolicy::ChecksOnly,
         )
         .unwrap();
 
@@ -736,6 +875,67 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("not a read-only check"));
+    }
+
+    #[test]
+    fn action_plans_bind_required_native_arguments_into_the_digest() {
+        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
+        let target: TargetId = "api:migration-add".parse().unwrap();
+        let mut action = ActionSpec::new(
+            target.clone(),
+            ActionIntent::Generate,
+            ActionRunner::native(jig_contract::tool::MIGRATION_ADD),
+        );
+        action.effects = vec![ActionEffect::Worktree, ActionEffect::Process];
+        let profile_id = ProfileId::parse("verify").unwrap();
+        let profile = ProfileSpec::new(profile_id.clone(), vec![target.clone()]);
+        let catalog = RepositoryCatalog::from_native(
+            6,
+            "digest",
+            &[component],
+            &[action],
+            &[profile],
+            Some(&profile_id),
+        )
+        .unwrap();
+        let request = PlanRunRequest {
+            selectors: vec![target.to_string()],
+            ..PlanRunRequest::default()
+        };
+
+        let missing = plan_run_with_source_and_paths(
+            &catalog,
+            request.clone(),
+            source(),
+            None,
+            BTreeMap::new(),
+            PlanningPolicy::DeclaredActions,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(missing.contains("requires string argument 'name'"));
+
+        let arguments = BTreeMap::from([(
+            target,
+            ActionArguments {
+                name: Some("create_examples".into()),
+            },
+        )]);
+        let plan = plan_run_with_source_and_paths(
+            &catalog,
+            request,
+            source(),
+            None,
+            arguments,
+            PlanningPolicy::DeclaredActions,
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.targets[0].arguments.name.as_deref(),
+            Some("create_examples")
+        );
+        assert!(plan.id.starts_with("run-plan_sha256:"));
     }
 
     #[test]
