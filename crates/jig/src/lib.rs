@@ -92,6 +92,12 @@ pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
     cli::structured_error_exit_code(error)
 }
 
+/// Returns whether human stderr delivery was abandoned after its shutdown
+/// deadline. Callers must not perform another blocking stderr write afterward.
+pub fn stderr_delivery_abandoned() -> bool {
+    progress::stderr_delivery_abandoned()
+}
+
 #[cfg(all(test, not(feature = "dev-proxy")))]
 mod no_dev_proxy_feature_tests {
     use tempfile::tempdir;

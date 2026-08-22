@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,11 @@ use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver}
 const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
 const CLI_PROGRESS_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
+static CLI_STDERR_DELIVERY_ABANDONED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn stderr_delivery_abandoned() -> bool {
+    CLI_STDERR_DELIVERY_ABANDONED.load(Ordering::Acquire)
+}
 
 /// Command-scoped terminal progress output.
 ///
@@ -53,7 +59,7 @@ impl CliProgress {
     }
 
     pub(crate) fn header(&self, action: impl fmt::Display) {
-        if !self.enabled {
+        if !self.enabled || stderr_delivery_abandoned() {
             return;
         }
         eprintln!(
@@ -114,6 +120,9 @@ impl CliProgress {
     }
 
     fn line(&self, label: &str, detail: impl fmt::Display, status: Status) {
+        if stderr_delivery_abandoned() {
+            return;
+        }
         eprintln!(
             "  {} {} {} {}",
             self.status_token(status),
@@ -291,12 +300,16 @@ impl CliExecutionObserver {
 
     pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
         let rendered = self.take_rendered();
-        finish_rendered_with_timeout(
-            outcome,
-            rendered,
-            io::stderr(),
-            CLI_PROGRESS_DELIVERY_TIMEOUT,
-        )
+        let writer = match independent_stderr_writer() {
+            Ok(writer) => writer,
+            Err(error) => return combine_progress_delivery(outcome, Err(error)),
+        };
+        let (outcome, delivery) =
+            finish_rendered_with_timeout(outcome, rendered, writer, CLI_PROGRESS_DELIVERY_TIMEOUT);
+        if delivery == ProgressDelivery::Abandoned {
+            CLI_STDERR_DELIVERY_ABANDONED.store(true, Ordering::Release);
+        }
+        outcome
     }
 
     #[cfg(test)]
@@ -338,17 +351,23 @@ impl CliExecutionObserver {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProgressDelivery {
+    Complete,
+    Abandoned,
+}
+
 fn finish_rendered_with_timeout<T, W>(
     outcome: anyhow::Result<T>,
     rendered: Vec<u8>,
     mut writer: W,
     timeout: Duration,
-) -> anyhow::Result<T>
+) -> (anyhow::Result<T>, ProgressDelivery)
 where
     W: Write + Send + 'static,
 {
     if rendered.is_empty() {
-        return outcome;
+        return (outcome, ProgressDelivery::Complete);
     }
     let (sender, receiver) = mpsc::sync_channel(1);
     let writer = std::thread::Builder::new()
@@ -359,21 +378,86 @@ where
         });
     let writer = match writer {
         Ok(writer) => writer,
-        Err(error) => return combine_progress_delivery(outcome, Err(error)),
+        Err(error) => {
+            return (
+                combine_progress_delivery(outcome, Err(error)),
+                ProgressDelivery::Complete,
+            );
+        }
     };
     match receiver.recv_timeout(timeout) {
         Ok(result) => {
             let _ = writer.join();
-            combine_progress_delivery(outcome, result)
+            (
+                combine_progress_delivery(outcome, result),
+                ProgressDelivery::Complete,
+            )
         }
-        Err(mpsc::RecvTimeoutError::Timeout) => outcome,
-        Err(mpsc::RecvTimeoutError::Disconnected) => combine_progress_delivery(
-            outcome,
-            Err(io::Error::other(
-                "execution progress writer stopped before reporting its result",
-            )),
+        Err(mpsc::RecvTimeoutError::Timeout) => (outcome, ProgressDelivery::Abandoned),
+        Err(mpsc::RecvTimeoutError::Disconnected) => (
+            combine_progress_delivery(
+                outcome,
+                Err(io::Error::other(
+                    "execution progress writer stopped before reporting its result",
+                )),
+            ),
+            ProgressDelivery::Complete,
         ),
     }
+}
+
+#[cfg(unix)]
+fn independent_stderr_writer() -> io::Result<std::fs::File> {
+    use std::os::fd::FromRawFd;
+
+    // SAFETY: `dup` either fails or returns a new descriptor whose ownership is
+    // transferred exactly once to `File`. Unlike `std::io::Stderr`, the file
+    // has no process-wide Rust lock that a timed-out writer can retain.
+    let descriptor = unsafe { libc::dup(libc::STDERR_FILENO) };
+    if descriptor < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { std::fs::File::from_raw_fd(descriptor) })
+}
+
+#[cfg(windows)]
+fn independent_stderr_writer() -> io::Result<std::fs::File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{GetStdHandle, STD_ERROR_HANDLE};
+    use windows_sys::Win32::System::Threading::{
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, GetCurrentProcess,
+    };
+
+    // SAFETY: the standard-error handle is borrowed, `DuplicateHandle` creates
+    // a separately owned handle, and successful ownership transfers exactly
+    // once to `File` below.
+    let source = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    if source.is_null() || source == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicate = std::ptr::null_mut();
+    let duplicated = unsafe {
+        DuplicateHandle(
+            process,
+            source,
+            process,
+            &mut duplicate,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if duplicated == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { std::fs::File::from_raw_handle(duplicate) })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn independent_stderr_writer() -> io::Result<io::Stderr> {
+    Ok(io::stderr())
 }
 
 fn combine_progress_delivery<T>(
@@ -432,7 +516,7 @@ mod tests {
 
     use super::{
         CLI_PROGRESS_OUTPUT_LIMIT, CLI_PROGRESS_STRUCTURE_LIMIT, CliExecutionObserver, CliProgress,
-        finish_rendered_with_timeout, format_duration, leader,
+        ProgressDelivery, finish_rendered_with_timeout, format_duration, leader,
     };
 
     #[test]
@@ -528,14 +612,15 @@ mod tests {
         }
 
         let operation: anyhow::Result<()> = Err(anyhow::anyhow!("fixture operation failed"));
-        let error = finish_rendered_with_timeout(
+        let (result, delivery) = finish_rendered_with_timeout(
             operation,
             b"pending progress".to_vec(),
             FailingWriter,
             Duration::from_secs(1),
-        )
-        .unwrap_err();
+        );
+        let error = result.unwrap_err();
 
+        assert_eq!(delivery, ProgressDelivery::Complete);
         let rendered = format!("{error:#}");
         assert!(rendered.starts_with("Execution progress also failed to flush"));
         assert!(rendered.contains("fixture operation failed"));
@@ -558,15 +643,16 @@ mod tests {
         }
 
         let started = std::time::Instant::now();
-        let result = finish_rendered_with_timeout(
+        let (result, delivery) = finish_rendered_with_timeout(
             Ok(7),
             b"pending progress".to_vec(),
             SlowWriter,
             Duration::from_millis(10),
-        )
-        .unwrap();
+        );
+        let result = result.unwrap();
 
         assert_eq!(result, 7);
+        assert_eq!(delivery, ProgressDelivery::Abandoned);
         assert!(started.elapsed() < Duration::from_millis(100));
     }
 
