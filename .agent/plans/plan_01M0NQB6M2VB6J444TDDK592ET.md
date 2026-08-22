@@ -13,7 +13,7 @@ The unpublished branch introduced cooperative cancellation, bounded process capt
 - [x] (2026-08-22T23:58:59+02:00) Committed this plan and its append-only work records as the planning slice.
 - [x] (2026-08-23T00:18:09+02:00) Made Git-backed receipt finalization cooperative without sacrificing durable cancellation receipts; the full `jig-sh` library and signal-policy integration tests passed before committing the slice.
 - [x] (2026-08-23T00:22:00+02:00) Monitored the Codex authoritative result file during execution, terminated the owned process tree at the configured limit, preserved external cancellation semantics, and passed all worker-runner regressions before committing the slice.
-- [ ] Make the supported-host source inventory fail closed and match only actual Windows path components; add regression coverage and commit the slice.
+- [x] (2026-08-23T00:23:29+02:00) Made the supported-host source inventory fail closed, narrowed Windows path matching, excluded append-only work plans as a class, and passed the direct script plus four integration regressions before committing the slice.
 - [ ] Decouple the timeout test fixture, correct pull-request diagnostics, cover included Rust fragments with the format gate, format those fragments, and commit the cleanup slice.
 - [ ] Run targeted checks, then the full configured test suite and remaining repository gates through the development binary.
 - [ ] Record evidence, update this plan's outcome, finish structured work, and commit the final append-only records.
@@ -188,3 +188,5 @@ Plan revision note (2026-08-22): Expanded the structured-work stub into a self-c
 Plan revision note (2026-08-23): Marked the cancellation-safe receipt milestone complete after 1,570 library tests and both runtime signal-policy tests passed, and recorded unrelated Rust 1.97 Clippy drift for the later gate-cleanup slice.
 
 Plan revision note (2026-08-23): Marked the authoritative worker-output milestone complete after proving prompt overflow termination, descendant cleanup, post-exit race defense, and external cancellation precedence.
+
+Plan revision note (2026-08-23): Marked the supported-host inventory milestone complete after proving both Git inventory commands fail closed and a benign `window.rs` path remains allowed; generalized the plan exclusion instead of adding another per-plan exception.
