@@ -12,8 +12,8 @@ After this work, every PR-repair child process uses the same typed owned-process
 
 - [x] (2026-08-22) Reviewed repository and crate guidance, built the development Jig binary, and opened structured work.
 - [x] (2026-08-22) Implemented typed supervision and post-cancellation reconciliation for every PR-manager Git command; focused PR-manager tests and strict crate Clippy pass.
-- [ ] Add bounded CLI progress finalization that cannot indefinitely delay signal retirement.
-- [ ] Run focused tests and commit each implementation slice independently.
+- [x] (2026-08-22) Added consuming, deadline-bounded CLI progress delivery; focused unit and production-binary signal/backpressure regressions pass.
+- [x] (2026-08-22) Ran focused tests and strict Clippy for both implementation slices and committed the Git slice independently.
 - [ ] Run format, Clippy, contract, and the complete configured test suite through `JIG_DEV_BIN=target/debug/jig`; inspect receipts and close the work.
 
 ## Surprises & Discoveries
@@ -24,6 +24,8 @@ After this work, every PR-repair child process uses the same typed owned-process
   Evidence: `CliExecutionObserver::finish_with` synchronously writes up to 64 KiB of child preview plus 16 KiB of structural output before `DoctorSignalSession::finish` restores and redelivers a pending termination signal.
 - Observation: Push ambiguity applies to ordinary client failures as well as cancellation.
   Evidence: A server can accept the single ref update before the client sees EOF, timeout, or cancellation; the implementation now reconciles every non-successful push outcome and the focused fixture proves a completed remote update survives cancellation classification.
+- Observation: The existing production setup interruption fixture already had the wait-before-read shape needed to reproduce the progress deadlock.
+  Evidence: Expanding its generic child transcript beyond the 64 KiB preview cap makes the old synchronous finalizer fill the unread stderr pipe; the new 250 ms delivery deadline lets signal retirement proceed while the sentinel and descendant-cleanup assertions still pass.
 
 ## Decision Log
 

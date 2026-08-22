@@ -149,10 +149,15 @@ printf x >> "$JIG_CODEX_PROBE_COUNT"
         fs::write(
             &bootstrap,
             r#"#!/bin/sh
-printf 'setup child progress sentinel\n'
-printf started > "$JIG_SETUP_CHILD_STARTED"
-(sleep 1; printf leaked > "$JIG_SETUP_DELAYED_MARKER") &
-wait
+	printf 'setup child progress sentinel\n'
+	i=0
+	while [ "$i" -lt 5000 ]; do
+	  printf 'bounded progress payload\n'
+	  i=$((i + 1))
+	done
+	printf started > "$JIG_SETUP_CHILD_STARTED"
+	(sleep 1; printf leaked > "$JIG_SETUP_DELAYED_MARKER") &
+	wait
 "#,
         )
         .unwrap();

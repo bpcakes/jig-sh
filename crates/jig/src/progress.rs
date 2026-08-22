@@ -1,12 +1,14 @@
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver};
 
 const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
+const CLI_PROGRESS_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Command-scoped terminal progress output.
 ///
@@ -288,55 +290,102 @@ impl CliExecutionObserver {
     }
 
     pub(crate) fn finish_with<T>(&mut self, outcome: anyhow::Result<T>) -> anyhow::Result<T> {
-        let stderr = io::stderr();
-        self.finish_to_with(outcome, &mut stderr.lock())
+        let rendered = self.take_rendered();
+        finish_rendered_with_timeout(
+            outcome,
+            rendered,
+            io::stderr(),
+            CLI_PROGRESS_DELIVERY_TIMEOUT,
+        )
     }
 
-    fn finish_to_with<T>(
-        &mut self,
-        outcome: anyhow::Result<T>,
-        writer: &mut dyn Write,
-    ) -> anyhow::Result<T> {
-        match (outcome, self.finish_to(writer)) {
-            (outcome, Ok(())) => outcome,
-            (Ok(_), Err(error)) => Err(error.into()),
-            (Err(error), Err(flush_error)) => Err(error.context(format!(
-                "Execution progress also failed to flush: {flush_error}"
-            ))),
-        }
-    }
-
+    #[cfg(test)]
     fn finish_to(&mut self, writer: &mut dyn Write) -> io::Result<()> {
+        writer.write_all(&self.take_rendered())?;
+        writer.flush()
+    }
+
+    fn take_rendered(&mut self) -> Vec<u8> {
         if !self.enabled {
-            return Ok(());
+            return Vec::new();
         }
-        for chunk in &self.pending {
-            writer.write_all(&chunk.bytes)?;
+        let mut rendered = Vec::with_capacity(
+            self.output_bytes
+                .saturating_add(self.structural_bytes)
+                .saturating_add(128),
+        );
+        for chunk in std::mem::take(&mut self.pending) {
+            rendered.extend_from_slice(&chunk.bytes);
         }
         if self.output_truncated {
-            if self
-                .pending
-                .last()
-                .and_then(|chunk| chunk.bytes.last())
-                .is_some_and(|byte| *byte != b'\n')
-            {
-                writer.write_all(b"\n")?;
+            if rendered.last().is_some_and(|byte| *byte != b'\n') {
+                rendered.push(b'\n');
             }
-            writer.write_all(b"[..] progress preview truncated after 64 KiB\n")?;
+            rendered.extend_from_slice(b"[..] progress preview truncated after 64 KiB\n");
         }
         if self.structure_truncated {
-            if !self.output_truncated
-                && self
-                    .pending
-                    .last()
-                    .and_then(|chunk| chunk.bytes.last())
-                    .is_some_and(|byte| *byte != b'\n')
-            {
-                writer.write_all(b"\n")?;
+            if !self.output_truncated && rendered.last().is_some_and(|byte| *byte != b'\n') {
+                rendered.push(b'\n');
             }
-            writer.write_all(b"[..] structural progress truncated after 16 KiB\n")?;
+            rendered.extend_from_slice(b"[..] structural progress truncated after 16 KiB\n");
         }
-        writer.flush()
+        self.output_bytes = 0;
+        self.structural_bytes = 0;
+        self.output_truncated = false;
+        self.structure_truncated = false;
+        self.output_needs_newline = false;
+        rendered
+    }
+}
+
+fn finish_rendered_with_timeout<T, W>(
+    outcome: anyhow::Result<T>,
+    rendered: Vec<u8>,
+    mut writer: W,
+    timeout: Duration,
+) -> anyhow::Result<T>
+where
+    W: Write + Send + 'static,
+{
+    if rendered.is_empty() {
+        return outcome;
+    }
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let writer = std::thread::Builder::new()
+        .name("jig-progress-writer".into())
+        .spawn(move || {
+            let result = writer.write_all(&rendered).and_then(|()| writer.flush());
+            let _ = sender.send(result);
+        });
+    let writer = match writer {
+        Ok(writer) => writer,
+        Err(error) => return combine_progress_delivery(outcome, Err(error)),
+    };
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => {
+            let _ = writer.join();
+            combine_progress_delivery(outcome, result)
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => outcome,
+        Err(mpsc::RecvTimeoutError::Disconnected) => combine_progress_delivery(
+            outcome,
+            Err(io::Error::other(
+                "execution progress writer stopped before reporting its result",
+            )),
+        ),
+    }
+}
+
+fn combine_progress_delivery<T>(
+    outcome: anyhow::Result<T>,
+    delivery: io::Result<()>,
+) -> anyhow::Result<T> {
+    match (outcome, delivery) {
+        (outcome, Ok(())) => outcome,
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(delivery_error)) => Err(error.context(format!(
+            "Execution progress also failed to flush: {delivery_error}"
+        ))),
     }
 }
 
@@ -383,7 +432,7 @@ mod tests {
 
     use super::{
         CLI_PROGRESS_OUTPUT_LIMIT, CLI_PROGRESS_STRUCTURE_LIMIT, CliExecutionObserver, CliProgress,
-        format_duration, leader,
+        finish_rendered_with_timeout, format_duration, leader,
     };
 
     #[test]
@@ -478,17 +527,61 @@ mod tests {
             }
         }
 
-        let mut observer = CliExecutionObserver::for_human_output(false);
-        observer.queue_output(b"pending progress");
         let operation: anyhow::Result<()> = Err(anyhow::anyhow!("fixture operation failed"));
-        let error = observer
-            .finish_to_with(operation, &mut FailingWriter)
-            .unwrap_err();
+        let error = finish_rendered_with_timeout(
+            operation,
+            b"pending progress".to_vec(),
+            FailingWriter,
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
 
         let rendered = format!("{error:#}");
         assert!(rendered.starts_with("Execution progress also failed to flush"));
         assert!(rendered.contains("fixture operation failed"));
         assert!(rendered.contains("fixture sink failed"));
+    }
+
+    #[test]
+    fn progress_delivery_timeout_does_not_block_the_operation_result() {
+        struct SlowWriter;
+
+        impl Write for SlowWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let started = std::time::Instant::now();
+        let result = finish_rendered_with_timeout(
+            Ok(7),
+            b"pending progress".to_vec(),
+            SlowWriter,
+            Duration::from_millis(10),
+        )
+        .unwrap();
+
+        assert_eq!(result, 7);
+        assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn progress_rendering_is_consuming() {
+        let mut observer = CliExecutionObserver::for_human_output(false);
+        observer.queue_output(b"one copy\n");
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+
+        observer.finish_to(&mut first).unwrap();
+        observer.finish_to(&mut second).unwrap();
+
+        assert_eq!(first, b"one copy\n");
+        assert!(second.is_empty());
     }
 
     #[test]
