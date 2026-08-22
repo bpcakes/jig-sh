@@ -6,8 +6,6 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use tempfile::tempdir;
-use wait_timeout::ChildExt;
-
 #[test]
 fn blocked_progress_pipe_does_not_retain_stderr_or_block_error_exit() {
     let temp = tempdir().unwrap();
@@ -55,17 +53,22 @@ rust_test_command = "dd if=/dev/zero bs=262144 count=1 2>/dev/null; exit 7"
     let resized = unsafe { libc::fcntl(blocked_stderr.as_raw_fd(), libc::F_SETPIPE_SZ, 4096) };
     assert!(resized >= 4096, "failed to constrain test pipe capacity");
 
-    let status = child
-        // This outer watchdog detects the historical infinite stderr-lock
-        // wait. Keep ample scheduling headroom for the repository's highly
-        // parallel full suite; production delivery still abandons after 250ms.
-        .wait_timeout(Duration::from_secs(30))
-        .unwrap()
-        .unwrap_or_else(|| {
+    // Poll `waitpid(WNOHANG)` directly instead of installing another SIGCHLD
+    // waiter inside Nextest's child-heavy full suite. This outer watchdog only
+    // detects the historical infinite stderr-lock wait; production delivery
+    // still abandons after 250ms.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("jig retained or wrote through blocked stderr after progress abandonment")
-        });
+            panic!("jig retained or wrote through blocked stderr after progress abandonment");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
 
     assert!(!status.success());
     drop(blocked_stderr);
