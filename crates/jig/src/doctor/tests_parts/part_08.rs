@@ -728,17 +728,19 @@ fn write_sqlx_doctor_fixture_with_command(root: &Path, command: &str) {
     write_doctor_fixture(root);
     let config_path = root.join(".jig.toml");
     let sqlx_config = format!(
-        "sqlx_enabled = true\nrust_crate_roots = [\"crates\"]\nrust_migration_dir = \"migrations\"\nrust_sqlx_metadata_dir = \".sqlx\"\nschema_dump_enabled = false\nsqlx_check_command = {command:?}\n\n[agent_tooling.codex]"
+        "sqlx_enabled = true\nrust_crate_roots = [\"crates\"]\nrust_migration_dir = \"migrations\"\nrust_sqlx_metadata_dir = \".sqlx\"\nschema_dump_enabled = false\nsqlx_check_command = {command:?}\n\n[repository]"
     );
     let config = fs::read_to_string(&config_path)
         .unwrap()
-        .replace("[agent_tooling.codex]", &sqlx_config);
+        .replace("adapters = [\"rust\"]", "adapters = [\"rust\", \"sqlx\"]")
+        .replace("[repository]", &sqlx_config);
     fs::write(config_path, config).unwrap();
     fs::create_dir(root.join("migrations")).unwrap();
 
     let contract_path = root.join(".agent/jig-contract.json");
     let mut contract: Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"][0]["adapters"] = json!(["rust", "sqlx"]);
     contract["required_commands"]
         .as_array_mut()
         .unwrap()

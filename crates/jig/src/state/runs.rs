@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use jig_contract::{RunConclusion, RunPlan, RunResult, RunStatus, TargetId, TargetRunResult};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::context::RepoContext;
@@ -17,7 +18,7 @@ const EVENT_COMPLETED: &str = "completed";
 const EVENT_CANCEL_REQUESTED: &str = "cancel_requested";
 
 /// The accepted plan and current state reconstructed from the append-only run log.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub(crate) struct DurableRun {
     pub(crate) plan: RunPlan,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,13 +108,13 @@ pub(crate) fn complete_run(
     append_simple_event(ctx, run_id, EVENT_COMPLETED, None, Some(conclusion))
 }
 
-#[allow(dead_code)] // Wired to the bounded MCP cancel surface in migration slice 7.
-pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<()> {
+pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
     let run = run_by_id(ctx, run_id)?;
-    if run.result.status == RunStatus::Completed {
-        bail!("run '{run_id}' is already completed");
+    if run.result.status == RunStatus::Completed || run.cancel_requested {
+        return Ok(run);
     }
-    append_simple_event(ctx, run_id, EVENT_CANCEL_REQUESTED, None, None)
+    append_simple_event(ctx, run_id, EVENT_CANCEL_REQUESTED, None, None)?;
+    run_by_id(ctx, run_id)
 }
 
 pub(crate) fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
@@ -262,7 +263,12 @@ fn fold_events(run_id: &str, events: Vec<RunEventRecord>) -> Result<DurableRun> 
             }
             EVENT_CANCEL_REQUESTED => {
                 let current = require_run(&mut run, run_id, EVENT_CANCEL_REQUESTED)?;
-                ensure_nonterminal(current, run_id, EVENT_CANCEL_REQUESTED)?;
+                // Cancellation and terminal completion may race across MCP
+                // request and worker threads. A physically later cancellation
+                // event is an idempotent observation, not stream corruption.
+                if current.result.status == RunStatus::Completed {
+                    continue;
+                }
                 current.cancel_requested = true;
                 current.result.updated_at_ms = event.timestamp_ms;
             }
@@ -362,6 +368,41 @@ mod tests {
             reloaded.result.targets[0].conclusion,
             Some(RunConclusion::Success)
         );
+    }
+
+    #[test]
+    fn cancellation_requests_are_idempotent() {
+        let (_temp, ctx) = context();
+        let started = start_run(&ctx, plan(), None).unwrap();
+        let run_id = started.result.run_id;
+
+        let first = request_run_cancel(&ctx, &run_id).unwrap();
+        let second = request_run_cancel(&ctx, &run_id).unwrap();
+
+        assert!(first.cancel_requested);
+        assert!(second.cancel_requested);
+        let events = std::fs::read_to_string(ctx.state_file(RUNS_FILE)).unwrap();
+        assert_eq!(events.matches(EVENT_CANCEL_REQUESTED).count(), 1);
+    }
+
+    #[test]
+    fn cancellation_observed_after_completion_does_not_corrupt_the_run() {
+        let (_temp, ctx) = context();
+        let started = start_run(&ctx, plan(), None).unwrap();
+        let run_id = started.result.run_id;
+        let target: TargetId = "repo:test".parse().unwrap();
+        let mut result = TargetRunResult::queued(target, "sha256:config", "sha256:input");
+        result.status = RunStatus::Completed;
+        result.conclusion = Some(RunConclusion::Success);
+        record_target_result(&ctx, &run_id, result).unwrap();
+        complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+
+        append_simple_event(&ctx, &run_id, EVENT_CANCEL_REQUESTED, None, None).unwrap();
+        let reloaded = run_by_id(&ctx, &run_id).unwrap();
+
+        assert_eq!(reloaded.result.status, RunStatus::Completed);
+        assert_eq!(reloaded.result.conclusion, Some(RunConclusion::Success));
+        assert!(!reloaded.cancel_requested);
     }
 
     #[test]

@@ -65,6 +65,7 @@ secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
+schemars.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 time.workspace = true
@@ -78,6 +79,7 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 jig-vault = { workspace = true, features = ["test-utils"] }
+jsonschema.workspace = true
 
 [lints]
 workspace = true

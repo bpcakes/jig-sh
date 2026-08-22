@@ -61,7 +61,7 @@ scripts/jig work finish --plan-id "$plan_id" --resolution "Harness loop verified
 
 ## The command contract
 
-`.agent/jig-contract.json` records the stable command tools that MCP clients and CI can execute across machines. Runtime-owned commands manage local workflow state, processes, or secrets and are intentionally outside the generated contract.
+`.agent/jig-contract.json` records the stable repository targets and compatibility command tools that CLI and CI clients can execute across machines. Contract v6 MCP clients discover the same repository model through four bounded inspect, plan, execute, and cancel operations; older contracts continue to expose their declared command tools directly. Runtime-owned commands manage local workflow state, processes, or secrets and are intentionally outside the generated contract.
 
 | Surface         | Stable contract? | Records receipts? | Machine-local? |
 | --------------- | ---------------- | ----------------- | -------------- |

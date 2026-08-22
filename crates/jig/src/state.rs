@@ -37,7 +37,7 @@ use records::DecisionRecord;
 use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
     DurableRun, complete_run, mark_run_running, mark_target_started, record_target_result,
-    run_by_id, start_run,
+    request_run_cancel, run_by_id, start_run,
 };
 #[cfg(test)]
 use sessions::build_summary;

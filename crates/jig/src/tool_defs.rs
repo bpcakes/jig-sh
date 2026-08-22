@@ -3,6 +3,14 @@ use jig_contract::ManifestTool;
 pub(crate) use jig_contract::{kind, tool};
 use serde_json::{Map, Value, json};
 
+mod repository;
+
+pub(crate) use repository::{
+    CancelRunArgs, CancelRunOutput, ExecuteRunArgs, ExecuteRunOutput, PlanRunArgs, PlanRunOutput,
+    RepositoryInspectArgs, RepositoryInspectOutput, RepositoryInspectResult, RepositoryTool,
+    RunInspection,
+};
+
 pub(crate) const DEFAULT_RECEIPTS_LIMIT: usize = 20;
 pub(crate) const LOOP_CLEAR_ATTEMPT_TOOL: &str = "jig.loop_clear_attempt";
 pub(crate) const LOOP_TICK_TOOL: &str = "jig.loop_tick";
@@ -383,11 +391,25 @@ impl MemoryTool {
     }
 }
 
-pub(crate) fn tool_descriptors(manifest_tools: &[ManifestTool]) -> Vec<Value> {
-    manifest_tools
-        .iter()
-        .filter(|tool| is_execution_tool(tool))
-        .map(manifest_tool_descriptor)
+pub(crate) fn tool_descriptors(
+    contract_version: u32,
+    manifest_tools: &[ManifestTool],
+) -> Vec<Value> {
+    let execution = if contract_version >= 6 {
+        RepositoryTool::ALL
+            .iter()
+            .copied()
+            .map(RepositoryTool::descriptor)
+            .collect::<Vec<_>>()
+    } else {
+        manifest_tools
+            .iter()
+            .filter(|tool| is_execution_tool(tool))
+            .map(manifest_tool_descriptor)
+            .collect()
+    };
+    execution
+        .into_iter()
         .chain(MemoryTool::ALL.iter().copied().map(memory_tool_descriptor))
         .collect()
 }

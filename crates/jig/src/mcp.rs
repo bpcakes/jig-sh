@@ -52,7 +52,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "tools": tool_defs::tool_descriptors(ctx.tool_specs())
+                    "tools": tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
                 }
             })),
             "tools/call" => Some(handle_tool_call(ctx, id, params)),

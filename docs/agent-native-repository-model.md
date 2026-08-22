@@ -174,16 +174,16 @@ prevents another overlapping inspection command.
 The MCP server exposes a small, stable tool surface rather than one tool for
 every target:
 
-- `jig.inspect` reads workspace, component, target, profile, run, gate, and work
-  information for clients that do not consume MCP resources.
+- `jig.inspect` reads workspace, component, target, profile, and durable run
+  information. Bounded `jig.work_*` tools own work lifecycle information.
 - `jig.plan_run` resolves selectors and returns a run plan without executing it.
 - `jig.execute_run` executes an unchanged plan and returns a durable run handle.
 - `jig.cancel_run` requests cancellation of a running execution.
 - Structured work lifecycle tools remain a separate, bounded `jig.work_*`
   namespace.
 
-Inspectable context is also published as resources when the client supports
-them:
+MCP resources are a compatible later projection, not a prerequisite for the
+repository model. A future client-capability-aware surface can publish:
 
     jig://workspace
     jig://components/COMPONENT_ID
@@ -196,12 +196,14 @@ Tools have strict input and output JSON schemas. The canonical response is
 `structuredContent`; a text rendering is included only for compatibility. A
 target conclusion of `failure` is a successful execution result, not an MCP
 protocol error. Invalid arguments, stale plans, state corruption, and runtime
-infrastructure failures use the protocol's error channels.
+infrastructure failures before a run handle is accepted use the protocol's
+error channels. If an accepted worker later fails internally, Jig best-effort
+closes its unfinished targets and run as `blocked` for durable inspection.
 
-Jig owns durable run ids and lifecycle state. When an MCP client supports the
-Tasks extension, a long execution is projected as an MCP Task. Clients without
-that extension use the same run id through `jig.inspect`; the underlying model
-does not depend on one transport feature.
+Jig owns durable run ids and lifecycle state. The initial transport works for
+every client by returning a run id and polling through `jig.inspect`. A later
+Tasks-extension projection can reuse that id without changing the underlying
+repository or run model.
 
 Every effectful call is constrained by the checked-in action contract. Plans
 include effect and approval metadata, and execution verifies the plan's

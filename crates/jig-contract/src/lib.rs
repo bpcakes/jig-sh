@@ -27,6 +27,10 @@ pub mod tool {
     pub const FMT_CHECK: &str = "jig.fmt_check";
     pub const LINT: &str = "jig.lint";
     pub const MIGRATION_ADD: &str = "jig.migration_add";
+    pub const INSPECT: &str = "jig.inspect";
+    pub const PLAN_RUN: &str = "jig.plan_run";
+    pub const EXECUTE_RUN: &str = "jig.execute_run";
+    pub const CANCEL_RUN: &str = "jig.cancel_run";
     pub const PLANS_APPEND: &str = "jig.plans_append";
     pub const PLANS_CLOSE: &str = "jig.plans_close";
     pub const PLANS_OPEN: &str = "jig.plans_open";

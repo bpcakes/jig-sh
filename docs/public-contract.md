@@ -16,7 +16,7 @@ Runtime seeding selects Bash and its helper-command path as one platform policy.
 
 Jig also specifies the separate open [`jig.status-provider/v1`](status-provider.md) protocol. It lets a project-specific inspector, including a closed-source provider, publish software-rewrite observations to Jig or any other consumer through a committed JSON Schema. The status-provider protocol is not a command in `.agent/jig-contract.json`, and its major version is independent of the generated command contract's `contract_version`.
 
-Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v5 is the current compatibility epoch for this whole generated-harness surface, and v4 remains a supported prior epoch. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
+Structured work commands, state hygiene commands, first-run setup, the unified doctor, status aggregation, Codex-home selection, and agent tooling checks are runtime-owned conveniences. They are available through commands such as `scripts/jig setup`, `scripts/jig doctor`, `scripts/jig status`, `scripts/jig work ...`, `scripts/jig state ...`, `scripts/jig codex ...`, and `scripts/jig agent doctor`, and MCP tools named `jig.work_*` and `jig.agent_doctor`, but they are not individually declared in `.agent/jig-contract.json`. Contract v6 is the current compatibility epoch, and versions 2 through 5 remain supported through the legacy repository projection. A runtime may add behavior that repositories in an epoch can ignore, but a breaking CLI, JSON/state, configuration, safety, launcher, dev, or vault change requires a contract bump or an explicit end to support for the affected epoch. Status text, JSON, and TUI modes and the `codex` namespace remain CLI-only.
 
 CLI commands print human-readable output by default. Pass global `--json` for structured automation output (for example `scripts/jig doctor --json`, `scripts/jig status --json`, `scripts/jig work status --json`, or `scripts/jig work evidence --json`). Usage and pre-output command failures in JSON mode write one object to stdout with `ok: false`, `error.kind` (`usage` or `command_failed`), `error.message`, and `exit_status`, while preserving the nonzero process status. Commands that already emitted JSON do not append a second error document, and `scripts/jig mcp` always reserves stdout for MCP framing. `scripts/jig prompt get` prints the bare rendered body without `--json` and the standard `prompt get` command envelope with it. `scripts/jig status --tui` is an explicit interactive consumer and conflicts with `--json`; it requires terminal stdin and stdout. For other commands, output selection is independent of interactivity: `--json` does not suppress terminal prompts. For init automation, `--defaults` applies documented project-shape defaults but can still prompt for initial vault setup; supply `JIG_VAULT_PASSPHRASE` or `--no-vault` when that must be noninteractive. `--no-input` and implicit non-terminal execution require an explicit complete shape such as `--preset harness-only`; stored `harness_footprint = "minimal"` is also a complete harness-only shape. `scripts/jig work start --print-plan-id` remains a shell-capture override that prints only the new plan id. Human text, TUI presentation, and `--print-plan-id` output are for terminal use and are not stable machine-readable contract output; automation should pass `--json` or use MCP tools.
 
@@ -216,6 +216,44 @@ the current folded `RunResult`. Target conclusions are independent of lifecycle
 status and use `success`, `failure`, `cancelled`, `timed_out`, `blocked`, or
 `skipped`. Unknown future run event names are ignored; malformed known
 lifecycle transitions fail closed.
+
+## MCP Repository Operations
+
+Contract v6 advertises four repository operations rather than one MCP tool per
+action:
+
+- `jig.inspect` reads the workspace, component, target, and profile catalogs or
+  one durable run. Its `kind` discriminator determines whether `id` or `run_id`
+  is required.
+- `jig.plan_run` resolves explicit `selectors`, a mutually exclusive `profile`,
+  and optional `affected_base` through the same deterministic planner as the
+  CLI. It does not execute or write run state.
+- `jig.execute_run` accepts the exact returned plan plus optional
+  `work_plan_id`, `record_receipts`, and `fail_fast` controls. It validates the
+  plan again, creates durable queued state, and returns an accepted run handle
+  without waiting for target execution.
+- `jig.cancel_run` durably records an idempotent cancellation request. The
+  owning worker observes that event even when it came from another MCP process;
+  an in-process registry also signals the owned process tree immediately.
+
+All four descriptors contain strict input and output JSON Schemas and reject
+unknown input fields. Their successful MCP responses put the canonical object
+in `structuredContent` and include a text rendering for compatibility. After
+`jig.execute_run` returns, clients poll with
+`jig.inspect {"kind":"run","run_id":"..."}` until the run status is
+`completed`; each target then has its own terminal conclusion. A failed,
+cancelled, timed-out, skipped, or blocked target is inspectable execution data,
+not an MCP protocol error. Invalid arguments, an unknown identity, a stale or
+modified plan, corrupt durable state, and failures before a durable handle is
+accepted use the MCP error response. If an accepted background worker later
+encounters an internal infrastructure failure, Jig best-effort closes its
+unfinished targets and run with the `blocked` conclusion so polling does not
+silently strand a live-looking handle.
+
+Contract v6 manifest tools are compatibility aliases and are not individually
+advertised or callable over MCP. Contracts v2 through v5 retain their existing
+per-manifest-tool discovery, calls, and response shapes. The bounded
+`jig.work_*` lifecycle tools remain available in every supported epoch.
 
 ## Runtime State
 

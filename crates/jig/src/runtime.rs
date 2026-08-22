@@ -13,6 +13,7 @@ use crate::tool_defs::{self, MemoryTool, tool};
 
 mod agent;
 mod loops;
+mod mcp_repository;
 mod migration;
 mod prompt;
 mod run_execution;
@@ -354,11 +355,17 @@ fn dispatch_repository_check(
 pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
 
-    match ctx.tool_spec(name) {
-        Some(tool) if tool_defs::is_execution_tool(tool) => {
-            return tool_execution::call_manifest_tool(ctx, tool, &args_obj);
+    if ctx.contract_version() >= 6 {
+        if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
+            return mcp_repository::call(ctx, tool, args);
         }
-        _ => {}
+    } else {
+        match ctx.tool_spec(name) {
+            Some(tool) if tool_defs::is_execution_tool(tool) => {
+                return tool_execution::call_manifest_tool(ctx, tool, &args_obj);
+            }
+            _ => {}
+        }
     }
 
     // MCP dispatch is intentionally allowlisted here. CLI-only dev/proxy

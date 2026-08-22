@@ -39,7 +39,7 @@ and, over MCP:
 - [x] (2026-08-21 21:21Z) Slice 4: added stale-plan validation, owned target execution, append-only run lifecycle folding, target-aware compatible receipts, terminal cancellation/fail-fast results, and `jig status run RUN_ID` lookup.
 - [x] (2026-08-21 22:19Z) Slice 5: added feature-owned adapter contributions, explicit v6 components/actions/profiles and provenance, component-scoped commands, adapter-derived runtime capability checks, per-frontend execution, authored multi-stack recopy preservation, and v2–v5 template compatibility.
 - [x] (2026-08-21 23:26Z) Slice 6: added exact target/profile evidence gates, same-run profile proof, contract/input/worktree freshness, one-run configured work checks, strict selector validation, compatible legacy tool gates, and focused evidence/index modules.
-- [ ] Slice 7: expose bounded MCP inspect/plan/execute/cancel operations with strict input/output schemas and durable lookup; commit independently.
+- [x] (2026-08-22 00:03Z) Slice 7: replaced v6 per-action MCP discovery with four strictly schema-bound repository operations, immediate durable run handles, typed catalog/run inspection, background execution, cross-process durable cancellation observation, terminal worker-error recovery, and v2–v5 compatibility.
 - [ ] Slice 8: add deterministic, explainable affected selection without artifact caching; commit independently.
 - [ ] Run focused acceptance fixtures, full formatting, strict Clippy, workspace tests, generated-template checks, contract checks, and structured-work gates through a fresh development binary.
 - [ ] Audit every acceptance item against code and test evidence, update this plan, and finish structured work.
@@ -78,6 +78,18 @@ and, over MCP:
 
 - Observation: exact profile proof requires correlating target receipts by run; choosing the latest receipt independently for each target would incorrectly allow partial runs to be stitched together.
   Evidence: the receipt index groups required targets by `run_id`, selects the latest complete group, and returns a detailed partial group only when no complete group exists; focused tests run `api:test` and `web:test` separately and keep the profile blocked.
+
+- Observation: Serde's internally tagged unit variants accept extra object fields even with `deny_unknown_fields`, so deriving an input schema was stricter than deserializing `{"kind":"workspace","unexpected":true}`.
+  Evidence: `jig.inspect` now performs one explicit discriminator-aware field check before typed deserialization, and both runtime and generated-schema regressions reject unknown fields.
+
+- Observation: an in-process cancellation registry cannot support a cancel request delivered through a reconnected or second MCP process.
+  Evidence: the run worker now polls the authoritative append-only cancellation event at a bounded interval while the local registry remains a low-latency signal; a regression writes only durable state and still reaps the owned process tree.
+
+- Observation: a closed outer inspection response with `serde_json::Value` as its payload still generates an unconstrained output schema.
+  Evidence: catalog inspection now builds typed workspace/component/target/profile payloads shared by CLI serialization and MCP schema generation; an end-to-end schema regression rejects an unknown nested result field.
+
+- Observation: doctor process tests silently stopped reaching their child probes after their shared fixture advanced to v6 without component/action/profile records, and SQLx root fields were later inserted inside the final repository profile table.
+  Evidence: the current-contract doctor fixture now carries a minimal native repository model, SQLx mutates adapter provenance on both authored and resolved sides, and both exact process-cancellation tests pass.
 
 ## Decision Log
 
@@ -132,6 +144,18 @@ and, over MCP:
 - Decision: Keep target evidence evaluation and target receipt correlation in focused submodules while the existing gate and receipt modules retain shared orchestration and compatibility logic.
   Rationale: the new model has distinct freshness and grouping invariants; isolating them keeps the already-large legacy gate paths reviewable without duplicating shared receipt behavior.
   Date/Author: 2026-08-21 / Codex.
+
+- Decision: Contract v6 advertises only `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` for repository execution; manifest tools remain aliases but are neither advertised nor callable through MCP. Contracts 2 through 5 keep direct manifest tools unchanged.
+  Rationale: MCP complexity stays bounded as monorepos grow without silently breaking existing clients attached to older contract epochs.
+  Date/Author: 2026-08-22 / Codex.
+
+- Decision: A durable cancellation event is authoritative across processes; the live registry is only a fast path. Once execution has published a queued handle, an internal worker error is represented by best-effort terminal `blocked` target/run results rather than leaving an apparently live handle indefinitely.
+  Rationale: durable handles must remain actionable after reconnects, and post-accept failures no longer have a synchronous protocol response in which to report infrastructure errors.
+  Date/Author: 2026-08-22 / Codex.
+
+- Decision: Keep MCP resources and Tasks-extension projection as compatible later transports over the same catalog and run ids rather than prerequisites for v6.
+  Rationale: the initial bounded tools work with every MCP client; transport capability negotiation should not fork repository semantics.
+  Date/Author: 2026-08-22 / Codex.
 
 ## Outcomes & Retrospective
 
@@ -264,7 +288,7 @@ The final repository state must satisfy formatting, strict all-feature/all-targe
 
 Inspection, planning, and `--explain` are read-only and deterministic. Repeating them against the same contract and source identity returns the same plan id. Executing the same plan creates a new run id and new append-only events; it does not overwrite prior evidence. Cancellation is idempotent: an already-requested cancellation reports the current run, and a terminal run remains terminal.
 
-All state additions are append-only JSONL. Readers fold duplicate or repeated lifecycle observations deterministically and reject incompatible terminal events. Historical receipt and work-gate records continue to deserialize through optional/default fields. If implementation fails partway through a run, the existing queued/running event remains inspectable and is classified as interrupted on the next query rather than deleted.
+All state additions are append-only JSONL. Readers fold duplicate or repeated lifecycle observations deterministically and reject incompatible terminal events. Historical receipt and work-gate records continue to deserialize through optional/default fields. If an accepted worker returns an internal error, Jig best-effort completes unfinished targets and the run as `blocked`; if the whole server process is terminated abruptly, its last queued/running event remains inspectable rather than being deleted. Automatic orphan classification requires a durable worker lease and is deliberately not inferred from a missing in-process registry.
 
 Template refresh is deterministic and happens only after source templates are valid. A failed generated-contract validation must not publish a partially rendered repository. Git history is the recovery mechanism for each separately committed slice; no destructive reset or broad checkout is used.
 
@@ -328,6 +352,31 @@ Slice 6 validation evidence:
     cargo clippy -p jig-sh --all-targets --all-features -- -D warnings
     # passed
 
+Slice 7 validation evidence:
+
+    cargo test -p jig-sh mcp --no-fail-fast
+    # 29 focused library tests plus MCP process integrations passed
+
+    cargo test -p jig-sh mcp_repository --no-fail-fast -- --nocapture
+    # 5 passed, including durable external cancellation and owned-process cleanup
+
+    cargo test -p jig-sh repository_input_schemas_reject_unknown_fields --no-fail-fast
+    cargo test -p jig-sh repository_tools_have_closed_input_and_output_schemas --no-fail-fast
+    # both passed; actual catalog and run outputs validate against their advertised schemas
+
+    cargo test -p jig-sh doctor::tests::cancellation_during_noisy_codex_reaps_descendant_and_prevents_proxy_spawn -- --exact
+    cargo test -p jig-sh doctor::tests::cancellation_during_production_sqlx_prevents_codex_and_proxy_spawns -- --exact
+    # both passed after repairing the shared current-v6 fixture
+
+    cargo fmt --all -- --check
+    cargo clippy -p jig-sh --all-targets --all-features -- -D warnings
+    cargo build -p jig-sh --bin jig
+    # all passed
+
+    JIG_DEV_BIN=target/debug/jig scripts/jig mcp
+    # generated v6 harness smoke: exactly four repository tools, each with input/output schema;
+    # jig.inspect workspace returned structuredContent.kind=workspace with two components
+
 ## Interfaces and Dependencies
 
 `jig-contract` will export versioned, serde-stable types equivalent to:
@@ -358,3 +407,6 @@ The exact Rust signatures may move to keep modules cohesive, but CLI and MCP mus
 Configured command runners initially reuse the existing named command table in `.jig.toml`; their v6 action records reference a command key and an optional relative working directory, environment additions, timeout, and result parser. This preserves current shell-command compatibility while preventing MCP clients from supplying shell text. Native runner ids remain a closed enum or validated registry owned by Jig.
 
 SHA-256 should reuse the workspace's existing digest dependency if available. Glob matching should reuse an existing dependency if one is already present; otherwise add one at workspace scope with anchored, repository-relative semantics and explicit tests. Process execution and cancellation must use `jig-owned-process`, not a second child-process implementation.
+
+
+Slice 7 complete: bounded v6 MCP inspect/plan/execute/cancel tools, strict typed schemas, durable background handles, cross-process cancellation observation, worker-error terminalization, legacy MCP compatibility, repaired current-v6 doctor fixtures, focused tests, strict Clippy, and generated-harness protocol smoke all pass.

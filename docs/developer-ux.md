@@ -116,7 +116,7 @@ The daily developer loop is built around a few stable verbs:
 - `scripts/jig work ...` opens work, runs configured target/profile evidence, legacy check, and review gates, can refine actionable review findings, reports receipt status, and refuses to finish work without fresh required evidence.
 - `scripts/jig status` joins configured software-rewrite providers with local repository, work/gate, lease, and attempt state; `--tui` makes that aggregate navigable in the terminal.
 - `scripts/jig ui` serves the flight recorder: a local read-only dashboard over the same state.
-- `scripts/jig mcp` exposes the same command contract to MCP clients.
+- `scripts/jig mcp` exposes bounded repository discovery and execution tools to contract v6 clients, while older contracts retain direct command tools.
 - `scripts/jig agent doctor` remains the focused local agent tooling check.
 - `scripts/jig codex homes` shows the authenticated account in each local Codex home; bare `scripts/jig codex launch` opens an immediate searchable picker whose account, quota remaining, and at-current-pace projection fill in without blocking navigation. The picker marks the inspected home with the best projected outcome—most headroom or least overrun—without reordering results. `scripts/jig codex launch HOME` selects one account/state root directly. `scripts/jig codex resume SESSION_ID` reports lookup progress while finding the state root that owns a session, then launches Codex. Launch and resume forward Codex arguments after `--`.
 
@@ -339,7 +339,7 @@ An agent can discover:
 - whether required work gates have fresh receipts
 - whether local Codex-side Jig skills are available
 
-The MCP surface is especially useful because it exposes the same declared tools as the CLI. Agents can call named tools instead of scraping README instructions or hard-coding one repo's check commands.
+The contract v6 MCP surface is deliberately independent of repository size. Agents inspect components, targets, profiles, and durable runs with `jig.inspect`; resolve an exact immutable plan with `jig.plan_run`; submit that plan with `jig.execute_run`; and poll or cancel by run id. Adding another component or action changes catalog data rather than adding another MCP tool. Contracts v2 through v5 keep their direct manifest tools for compatibility.
 
 ## Update And Maintenance UX
 

@@ -12,7 +12,9 @@ use crate::context::{RepoContext, WorkEvidenceSelector};
 mod inspect;
 mod planner;
 
-pub(crate) use inspect::{InspectRequest, inspect_repository};
+pub(crate) use inspect::{
+    CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
+};
 pub(crate) use planner::{PlanRunRequest, plan_run, target_input_digest, validate_run_plan};
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;

@@ -1,7 +1,302 @@
 use super::*;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::test_env::TestRepoBuilder;
+
+fn wait_for_repository_run(ctx: &RepoContext, run_id: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let inspected =
+            call_tool(ctx, tool::INSPECT, json!({"kind": "run", "run_id": run_id})).unwrap();
+        if inspected["result"]["run"]["result"]["status"] == "completed" {
+            return inspected;
+        }
+        assert!(Instant::now() < deadline, "run {run_id} did not complete");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn assert_repository_output_schema(ctx: &RepoContext, name: &str, output: &Value) {
+    let descriptor = crate::tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
+        .into_iter()
+        .find(|descriptor| descriptor["name"] == name)
+        .unwrap();
+    let validator = jsonschema::validator_for(&descriptor["outputSchema"]).unwrap();
+    assert!(
+        validator.is_valid(output),
+        "{name} output did not match its schema: {output:#}"
+    );
+}
+
+#[test]
+fn mcp_v6_advertises_bounded_repository_tools_and_v5_keeps_manifest_tools() {
+    let v6 = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(v6.path(), "");
+    let v6_manifest_path = v6.path().join(".agent/jig-contract.json");
+    let mut v6_manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&v6_manifest_path).unwrap()).unwrap();
+    v6_manifest["tools"] = json!([{
+        "name": tool::TEST,
+        "kind": "command",
+        "description": "Compatibility API test alias.",
+        "command": "api_test_command"
+    }]);
+    fs::write(
+        &v6_manifest_path,
+        serde_json::to_string_pretty(&v6_manifest).unwrap(),
+    )
+    .unwrap();
+    let v6_ctx = RepoContext::load_from(v6.path()).unwrap();
+    let v6_descriptors =
+        crate::tool_defs::tool_descriptors(v6_ctx.contract_version(), v6_ctx.tool_specs());
+    let v6_names = v6_descriptors
+        .iter()
+        .filter_map(|descriptor| descriptor["name"].as_str())
+        .collect::<Vec<_>>();
+
+    for name in [
+        tool::INSPECT,
+        tool::PLAN_RUN,
+        tool::EXECUTE_RUN,
+        tool::CANCEL_RUN,
+    ] {
+        let descriptor = v6_descriptors
+            .iter()
+            .find(|descriptor| descriptor["name"] == name)
+            .unwrap();
+        assert!(descriptor.get("inputSchema").is_some());
+        assert!(descriptor.get("outputSchema").is_some());
+    }
+    assert!(!v6_names.contains(&tool::TEST));
+    assert!(
+        call_tool(&v6_ctx, tool::TEST, json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported tool")
+    );
+
+    let v5 = tempdir().unwrap();
+    write_fixture_repo(v5.path());
+    let v5_ctx = RepoContext::load_from(v5.path()).unwrap();
+    let v5_names =
+        crate::tool_defs::tool_descriptors(v5_ctx.contract_version(), v5_ctx.tool_specs())
+            .into_iter()
+            .filter_map(|descriptor| descriptor["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+
+    assert!(v5_names.iter().any(|name| name == "jig.custom_check"));
+    assert!(!v5_names.iter().any(|name| name == tool::PLAN_RUN));
+}
+
+#[test]
+fn mcp_repository_plan_execute_and_inspect_share_durable_run_state() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let workspace = call_tool(&ctx, tool::INSPECT, json!({"kind": "workspace"})).unwrap();
+    assert_repository_output_schema(&ctx, tool::INSPECT, &workspace);
+    assert_eq!(
+        workspace["result"]["components"].as_array().unwrap().len(),
+        2
+    );
+    let mut invalid_workspace = workspace;
+    invalid_workspace["result"]["unexpected"] = json!(true);
+    let inspect_descriptor =
+        crate::tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
+            .into_iter()
+            .find(|descriptor| descriptor["name"] == tool::INSPECT)
+            .unwrap();
+    assert!(
+        !jsonschema::validator_for(&inspect_descriptor["outputSchema"])
+            .unwrap()
+            .is_valid(&invalid_workspace)
+    );
+
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"profile": "verify"})).unwrap();
+    assert_repository_output_schema(&ctx, tool::PLAN_RUN, &planned);
+    assert_eq!(planned["plan"]["targets"].as_array().unwrap().len(), 2);
+
+    let executed = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    assert_repository_output_schema(&ctx, tool::EXECUTE_RUN, &executed);
+    assert_eq!(executed["accepted"], true);
+    assert_eq!(executed["status"], "queued");
+    let run_id = executed["run_id"].as_str().unwrap();
+
+    let inspected = wait_for_repository_run(&ctx, run_id);
+    assert_repository_output_schema(&ctx, tool::INSPECT, &inspected);
+    assert_eq!(
+        inspected["result"]["run"]["result"]["conclusion"],
+        "success"
+    );
+    assert_eq!(
+        inspected["result"]["run"]["result"]["targets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!crate::runtime::mcp_repository::is_live_run_registered(
+        &ctx, run_id
+    ));
+
+    let terminal_cancel = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    assert_eq!(terminal_cancel["cancellation_requested"], false);
+    assert_eq!(terminal_cancel["worker_signalled"], false);
+    assert_eq!(terminal_cancel["run"]["conclusion"], "success");
+}
+
+#[test]
+fn mcp_repository_failures_are_structured_terminal_conclusions() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace("printf 'api tests passed\\n'", "exit 7"),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    let terminal = wait_for_repository_run(&ctx, accepted["run_id"].as_str().unwrap());
+
+    assert_eq!(accepted["ok"], true);
+    assert_eq!(terminal["result"]["run"]["result"]["conclusion"], "failure");
+}
+
+#[test]
+fn mcp_repository_cancel_is_cooperative_idempotent_and_cleans_registry() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace(
+            "printf 'api tests passed\\n'",
+            "printf 'started\\n'; sleep 30; printf 'done\\n' > api-finished.txt",
+        ),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    let run_id = accepted["run_id"].as_str().unwrap();
+
+    let cancelled = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    assert_repository_output_schema(&ctx, tool::CANCEL_RUN, &cancelled);
+    assert_eq!(cancelled["cancellation_requested"], true);
+    assert_eq!(cancelled["worker_signalled"], true);
+
+    let terminal = wait_for_repository_run(&ctx, run_id);
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"],
+        "cancelled"
+    );
+    assert!(!crate::runtime::mcp_repository::is_live_run_registered(
+        &ctx, run_id
+    ));
+    thread::sleep(Duration::from_millis(100));
+    assert!(!temp.path().join("api-finished.txt").exists());
+
+    let repeated = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    assert_eq!(repeated["ok"], true);
+    assert_eq!(repeated["worker_signalled"], false);
+    assert_eq!(repeated["run"]["status"], "completed");
+}
+
+#[test]
+fn mcp_repository_worker_observes_a_durable_external_cancel_request() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace(
+            "printf 'api tests passed\\n'",
+            "printf 'started\\n'; sleep 30; printf 'done\\n' > api-finished.txt",
+        ),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    let run_id = accepted["run_id"].as_str().unwrap();
+
+    crate::state::request_run_cancel(&ctx, run_id).unwrap();
+    let terminal = wait_for_repository_run(&ctx, run_id);
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"],
+        "cancelled"
+    );
+    thread::sleep(Duration::from_millis(100));
+    assert!(!temp.path().join("api-finished.txt").exists());
+}
+
+#[test]
+fn mcp_repository_rejects_unknown_arguments_stale_plans_and_v6_legacy_calls() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = call_tool(
+        &ctx,
+        tool::INSPECT,
+        json!({"kind": "workspace", "unexpected": true}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("Invalid arguments for jig.inspect"));
+
+    let mut planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:test"]})).unwrap();
+    planned["plan"]["config_digest"] = json!("sha256:tampered");
+    let error = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("repository configuration changed"));
+    assert!(!temp.path().join(".agent/state/runs.jsonl").exists());
+
+    let error = call_tool(&ctx, tool::TEST, json!({}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Unsupported tool"));
+}
 
 #[test]
 fn mcp_call_dispatches_command_tool_declared_only_in_manifest() {

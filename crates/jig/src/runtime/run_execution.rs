@@ -46,8 +46,27 @@ pub(in crate::runtime) fn execute_check_run(
     request: ExecuteCheckRunRequest,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<CheckRunExecution> {
+    let run = start_check_run(ctx, catalog, plan, request.work_plan_id.clone())?;
+    execute_started_check_run(ctx, catalog, run, request, cancelled)
+}
+
+pub(in crate::runtime) fn start_check_run(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    plan: RunPlan,
+    work_plan_id: Option<String>,
+) -> Result<crate::state::DurableRun> {
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    let run = start_run(ctx, plan, request.work_plan_id.clone())?;
+    start_run(ctx, plan, work_plan_id)
+}
+
+pub(in crate::runtime) fn execute_started_check_run(
+    ctx: &RepoContext,
+    catalog: &RepositoryCatalog,
+    run: crate::state::DurableRun,
+    request: ExecuteCheckRunRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<CheckRunExecution> {
     let run_id = run.result.run_id.clone();
     mark_run_running(ctx, &run_id)?;
 
@@ -59,7 +78,7 @@ pub(in crate::runtime) fn execute_check_run(
         ctx,
         catalog,
         run: &run,
-        work_plan_id: request.work_plan_id.as_deref(),
+        work_plan_id: run.work_plan_id.as_deref(),
         record_receipts: request.record_receipts,
     };
 
@@ -126,6 +145,32 @@ pub(in crate::runtime) fn execute_check_run(
         results: compatibility_results,
         failed_targets,
     })
+}
+
+pub(in crate::runtime) fn block_started_check_run(
+    ctx: &RepoContext,
+    run_id: &str,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let run = run_by_id(ctx, run_id)?;
+    if run.result.status == RunStatus::Completed {
+        return Ok(());
+    }
+
+    let message = format!("repository run worker stopped unexpectedly: {error:#}");
+    for mut target in run
+        .result
+        .targets
+        .into_iter()
+        .filter(|target| target.status != RunStatus::Completed)
+    {
+        target.status = RunStatus::Completed;
+        target.conclusion = Some(RunConclusion::Blocked);
+        target.ended_at_ms = Some(now_ms());
+        target.findings.push(finding(message.clone(), "jig"));
+        record_target_result(ctx, run_id, target)?;
+    }
+    complete_run(ctx, run_id, RunConclusion::Blocked)
 }
 
 fn planned_target<'a>(plan: &'a RunPlan, target: &TargetId) -> Result<&'a PlannedTarget> {
@@ -539,6 +584,7 @@ fn finding(message: impl Into<String>, source: &str) -> Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::TestRepoBuilder;
     use tempfile::tempdir;
 
     #[test]
@@ -561,5 +607,44 @@ mod tests {
 
         let findings = parse_findings(ResultParser::JsonLines, "not-json");
         assert!(!findings_parse_succeeded(&findings));
+    }
+
+    #[test]
+    fn an_accepted_run_becomes_blocked_when_its_worker_stops() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(["rust_test_command"])
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let target: TargetId = "repo:test".parse().unwrap();
+        let plan = RunPlan::new(
+            "run-plan_1",
+            "sha256:config",
+            jig_contract::SourceIdentity::new(None, "sha256:worktree"),
+            vec![PlannedTarget::new(
+                target.clone(),
+                jig_contract::ActionIntent::Check,
+                ActionRunner::command("rust_test_command"),
+                "sha256:input",
+            )],
+            vec![vec![target]],
+        );
+        let run = start_run(&ctx, plan, None).unwrap();
+
+        block_started_check_run(&ctx, &run.result.run_id, &anyhow::anyhow!("state failure"))
+            .unwrap();
+        let terminal = run_by_id(&ctx, &run.result.run_id).unwrap();
+
+        assert_eq!(terminal.result.status, RunStatus::Completed);
+        assert_eq!(terminal.result.conclusion, Some(RunConclusion::Blocked));
+        assert_eq!(
+            terminal.result.targets[0].conclusion,
+            Some(RunConclusion::Blocked)
+        );
+        assert!(
+            terminal.result.targets[0].findings[0]
+                .message
+                .contains("state failure")
+        );
     }
 }

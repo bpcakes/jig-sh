@@ -4,13 +4,13 @@ This document captures what the current codebase makes clear about `jig.sh`, plu
 
 ## High-Level Intent
 
-`jig.sh` is a reusable harness for making Rust application repositories operable by coding agents.
+`jig.sh` is a reusable harness for making multi-stack software repositories operable by coding agents.
 
 The core idea is to turn a repository into an operating environment for coding agents through a small, stable, repo-local contract:
 
 - repo-wide and crate-level agent guidance
 - a typed `scripts/jig` CLI for repo-local commands
-- an MCP server exposing the same tools to MCP clients
+- an MCP server exposing a bounded repository inspection and execution model to clients
 - append-only session, plan, receipt, and decision state under `.agent/`
 - required work gates evaluated from plan-linked receipts
 - native agent tooling checks for client-side Jig skills
@@ -26,7 +26,7 @@ The harness was extracted from the durable parts of an existing application work
 
 Generated or adopted repos receive assets such as `.jig.toml`, `.mcp.json`, `AGENTS.md`, `agent-map.md`, `.agent/PLANS.md`, `.agent/jig-contract.json`, scripts, and workflows.
 
-Generated repos use `scripts/jig` as the execution backend. `scripts/jig mcp` exposes the same declared command contract to MCP clients.
+Generated repos use `scripts/jig` as the execution backend. In contract v6, `scripts/jig mcp` exposes the resolved repository catalog through bounded inspect, plan, execute, and cancel operations. Contracts v2 through v5 retain their declared command tools over MCP.
 
 The runtime is implemented in `crates/jig`. Its main responsibilities are:
 
@@ -85,7 +85,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 - `adopt` renders the harness into an existing repo while preserving repo-owned root `AGENTS.md` content.
 - `update` re-renders managed paths from stored template metadata and refuses to overwrite changed managed files unless forced.
 
-`crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. For command-backed tools, it resolves the command key from `.agent/jig-contract.json`, executes the configured `.jig.toml` command from the repo root, records a receipt, and returns structured JSON.
+`crates/jig/src/runtime.rs` dispatches CLI and MCP tool calls. Repository execution resolves a checked-in target to its configured command or closed native runner, records target-attributed receipts, and returns structured results. Legacy contracts still resolve their manifest tool to a command key and retain the previous response shape.
 
 `crates/jig-contract` owns dependency-downward DTOs and identifiers shared across Jig crates. It also owns the Rust source of truth for the open status-provider protocol but does not execute providers, load repositories, or aggregate their observations.
 
@@ -101,7 +101,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 `crates/jig` enables the `dev-proxy` Cargo feature by default so normal installs include the local proxy. Minimal consumers that only need the contract, MCP, and work-receipt runtime can build `jig-sh` with `--no-default-features` to omit the proxy dependency tree.
 
-`crates/jig/src/mcp.rs` is a minimal MCP stdio server. It lists execution tools from the manifest and runtime memory tools from code, then dispatches `tools/call` through the same runtime path as the CLI.
+`crates/jig/src/mcp.rs` is a minimal MCP stdio server. For contract v6 it lists four closed repository operations with strict input and output schemas plus bounded runtime memory tools; contracts v2 through v5 list their manifest execution tools. Calls reuse the same catalog, planner, executor, and append-only state as the CLI.
 
 `crates/jig/src/state/` stores append-only JSONL records:
 
@@ -109,6 +109,7 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 - `plans.jsonl`: plan open/append/close events
 - `receipts.jsonl`: tool execution evidence with bounded output and changed-path previews
 - `decisions.jsonl`: structured decision records
+- `runs.jsonl`: accepted immutable plans and folded execution lifecycle events
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: session compaction creates an exact recovery
