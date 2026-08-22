@@ -4,7 +4,7 @@ use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,7 @@ use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
 const DEFAULT_CODEX_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexExecMode {
@@ -308,30 +309,7 @@ fn run_worker_command(
         None
     };
 
-    let timeout = codex_timeout()?;
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if cancelled.is_some_and(|cancelled| cancelled()) {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
-            bail!("Worker process cancelled because its execution lease was lost");
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            terminate_worker_process(&mut child);
-            let _ = child.wait();
-            bail!(
-                "Worker process timed out after {} seconds",
-                timeout.as_secs()
-            );
-        }
-        if let Some(status) = child
-            .wait_timeout(remaining.min(Duration::from_millis(100)))
-            .context("Failed to wait for worker process")?
-        {
-            break status;
-        }
-    };
+    let status = wait_for_worker(&mut child, codex_timeout()?, cancelled)?;
 
     if let Some(writer) = writer {
         writer
@@ -344,6 +322,44 @@ fn run_worker_command(
         stdout: fs::read(stdout_file.path()).context("Failed to read worker stdout")?,
         stderr: fs::read(stderr_file.path()).context("Failed to read worker stderr")?,
     })
+}
+
+fn wait_for_worker(
+    child: &mut Child,
+    timeout: Duration,
+    cancelled: Option<&dyn Fn() -> bool>,
+) -> Result<ExitStatus> {
+    let started = Instant::now();
+    loop {
+        if cancelled.is_some_and(|cancelled| cancelled()) {
+            terminate_worker_process(child);
+            let _ = child.wait();
+            bail!("Worker process cancelled because its execution lease was lost");
+        }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            terminate_worker_process(child);
+            let _ = child.wait();
+            bail!(
+                "Worker process timed out after {} seconds",
+                timeout.as_secs()
+            );
+        }
+        if let Some(status) = child
+            .wait_timeout(worker_wait_interval(remaining, cancelled.is_some()))
+            .context("Failed to wait for worker process")?
+        {
+            return Ok(status);
+        }
+    }
+}
+
+fn worker_wait_interval(remaining: Duration, cancellable: bool) -> Duration {
+    if cancellable {
+        remaining.min(CANCELLATION_POLL_INTERVAL)
+    } else {
+        remaining
+    }
 }
 
 #[cfg(unix)]
@@ -533,6 +549,30 @@ mod tests {
                 .get_envs()
                 .all(|(key, _)| key != crate::codex::CODEX_HOME_ENV)
         );
+    }
+
+    #[test]
+    fn worker_wait_interval_only_polls_cancellable_workers() {
+        let remaining = Duration::from_secs(30 * 60);
+
+        assert_eq!(worker_wait_interval(remaining, false), remaining);
+        assert_eq!(
+            worker_wait_interval(remaining, true),
+            CANCELLATION_POLL_INTERVAL
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn maximum_worker_timeout_does_not_overflow_deadline() {
+        let _guard = lock_env();
+        let _timeout = EnvVarGuard::set(CODEX_TIMEOUT_ENV, u64::MAX.to_string());
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 0"]);
+
+        let output = run_worker_command(&mut command, None, None).unwrap();
+
+        assert!(output.status.success());
     }
 
     #[cfg(unix)]

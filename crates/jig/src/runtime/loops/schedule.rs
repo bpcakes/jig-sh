@@ -13,7 +13,9 @@ use super::engine::{ScheduledTick, tick, tick_scheduled};
 use super::occurrence::{
     OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceStore, ScheduleOccurrence,
 };
-use super::workflow::{ResolvedWorkflow, list_workflows};
+use super::workflow::{
+    ResolvedWorkflow, TuningOverrides, WorkflowRunPolicy, list_workflows, resolve_workflow,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct ScheduleSpec {
@@ -38,6 +40,40 @@ struct DispatchStep {
     failed_count: u64,
 }
 
+#[derive(Default)]
+struct DispatchSummary {
+    due_count: u64,
+    executed_count: u64,
+    skipped_count: u64,
+    failed_count: u64,
+    needs_attention_count: u64,
+}
+
+impl DispatchSummary {
+    fn include(&mut self, step: &DispatchStep) {
+        self.due_count += step.due_count;
+        self.executed_count += step.executed_count;
+        self.skipped_count += step.skipped_count;
+        self.failed_count += step.failed_count;
+    }
+
+    fn requires_attention(&self) -> bool {
+        self.failed_count > 0 || self.needs_attention_count > 0
+    }
+
+    fn status(&self) -> &'static str {
+        if self.failed_count > 0 {
+            "failed"
+        } else if self.needs_attention_count > 0 {
+            "needs_attention"
+        } else if self.executed_count > 0 {
+            "acted"
+        } else {
+            "idle"
+        }
+    }
+}
+
 impl DispatchStep {
     fn action(action: Value) -> Self {
         Self {
@@ -55,6 +91,62 @@ impl DispatchStep {
             })),
             failed_count: 1,
             ..Self::default()
+        }
+    }
+}
+
+fn begin_execution<T>(step: &mut DispatchStep, start: impl FnOnce() -> Result<T>) -> Result<T> {
+    let execution = start()?;
+    step.executed_count = 1;
+    Ok(execution)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunTickDisposition {
+    Continue,
+    Failed,
+    Stop(&'static str),
+}
+
+#[derive(Default)]
+struct RunSummary {
+    failed: bool,
+    stop_status: Option<&'static str>,
+}
+
+impl RunSummary {
+    fn observe(&mut self, disposition: RunTickDisposition) -> bool {
+        match disposition {
+            RunTickDisposition::Continue => false,
+            RunTickDisposition::Failed => {
+                self.failed = true;
+                false
+            }
+            RunTickDisposition::Stop(status) => {
+                self.stop_status = Some(status);
+                true
+            }
+        }
+    }
+
+    fn status(&self) -> &'static str {
+        if self.failed {
+            "failed"
+        } else {
+            self.stop_status.unwrap_or("max_ticks_reached")
+        }
+    }
+}
+
+impl RunTickDisposition {
+    fn from_tick(tick: &Value) -> Self {
+        match tick["status"].as_str() {
+            Some("failed") => Self::Failed,
+            Some("waiting") => Self::Stop("waiting"),
+            Some("disabled") => Self::Stop("disabled"),
+            Some("needs_attention") => Self::Stop("needs_attention"),
+            _ if tick["idle"].as_bool() == Some(true) => Self::Stop("idle"),
+            _ => Self::Continue,
         }
     }
 }
@@ -165,10 +257,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
     let reconciled = occurrences.reconcile_stale()?;
     let known_occurrences = occurrences.snapshot()?;
     let mut actions = Vec::new();
-    let mut due_count = 0_u64;
-    let mut executed_count = 0_u64;
-    let mut skipped_count = 0_u64;
-    let mut failed_count = 0_u64;
+    let mut summary = DispatchSummary::default();
 
     for workflow in workflows {
         let step = dispatch_workflow(
@@ -178,36 +267,33 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
             &workflow,
             dispatch_at_ms,
         );
-        due_count += step.due_count;
-        executed_count += step.executed_count;
-        skipped_count += step.skipped_count;
-        failed_count += step.failed_count;
+        summary.include(&step);
         if let Some(action) = step.action {
             actions.push(action);
         }
     }
 
-    let needs_attention_count = u64::try_from(reconciled.len()).unwrap_or(u64::MAX);
-    let status = if failed_count > 0 {
-        "failed"
-    } else if needs_attention_count > 0 {
-        "needs_attention"
-    } else if executed_count > 0 {
-        "acted"
-    } else {
-        "idle"
-    };
+    summary.needs_attention_count = u64::try_from(
+        occurrences
+            .snapshot()?
+            .iter()
+            .filter(|occurrence| occurrence.status == "needs_attention")
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let status = summary.status();
+    let ok = !summary.requires_attention();
     let ended = now_ms();
     let evidence = json!({
         "kind": "loop_dispatch",
         "schema_version": 1,
         "dispatch_at_ms": dispatch_at_ms,
         "status": status,
-        "due_count": due_count,
-        "executed_count": executed_count,
-        "skipped_count": skipped_count,
-        "failed_count": failed_count,
-        "needs_attention_count": needs_attention_count,
+        "due_count": summary.due_count,
+        "executed_count": summary.executed_count,
+        "skipped_count": summary.skipped_count,
+        "failed_count": summary.failed_count,
+        "needs_attention_count": summary.needs_attention_count,
         "reconciled_occurrences": reconciled,
         "actions": actions,
     });
@@ -220,7 +306,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
             plan_id: None,
             started_at_ms: started,
             ended_at_ms: ended,
-            exit_status: i32::from(failed_count > 0),
+            exit_status: i32::from(!ok),
             stdout: "",
             stderr: "",
             evidence: Some(evidence.clone()),
@@ -231,16 +317,16 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
         },
     )?;
     Ok(json!({
-        "ok": failed_count == 0,
+        "ok": ok,
         "command": "loop dispatch",
         "receipt_id": receipt_id,
         "status": status,
         "dispatch_at_ms": dispatch_at_ms,
-        "due_count": due_count,
-        "executed_count": executed_count,
-        "skipped_count": skipped_count,
-        "failed_count": failed_count,
-        "needs_attention_count": needs_attention_count,
+        "due_count": summary.due_count,
+        "executed_count": summary.executed_count,
+        "skipped_count": summary.skipped_count,
+        "failed_count": summary.failed_count,
+        "needs_attention_count": summary.needs_attention_count,
         "reconciled_occurrences": evidence["reconciled_occurrences"],
         "actions": evidence["actions"],
     }))
@@ -303,37 +389,37 @@ fn dispatch_workflow(
         OccurrenceClaim::Acquired(claim) => claim,
     };
 
-    step.executed_count = 1;
-    let guard =
-        match OccurrenceGuard::start(occurrences.clone(), &claim, workflow.lease_ttl_seconds) {
-            Ok(guard) => guard,
-            Err(error) => {
-                let error = format!("Failed to renew scheduled occurrence: {error:#}");
-                step.failed_count = 1;
-                step.action = Some(
-                    match occurrences.finish(
-                        &claim.occurrence_id,
-                        &claim.owner,
-                        OccurrenceFinish {
-                            status: "failed",
-                            worker_receipt_id: None,
-                            worktree: None,
-                            error: Some(&error),
-                        },
-                    ) {
-                        Ok(record) => dispatch_action(&record, "failed", window.next_at_ms, None),
-                        Err(finish_error) => dispatch_state_failure(
-                            workflow,
-                            &claim,
-                            window.next_at_ms,
-                            None,
-                            format!("{error}; recording the failure also failed: {finish_error:#}"),
-                        ),
+    let guard = match begin_execution(&mut step, || {
+        OccurrenceGuard::start(occurrences.clone(), &claim, workflow.lease_ttl_seconds)
+    }) {
+        Ok(guard) => guard,
+        Err(error) => {
+            let error = format!("Failed to renew scheduled occurrence: {error:#}");
+            step.failed_count = 1;
+            step.action = Some(
+                match occurrences.finish(
+                    &claim.occurrence_id,
+                    &claim.owner,
+                    OccurrenceFinish {
+                        status: "failed",
+                        worker_receipt_id: None,
+                        worktree: None,
+                        error: Some(&error),
                     },
-                );
-                return step;
-            }
-        };
+                ) {
+                    Ok(record) => dispatch_action(&record, "failed", window.next_at_ms, None),
+                    Err(finish_error) => dispatch_state_failure(
+                        workflow,
+                        &claim,
+                        window.next_at_ms,
+                        None,
+                        format!("{error}; recording the failure also failed: {finish_error:#}"),
+                    ),
+                },
+            );
+            return step;
+        }
+    };
     let cancelled = || guard.renewal_failed();
     let tick = tick_scheduled(ctx, &workflow.id, &claim.occurrence_id, &cancelled);
     if tick
@@ -456,9 +542,25 @@ pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Va
     if request.max_ticks == 0 {
         bail!("--max-ticks must be greater than zero");
     }
+    let workflow = resolve_workflow(
+        ctx,
+        request.workflow.as_deref(),
+        TuningOverrides {
+            lease_ttl_seconds: request.lease_ttl_seconds,
+            max_attempts: request.max_attempts,
+            backoff_seconds: request.backoff_seconds,
+        },
+    )?;
+    if workflow.run_policy() == WorkflowRunPolicy::SingleTick {
+        bail!(
+            "Loop workflow '{}' runs one task per tick and does not support `loop run`; use `loop tick --workflow {}` for a manual run or `loop dispatch` for scheduled execution",
+            workflow.id,
+            workflow.id,
+        );
+    }
 
     let mut ticks = Vec::new();
-    let mut status = "max_ticks_reached".to_string();
+    let mut summary = RunSummary::default();
     for _ in 0..request.max_ticks {
         let tick = tick(
             ctx,
@@ -469,21 +571,13 @@ pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Va
                 backoff_seconds: request.backoff_seconds,
             },
         )?;
-        let tick_status = tick["status"].as_str().unwrap_or("unknown").to_string();
-        let idle = tick["idle"].as_bool().unwrap_or(false);
+        let disposition = RunTickDisposition::from_tick(&tick);
         ticks.push(tick);
-        if matches!(
-            tick_status.as_str(),
-            "waiting" | "disabled" | "failed" | "needs_attention"
-        ) {
-            status = tick_status;
-            break;
-        }
-        if idle {
-            status = "idle".into();
+        if summary.observe(disposition) {
             break;
         }
     }
+    let status = summary.status();
 
     Ok(json!({
         "ok": status != "failed",
@@ -500,10 +594,14 @@ mod tests {
     use std::fs;
 
     use chrono::DateTime;
+    use serde_json::json;
     use tempfile::tempdir;
 
-    use super::super::state::{LeaseAcquire, LeaseStore};
-    use super::{ScheduleSpec, dispatch_due_at};
+    use super::super::state::{LOOP_CACHE_DIR, LeaseAcquire, LeaseStore};
+    use super::{
+        DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, ScheduleSpec,
+        begin_execution, dispatch_due_at,
+    };
     use crate::command::LoopStatusRequest;
     use crate::context::RepoContext;
     use crate::test_env::TestRepoBuilder;
@@ -522,6 +620,64 @@ mod tests {
             schedule.window(now, window.due_at_ms).unwrap().due_at_ms,
             None
         );
+    }
+
+    #[test]
+    fn run_tick_disposition_preserves_terminal_status_policy() {
+        assert_eq!(
+            RunTickDisposition::from_tick(&json!({"status": "failed", "idle": false})),
+            RunTickDisposition::Failed
+        );
+        assert_eq!(
+            RunTickDisposition::from_tick(&json!({"status": "waiting", "idle": false})),
+            RunTickDisposition::Stop("waiting")
+        );
+        assert_eq!(
+            RunTickDisposition::from_tick(&json!({"status": "acted", "idle": true})),
+            RunTickDisposition::Stop("idle")
+        );
+        assert_eq!(
+            RunTickDisposition::from_tick(&json!({"status": "acted", "idle": false})),
+            RunTickDisposition::Continue
+        );
+    }
+
+    #[test]
+    fn failed_run_ticks_continue_but_determine_the_final_status() {
+        let mut summary = RunSummary::default();
+
+        assert!(!summary.observe(RunTickDisposition::Failed));
+        assert!(summary.observe(RunTickDisposition::Stop("waiting")));
+        assert_eq!(summary.status(), "failed");
+    }
+
+    #[test]
+    fn dispatch_summary_uses_one_attention_policy_for_status_and_success() {
+        let mut summary = DispatchSummary {
+            executed_count: 1,
+            needs_attention_count: 1,
+            ..DispatchSummary::default()
+        };
+
+        assert_eq!(summary.status(), "needs_attention");
+        assert!(summary.requires_attention());
+
+        summary.failed_count = 1;
+        assert_eq!(summary.status(), "failed");
+        assert!(summary.requires_attention());
+    }
+
+    #[test]
+    fn execution_count_starts_only_after_guard_start_succeeds() {
+        let mut step = DispatchStep::default();
+
+        assert!(
+            begin_execution::<()>(&mut step, || anyhow::bail!("injected start failure")).is_err()
+        );
+        assert_eq!(step.executed_count, 0);
+
+        begin_execution(&mut step, || Ok(())).unwrap();
+        assert_eq!(step.executed_count, 1);
     }
 
     #[test]
@@ -613,6 +769,66 @@ timezone = "UTC"
         );
         assert_eq!(status["scheduled_occurrences"].as_array().unwrap().len(), 1);
         serde_json::from_value::<jig_ui::LoopsView>(status).unwrap();
+    }
+
+    #[test]
+    fn dispatcher_persistently_fails_while_occurrence_needs_attention() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+        fs::write(
+            temp.path().join(".jig.toml"),
+            format!(
+                r#"{config}
+[[loop.workflows]]
+id = "scheduled-noop"
+kind = "noop_status"
+schedule = "* * * * *"
+timezone = "UTC"
+"#
+            ),
+        )
+        .unwrap();
+        let cache = temp.path().join(LOOP_CACHE_DIR);
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(
+            cache.join("schedule.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "occurrences": {
+                    "scheduled-noop@1787301600000": {
+                        "occurrence_id": "scheduled-noop@1787301600000",
+                        "workflow_id": "scheduled-noop",
+                        "scheduled_at_ms": 1_787_301_600_000_u64,
+                        "owner": "crashed-dispatcher",
+                        "claim_expires_at_ms": 1,
+                        "started_at_ms": 1,
+                        "status": "running"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let dispatch_at = timestamp("2026-08-21T08:42:30Z");
+
+        let first = dispatch_due_at(&ctx, dispatch_at).unwrap();
+        let second = dispatch_due_at(&ctx, dispatch_at).unwrap();
+
+        assert_eq!(first["status"], "needs_attention", "{first:#}");
+        assert_eq!(first["ok"], false);
+        assert_eq!(first["needs_attention_count"], 1);
+        assert_eq!(first["reconciled_occurrences"].as_array().unwrap().len(), 1);
+        assert_eq!(second["status"], "needs_attention", "{second:#}");
+        assert_eq!(second["ok"], false);
+        assert_eq!(second["needs_attention_count"], 1);
+        assert!(
+            second["reconciled_occurrences"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

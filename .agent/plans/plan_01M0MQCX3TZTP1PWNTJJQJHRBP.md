@@ -1,0 +1,5 @@
+Model loop run termination and scheduled attention as explicit policies, harden worker timeout waiting, correct dispatch metrics, close review test gaps, and run repository gates.
+
+Replaced duplicated run and dispatch conditionals with explicit policy summaries; restricted scheduled codex tasks to one tick; preserved unresolved occurrence attention across dispatches; hardened worker waiting; added focused and integration regression tests.
+
+Validation: all 30 loop schedule/runtime unit tests, 35 loop integration tests, 16 CLI JSON tests, focused worker tests, all-target cargo check, fmt, clippy, and contract checks pass. The full jig.test gate was attempted twice; both runs passed 436/437 executed tests but the unrelated vault_tui browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit test failed only under the 1,977-test concurrent suite. That test passes in isolation.

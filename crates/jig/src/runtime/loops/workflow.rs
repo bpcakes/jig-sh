@@ -105,6 +105,12 @@ pub(super) enum CodexTaskCheckout {
     Worktree,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WorkflowRunPolicy {
+    UntilIdle,
+    SingleTick,
+}
+
 impl CodexTaskCheckout {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -127,6 +133,14 @@ impl ResolvedWorkflow {
         match self.codex_task.as_ref().map(|task| task.checkout) {
             Some(CodexTaskCheckout::Repo) => REPO_CHECKOUT_LEASE_KEY.into(),
             _ => format!("{WORKFLOW_LEASE_PREFIX}{}", self.id),
+        }
+    }
+
+    pub(super) fn run_policy(&self) -> WorkflowRunPolicy {
+        if self.kind == CODEX_TASK_KIND {
+            WorkflowRunPolicy::SingleTick
+        } else {
+            WorkflowRunPolicy::UntilIdle
         }
     }
 
@@ -365,6 +379,14 @@ mod tests {
         assert_eq!(first.lease_key(), REPO_CHECKOUT_LEASE_KEY);
         assert_eq!(second.lease_key(), first.lease_key());
         assert_eq!(isolated.lease_key(), "workflow:isolated");
+    }
+
+    #[test]
+    fn scheduled_codex_tasks_are_single_tick_workflows() {
+        assert_eq!(
+            workflow_with_checkout("scheduled", CodexTaskCheckout::Worktree).run_policy(),
+            WorkflowRunPolicy::SingleTick
+        );
     }
 
     fn workflow_with_checkout(id: &str, checkout: CodexTaskCheckout) -> ResolvedWorkflow {

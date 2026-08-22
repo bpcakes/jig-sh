@@ -295,6 +295,59 @@ prompt_file = "tasks/nightly.md"
 
 #[cfg(unix)]
 #[test]
+fn loop_run_rejects_scheduled_codex_task_without_invoking_worker() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    fs::create_dir_all(temp.path().join("tasks")).unwrap();
+    fs::write(temp.path().join("tasks/nightly.md"), "Run once.\n").unwrap();
+    let config = fs::read_to_string(temp.path().join(".jig.toml")).unwrap();
+    fs::write(
+        temp.path().join(".jig.toml"),
+        format!(
+            r#"{config}
+[[loop.workflows]]
+id = "single-task"
+kind = "codex_task"
+schedule = "* * * * *"
+prompt_file = "tasks/nightly.md"
+"#
+        ),
+    )
+    .unwrap();
+    let marker = temp.path().join("worker-invoked");
+    let codex_path = temp.path().join("codex-must-not-run.sh");
+    write_codex_stub(
+        &codex_path,
+        r#"#!/bin/sh
+touch "$JIG_TEST_TASK_COMPLETION_MARKER"
+exit 0
+"#,
+    );
+    let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
+    let _marker = EnvVarGuard::set("JIG_TEST_TASK_COMPLETION_MARKER", marker.as_os_str());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Loop(LoopCommand::Run(LoopRunRequest {
+            workflow: Some("single-task".into()),
+            until: "idle".into(),
+            max_ticks: 10,
+            lease_ttl_seconds: None,
+            max_attempts: None,
+            backoff_seconds: None,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("does not support `loop run`"), "{error}");
+    assert!(!marker.exists(), "loop run must not start the Codex worker");
+}
+
+#[cfg(unix)]
+#[test]
 fn codex_task_retains_clean_worktree_when_worker_commits() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
@@ -2145,7 +2198,7 @@ exit 2
 
 #[cfg(unix)]
 #[test]
-fn loop_tick_pr_manager_cleans_failed_merge_worktree_before_retry() {
+fn loop_run_pr_manager_preserves_failure_and_cleans_worktree_before_retry() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -2225,22 +2278,28 @@ exit 2
     let _codex = EnvVarGuard::set("JIG_CODEX_BIN", codex_path.as_os_str());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let first = crate::runtime::dispatch(
+    let run = crate::runtime::dispatch(
         &ctx,
-        RuntimeCommand::Loop(LoopCommand::Tick(LoopTickRequest {
+        RuntimeCommand::Loop(LoopCommand::Run(LoopRunRequest {
             workflow: Some("pr-manager".into()),
+            until: "idle".into(),
+            max_ticks: 3,
             lease_ttl_seconds: None,
             max_attempts: Some(3),
             backoff_seconds: Some(1),
         })),
     )
     .unwrap();
-    assert_eq!(first["actions"][0]["status"], "failed", "{first:#}");
+    assert_eq!(run["ok"], false, "{run:#}");
+    assert_eq!(run["status"], "failed", "{run:#}");
+    assert_eq!(run["tick_count"], 2, "{run:#}");
+    assert_eq!(run["ticks"][0]["actions"][0]["status"], "failed");
+    assert_eq!(run["ticks"][1]["status"], "waiting");
     assert_eq!(
-        first["actions"][0]["codex_home_resolved"],
+        run["ticks"][0]["actions"][0]["codex_home_resolved"],
         codex_home.canonicalize().unwrap().display().to_string()
     );
-    assert_eq!(first["attempts"][0]["attempts"], 1);
+    assert_eq!(run["ticks"][0]["attempts"][0]["attempts"], 1);
 
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let second = crate::runtime::dispatch(

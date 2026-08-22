@@ -30,8 +30,9 @@ Examples:
 
 pub(super) const LOOP_RUN_AFTER_HELP: &str = "\
 Call tick until the workflow is idle, waiting, or max ticks is reached. This is
-a thin scheduler wrapper; cron, launchd, systemd, or GitHub Actions can call
-`jig loop tick` directly.
+a reconcile helper for workflows such as pr_manager. Scheduled codex_task
+workflows run exactly once through `jig loop tick` or when due through
+`jig loop dispatch`; `loop run` rejects them to prevent repeated execution.
 
 Examples:
   jig loop run --workflow noop-status --until idle
