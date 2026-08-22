@@ -13,7 +13,9 @@ use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metada
 
 mod defaults;
 mod execution_config;
-pub(crate) use execution_config::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS};
+pub(crate) use execution_config::{
+    CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
+};
 mod loop_config;
 mod optional;
 mod runtime;

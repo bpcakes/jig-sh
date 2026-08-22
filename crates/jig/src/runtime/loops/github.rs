@@ -627,8 +627,13 @@ fn run_gh_with_program_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output =
-        run_authoritative_execution_command(&mut command, timeout, &execution_label, observer)?;
+    let output = run_authoritative_execution_command(
+        &mut command,
+        timeout,
+        crate::execution::internal_execution_output_limit(),
+        &execution_label,
+        observer,
+    )?;
 
     Ok(GhOutput {
         status_code: output.status.code(),

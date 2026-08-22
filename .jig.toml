@@ -20,6 +20,8 @@ frontend_apps = []
 [execution]
 # Applies to configured checks and Codex-backed work/loop workers.
 command_timeout_seconds = 1800
+# Applies per stream to authoritative configured-command output capture.
+command_output_limit_bytes = 67108864
 
 [dev]
 # This source repo dogfoods the proxy runtime but does not auto-discover apps.

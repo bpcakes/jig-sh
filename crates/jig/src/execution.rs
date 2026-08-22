@@ -10,10 +10,15 @@ use jig_owned_process::{
     run_owned_process_tree_with_output_policy_and_observer,
 };
 
-use crate::context::CommandTimeout;
+use crate::context::{CommandOutputLimit, CommandTimeout};
 
 pub(crate) const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
 pub(crate) const EXECUTION_OUTPUT_CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
+
+pub(crate) fn internal_execution_output_limit() -> CommandOutputLimit {
+    CommandOutputLimit::from_bytes(EXECUTION_OUTPUT_CAPTURE_LIMIT as u64)
+        .expect("internal execution output limit is valid")
+}
 
 pub(crate) struct ExecutionCommandOutput {
     pub(crate) status: ExitStatus,
@@ -72,6 +77,7 @@ impl From<anyhow::Error> for ExecutionCommandError {
 pub(crate) fn run_authoritative_execution_command(
     command: &mut Command,
     timeout: CommandTimeout,
+    output_limit: CommandOutputLimit,
     label: &str,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ExecutionCommandOutput, ExecutionCommandError> {
@@ -79,24 +85,25 @@ pub(crate) fn run_authoritative_execution_command(
         command,
         timeout.duration(),
         ProcessOutputLimits {
-            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
-            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stdout: output_limit.bytes(),
+            stderr: output_limit.bytes(),
         },
         ProcessOutputOverflowPolicy::Error,
         &mut ProcessExecutionObserver::new(observer, label),
     )
-    .map_err(|error| execution_command_error(error, timeout, label))?;
+    .map_err(|error| execution_command_error(error, timeout, output_limit, label))?;
 
     Ok(ExecutionCommandOutput {
         status: output.status,
-        stdout: complete_execution_capture(output.stdout, label, "stdout")?,
-        stderr: complete_execution_capture(output.stderr, label, "stderr")?,
+        stdout: complete_execution_capture(output.stdout, output_limit, label, "stdout")?,
+        stderr: complete_execution_capture(output.stderr, output_limit, label, "stderr")?,
     })
 }
 
 fn execution_command_error(
     error: OwnedProcessTreeError,
     timeout: CommandTimeout,
+    output_limit: CommandOutputLimit,
     label: &str,
 ) -> ExecutionCommandError {
     let error = match error {
@@ -109,7 +116,8 @@ fn execution_command_error(
             anyhow!("{label} timed out after {} seconds", timeout.as_secs())
         }
         OwnedProcessTreeError::OutputLimitExceeded(stream) => anyhow!(
-            "{label} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
+            "{label} exceeded the {} byte {stream} capture limit",
+            output_limit.bytes()
         ),
         OwnedProcessTreeError::Await => anyhow!("{label} could not be awaited"),
         OwnedProcessTreeError::Cleanup => {
@@ -121,6 +129,7 @@ fn execution_command_error(
 
 fn complete_execution_capture(
     output: Option<BoundedProcessOutput>,
+    output_limit: CommandOutputLimit,
     label: &str,
     stream: &str,
 ) -> Result<Vec<u8>, ExecutionCommandError> {
@@ -129,7 +138,8 @@ fn complete_execution_capture(
     })?;
     if output.truncated {
         return Err(ExecutionCommandError::failed(anyhow!(
-            "{label} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
+            "{label} exceeded the {} byte {stream} capture limit",
+            output_limit.bytes()
         )));
     }
     if !output.complete {

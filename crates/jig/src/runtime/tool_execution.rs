@@ -769,6 +769,7 @@ fn run_configured_command(
     let result = match run_authoritative_execution_command(
         &mut command,
         ctx.command_timeout(),
+        ctx.command_output_limit(),
         &label,
         observer,
     ) {

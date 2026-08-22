@@ -18,6 +18,7 @@ schema_dump_enabled = false
 
 [execution]
 command_timeout_seconds = 321
+command_output_limit_bytes = 7654321
 
 [[status.providers]]
 id = "factorish.example"
@@ -51,6 +52,7 @@ timeout_seconds = 45
     );
     assert_eq!(value["status"]["providers"][0]["timeout_seconds"], 45);
     assert_eq!(value["execution"]["command_timeout_seconds"], 321);
+    assert_eq!(value["execution"]["command_output_limit_bytes"], 7_654_321);
 }
 
 #[test]

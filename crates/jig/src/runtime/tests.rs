@@ -443,6 +443,50 @@ rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
     assert!(observer.finished);
 }
 
+#[cfg(unix)]
+#[test]
+fn configured_command_output_limit_can_exceed_the_internal_protocol_bound() {
+    const OUTPUT_BYTES: usize = 4 * 1024 * 1024 + 1;
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(format!(
+            r#"
+rust_test_command = "head -c {OUTPUT_BYTES} /dev/zero"
+
+[execution]
+command_output_limit_bytes = {OUTPUT_BYTES}
+"#,
+        ))
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Check(
+            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: true,
+            })
+            .into(),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output["result"]["stdout"].as_str().unwrap().len(),
+        OUTPUT_BYTES
+    );
+}
+
 #[test]
 fn command_tool_honors_repository_timeout() {
     let temp = tempdir().unwrap();

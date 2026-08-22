@@ -1968,7 +1968,13 @@ where
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = run_authoritative_execution_command(&mut command, timeout, &label, observer)?;
+    let output = run_authoritative_execution_command(
+        &mut command,
+        timeout,
+        crate::execution::internal_execution_output_limit(),
+        &label,
+        observer,
+    )?;
     Ok(Output {
         status: output.status,
         stdout: output.stdout,

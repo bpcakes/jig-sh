@@ -317,6 +317,7 @@ pub(crate) fn schema_check_with_observer(
     let output = run_authoritative_execution_command(
         &mut command,
         ctx.command_timeout(),
+        ctx.command_output_limit(),
         "Configured schema dump",
         observer,
     )?;
