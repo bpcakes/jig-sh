@@ -5,16 +5,17 @@ Jig supports Linux and macOS hosts. This change removes native-Windows implement
 ## Progress
 
 - [x] (2026-08-22) Inventory Windows-specific source files, conditional branches, dependencies, tests, templates, and documentation.
-- [ ] Remove Windows process-supervision and runtime implementations from the owning crates.
-- [ ] Remove Windows bootstrap, launcher, shell, and generated-template behavior.
-- [ ] Reduce platform guidance to the supported Linux/macOS contract and remove support-shaped Windows details.
-- [ ] Regenerate dependency metadata and run formatting, Clippy, contract checks, and the full workspace test suite.
-- [ ] Inspect the final diff, record evidence, and close the work item.
+- [x] (2026-08-22) Remove Windows process-supervision and runtime implementations from the owning crates.
+- [x] (2026-08-22) Remove Windows bootstrap, launcher, shell, generated-template, and path-semantics behavior.
+- [x] (2026-08-22) Reduce platform guidance to the supported Linux/macOS contract and remove support-shaped Windows details.
+- [x] (2026-08-22) Run formatting, targeted checks, contract checks, and the full workspace test suite.
+- [x] (2026-08-22) Inspect the final diff, record evidence, and close the work item.
 
 ## Surprises & Discoveries
 
 - The repository policy already declared native Windows unsupported, but several crates still carried complete Windows process, terminal, filesystem, certificate, shell, and bootstrap implementations plus direct `windows-sys` dependencies. Those implementations materially enlarged the maintenance surface despite having no CI contract.
 - Some dependency-lock entries are target metadata of otherwise portable third-party crates. They are not Jig implementations and Cargo may retain them after every direct Jig dependency is removed.
+- The first full-suite run exposed a residual pair of drive/share pnpm fixtures plus NTFS Git metadata alias handling and a drive-prefix status-contract rule that a simple platform-token sweep did not reveal. Removing those semantics fixed the failing fixture at the abstraction boundary instead of weakening its assertion.
 
 ## Decision Log
 
@@ -27,7 +28,9 @@ Jig supports Linux and macOS hosts. This change removes native-Windows implement
 
 ## Outcomes & Retrospective
 
-Pending implementation and validation.
+Jig-owned native-Windows process supervision, vault/process/file backends, proxy runtime behavior, CLI and bootstrap branches, generated launcher behavior, dependencies, tests, fixtures, and documentation were removed in coherent commits. Platform selection now names Linux and macOS positively, with only generic unsupported-host failures where a fallback is required. Repository path safety retains containment, canonical separator, and macOS HFS protections without modeling drive prefixes or NTFS aliases.
+
+Targeted crate and regression tests passed. The authoritative `scripts/jig check test` run passed all 2,150 selected tests, and a second plan-linked `work check` run passed the same 2,150 tests plus the contract check. Required contract and test gates are fresh and passed under batch receipt `receipt_01M0NCCYXTFH90W62PTKGK7408`; formatting and workspace-wide Clippy also passed under receipts `receipt_01M0NCEDS1WD74X4BKW4858TE2` and `receipt_01M0NCF1VDYN9TNMATZXDVTRP6`.
 
 ## Context and orientation
 
