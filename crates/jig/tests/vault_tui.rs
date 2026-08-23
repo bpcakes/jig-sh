@@ -28,9 +28,9 @@ const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
 // Vault interactions perform deliberately expensive key derivation. Allow
-// enough headroom for loaded CI and developer machines while retaining a
-// bounded watchdog for every expected terminal transition.
-const UI_INTERACTION_TIMEOUT: Duration = Duration::from_secs(60);
+// enough headroom for loaded CI and developer machines. This PTY binary runs
+// serially in its own Nextest invocation so the timeout remains a useful bound.
+const UI_INTERACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct ChildGuard(Child);
 

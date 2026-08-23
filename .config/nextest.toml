@@ -32,13 +32,5 @@ filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | b
 test-group = 'process-signals'
 
 [[profile.default.overrides]]
-# This PTY scenario performs several sequential KDF-backed interactions and
-# asserts bounded UI response times. Reserve the whole vault group so unrelated
-# crypto work cannot consume its latency budget.
-filter = 'package(jig-sh) & binary(vault_tui) & test(browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit)'
-test-group = 'vault-crypto'
-threads-required = 4
-
-[[profile.default.overrides]]
 filter = 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 test-group = 'vault-crypto'

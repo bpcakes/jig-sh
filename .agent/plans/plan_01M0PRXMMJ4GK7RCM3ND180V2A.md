@@ -15,8 +15,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, and passed all 5 supported-host regression tests; commit remains the immediate next action.
 - [x] (2026-08-23 07:49Z) Unified CLI and MCP progress outcome composition, made the primary operation error first on dual failure, and passed 11 MCP plus 12 CLI progress unit tests; commit remains the immediate next action.
 - [x] (2026-08-23 07:55Z) Added an independent monotonic 10ms authoritative-result inspection schedule and passed the deterministic cadence, cancelled-before-start, and live process-group overflow regressions; commit remains the immediate next action.
-- [x] (2026-08-23 08:48Z) Isolated the latency-sensitive Vault PTY browser test from unrelated KDF contention, confirmed the specific override wins, and passed the exact test plus all 439 Vault-partition tests; commit remains the immediate next action.
-- [x] (2026-08-23 09:16Z) Widened the isolated PTY interaction watchdog from 30 to 60 seconds, passed the exact scenario in 3.371 seconds, and passed all 439 loaded Vault tests in 549.356 seconds; commit remains the immediate next action.
+- [x] (2026-08-23 08:48Z) Tested a four-slot Nextest reservation for the PTY browser; focused validation passed, but a later complete gate proved the in-process isolation insufficient.
+- [x] (2026-08-23 09:16Z) Tested a 60-second PTY watchdog; focused validation passed, but a later complete gate failed at 62.120 seconds and disproved the slow-operation hypothesis.
+- [x] (2026-08-23 09:41Z) Restored the meaningful 30-second watchdog, split the two PTY tests into a dedicated serial Nextest process, proved exact 2,163/437/2 selector coverage, and passed both PTY tests in 4.410 seconds; commit remains the immediate next action.
 - [ ] Build the development binary, run focused checks, repository gates, and `scripts/jig check test`, then record evidence and finish structured work.
 
 ## Surprises & Discoveries
@@ -48,8 +49,11 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - Observation: Slot reservation alone does not make a 30-second PTY watchdog deterministic after the complete broad partition has exercised the host.
   Evidence: the committed full gate still failed the same PTY test at 32.165 seconds, while individual KDF-heavy Vault tests in that run took up to 67.954 seconds. The timeout is a hang detector, not a product latency contract, so tying correctness to a tighter host-load threshold is structurally unsound.
 
-- Observation: A 60-second per-transition watchdog remains much tighter than the surrounding Vault partition's overall slow cases while eliminating the observed false timeout.
-  Evidence: after the change, the exact PTY scenario passed in 3.371 seconds and the loaded partition passed 439 of 439 tests in 549.356 seconds; unrelated lifecycle work crossed 120 seconds during that successful run.
+- Observation: Doubling the watchdog shifts the failure one-for-one instead of allowing slow work to complete.
+  Evidence: after focused validation passed with a 60-second watchdog, the complete gate failed the same test at 62.120 seconds. This disproves the slow-operation hypothesis and shows that the PTY child remains blocked for the entire watchdog only when embedded in the combined test workflow.
+
+- Observation: Nextest's JSON `test-count` includes mismatching test cases from any partially selected binary, so it cannot directly prove partition coverage for a test-name filter.
+  Evidence: counting each testcase whose `filter-match.status` is `matches` yields 2,163 broad tests, 437 non-PTY Vault tests, and 2 PTY tests, exactly matching the prior 2,602-test total. The dedicated serial PTY invocation then passed both tests in 4.410 seconds with the restored 30-second watchdog.
 
 ## Decision Log
 
@@ -69,8 +73,8 @@ After this work, the repository can state its current Linux/macOS host policy wh
   Rationale: Each product behavior can be reviewed, reverted, and bisected without mixing policy, transport errors, and process supervision. A separately discovered test-infrastructure defect remains outside those product commits.
   Date/Author: 2026-08-23 / Codex
 
-- Decision: Add a fourth, test-infrastructure-only commit that assigns all four `vault-crypto` execution slots to the long PTY browser scenario.
-  Rationale: Repeated full-load failures plus fast isolated passes prove resource sensitivity rather than a product regression. Reserving the existing group capacity avoids unrelated in-process test contention. A follow-up widens the per-transition watchdog to 60 seconds because the complete gate proved that isolation alone cannot turn a host-load watchdog into a stable 30-second performance assertion.
+- Decision: Run the `vault_tui` integration binary serially in its own final Nextest process and restore the 30-second watchdog; remove the narrower thread reservation.
+  Rationale: The scenario repeatedly passes in about 3.3 seconds in a dedicated Nextest process and repeatedly blocks for exactly the configured watchdog inside the combined workflow. Neither reserving all in-process slots nor doubling the timeout changes that boundary-dependent behavior. A separate process is the demonstrated isolation unit, while serial execution prevents the two PTY tests from contending with each other.
   Date/Author: 2026-08-23 / Codex
 
 ## Outcomes & Retrospective
@@ -95,7 +99,7 @@ Milestone two repairs progress error composition. Generalize `crates/jig/src/pro
 
 Milestone three repairs result inspection cadence. In `crates/jig/src/runtime/worker_runner.rs`, add a 10ms inspection interval and a last-inspection `Instant` to `WorkerProcessObserver`. Replace the unconditional metadata call in `cancelled` with an `inspect_authoritative_output_if_due` helper. Check the execution cancellation source first so an already-cancelled command still yields `CancelledBeforeStart`; otherwise inspect immediately on the first callback and at most once per interval. Retain `read_worker_output_file` after process exit as the authoritative final validation. Add a deterministic unit test that controls the observer's private monotonic timestamp and proves a missing output file is ignored before the interval and detected when due. Keep the existing live-overflow and pre-start cancellation regressions passing. Commit this milestone alone.
 
-Milestone four hardens full-suite scheduling without changing product behavior. In `.config/nextest.toml`, add a more specific override before the broad Vault override for `jig-sh::vault_tui browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit`. Keep it in `vault-crypto` but set `threads-required = 4`, reserving the group's full configured capacity while this latency-sensitive multi-step PTY scenario runs. In `crates/jig/tests/vault_tui.rs`, retain a bounded per-transition watchdog but raise it from 30 to 60 seconds because full-run KDF timings exceed 60 seconds on the validation host. Confirm with `cargo nextest show-config test-groups` that the specific override wins, run the exact test and the complete Vault partition, and keep the scheduling and watchdog corrections in separate commits.
+Milestone four hardens full-suite scheduling without changing product behavior. In `.jig.toml`, keep the existing broad first partition, exclude the `jig-sh` `vault_tui` integration binary from the second Vault partition, and add a third `cargo nextest run -p jig-sh --test vault_tui -j 1` invocation. Apply the same three-part structure to `rust_test_locked_command`. Remove the now-redundant specific override from `.config/nextest.toml` and restore `crates/jig/tests/vault_tui.rs` to its 30-second per-transition watchdog. Validate that the selectors enumerate 2,163 broad tests, 437 Vault tests, and 2 serial PTY tests, then run the exact configured command and commit this process-isolation correction separately from the earlier experiments.
 
 After all four milestones, format the workspace, rebuild the development binary, run the supported-host and crate-focused tests, run the configured contract gate, and run `JIG_DEV_BIN=target/debug/jig scripts/jig check test` as the full-suite acceptance command. Use `scripts/jig work check`, `work evidence`, `work gates`, and `work receipts` to connect the results to this plan. Update every living section of this plan, append a final structured-work progress record, finish the work only after required gates pass, and commit the plan and append-only evidence.
 
@@ -133,13 +137,14 @@ For the worker slice, edit with `apply_patch`, then run:
     git add crates/jig/src/runtime/worker_runner.rs
     git commit -m "fix(worker): decouple result inspection cadence"
 
-For the Vault scheduling slice, edit with `apply_patch`, then run:
+For the Vault process-isolation slice, edit with `apply_patch`, then run:
 
-    cargo nextest show-config test-groups -p jig-sh --test vault_tui --no-pager -v -- browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit --exact
-    cargo nextest run -p jig-sh --test vault_tui -E 'test(browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit)'
-    cargo nextest run --workspace -E 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
-    git add .config/nextest.toml .agent/plans/plan_01M0PRXMMJ4GK7RCM3ND180V2A.md .agent/state/plans.jsonl .agent/state/receipts.jsonl
-    git commit -m "test(vault): isolate PTY browser from KDF contention"
+    cargo nextest list --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))'
+    cargo nextest list --workspace -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))'
+    cargo nextest list -p jig-sh --test vault_tui
+    cargo nextest run -p jig-sh --test vault_tui -j 1
+    git add .jig.toml .config/nextest.toml crates/jig/tests/vault_tui.rs .agent/plans/plan_01M0PRXMMJ4GK7RCM3ND180V2A.md .agent/state/plans.jsonl .agent/state/receipts.jsonl
+    git commit -m "test(vault): isolate PTY suite process"
 
 For final acceptance and structured evidence, run:
 
@@ -163,7 +168,7 @@ The progress repair is accepted when an MCP unit test supplies both a synthetic 
 
 The worker repair is accepted when the schedule unit test proves metadata is not re-read before the monotonic deadline and is re-read once due, the existing cancelled-before-start test retains its typed outcome, and the live oversized-result test still terminates the worker process group before its escaped marker can be written.
 
-The Vault scheduling repair is accepted when Nextest reports that the exact PTY browser test uses the specific four-thread override, the test passes under Nextest with its bounded 60-second per-transition watchdog, and all 439 tests in the Vault partition pass under the configured four-thread load.
+The Vault scheduling repair is accepted when the configured selectors cover 2,163 broad tests, 437 non-PTY Vault tests, and both PTY tests exactly once; the PTY binary passes serially in its own process with the restored 30-second watchdog; and the complete three-part `scripts/jig check test` command exits zero.
 
 The overall work is accepted only when `cargo fmt --all -- --check`, the supported-host checker, the contract gate, and `JIG_DEV_BIN=target/debug/jig scripts/jig check test` all exit zero. Any unrelated optional lint failure must be recorded with evidence but does not replace the required full test result.
 
@@ -222,6 +227,10 @@ Plan revision note (2026-08-23 09:03Z): Added a follow-up to widen the isolated 
 
 Plan revision note (2026-08-23 09:16Z): Marked the watchdog follow-up complete after the exact PTY test and all 439 loaded Vault tests passed. Recorded the successful timings and retained the complete repository gate as the remaining acceptance step.
 
+Plan revision note (2026-08-23 09:32Z): Rejected both the in-process thread reservation and timeout-inflation hypotheses after the complete gate failed at 62.120 seconds. Reworked the fourth milestone around the demonstrated process boundary: a dedicated serial `vault_tui` Nextest invocation with the original 30-second watchdog.
+
+Plan revision note (2026-08-23 09:41Z): Marked the process-isolation correction ready to commit after validating exact partition membership through per-test filter-match statuses and passing both dedicated PTY tests serially with the restored watchdog.
+
 
 Policy slice complete: separated active supported-host scanning from immutable release history, restored all 22 deleted historical entries, added the Unreleased breaking cutover, and passed scripts/check-supported-host-surface.sh plus 5/5 supported_host_surface tests.
 
@@ -236,3 +245,6 @@ Verification infrastructure slice complete: the Vault PTY browser now reserves a
 
 
 Vault PTY watchdog follow-up complete: kept every terminal transition bounded while widening the host-load watchdog to 60s. The exact scenario passed in 3.371s and the loaded Vault partition passed 439/439 in 549.356s.
+
+
+Vault process-isolation correction ready: restored the 30-second PTY watchdog, removed the ineffective in-process slot override, split vault_tui into a dedicated serial Nextest invocation, proved exact 2163/437/2 test coverage, and passed both PTY tests in 4.410 seconds.
