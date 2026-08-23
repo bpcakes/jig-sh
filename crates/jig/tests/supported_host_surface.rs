@@ -50,6 +50,29 @@ esac
 }
 
 #[test]
+fn supported_host_policy_excludes_release_history_from_content_scan() {
+    let output = run_with_fake_git(
+        r#"case "$1" in
+  grep)
+    for arg in "$@"; do
+      [ "$arg" = ':!CHANGELOG.md' ] && exit 1
+    done
+    printf '%s%s\n' 'CHANGELOG.md:Win' 'dows support was released'
+    ;;
+  ls-files) exit 0 ;;
+  *) exit 88 ;;
+esac
+"#,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn supported_host_policy_does_not_treat_window_as_windows() {
     let output = run_with_fake_git(
         r#"case "$1" in

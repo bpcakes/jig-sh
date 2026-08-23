@@ -9,9 +9,12 @@ path_pattern='(^|[/_.-])(windows|win32|powershell|pwsh|cygwin|msys|mingw)([/_.-]
 
 content_matches=""
 if content_matches="$(
+  # Release notes and append-only agent records are historical evidence, not
+  # statements of the currently supported host surface.
   git grep -n -I -E "$content_pattern" -- \
     ':!Cargo.lock' \
     ':!landing/bun.lock' \
+    ':!CHANGELOG.md' \
     ':!.agent/state/**' \
     ':!.agent/plans/**' \
     ':!scripts/check-supported-host-surface.sh'
@@ -25,7 +28,7 @@ else
   fi
 fi
 if [[ -n "$content_matches" ]]; then
-  echo "Tracked source still contains unsupported-host implementation or support guidance:" >&2
+  echo "Tracked current source or guidance still contains unsupported-host implementation or claims:" >&2
   printf '%s\n' "$content_matches" >&2
   exit 1
 fi

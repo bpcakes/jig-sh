@@ -11,8 +11,8 @@ After this work, the repository can state its current Linux/macOS host policy wh
 ## Progress
 
 - [x] (2026-08-23 07:38Z) Opened structured work, read `.agent/PLANS.md`, `agent-map.md`, and `crates/jig/AGENTS.md`, and inspected the three affected boundaries and existing regression tests.
-- [ ] Commit this self-contained execution plan and its structured-work start records.
-- [ ] Restore accurate released host-support history, add a current breaking-change note, narrow the active-host content guard, add a regression test, and commit that slice.
+- [x] (2026-08-23 07:38Z) Committed this self-contained execution plan and its structured-work start records as `187ba84`.
+- [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, and passed all 5 supported-host regression tests; commit remains the immediate next action.
 - [ ] Introduce explicit MCP tool/progress outcome composition, cover simultaneous failure ordering, and commit that slice.
 - [ ] Add an independent time-based authoritative-result inspection schedule, cover its cadence and cancellation behavior, and commit that slice.
 - [ ] Build the development binary, run focused checks, repository gates, and `scripts/jig check test`, then record evidence and finish structured work.
@@ -21,6 +21,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 
 - Observation: `scripts/check-supported-host-surface.sh` excludes append-only state and plan evidence from its content scan but still scans `CHANGELOG.md`, even though a changelog necessarily records obsolete support commitments.
   Evidence: `git diff origin/master...HEAD -- CHANGELOG.md` shows numerous released Windows entries deleted while the script's `git grep` pathspec has no `:!CHANGELOG.md` exclusion.
+
+- Observation: Restoring the historical record is cleanly separable from current release changes.
+  Evidence: after restoration, `git diff --numstat origin/master -- CHANGELOG.md` reports `2 0 CHANGELOG.md`: only the pre-existing Rust-version entry and the new host-support breaking entry differ from the published history.
 
 - Observation: `crates/jig/src/mcp.rs::handle_tool_call` already defers progress output until after tool execution, but sequential `?` operators give the later flush error unconditional precedence over the earlier tool result.
   Evidence: the function stores `tool_result`, calls `observer.flush()?`, and only then evaluates `tool_result?`.
@@ -161,3 +164,10 @@ Initial problematic worker callback:
 No new third-party dependencies are required. The policy test continues to use `tempfile` and `std::process::Command`. The MCP helper remains private to `crates/jig/src/mcp.rs` and has the conceptual signature `fn combine_tool_and_progress_results<T>(tool_result: anyhow::Result<T>, progress_result: anyhow::Result<()>) -> anyhow::Result<T>`. The worker observer uses `std::time::Instant` and `Duration`; it retains the existing `OwnedProcessObserver` interface and `WorkerResultFileFailure` mapping. No command-line, JSON-RPC schema, durable-state schema, or public Rust API changes are introduced.
 
 Plan revision note (2026-08-23 07:38Z): Replaced the one-line work-start body with a self-contained execution plan after inspecting the affected policy, MCP, and worker boundaries. The plan records the structural causes, fixes, separate commit strategy, and full-suite acceptance criteria so work can resume from this file alone.
+
+Plan revision note (2026-08-23 07:42Z): Marked the planning commit complete and recorded partial progress on the policy milestone after narrowing the guard and adding its regression. Released changelog entries still need restoration before this slice is valid.
+
+Plan revision note (2026-08-23 07:45Z): Marked the policy implementation and focused validation complete after restoring all 22 deleted historical entries. The five-test integration target and the real checker both pass; the slice is ready to commit.
+
+
+Policy slice complete: separated active supported-host scanning from immutable release history, restored all 22 deleted historical entries, added the Unreleased breaking cutover, and passed scripts/check-supported-host-surface.sh plus 5/5 supported_host_surface tests.
