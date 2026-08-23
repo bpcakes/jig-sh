@@ -6,33 +6,64 @@ use serde_json::{Value, json};
 
 use crate::command::WorkCheckRequest;
 use crate::context::{RepoContext, WorkGate};
+use crate::execution::{ExecutionControl, PhasePosition};
 use crate::repository::{PlanRunRequest, RepositoryCatalog, plan_run, resolve_evidence_targets};
-use crate::state::{ReceiptInput, current_worktree_fingerprint, now_ms, record_receipt};
+use crate::state::{
+    ReceiptInput, current_worktree_fingerprint_for_receipt_with_cancellation,
+    current_worktree_fingerprint_with_cancellation, now_ms, record_receipt_with_cancellation,
+};
 use crate::tool_defs::tool;
 
 use super::super::run_execution::{ExecuteCheckRunRequest, execute_check_run};
-use super::super::tool_execution::{
-    execute_manifest_tool_result_without_worktree_fingerprint, manifest_tool_result_failure,
-};
+use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
 use super::tools::{selected_tools, validate_check_tool};
 
-pub(super) fn check(ctx: &RepoContext, opts: WorkCheckRequest) -> Result<Value> {
+pub(super) fn check_with_observer(
+    ctx: &RepoContext,
+    opts: WorkCheckRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     // Closed plans are inspectable through gates/evidence, but checks append
     // fresh receipts and must stay tied to open work.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
     if opts.tools.is_empty() {
-        check_configured(ctx, &opts.plan_id, CheckFailureMode::ReportError)
+        check_configured(ctx, &opts.plan_id, CheckFailureMode::ReportError, observer)
     } else {
-        check_tools(ctx, &opts.plan_id, selected_tools(ctx, &opts.tools)?)
+        check_tools_with_observer(
+            ctx,
+            &opts.plan_id,
+            selected_tools(ctx, &opts.tools)?,
+            observer,
+        )
     }
 }
 
-pub(super) fn check_tools(ctx: &RepoContext, plan_id: &str, tools: Vec<String>) -> Result<Value> {
-    run_check_tools(ctx, plan_id, tools, CheckFailureMode::ReportError)?.require_success()
+pub(super) fn check_tools_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tools: Vec<String>,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    run_check_tools(ctx, plan_id, tools, CheckFailureMode::ReportError, observer)?.require_success()
 }
 
-pub(super) fn check_configured_collect_failures(ctx: &RepoContext, plan_id: &str) -> Result<Value> {
-    check_configured(ctx, plan_id, CheckFailureMode::Collect)
+pub(super) fn check_configured_collect_failures_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    check_configured(ctx, plan_id, CheckFailureMode::Collect, observer)
+}
+
+#[cfg(test)]
+pub(in crate::runtime) fn check_tools_collect_failures_with_observer(
+    ctx: &RepoContext,
+    plan_id: &str,
+    tools: Vec<String>,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    run_check_tools(ctx, plan_id, tools, CheckFailureMode::Collect, observer)
+        .map(|batch| batch.result)
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +82,7 @@ fn check_configured(
     ctx: &RepoContext,
     plan_id: &str,
     failure_mode: CheckFailureMode,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let tools = ctx.work_check_tools();
     let catalog = RepositoryCatalog::from_context(ctx)?;
@@ -72,7 +104,7 @@ fn check_configured(
             failures: Vec::new(),
         }
     } else {
-        run_check_tools(ctx, plan_id, tools, failure_mode)?
+        run_check_tools(ctx, plan_id, tools, failure_mode, observer)?
     };
 
     if targets.is_empty() {
@@ -103,7 +135,7 @@ fn check_configured(
             record_receipts: true,
             fail_fast: false,
         },
-        &|| false,
+        &|| observer.cancelled(),
     )?;
     let evidence_ok = execution.run.result.conclusion == Some(RunConclusion::Success);
     let failed_target_labels = execution
@@ -185,24 +217,41 @@ fn run_check_tools(
     plan_id: &str,
     tools: Vec<String>,
     failure_mode: CheckFailureMode,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<CheckBatch> {
     let started = now_ms();
-    let before_fingerprint = current_worktree_fingerprint(ctx);
+    let before_fingerprint =
+        current_worktree_fingerprint_with_cancellation(ctx, &|| observer.cancelled())?;
     for name in &tools {
         validate_check_tool(ctx, name, "Work check")?;
     }
 
     let mut results = Vec::with_capacity(tools.len());
     let mut check_failures = Vec::<CheckFailure>::new();
-    for name in &tools {
-        let execution = execute_manifest_tool_result_without_worktree_fingerprint(
-            ctx,
-            name,
-            json!({}),
-            Some(plan_id.to_string()),
-        );
+    let mut cancellation = None;
+    for (index, name) in tools.iter().enumerate() {
+        if observer.cancelled() {
+            let message = format!("Work check was cancelled before {name} started");
+            check_failures.push(CheckFailure {
+                exit_status: 1,
+                message: message.clone(),
+            });
+            cancellation = Some(message);
+            break;
+        }
+        let position = PhasePosition::new(index + 1, tools.len())
+            .expect("work checks are enumerated within a nonempty tool list");
+        let execution =
+            super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
+                ctx,
+                name,
+                json!({}),
+                Some(plan_id.to_string()),
+                position,
+                observer,
+            );
         match execution {
-            Ok(result) => {
+            Ok(ManifestToolExecutionOutcome::Completed(result)) => {
                 let result_failure = manifest_tool_result_failure(&result)?;
                 results.push(result);
                 if let Some((exit_status, message)) = result_failure {
@@ -211,6 +260,18 @@ fn run_check_tools(
                         message,
                     });
                 }
+            }
+            Ok(ManifestToolExecutionOutcome::Cancelled(result)) => {
+                let message = manifest_tool_result_failure(&result)?
+                    .map(|(_, message)| message)
+                    .unwrap_or_else(|| "Tool execution was cancelled".to_string());
+                results.push(result);
+                check_failures.push(CheckFailure {
+                    exit_status: 1,
+                    message: message.clone(),
+                });
+                cancellation = Some(message);
+                break;
             }
             Err(error) => check_failures.push(CheckFailure {
                 exit_status: 1,
@@ -225,10 +286,12 @@ fn run_check_tools(
         .iter()
         .filter_map(|result| result["receipt_id"].as_str())
         .collect::<Vec<_>>();
-    let after_fingerprint = current_worktree_fingerprint(ctx);
+    let after_fingerprint =
+        current_worktree_fingerprint_for_receipt_with_cancellation(ctx, &|| observer.cancelled());
     let worktree_fingerprint_override =
         work_check_fingerprint_evidence(&before_fingerprint, &after_fingerprint);
-    let receipt_result = record_receipt(
+    let receipt_stderr = failure_message(&check_failures).unwrap_or_default();
+    let receipt_result = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: tool::WORK_CHECK,
@@ -247,13 +310,14 @@ fn run_check_tools(
                 .max()
                 .unwrap_or(0),
             stdout: "",
-            stderr: "",
+            stderr: &receipt_stderr,
             evidence: None,
             session_override: None,
             collect_git_metadata: true,
             collect_worktree_fingerprint: false,
             worktree_fingerprint_override: Some(worktree_fingerprint_override),
         },
+        &|| observer.cancelled(),
     );
 
     let receipt_id = match receipt_result {
@@ -268,6 +332,10 @@ fn run_check_tools(
             return Err(receipt_error);
         }
     };
+
+    if let Some(message) = cancellation {
+        bail!("{message}\nreceipt: {receipt_id}");
+    }
 
     Ok(CheckBatch {
         result: json!({
@@ -357,7 +425,12 @@ tool = "jig.second_check"
         let ctx = RepoContext::load_from(temp.path()).unwrap();
         crate::state::seed_open_plan_for_test(&ctx, "plan_1", "Test", "# Test\n").unwrap();
 
-        let result = check_configured_collect_failures(&ctx, "plan_1").unwrap();
+        let result = check_configured_collect_failures_with_observer(
+            &ctx,
+            "plan_1",
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["checks"].as_array().unwrap().len(), 2);

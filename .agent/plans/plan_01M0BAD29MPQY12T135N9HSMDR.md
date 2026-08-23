@@ -1,0 +1,1 @@
+Refactor dev-session recovery around typed process observations and explicit spawn-pending state, then close orphan recovery, route ownership, status, and diagnostic gaps with compatibility-preserving tests.

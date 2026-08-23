@@ -8,6 +8,7 @@
 
 mod certs;
 mod dev_api;
+mod dev_outcome;
 mod dev_sessions;
 mod file_ops;
 mod host;
@@ -19,8 +20,6 @@ mod session_control;
 mod session_id;
 mod state;
 mod types;
-#[cfg(any(windows, test))]
-mod windows_system;
 mod workspace;
 
 use std::collections::HashMap;
@@ -60,7 +59,7 @@ pub(crate) fn test_tempdir() -> std::io::Result<tempfile::TempDir> {
 
 use crate::host::{RouteHostname, TargetHost};
 use crate::ports::{is_tcp_listening, jig_proxy_http_pid, local_lan_ip_for_ipv4_listener};
-use crate::state::{StateStore, now_ms, pid_is_alive};
+use crate::state::{PidObservation, StateStore, now_ms, observe_pid};
 use crate::types::{Route, RouteMode};
 
 pub use crate::dev_api::{dev, dev_resolved, dev_status, dev_stop};
@@ -101,6 +100,10 @@ impl DevPreflightError {
 
     pub const fn cleanup_unconfirmed(error: anyhow::Error) -> Self {
         Self::CleanupUnconfirmed(error)
+    }
+
+    pub(crate) const fn cleanup_was_confirmed(&self) -> bool {
+        !matches!(self, Self::CleanupUnconfirmed(_))
     }
 }
 
@@ -353,6 +356,7 @@ fn proxy_stop_with_service_probe_and_terminator(
             "runtime_files_cleared": false,
             "pid": null,
             "pid_alive": false,
+            "pid_observation": null,
             "probed_http_port": null,
             "health_pid": null,
             "handshake_ok": false,
@@ -371,7 +375,8 @@ fn proxy_stop_with_service_probe_and_terminator(
     let store = StateStore::resolve(request.settings.state_dir.clone())?;
     let status = proxy_runtime_status(&store)?;
     let pid = status.pid;
-    let pid_alive = status.pid_alive;
+    let pid_alive = status.pid_is_alive();
+    let pid_may_be_alive = status.pid_may_be_alive();
     let probed_http_port = status.http_port;
     let health_pid = status.health_pid;
     let handshake_ok = status.handshake_ok;
@@ -381,13 +386,14 @@ fn proxy_stop_with_service_probe_and_terminator(
     let service_degrades_stop_ok = service_status.degrades_stop_ok();
     let mut stopped = false;
     if !service_degrades_stop_ok {
-        if let Some(stop_pid) = proxy_stop_target_pid(pid, pid_alive, pid_matches_proxy) {
+        if let Some(stop_pid) = proxy_stop_target_pid(pid, pid_may_be_alive, pid_matches_proxy) {
             stopped = terminate_proxy(stop_pid);
         }
     }
     let authenticated_proxy_still_running = handshake_ok && !stopped;
     let should_clear_runtime_files = !service_degrades_stop_ok
-        && (stopped || (!authenticated_proxy_still_running && (pid.is_none() || !pid_alive)));
+        && (stopped
+            || (!authenticated_proxy_still_running && (pid.is_none() || !pid_may_be_alive)));
     let runtime_files_cleared = if should_clear_runtime_files {
         match store.try_clear_runtime_files() {
             Ok(()) => true,
@@ -411,6 +417,7 @@ fn proxy_stop_with_service_probe_and_terminator(
         "runtime_files_cleared": runtime_files_cleared,
         "pid": pid,
         "pid_alive": pid_alive,
+        "pid_observation": status.pid_observation.map(PidObservation::label),
         "probed_http_port": probed_http_port,
         "health_pid": health_pid,
         "handshake_ok": handshake_ok,
@@ -421,7 +428,7 @@ fn proxy_stop_with_service_probe_and_terminator(
         "warning": stop_warning(StopWarningStatus {
             pid,
             health_pid,
-            pid_alive,
+            pid_observation: status.pid_observation,
             handshake_ok,
             pid_matches_proxy,
             stopped,
@@ -434,10 +441,10 @@ fn proxy_stop_with_service_probe_and_terminator(
 
 const fn proxy_stop_target_pid(
     pid: Option<u32>,
-    pid_alive: bool,
+    pid_may_be_alive: bool,
     pid_matches_proxy: bool,
 ) -> Option<u32> {
-    if pid_alive && pid_matches_proxy {
+    if pid_may_be_alive && pid_matches_proxy {
         return pid;
     }
     None
@@ -467,7 +474,7 @@ fn missing_state_warning(
 struct StopWarningStatus {
     pid: Option<u32>,
     health_pid: Option<u32>,
-    pid_alive: bool,
+    pid_observation: Option<PidObservation>,
     handshake_ok: bool,
     pid_matches_proxy: bool,
     stopped: bool,
@@ -479,13 +486,14 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
     let StopWarningStatus {
         pid,
         health_pid,
-        pid_alive,
+        pid_observation,
         handshake_ok,
         pid_matches_proxy,
         stopped,
         service_keepalive_active,
         service_status_uncertain,
     } = status;
+    let pid_may_be_alive = pid_observation.is_some_and(PidObservation::may_be_alive);
 
     if stopped {
         if service_keepalive_active {
@@ -516,7 +524,7 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
             );
         }
     }
-    if handshake_ok && !stopped && !pid_alive {
+    if handshake_ok && !stopped && !pid_may_be_alive {
         let health_pid = health_pid?;
         let pid_detail = pid
             .map(|pid| format!("stale PID file points at {pid}"))
@@ -543,12 +551,17 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
     } else {
         ""
     };
-    if pid_alive && !handshake_ok {
+    if pid_observation == Some(PidObservation::Uncertain) && !handshake_ok {
+        return Some(format!(
+            "PID file points at process {pid}, but Jig could not classify whether that PID is still alive and it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.{service_suffix}"
+        ));
+    }
+    if pid_may_be_alive && !handshake_ok {
         return Some(format!(
             "PID file points at process {pid}, but it did not answer the Jig proxy health check. Runtime files were kept to avoid hiding or terminating an unrelated process; inspect the PID or remove the state dir after confirming it is stale.{service_suffix}"
         ));
     }
-    if pid_alive && handshake_ok && !pid_matches_proxy {
+    if pid_may_be_alive && handshake_ok && !pid_matches_proxy {
         let Some(health_pid) = health_pid else {
             return Some(format!(
                 "A Jig proxy answered the stored health check, but the health response did not include a PID while the PID file points at {pid}. Runtime files were kept to avoid terminating an unrelated process.{service_suffix}"
@@ -558,12 +571,12 @@ fn stop_warning(status: StopWarningStatus) -> Option<String> {
             "A Jig proxy answered on the stored port as PID {health_pid}, but the PID file points at {pid}. Runtime files were kept to avoid terminating an unrelated process; use the matching JIG_PROXY_STATE_DIR or stop the other proxy explicitly.{service_suffix}"
         ));
     }
-    if pid_alive && handshake_ok {
+    if pid_may_be_alive && handshake_ok {
         return Some(format!(
             "Jig proxy process {pid} answered the health check but did not exit after stop signals. Runtime files were kept because the process may still own its ports.{service_suffix}"
         ));
     }
-    if !pid_alive {
+    if !pid_may_be_alive {
         return Some(format!(
             "Stale Jig proxy PID file for process {pid} was found and cleared.{service_suffix}"
         ));
@@ -628,45 +641,20 @@ pub(crate) fn unix_pid(pid: u32) -> Option<i32> {
     i32::try_from(pid).ok()
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn terminate_proxy_pid(_pid: u32) -> bool {
     false
-}
-
-#[cfg(windows)]
-fn terminate_proxy_pid(pid: u32) -> bool {
-    let Ok(taskkill) = crate::windows_system::native_system_executable("taskkill.exe") else {
-        return false;
-    };
-    let Ok(status) = std::process::Command::new(&taskkill)
-        .env_clear()
-        .args(["/PID", &pid.to_string(), "/T"])
-        .status()
-    else {
-        return false;
-    };
-    if status.success() && wait_for_pid_exit(pid, Duration::from_secs(2)) {
-        return true;
-    }
-    let Ok(status) = std::process::Command::new(taskkill)
-        .env_clear()
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .status()
-    else {
-        return false;
-    };
-    status.success() && wait_for_pid_exit(pid, Duration::from_secs(1))
 }
 
 fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if !pid_is_alive(pid) {
+        if observe_pid(pid).is_absent() {
             return true;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    !pid_is_alive(pid)
+    observe_pid(pid).is_absent()
 }
 
 /// Lists proxy routes and runtime status.
@@ -696,6 +684,7 @@ fn proxy_list_with_service_probe(
             "https_port": null,
             "pid": null,
             "pid_alive": false,
+            "pid_observation": null,
             "health_pid": null,
             "handshake_ok": false,
             "pid_matches_proxy": false,
@@ -730,7 +719,8 @@ fn proxy_list_with_service_probe(
         "http_port": status.http_port,
         "https_port": https_port,
         "pid": status.pid,
-        "pid_alive": status.pid_alive,
+        "pid_alive": status.pid_is_alive(),
+        "pid_observation": status.pid_observation.map(PidObservation::label),
         "health_pid": status.health_pid,
         "handshake_ok": status.handshake_ok,
         "pid_matches_proxy": status.pid_matches_proxy,
@@ -749,16 +739,27 @@ fn proxy_list_with_service_probe(
 #[derive(Debug)]
 struct ProxyRuntimeStatus {
     pid: Option<u32>,
-    pid_alive: bool,
+    pid_observation: Option<PidObservation>,
     http_port: Option<u16>,
     health_pid: Option<u32>,
     handshake_ok: bool,
     pid_matches_proxy: bool,
 }
 
+impl ProxyRuntimeStatus {
+    fn pid_is_alive(&self) -> bool {
+        self.pid_observation.is_some_and(PidObservation::is_alive)
+    }
+
+    fn pid_may_be_alive(&self) -> bool {
+        self.pid_observation
+            .is_some_and(PidObservation::may_be_alive)
+    }
+}
+
 fn proxy_runtime_status(store: &StateStore) -> Result<ProxyRuntimeStatus> {
     let pid = store.read_pid()?;
-    let pid_alive = pid.is_some_and(pid_is_alive);
+    let pid_observation = pid.map(observe_pid);
     let http_port = store.read_http_port()?;
     let health_token = store.read_health_token()?;
     let health_pid = match (http_port, health_token.as_deref()) {
@@ -771,7 +772,7 @@ fn proxy_runtime_status(store: &StateStore) -> Result<ProxyRuntimeStatus> {
         .is_some_and(|(pid, health_pid)| pid == health_pid);
     Ok(ProxyRuntimeStatus {
         pid,
-        pid_alive,
+        pid_observation,
         http_port,
         health_pid,
         handshake_ok,

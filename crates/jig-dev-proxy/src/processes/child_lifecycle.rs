@@ -1,15 +1,5 @@
-#[cfg(any(windows, test))]
-use std::collections::HashMap;
 use std::io;
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-#[cfg(windows)]
-use std::process::Command;
 use std::process::{Child, ExitStatus};
-#[cfg(windows)]
-use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(windows)]
-use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -26,23 +16,6 @@ use jig_owned_process::unix::{
     ProcessGroupId, UnreapedChildObservation, WaitidClassificationError, classify_waitid_status,
     waitid_without_reaping,
 };
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
-#[cfg(windows)]
-use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
-#[cfg(windows)]
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-};
-#[cfg(windows)]
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
-    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-};
-#[cfg(windows)]
-use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
 #[cfg(unix)]
 use crate::unix_pid;
@@ -53,211 +26,16 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(2);
 const KILL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(1);
 
-#[cfg(any(windows, test))]
-struct WindowsAppJobEntry<H> {
-    generation: u64,
-    handle: H,
-}
-
-#[cfg(windows)]
-static WINDOWS_APP_JOBS: OnceLock<Mutex<HashMap<u32, WindowsAppJobEntry<OwnedHandle>>>> =
-    OnceLock::new();
-#[cfg(windows)]
-static NEXT_WINDOWS_APP_JOB_GENERATION: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(windows)]
-fn windows_app_jobs() -> &'static Mutex<HashMap<u32, WindowsAppJobEntry<OwnedHandle>>> {
-    WINDOWS_APP_JOBS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[cfg(windows)]
-pub(super) struct AppProcessLease {
-    pid: u32,
-    generation: u64,
-}
-
-#[cfg(not(windows))]
 #[derive(Default)]
 pub(super) struct AppProcessLease;
 
-#[cfg(windows)]
-impl Drop for AppProcessLease {
-    fn drop(&mut self) {
-        let mut jobs = match windows_app_jobs().lock() {
-            Ok(jobs) => jobs,
-            Err(poisoned) => {
-                eprintln!(
-                    "jig proxy app process job registry mutex was poisoned during final lease cleanup; recovering the owned registry entry"
-                );
-                poisoned.into_inner()
-            }
-        };
-        // An old lease may outlive successful explicit cleanup and PID reuse.
-        // Only its own generation is allowed to close a kill-on-close handle.
-        drop(remove_job_entry_if_generation(
-            &mut jobs,
-            self.pid,
-            self.generation,
-        ));
-    }
-}
-
-#[cfg(any(windows, test))]
-fn remove_job_entry_if_generation<H>(
-    jobs: &mut HashMap<u32, WindowsAppJobEntry<H>>,
-    pid: u32,
-    generation: u64,
-) -> Option<H> {
-    if jobs.get(&pid).map(|entry| entry.generation) != Some(generation) {
-        return None;
-    }
-    jobs.remove(&pid).map(|entry| entry.handle)
-}
-
-#[cfg(not(windows))]
 pub(super) const fn register_app_child(_child: &mut Child) -> AppProcessLease {
     AppProcessLease
-}
-
-#[cfg(windows)]
-pub(super) fn register_app_child(child: &mut Child) -> Result<AppProcessLease> {
-    let pid = child.id();
-    let generation = NEXT_WINDOWS_APP_JOB_GENERATION
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
-            generation.checked_add(1)
-        })
-        .map_err(|_| anyhow!("app process job generation space exhausted"))?;
-    let raw_job = unsafe {
-        // SAFETY: null attributes/name request a private job with default
-        // security. The returned owned handle is checked before conversion.
-        CreateJobObjectW(std::ptr::null(), std::ptr::null())
-    };
-    if raw_job.is_null() {
-        return Err(io::Error::last_os_error()).context("failed to create app process job");
-    }
-    let job = unsafe {
-        // SAFETY: CreateJobObjectW returned a new, non-null owned handle.
-        OwnedHandle::from_raw_handle(raw_job as _)
-    };
-    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if unsafe {
-        // SAFETY: job is live and limits is a fully initialized structure of
-        // the exact size supplied to SetInformationJobObject.
-        SetInformationJobObject(
-            job.as_raw_handle() as _,
-            JobObjectExtendedLimitInformation,
-            (&raw const limits).cast(),
-            std::mem::size_of_val(&limits) as u32,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error())
-            .context("failed to configure app process job cleanup");
-    }
-    if unsafe {
-        // SAFETY: both handles are live. The child was created suspended, so
-        // it cannot create an untracked descendant before this assignment.
-        AssignProcessToJobObject(job.as_raw_handle() as _, child.as_raw_handle() as _)
-    } == 0
-    {
-        return Err(io::Error::last_os_error()).context("failed to assign app process to job");
-    }
-
-    {
-        let mut jobs = windows_app_jobs()
-            .lock()
-            .map_err(|_| anyhow!("app process job registry mutex was poisoned"))?;
-        if jobs.contains_key(&pid) {
-            bail!("app process job registry already contained child PID {pid}");
-        }
-        jobs.insert(
-            pid,
-            WindowsAppJobEntry {
-                generation,
-                handle: job,
-            },
-        );
-    }
-    let lease = AppProcessLease { pid, generation };
-    if let Err(error) = resume_suspended_windows_process(pid) {
-        drop(lease);
-        return Err(error);
-    }
-    Ok(lease)
-}
-
-#[cfg(windows)]
-fn resume_suspended_windows_process(pid: u32) -> Result<()> {
-    let raw_snapshot = unsafe {
-        // SAFETY: TH32CS_SNAPTHREAD takes no process pointer and returns a new
-        // snapshot handle which is checked before conversion.
-        CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
-    };
-    if raw_snapshot == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error())
-            .context("failed to enumerate suspended app process threads");
-    }
-    let snapshot = unsafe {
-        // SAFETY: CreateToolhelp32Snapshot returned a valid owned handle.
-        OwnedHandle::from_raw_handle(raw_snapshot as _)
-    };
-    let mut entry = THREADENTRY32 {
-        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
-        ..THREADENTRY32::default()
-    };
-    let mut found = false;
-    let mut has_entry = unsafe {
-        // SAFETY: snapshot is live and entry points to writable storage with
-        // the required dwSize initialized.
-        Thread32First(snapshot.as_raw_handle() as _, &mut entry)
-    } != 0;
-    while has_entry {
-        if entry.th32OwnerProcessID == pid {
-            let raw_thread = unsafe {
-                // SAFETY: the enumerated thread id is used only to request the
-                // minimal resume right, and the returned handle is checked.
-                OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID)
-            };
-            if raw_thread.is_null() {
-                return Err(io::Error::last_os_error())
-                    .with_context(|| format!("failed to open suspended app thread for PID {pid}"));
-            }
-            let thread = unsafe {
-                // SAFETY: OpenThread returned a new, non-null owned handle.
-                OwnedHandle::from_raw_handle(raw_thread as _)
-            };
-            if unsafe {
-                // SAFETY: thread has THREAD_SUSPEND_RESUME access and remains
-                // live for the duration of the call.
-                ResumeThread(thread.as_raw_handle() as _)
-            } == u32::MAX
-            {
-                return Err(io::Error::last_os_error())
-                    .with_context(|| format!("failed to resume app thread for PID {pid}"));
-            }
-            found = true;
-        }
-        has_entry = unsafe {
-            // SAFETY: snapshot and entry remain valid across enumeration.
-            Thread32Next(snapshot.as_raw_handle() as _, &mut entry)
-        } != 0;
-    }
-    let enumeration_error = io::Error::last_os_error();
-    if enumeration_error.raw_os_error() != Some(ERROR_NO_MORE_FILES as i32) {
-        return Err(enumeration_error)
-            .with_context(|| format!("failed while enumerating app threads for PID {pid}"));
-    }
-    if !found {
-        bail!("could not find the suspended primary app thread for PID {pid}");
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChildObservation {
     Running,
-    #[cfg_attr(windows, allow(dead_code))]
     ExitedUnreaped(ExitStatus),
     ExitedReaped(ExitStatus),
 }
@@ -741,7 +519,7 @@ fn wait_for_killed_child_exit_and_confirm_with<T>(
     }
 }
 
-#[cfg(all(not(unix), not(windows)))]
+#[cfg(not(unix))]
 pub(super) fn terminate_child(child: &mut Child) -> Result<()> {
     let pid = child.id();
     if child
@@ -755,178 +533,6 @@ pub(super) fn terminate_child(child: &mut Child) -> Result<()> {
             terminate_pid(pid)?;
         }
     }
-    Ok(())
-}
-
-#[cfg(windows)]
-pub(super) fn terminate_child(child: &mut Child) -> Result<()> {
-    let pid = child.id();
-    let exited = child
-        .try_wait()
-        .with_context(|| format!("failed to inspect child process {pid} before termination"))?
-        .is_some();
-    match windows_app_job_active_processes(pid)? {
-        Some(0) => {
-            remove_windows_app_job(pid)?;
-            return Ok(());
-        }
-        Some(_) => {}
-        None if exited => return Ok(()),
-        None if force_cleanup_requested() => return kill_pid(pid),
-        None => return terminate_pid(pid),
-    }
-
-    terminate_registered_windows_job_with(
-        pid,
-        force_cleanup_requested(),
-        || generate_windows_console_break(pid),
-        || run_taskkill(pid, false),
-        |timeout| wait_for_windows_app_job_empty(pid, timeout),
-        || terminate_windows_app_job(pid),
-        |timeout| wait_for_windows_app_job_empty(pid, timeout),
-        || remove_windows_app_job(pid),
-    )
-}
-
-#[cfg(any(windows, test))]
-#[allow(clippy::too_many_arguments)]
-fn terminate_registered_windows_job_with(
-    pid: u32,
-    forced: bool,
-    console_break: impl FnOnce() -> Result<()>,
-    fallback_taskkill: impl FnOnce() -> Result<()>,
-    wait_after_graceful: impl FnOnce(Duration) -> Result<bool>,
-    terminate_job: impl FnOnce() -> Result<()>,
-    confirm_after_terminate: impl FnOnce(Duration) -> Result<bool>,
-    release_job: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    let mut graceful_error = None;
-    if !forced {
-        let delivered = match console_break() {
-            Ok(()) => Ok(()),
-            Err(console_error) => fallback_taskkill().with_context(|| {
-                format!(
-                    "fallback taskkill failed after targeted CTRL+BREAK delivery failed: {console_error:#}"
-                )
-            }),
-        };
-        match delivered {
-            Ok(()) => match wait_after_graceful(TERMINATE_TIMEOUT) {
-                Ok(true) => return release_job(),
-                Ok(false) => {}
-                Err(error) => graceful_error = Some(error),
-            },
-            Err(error) => graceful_error = Some(error),
-        }
-    }
-
-    if let Err(error) = terminate_job() {
-        return match graceful_error {
-            Some(graceful_error) => Err(error.context(format!(
-                "forced app-job termination also failed after graceful cleanup error: {graceful_error:#}"
-            ))),
-            None => Err(error),
-        };
-    }
-
-    let confirmation = match confirm_after_terminate(KILL_CONFIRM_TIMEOUT) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(anyhow!(
-            "app process job for child {pid} retained active descendants after forced termination"
-        )),
-        Err(error) => Err(error),
-    };
-    let release = release_job();
-    match (confirmation, release) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(error), Err(release_error)) => Err(error.context(format!(
-            "app process job handle release also failed: {release_error:#}"
-        ))),
-    }
-}
-
-#[cfg(windows)]
-fn generate_windows_console_break(pid: u32) -> Result<()> {
-    if unsafe {
-        // SAFETY: app children are created with CREATE_NEW_PROCESS_GROUP, so
-        // their PID is the process-group id. CTRL+BREAK is the only console
-        // control event Windows permits targeting to one process group.
-        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)
-    } == 0
-    {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("failed to send CTRL+BREAK to app process group {pid}"));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-pub(super) fn windows_app_job_active_processes(pid: u32) -> Result<Option<u32>> {
-    let jobs = windows_app_jobs()
-        .lock()
-        .map_err(|_| anyhow!("app process job registry mutex was poisoned"))?;
-    let Some(job) = jobs.get(&pid) else {
-        return Ok(None);
-    };
-    let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
-    if unsafe {
-        // SAFETY: job is live and accounting is writable storage of the exact
-        // size supplied to QueryInformationJobObject.
-        QueryInformationJobObject(
-            job.handle.as_raw_handle() as _,
-            JobObjectBasicAccountingInformation,
-            (&raw mut accounting).cast(),
-            std::mem::size_of_val(&accounting) as u32,
-            std::ptr::null_mut(),
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("failed to inspect app process job for child {pid}"));
-    }
-    Ok(Some(accounting.ActiveProcesses))
-}
-
-#[cfg(windows)]
-fn wait_for_windows_app_job_empty(pid: u32, timeout: Duration) -> Result<bool> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match windows_app_job_active_processes(pid)? {
-            Some(0) | None => return Ok(true),
-            Some(_) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(20));
-            }
-            Some(_) => return Ok(false),
-        }
-    }
-}
-
-#[cfg(windows)]
-fn terminate_windows_app_job(pid: u32) -> Result<()> {
-    let jobs = windows_app_jobs()
-        .lock()
-        .map_err(|_| anyhow!("app process job registry mutex was poisoned"))?;
-    let Some(job) = jobs.get(&pid) else {
-        return Ok(());
-    };
-    if unsafe {
-        // SAFETY: job is a live handle owned by the registry.
-        TerminateJobObject(job.handle.as_raw_handle() as _, 1)
-    } == 0
-    {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("failed to terminate app process job for child {pid}"));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn remove_windows_app_job(pid: u32) -> Result<()> {
-    let mut jobs = windows_app_jobs()
-        .lock()
-        .map_err(|_| anyhow!("app process job registry mutex was poisoned"))?;
-    jobs.remove(&pid);
     Ok(())
 }
 
@@ -1430,68 +1036,11 @@ fn classify_liveness_probe(result: i32, error: impl FnOnce() -> io::Error) -> io
         Err(error)
     }
 }
-#[cfg(windows)]
-pub(super) fn terminate_pid(pid: u32) -> Result<()> {
-    if !crate::state::pid_is_alive(pid) {
-        return Ok(());
-    }
-    run_taskkill(pid, false)?;
-    if wait_for_pid_exit(pid, Duration::from_secs(2)) {
-        return Ok(());
-    }
-    run_taskkill(pid, true)?;
-    if wait_for_pid_exit(pid, Duration::from_secs(1)) {
-        Ok(())
-    } else {
-        bail!("child process {pid} remained alive after forced taskkill")
-    }
-}
-#[cfg(windows)]
-fn run_taskkill(pid: u32, force: bool) -> Result<()> {
-    let taskkill = crate::windows_system::native_system_executable("taskkill.exe")
-        .context("failed to resolve the native Windows taskkill executable")?;
-    let mut command = Command::new(taskkill);
-    command.env_clear().args(["/PID", &pid.to_string(), "/T"]);
-    if force {
-        command.arg("/F");
-    }
-    let status = command
-        .status()
-        .with_context(|| format!("failed to launch taskkill for child process {pid}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("taskkill for child process {pid} exited with status {status}")
-    }
-}
-#[cfg(windows)]
-fn wait_for_pid_exit(pid: u32, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if !crate::state::pid_is_alive(pid) {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    !crate::state::pid_is_alive(pid)
-}
-#[cfg(windows)]
-pub(super) fn kill_pid(pid: u32) -> Result<()> {
-    if !crate::state::pid_is_alive(pid) {
-        return Ok(());
-    }
-    run_taskkill(pid, true)?;
-    if wait_for_pid_exit(pid, Duration::from_secs(1)) {
-        Ok(())
-    } else {
-        bail!("child process {pid} remained alive after forced taskkill")
-    }
-}
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(super) fn terminate_pid(pid: u32) -> Result<()> {
     bail!("terminating child process {pid} is unsupported on this platform")
 }
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(super) fn kill_pid(pid: u32) -> Result<()> {
     terminate_pid(pid)
 }

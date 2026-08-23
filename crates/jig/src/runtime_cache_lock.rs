@@ -552,25 +552,13 @@ mod tests {
                 r#"
 import os, sys, time
 cache, ready = sys.argv[1:]
-if os.name == "nt":
-    guard = cache + ".lock.guard"
-    directory = cache + ".lock"
-    owner_name = "owner-v1"
-else:
-    cache, ready = os.fsencode(cache), os.fsencode(ready)
-    guard = cache + b".lock.guard"
-    directory = cache + b".lock"
-    owner_name = b"owner-v1"
+cache, ready = os.fsencode(cache), os.fsencode(ready)
+guard = cache + b".lock.guard"
+directory = cache + b".lock"
+owner_name = b"owner-v1"
 descriptor = os.open(guard, os.O_RDWR | os.O_CREAT, 0o600)
-if os.name == "nt":
-    import msvcrt
-    if os.fstat(descriptor).st_size == 0:
-        os.write(descriptor, b"\0")
-    os.lseek(descriptor, 0, os.SEEK_SET)
-    msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-else:
-    import fcntl
-    fcntl.flock(descriptor, fcntl.LOCK_EX)
+import fcntl
+fcntl.flock(descriptor, fcntl.LOCK_EX)
 os.mkdir(directory)
 owner = os.open(os.path.join(directory, owner_name), os.O_WRONLY | os.O_CREAT, 0o600)
 os.write(owner, f"owner-v1 {os.getpid()} test-owner\n".encode("ascii"))

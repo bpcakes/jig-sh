@@ -1,0 +1,1 @@
+Centralize cleanup obligation transitions, preserve replacement recovery evidence on failures, and derive session status from one process observation snapshot. Validate each slice independently and finish with the configured full suite.

@@ -4,8 +4,6 @@ use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,14 +16,12 @@ use crate::host::{RouteHostname, validate_routed_hostname};
 use crate::types::{Route, RouteMode};
 
 pub(crate) use dev_sessions::{
-    DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    DevStateSnapshot,
+    DevProcessIdentity, DevSessionApp, DevSessionAppSpawnEvidence, DevSessionControl,
+    DevSessionPhase, DevSessionRecord, DevStateSnapshot,
 };
 use process_identity::route_is_alive;
-#[cfg(test)]
-use process_identity::windows_tasklist_csv_pid;
 pub(crate) use process_identity::{
-    pid_is_alive, process_start_token, process_start_tokens_supported,
+    PidObservation, observe_pid, process_start_token, process_start_tokens_supported,
 };
 pub(crate) use signature::{FileSignature, file_signature};
 
@@ -49,12 +45,6 @@ const HEALTH_TOKEN_FILE: &str = "proxy-health-token";
 const LEAF_HOSTS_FILE: &str = "leaf-hosts.json";
 const CERT_LOCK_FILE: &str = "certs.lock";
 const STATE_FILE_FALLBACK: &str = "jig-proxy-state";
-#[cfg(not(test))]
-const REPLACE_BACKUP_RECOVERY_DELAY: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const REPLACE_BACKUP_RECOVERY_DELAY: Duration = Duration::ZERO;
-const MISSING_FILE_READ_RETRY_DELAY: Duration = Duration::from_millis(25);
-const MISSING_FILE_READ_ATTEMPTS: usize = 3;
 pub const MAX_ROUTES_FILE_BYTES: u64 = 4 * 1024 * 1024;
 pub(crate) const STATE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const STATE_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -666,8 +656,6 @@ impl StateStore {
         }
         let lock = LockedFile::new(lock, "route lock");
         let _lock_order_guard = enter_lock_order_guard(LockKind::Route)?;
-        recover_replace_backups(&self.root)?;
-
         let routes_path = self.routes_path();
         let result = f(&routes_path);
         let unlock_result = lock.unlock();
@@ -689,11 +677,6 @@ impl StateStore {
         }
         let lock = LockedFile::new(lock, "route lock");
         let _lock_order_guard = enter_lock_order_guard(LockKind::Route)?;
-        if cancelled() {
-            lock.unlock()?;
-            return Ok(LockOutcome::Cancelled);
-        }
-        recover_replace_backups(&self.root)?;
         if cancelled() {
             lock.unlock()?;
             return Ok(LockOutcome::Cancelled);
@@ -965,39 +948,11 @@ fn ensure_private_state_file_permissions(path: &Path, file: &File) -> std::io::R
 }
 
 fn open_read_no_follow_maybe_missing(path: &Path) -> std::io::Result<Option<File>> {
-    for attempt in 0..MISSING_FILE_READ_ATTEMPTS {
-        match file_ops::open_read_no_follow(path) {
-            Ok(file) => return Ok(Some(file)),
-            Err(error)
-                if cfg!(windows)
-                    && error.kind() == std::io::ErrorKind::NotFound
-                    && attempt + 1 < MISSING_FILE_READ_ATTEMPTS =>
-            {
-                std::thread::sleep(MISSING_FILE_READ_RETRY_DELAY);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return missing_file_read_result(path, cfg!(windows));
-            }
-            Err(error) => return Err(error),
-        }
+    match file_ops::open_read_no_follow(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
     }
-    Ok(None)
-}
-
-fn missing_file_read_result(
-    path: &Path,
-    fail_on_replace_backup: bool,
-) -> std::io::Result<Option<File>> {
-    if fail_on_replace_backup && file_ops::replace_backup_for_path_exists(path) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::WouldBlock,
-            format!(
-                "state file {} is temporarily unavailable during replacement",
-                path.display()
-            ),
-        ));
-    }
-    Ok(None)
 }
 
 fn validate_route(route: &Route) -> Result<()> {
@@ -1078,7 +1033,7 @@ fn write_routes_to_path(path: &Path, routes: &[Route]) -> Result<()> {
     file.write_all(b"\n")?;
     file.sync_data()?;
     drop(file);
-    file_ops::replace_file(&tmp, path, "jig-proxy-state")?;
+    file_ops::replace_file(&tmp, path)?;
     Ok(())
 }
 
@@ -1278,56 +1233,10 @@ fn ensure_state_dir_permissions(path: &Path, can_chmod: bool) -> Result<()> {
         }
         Ok(())
     }
-    #[cfg(windows)]
-    {
-        let _ = can_chmod;
-        harden_windows_state_dir(path)
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = (path, can_chmod);
         Ok(())
-    }
-}
-
-#[cfg(windows)]
-fn harden_windows_state_dir(path: &Path) -> Result<()> {
-    let account = current_windows_account()?;
-    let grant = format!("{account}:(OI)(CI)F");
-    let icacls = crate::windows_system::native_system_executable("icacls.exe")
-        .context("Failed to resolve the native Windows icacls executable")?;
-    let output = Command::new(icacls)
-        .arg(path)
-        .args([
-            "/inheritance:r",
-            "/grant:r",
-            &grant,
-            "/remove:g",
-            "*S-1-1-0",
-            "*S-1-5-11",
-            "*S-1-5-32-545",
-            "/T",
-        ])
-        .output()
-        .with_context(|| format!("Failed to run icacls for {}", path.display()))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "Failed to apply owner-only ACL to proxy state dir {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn current_windows_account() -> Result<String> {
-    let user = std::env::var("USERNAME").context("USERNAME is not set")?;
-    let domain = std::env::var("USERDOMAIN").unwrap_or_default();
-    if domain.is_empty() {
-        Ok(user)
-    } else {
-        Ok(format!("{domain}\\{user}"))
     }
 }
 
@@ -1420,77 +1329,6 @@ fn ensure_existing_state_ancestor_is_not_shared_writable(
         );
     }
     Ok(())
-}
-
-fn recover_replace_backups(root: &Path) -> Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        let Some((original_name, backup_pid)) = file_ops::replace_backup_parts(file_name) else {
-            continue;
-        };
-        let original = root.join(original_name);
-        if original.exists() {
-            if replace_backup_is_stale(&entry.path()) {
-                let _ = fs::remove_file(entry.path());
-            }
-        } else if replace_backup_can_be_promoted(&entry.path(), backup_pid) {
-            match fs::rename(entry.path(), original) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-    }
-    Ok(())
-}
-
-fn recover_replace_backups_with_lock_interruptible(
-    root: &Path,
-    cancelled: &impl Fn() -> bool,
-) -> Result<bool> {
-    let lock = open_lock_file(root.join(LOCK_FILE))?;
-    if !lock_state_file_interruptible(&lock, "route recovery lock", cancelled)? {
-        return Ok(false);
-    }
-    let lock = LockedFile::new(lock, "route recovery lock");
-    if cancelled() {
-        lock.unlock()?;
-        return Ok(false);
-    }
-    let result = recover_replace_backups(root);
-    let unlock_result = lock.unlock();
-    finish_with_unlock("route recovery lock", result, unlock_result).map(|()| true)
-}
-
-fn replace_backup_can_be_promoted(path: &Path, backup_pid: &str) -> bool {
-    if !process_start_tokens_supported() {
-        return false;
-    }
-    let stale = replace_backup_is_stale(path);
-    // A fresh backup from this process can only be from the currently executing
-    // recovery/write path. Older same-pid backups are treated as stale PID reuse.
-    if backup_pid == std::process::id().to_string() && !stale {
-        return false;
-    }
-    stale
-        || backup_pid
-            .parse()
-            .ok()
-            .is_some_and(|pid| !pid_is_alive(pid))
-}
-
-fn replace_backup_is_stale(path: &Path) -> bool {
-    let Ok(modified) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
-        return false;
-    };
-    match modified.elapsed() {
-        Ok(age) => age >= REPLACE_BACKUP_RECOVERY_DELAY,
-        Err(_) => true,
-    }
 }
 
 fn existing_dir_is_empty(path: &Path) -> bool {

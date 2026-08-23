@@ -13,12 +13,6 @@ fn should_preserve_env_var(name: &str, exact: &[&str]) -> bool {
         .any(|preserved| env_var_names_equal_inner(name, preserved))
 }
 
-#[cfg(windows)]
-fn env_var_names_equal_inner(left: &str, right: &str) -> bool {
-    left.eq_ignore_ascii_case(right)
-}
-
-#[cfg(not(windows))]
 fn env_var_names_equal_inner(left: &str, right: &str) -> bool {
     left == right
 }
@@ -43,20 +37,7 @@ const PRESERVED_ENV_EXACT: &[&str] = &[
     "LC_TIME",
 ];
 
-#[cfg(windows)]
-const PRESERVED_ENV_EXACT: &[&str] = &[
-    "PATH",
-    "PATHEXT",
-    "SYSTEMROOT",
-    "WINDIR",
-    "COMSPEC",
-    "USERPROFILE",
-    "USERNAME",
-    "TEMP",
-    "TMP",
-];
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 const PRESERVED_ENV_EXACT: &[&str] = &[];
 
 #[cfg(test)]
@@ -73,11 +54,8 @@ mod tests {
     }
 
     #[test]
-    fn preserved_environment_name_case_follows_platform_rules() {
+    fn preserved_environment_name_matching_is_case_sensitive() {
         assert!(should_preserve_env_var("PATH", &["PATH"]));
-        #[cfg(windows)]
-        assert!(should_preserve_env_var("Path", &["PATH"]));
-        #[cfg(not(windows))]
         assert!(!should_preserve_env_var("Path", &["PATH"]));
     }
 }

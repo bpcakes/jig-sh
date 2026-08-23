@@ -17,10 +17,6 @@ use super::output::CappedOutputDrains;
 use super::process_unix::{
     observe_brokered_leader, spawn_brokered_process, terminate_brokered_process_tree,
 };
-#[cfg(windows)]
-use super::process_windows::{
-    observe_brokered_leader, spawn_brokered_process, terminate_brokered_process_tree,
-};
 use super::{
     ACTIVE_OUTPUT_POLL_INTERVAL, BROKERED_OUTPUT_DRAIN_TIMEOUT, BROKERED_PROCESS_CLEANUP_TIMEOUT,
     BROKERED_PROCESS_POLL_INTERVAL, checked_deadline,
@@ -42,8 +38,6 @@ pub(super) struct BrokeredProcess {
     pub(super) child: Child,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) process_group: Option<PinnedUnixProcessGroup>,
-    #[cfg(windows)]
-    pub(super) job: std::os::windows::io::OwnedHandle,
     pub(super) reaped_status: Option<ExitStatus>,
     pub(super) cleanup_deadline: Option<Instant>,
     pub(super) tree_cleanup_error: Option<String>,
@@ -141,12 +135,10 @@ impl BrokeredProcess {
 impl Drop for BrokeredProcess {
     fn drop(&mut self) {
         let _ = self.terminate_and_reap(BROKERED_PROCESS_CLEANUP_TIMEOUT);
-        // On Windows the retained kill-on-close Job Object is the final RAII
-        // backstop if explicit termination or confirmation failed.
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn spawn_brokered_process(_command: &mut Command) -> io::Result<BrokeredProcess> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -154,7 +146,7 @@ pub(super) fn spawn_brokered_process(_command: &mut Command) -> io::Result<Broke
     ))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn observe_brokered_leader(
     _process: &mut BrokeredProcess,
 ) -> io::Result<LeaderObservation> {
@@ -164,7 +156,7 @@ pub(super) fn observe_brokered_leader(
     ))
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) fn terminate_brokered_process_tree(
     _process: &mut BrokeredProcess,
     _deadline: Instant,

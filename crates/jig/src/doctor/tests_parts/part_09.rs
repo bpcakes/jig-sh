@@ -1,4 +1,3 @@
-
 fn write_doctor_fixture(root: &Path) {
     fs::create_dir_all(root.join("scripts")).unwrap();
     TestRepoBuilder::new(root)

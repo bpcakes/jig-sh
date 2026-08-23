@@ -704,14 +704,14 @@ fn crlf_frontmatter_is_parsed() {
     let registry = PromptRegistry::new(temp.path().to_path_buf(), None);
     fs::create_dir_all(temp.path().join("prompts/user")).unwrap();
     fs::write(
-        temp.path().join("prompts/user/windows.md"),
-        "---\r\nname: windows\r\n---\r\nbody",
+        temp.path().join("prompts/user/crlf.md"),
+        "---\r\nname: crlf\r\n---\r\nbody",
     )
     .unwrap();
 
     let rendered = registry
         .render_prompt(PromptRenderRequest {
-            name: "windows".into(),
+            name: "crlf".into(),
             vars: Vec::new(),
             raw: false,
         })

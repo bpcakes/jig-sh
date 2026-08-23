@@ -17,6 +17,9 @@ rust_test_command = "cargo test --workspace"
 rust_test_locked_command = "cargo test --workspace --locked"
 web_package_manager = "bun"
 
+[execution]
+command_timeout_seconds = 1800
+
 [[frontend_apps]]
 name = "frontend"
 dir = "frontend"

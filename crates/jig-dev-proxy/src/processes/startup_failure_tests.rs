@@ -26,7 +26,6 @@ fn wait_for_process_test_marker(path: &Path, child: &mut Child, label: &str) -> 
     panic!("{label} did not publish its marker");
 }
 
-#[cfg(not(windows))]
 #[test]
 fn startup_output_disposition_prints_failures_and_discards_interruptions() {
     const HELPER_ENV: &str = "JIG_STARTUP_OUTPUT_DISPOSITION_HELPER";

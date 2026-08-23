@@ -1,4 +1,3 @@
-
 fn configured_sqlx_driver(
     root: &Path,
     command: &str,
@@ -358,14 +357,7 @@ fn dotenv_value_uses_substitution(value: &str) -> bool {
 }
 
 fn dotenv_database_url_key(key: &str) -> bool {
-    #[cfg(windows)]
-    {
-        key.eq_ignore_ascii_case("DATABASE_URL")
-    }
-    #[cfg(not(windows))]
-    {
-        key == "DATABASE_URL"
-    }
+    key == "DATABASE_URL"
 }
 
 pub(crate) fn standalone_codex_support_probe(
@@ -489,7 +481,6 @@ fn probe_sqlx_driver_with_timeout_and_environment_and_cancellation(
         .env("NO_COLOR", "1")
         .env("LC_ALL", "C")
         .env("HOME", temp.path())
-        .env("USERPROFILE", temp.path())
         .env("TMPDIR", temp.path())
         .env("TMP", temp.path())
         .env("TEMP", temp.path())
@@ -498,11 +489,6 @@ fn probe_sqlx_driver_with_timeout_and_environment_and_cancellation(
         .stderr(Stdio::piped());
     if let Some(path) = sanitized_probe_search_path(root, executable) {
         command.env("PATH", path);
-    }
-    #[cfg(windows)]
-    if let Some(path_extensions) = sanitized_windows_pathext(environment.path_extensions.as_deref())
-    {
-        command.env("PATHEXT", path_extensions);
     }
     for (key, value) in &environment.probe_environment {
         command.env(key, value);
@@ -546,7 +532,11 @@ const fn driver_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     match error {
         OwnedProcessTreeError::Start(_) => "the driver probe could not start",
         OwnedProcessTreeError::TimedOut => "the driver probe timed out",
+        OwnedProcessTreeError::CancelledBeforeStart => "the driver probe was cancelled",
         OwnedProcessTreeError::Cancelled => "the driver probe was cancelled",
+        OwnedProcessTreeError::OutputLimitExceeded(_) => {
+            "the driver probe output exceeded the diagnostic capture limit"
+        }
         OwnedProcessTreeError::Await => "the driver probe could not be awaited",
         OwnedProcessTreeError::Cleanup => {
             "the driver probe process tree could not be cleaned up safely"
@@ -718,28 +708,6 @@ fn proxy_list_command(root: &Path) -> Result<(PathBuf, Command)> {
         )
     })?;
     let launcher = root.join("scripts/jig");
-    #[cfg(windows)]
-    let (root, launcher) = (
-        crate::shell::windows_bash_compatible_path(&root).with_context(|| {
-            format!(
-                "Failed to prepare proxy diagnostics root {} for Bash",
-                root.display()
-            )
-        })?,
-        crate::shell::windows_bash_compatible_path(&launcher).with_context(|| {
-            format!(
-                "Failed to prepare proxy diagnostics launcher {} for Bash",
-                launcher.display()
-            )
-        })?,
-    );
-    #[cfg(windows)]
-    let mut command = {
-        let mut command = Command::new("bash");
-        command.arg(&launcher);
-        command
-    };
-    #[cfg(not(windows))]
     let mut command = Command::new(&launcher);
     crate::shell::sanitize_bash_environment(&mut command);
     command.args(["proxy", "list", "--json"]).current_dir(&root);

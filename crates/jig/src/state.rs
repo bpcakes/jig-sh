@@ -19,15 +19,17 @@ pub(crate) use plans::{plans_open, seed_open_plan_for_test};
 pub(crate) use receipts::{
     CurrentWorktreeFingerprint, TargetReceiptStatus, ToolReceiptStatus, WorkGateReceiptIndex,
     WorkReviewReceiptEvidence, WorkReviewReceiptStatus, current_worktree_fingerprint,
+    current_worktree_fingerprint_for_receipt_with_cancellation,
     current_worktree_fingerprint_with_cancellation, work_gate_receipt_index,
-    work_gate_receipt_index_with_cancellation,
+    work_gate_receipt_index_with_cancellation, work_gate_receipt_indexes_with_cancellation,
 };
 pub(crate) use receipts::{
-    ReceiptInput, ReceiptListFilter, TargetReceiptMetadata, receipts_list, record_receipt,
-    record_target_receipt,
+    ReceiptInput, ReceiptListFilter, receipts_list, record_receipt,
+    record_receipt_with_cancellation,
 };
 pub(crate) use receipts::{StateArchiveRequest, receipts_archive, receipts_export};
 use receipts::{StateToolReceipt, record_successful_state_tool};
+pub(crate) use receipts::{TargetReceiptMetadata, record_target_receipt};
 #[cfg(test)]
 pub(crate) use receipts::{
     reset_work_gate_receipt_index_scan_count, work_gate_receipt_index_scan_count,

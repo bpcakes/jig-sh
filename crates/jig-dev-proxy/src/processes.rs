@@ -6,8 +6,6 @@ use std::fmt;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
@@ -34,11 +32,15 @@ use self::cleanup::{
     termination_requested,
 };
 pub(crate) use self::cleanup::{TerminationReason, force_cleanup_requested};
+#[cfg(test)]
+pub(crate) use self::dev_session::finalize_claimed_dev_session_result;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 use self::dev_session::finish_preflight_cleanup;
 #[cfg(test)]
+use self::dev_session::finish_preflight_result;
+#[cfg(test)]
 use self::dev_session::normalize_preflight_result;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 use self::dev_session::run_apps_with_interrupt_probe;
 pub(crate) use self::dev_session::run_apps_with_preflight;
 use self::frameworks::*;
@@ -52,7 +54,7 @@ use self::proxy::{
     ensure_proxy_running_interruptible, proxy_health_failed, proxy_ready_interruptible,
 };
 use self::route_publication::publish_process_route_interruptible;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 use self::route_publication::publish_process_route_interruptible_with_verifier;
 
 mod child_lifecycle;
@@ -63,12 +65,11 @@ mod listener_owner;
 mod output;
 mod proxy;
 mod route_publication;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 mod startup_failure_tests;
-#[cfg(any(windows, test))]
-mod windows_launch;
 
 const PROXY_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const UNCONFIRMED_DEV_CLEANUP_MESSAGE: &str = "Jig dev received a stop request, but process-tree or route cleanup could not be confirmed; the session was retained for inspection";
 // Keep this exact prefix aligned with the npm branch rendered for
 // `generated_frontend_dev_apps` in templates/project/.jig.toml.jinja. Matching
 // the complete generated form keeps ordinary repository-authored npm commands
@@ -174,26 +175,67 @@ pub(crate) fn ensure_proxy_running(settings: &ProxySettings, current_exe: &Path)
 }
 
 #[derive(Debug)]
-struct Interrupted(TerminationReason);
+struct Interrupted {
+    reason: TerminationReason,
+    cleanup: InterruptionCleanup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterruptionCleanup {
+    Confirmed,
+    Unconfirmed,
+}
 
 impl fmt::Display for Interrupted {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Interrupted by {}", self.0.label())
+        write!(formatter, "Interrupted by {}", self.reason.label())
     }
 }
 
 impl StdError for Interrupted {}
 
 pub(crate) fn interruption_error(reason: TerminationReason) -> anyhow::Error {
-    Interrupted(reason).into()
+    interruption_error_with_state(reason, InterruptionCleanup::Confirmed)
+}
+
+pub(crate) fn interruption_error_with_unconfirmed_cleanup(
+    reason: TerminationReason,
+    recoveries: Option<Value>,
+) -> anyhow::Error {
+    let error = interruption_error_with_state(reason, InterruptionCleanup::Unconfirmed);
+    match recoveries {
+        Some(recoveries) => crate::dev_outcome::with_recoveries(error, recoveries),
+        None => error,
+    }
+}
+
+fn interruption_error_with_state(
+    reason: TerminationReason,
+    cleanup: InterruptionCleanup,
+) -> anyhow::Error {
+    Interrupted { reason, cleanup }.into()
+}
+
+fn dev_error_source(error: &anyhow::Error) -> &anyhow::Error {
+    crate::dev_outcome::source(error)
 }
 
 pub(crate) fn is_interruption(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<Interrupted>().is_some()
+    dev_error_source(error)
+        .downcast_ref::<Interrupted>()
+        .is_some()
 }
 
 pub(crate) fn interruption_reason(error: &anyhow::Error) -> Option<TerminationReason> {
-    error.downcast_ref::<Interrupted>().map(|error| error.0)
+    dev_error_source(error)
+        .downcast_ref::<Interrupted>()
+        .map(|error| error.reason)
+}
+
+pub(crate) fn interruption_cleanup_unconfirmed(error: &anyhow::Error) -> bool {
+    dev_error_source(error)
+        .downcast_ref::<Interrupted>()
+        .is_some_and(|error| error.cleanup == InterruptionCleanup::Unconfirmed)
 }
 
 pub(crate) fn run_app(
@@ -703,29 +745,11 @@ fn spawn_child_with_cleanup_report(
     settings: &ProxySettings,
     dev_env: &[(String, String)],
 ) -> std::result::Result<SpawnedChild, SpawnChildFailure> {
-    ensure_app_supervision_supported(cfg!(unix), cfg!(windows))?;
+    ensure_app_supervision_supported(cfg!(any(target_os = "linux", target_os = "macos")))?;
     // App commands are trusted repo-configured dev processes and intentionally
     // inherit the caller's environment. Derived app coordinates are replaced
     // below; only the background proxy clears the broader environment.
-    #[cfg(windows)]
-    let working_directory = child_working_directory(&spec.dir).with_context(|| {
-        format!(
-            "Development app '{}' directory {} cannot be represented safely for a child process",
-            spec.name,
-            spec.dir.display()
-        )
-    })?;
-    #[cfg(not(windows))]
     let working_directory = child_working_directory(&spec.dir);
-    #[cfg(windows)]
-    let mut command =
-        build_app_child_command(argv, &working_directory, dev_env).with_context(|| {
-            format!(
-                "Failed to prepare command '{}' for dev app '{}'",
-                argv[0], spec.name
-            )
-        })?;
-    #[cfg(not(windows))]
     let mut command = build_app_child_command(argv, &working_directory, dev_env);
     command.current_dir(&working_directory);
     apply_dev_child_environment(
@@ -780,25 +804,6 @@ fn spawn_child_with_cleanup_report(
         pid: child.id(),
         start_token: process_start_token(child.id()),
     };
-    #[cfg(windows)]
-    let process_lease = match register_app_child(&mut child) {
-        Ok(lease) => lease,
-        Err(error) => {
-            let cleanup_confirmed = terminate_and_reap_logged(
-                &mut child,
-                "could not clean up app after process-tree registration failure",
-            );
-            return Err(SpawnChildFailure {
-                error: error.context(format!(
-                    "Failed to establish an owned process-tree boundary for dev app '{}'",
-                    spec.name
-                )),
-                cleanup_confirmed,
-                spawned_process: Some(spawned_process),
-            });
-        }
-    };
-    #[cfg(not(windows))]
     let process_lease = register_app_child(&mut child);
     let output = match CapturedAppOutput::from_child(&mut child, &spec.name) {
         Ok(output) => output,
@@ -890,9 +895,6 @@ fn is_runtime_owned_dev_app_environment_key(key: &OsStr) -> bool {
     let Some(key) = key.to_str() else {
         return false;
     };
-    #[cfg(windows)]
-    let normalized = key.to_ascii_uppercase();
-    #[cfg(not(windows))]
     let normalized = key;
     let Some(derived) = normalized.strip_prefix("JIG_DEV_") else {
         return false;
@@ -909,8 +911,8 @@ fn is_runtime_owned_dev_app_environment_key(key: &OsStr) -> bool {
         })
 }
 
-fn ensure_app_supervision_supported(unix: bool, windows: bool) -> Result<()> {
-    if unix || windows {
+fn ensure_app_supervision_supported(supported: bool) -> Result<()> {
+    if supported {
         return Ok(());
     }
     bail!(
@@ -918,26 +920,10 @@ fn ensure_app_supervision_supported(unix: bool, windows: bool) -> Result<()> {
     )
 }
 
-#[cfg(windows)]
-fn child_working_directory(path: &Path) -> Result<std::path::PathBuf> {
-    windows_launch::windows_command_compatible_path(path).map_err(anyhow::Error::new)
-}
-
-#[cfg(not(windows))]
 fn child_working_directory(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
-#[cfg(windows)]
-fn build_app_child_command(
-    argv: &[String],
-    working_directory: &Path,
-    dev_env: &[(String, String)],
-) -> Result<Command> {
-    windows_launch::build_windows_app_command(argv, working_directory, dev_env)
-}
-
-#[cfg(not(windows))]
 fn build_app_child_command(
     argv: &[String],
     _working_directory: &Path,
@@ -986,14 +972,7 @@ fn configure_app_child_process_group(command: &mut Command) {
     }
 }
 
-#[cfg(windows)]
-fn configure_app_child_process_group(command: &mut Command) {
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_SUSPENDED: u32 = 0x0000_0004;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn configure_app_child_process_group(_command: &mut Command) {}
 
 fn choose_app_port(

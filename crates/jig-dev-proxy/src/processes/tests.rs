@@ -14,7 +14,7 @@ mod dev_session;
 
 #[cfg(target_os = "linux")]
 fn process_identity_is_alive(pid: u32, start_token: &str) -> bool {
-    crate::state::pid_is_alive(pid)
+    crate::state::observe_pid(pid).may_be_alive()
         && crate::state::process_start_token(pid).as_deref() == Some(start_token)
 }
 
@@ -893,7 +893,7 @@ fn managed_npm_run_environment_key_matching_is_case_insensitive_and_narrow() {
 }
 
 #[test]
-fn runtime_owned_app_coordinate_key_matching_is_exact_and_case_insensitive() {
+fn runtime_owned_app_coordinate_key_matching_is_exact_and_case_sensitive() {
     for key in [
         "JIG_DEV_API_HOST",
         "JIG_DEV_API_PORT",
@@ -905,11 +905,9 @@ fn runtime_owned_app_coordinate_key_matching_is_exact_and_case_insensitive() {
             "expected runtime-owned key: {key}"
         );
     }
-    assert_eq!(
-        is_runtime_owned_dev_app_environment_key(OsStr::new("jig_dev_web_app_url")),
-        cfg!(windows),
-        "environment key case sensitivity must match the target platform"
-    );
+    assert!(!is_runtime_owned_dev_app_environment_key(OsStr::new(
+        "jig_dev_web_app_url"
+    )));
     for key in [
         "API_ORIGIN",
         "JIG_DEV_BIN",
@@ -1059,7 +1057,6 @@ fn spawn_child_errors_preserve_io_source() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn spawn_child_captures_output_without_inheriting_the_terminal() {
     let temp = crate::test_tempdir().unwrap();
@@ -1088,7 +1085,6 @@ fn spawn_child_captures_output_without_inheriting_the_terminal() {
     assert!(output.contains("captured stderr"));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn spawn_child_keeps_astro_in_the_supervised_foreground_group() {
     let temp = crate::test_tempdir().unwrap();
@@ -1118,7 +1114,7 @@ fn spawn_child_keeps_astro_in_the_supervised_foreground_group() {
 
 #[test]
 fn unsupported_app_supervision_fails_before_spawn() {
-    let error = ensure_app_supervision_supported(false, false).unwrap_err();
+    let error = ensure_app_supervision_supported(false).unwrap_err();
 
     assert!(error.to_string().contains("supervision is unsupported"));
     assert!(error.to_string().contains("refusing to spawn"));
@@ -1286,7 +1282,6 @@ fn repeated_silent_escaped_pipe_owners_do_not_leave_capture_threads() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn failure_tail_is_finalized_after_process_group_shutdown() {
     let _guard = termination_test_guard();
@@ -1425,7 +1420,6 @@ fn failed_multi_app_session_preserves_primary_failure_when_cleanup_is_incomplete
     assert!(require_cleanup_for_success(false, true).is_ok());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn run_apps_launches_non_proxied_apps_without_routes() {
     let _guard = termination_test_guard();
@@ -1925,14 +1919,14 @@ fn app_readiness_wait_rejects_listener_in_different_process_group() {
     let _ = child.wait();
     if let Some((pid, token)) = detached_identity {
         let deadline = Instant::now() + Duration::from_secs(2);
-        while crate::state::pid_is_alive(pid)
+        while crate::state::observe_pid(pid).may_be_alive()
             && crate::state::process_start_token(pid).as_deref() == Some(token.as_str())
             && Instant::now() < deadline
         {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            !crate::state::pid_is_alive(pid)
+            crate::state::observe_pid(pid).is_absent()
                 || crate::state::process_start_token(pid).as_deref() != Some(token.as_str()),
             "detached listener did not stop cooperatively"
         );
@@ -2194,7 +2188,7 @@ fn direct_proxy_start_sigint_reaps_unready_background_process_group() {
     let leader_token = crate::state::process_start_token(leader_pid).unwrap();
     let descendant_token = crate::state::process_start_token(descendant_pid).unwrap();
     let identity_is_alive = |pid, token: &str| {
-        crate::state::pid_is_alive(pid)
+        crate::state::observe_pid(pid).may_be_alive()
             && crate::state::process_start_token(pid).as_deref() == Some(token)
     };
     assert!(identity_is_alive(leader_pid, &leader_token));

@@ -8,6 +8,8 @@
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
 
 ### Changed
+- Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
+- Raise the Jig workspace minimum supported Rust version to 1.88 and lift dependency pins that only preserved Rust 1.85 compatibility.
 - Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
 - Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
 - Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
@@ -16,6 +18,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Let explicit dev stop and replacement recover definitively dead orphaned session records and exact-owned stale routes without signaling persisted PIDs; persist preflight-cleanup and pre-spawn obligations, distinguish uncertain process observations, preserve ambiguous records by default, add a targeted `dev stop --forget-ambiguous-orphans` repair that never signals stored PIDs or overrides a live or uncertain registered identity, and report successful recoveries with retained app diagnostics and typed forgotten ambiguities separately from blocking warnings.
 - Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
 - Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
 

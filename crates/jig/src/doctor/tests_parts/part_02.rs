@@ -1,4 +1,3 @@
-
 #[test]
 fn required_programs_track_path_lookup_scope() {
     let lookups = |command: &str| {
@@ -285,8 +284,6 @@ fn cargo_dispatch_detects_command_local_alias_and_home_environment_changes() {
         "CARGO_HOME=/tmp/cargo-home cargo sqlx prepare",
         "CARGO_HOME[0]=/tmp/cargo-home cargo sqlx prepare",
         "env HOME=/tmp/home cargo sqlx prepare",
-        "env -u USERPROFILE cargo sqlx prepare",
-        "env --unset=HOMEDRIVE cargo sqlx prepare",
         "env -i cargo sqlx prepare",
         "export CARGO_HOME=/tmp/cargo-home; cargo sqlx prepare",
         "declare -x CARGO_HOME=/tmp/cargo-home; cargo sqlx prepare",
@@ -299,7 +296,6 @@ fn cargo_dispatch_detects_command_local_alias_and_home_environment_changes() {
         "getopts p CARGO_HOME; cargo sqlx prepare",
         "let CARGO_HOME=0; cargo sqlx prepare",
         "declare -n cargo_home_ref=CARGO_HOME; cargo sqlx prepare",
-        "unset HOMEPATH; cargo sqlx prepare",
         "HOME=/tmp/home; cargo sqlx prepare",
         "exec -c cargo sqlx prepare",
     ] {

@@ -391,6 +391,52 @@ fn recorded_receipt_persists_bounded_change_set_metadata() {
     );
 }
 
+#[test]
+fn cancelled_git_enrichment_does_not_prevent_durable_receipt_append() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let receipt_id = record_receipt_with_cancellation(
+        &ctx,
+        ReceiptInput {
+            tool_name: tool::TEST,
+            args: json!({}),
+            invoked_command_key: None,
+            plan_id: None,
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            exit_status: 1,
+            stdout: "",
+            stderr: "cancelled",
+            evidence: None,
+            session_override: None,
+            collect_git_metadata: true,
+            collect_worktree_fingerprint: true,
+            worktree_fingerprint_override: None,
+        },
+        &|| true,
+    )
+    .unwrap();
+
+    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
+    let receipt = receipts.last().unwrap();
+    assert_eq!(receipt.id, receipt_id);
+    assert_eq!(receipt.exit_status, 1);
+    assert!(
+        receipt
+            .git_status_error
+            .as_deref()
+            .is_some_and(|error| error.contains("collection was cancelled"))
+    );
+    assert!(
+        receipt
+            .worktree_fingerprint_error
+            .as_deref()
+            .is_some_and(|error| error.contains("collection was cancelled"))
+    );
+}
+
 fn test_receipt(
     id: &str,
     plan_id: &str,

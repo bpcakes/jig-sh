@@ -21,9 +21,9 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 ## Install
 
-**Supported hosts:** Linux and macOS. Native Windows and Git Bash are unsupported; see [Platform Support](docs/platform-support.md) for the WSL boundary and feature-specific limits.
+**Supported hosts:** Linux and macOS. See [Platform Support](docs/platform-support.md) for feature-specific limits.
 
-**Prerequisites:** Rust 1.85+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), Go 1.26 for generated Go backends, and the selected database engine when database support is enabled.
+**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), Go 1.26 for generated Go backends, and the selected database engine when database support is enabled.
 
 ```sh
 cargo install jig-sh
@@ -226,7 +226,7 @@ scripts/jig proxy alias api --port 8080
 scripts/jig proxy list
 ```
 
-Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process.
+Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process. If a supervisor crashed, spawn state is known, and every exact registered process identity is gone, either explicit command reports the session as recoverable and retires it with its exact-owned stale routes without signaling stored PIDs. A record left by an interrupted spawn or an older Jig can instead be removed with `scripts/jig dev stop --forget-ambiguous-orphans` after checking that no unrecorded process is still running. That explicit repair still refuses live or uncertain registered identities and emits a structured recovery notice recording that ambiguous spawn history cannot prove process absence.
 
 For HTTPS, generate and explicitly trust a local, name-constrained CA:
 

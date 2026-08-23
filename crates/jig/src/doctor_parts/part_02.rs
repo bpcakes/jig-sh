@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorContextChecks) {
     if ctx.sqlx_enabled()
@@ -131,7 +130,6 @@ fn required_tools_check_with_environment_and_process_control(
                                 ctx.root(),
                                 program,
                                 environment.search_path.as_deref(),
-                                environment.path_extensions.as_deref(),
                             ) {
                                 Some(resolution) => ProgramPresence::Present(resolution),
                                 None => ProgramPresence::Missing,
@@ -142,7 +140,6 @@ fn required_tools_check_with_environment_and_process_control(
                                 ctx.root(),
                                 program,
                                 Some(search_path.as_os_str()),
-                                environment.path_extensions.as_deref(),
                             ) {
                                 Some(resolution) => ProgramPresence::Present(resolution),
                                 None => ProgramPresence::Missing,
@@ -157,7 +154,6 @@ fn required_tools_check_with_environment_and_process_control(
                                 ctx.root(),
                                 program,
                                 environment.search_path.as_deref(),
-                                environment.path_extensions.as_deref(),
                             ) {
                                 Some(resolution) => ProgramPresence::Present(resolution),
                                 None => ProgramPresence::Missing,
@@ -841,12 +837,8 @@ fn rust_runtime_check(
             );
         }
     };
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        "rustc",
-        environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
-    ) else {
+    let Some(resolution) = resolve_program(ctx.root(), "rustc", environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "rust_runtime",
@@ -987,7 +979,6 @@ fn go_runtime_check(
         ctx.root(),
         "go",
         environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
     ) else {
         return Some(
             check(

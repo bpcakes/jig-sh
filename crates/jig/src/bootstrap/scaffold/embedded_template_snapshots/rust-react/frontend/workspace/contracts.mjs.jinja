@@ -248,9 +248,7 @@ async function assertPublicArtifacts(explicitArtifacts, includeConventionalArtif
     ...publicFrontendDirs.map((directory) => join(directory, "dist")),
 [% if backend_language == "rust" %]
     "target/debug/<<[ package_name ]>>-api",
-    "target/debug/<<[ package_name ]>>-api.exe",
     "target/release/<<[ package_name ]>>-api",
-    "target/release/<<[ package_name ]>>-api.exe",
 [% endif %]
     "docs/public",
     "public-docs",

@@ -2,7 +2,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::types::{DevRequest, DevStatusRequest, DevStopRequest};
-use crate::{dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request};
+use crate::{
+    dev_outcome, dev_resolved_with_preflight, dev_sessions, processes, resolve_dev_request,
+};
 
 /// Resolves and runs a development request.
 ///
@@ -47,11 +49,51 @@ pub fn dev_resolved(request: crate::ResolvedDevRequest) -> Result<Value> {
 pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
     match result {
         Err(error) => {
-            let Some(reason) = processes::interruption_reason(&error) else {
-                return Err(error);
-            };
-            if reason.is_requested_stop() {
+            let (source, recoveries) = dev_outcome::parts(&error);
+            let Some(reason) = processes::interruption_reason(source) else {
+                let Some(recoveries) = recoveries else {
+                    return Err(error);
+                };
+                let recoveries = recoveries.to_value()?;
                 return Ok(json!({
+                    "ok": false,
+                    "interrupted": false,
+                    "stopped": false,
+                    "error": dev_outcome::command_failed_error(format!("{source:#}")),
+                    "exit_status": 1,
+                    "exit_signal": null,
+                    "termination_signal": null,
+                    "first_exit": null,
+                    "proxy_failed": false,
+                    "routes": [],
+                    "recoveries": recoveries,
+                }));
+            };
+            let recoveries = recoveries
+                .map(dev_outcome::DevRecoveries::to_value)
+                .transpose()?;
+            if processes::interruption_cleanup_unconfirmed(&error) {
+                let mut output = json!({
+                    "ok": false,
+                    "interrupted": false,
+                    "stopped": false,
+                    "cleanup_unconfirmed": true,
+                    "error": dev_outcome::command_failed_error(processes::UNCONFIRMED_DEV_CLEANUP_MESSAGE),
+                    "stop_reason": reason.label(),
+                    "exit_status": 1,
+                    "exit_signal": null,
+                    "termination_signal": null,
+                    "first_exit": null,
+                    "proxy_failed": false,
+                    "routes": [],
+                });
+                if let Some(recoveries) = recoveries {
+                    output["recoveries"] = recoveries;
+                }
+                return Ok(output);
+            }
+            if reason.is_requested_stop() {
+                let mut output = json!({
                     "ok": true,
                     "interrupted": false,
                     "stopped": true,
@@ -62,9 +104,13 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                     "first_exit": null,
                     "proxy_failed": false,
                     "routes": [],
-                }));
+                });
+                if let Some(recoveries) = recoveries {
+                    output["recoveries"] = recoveries;
+                }
+                return Ok(output);
             }
-            Ok(json!({
+            let mut output = json!({
                 "ok": false,
                 "interrupted": true,
                 "exit_status": reason.exit_status(),
@@ -73,7 +119,11 @@ pub(crate) fn normalize_dev_result(result: Result<Value>) -> Result<Value> {
                 "first_exit": null,
                 "proxy_failed": false,
                 "routes": [],
-            }))
+            });
+            if let Some(recoveries) = recoveries {
+                output["recoveries"] = recoveries;
+            }
+            Ok(output)
         }
         result => result,
     }

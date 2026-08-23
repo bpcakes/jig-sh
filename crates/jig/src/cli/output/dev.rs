@@ -4,19 +4,17 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
     let routes = value["routes"].as_array().map(Vec::len).unwrap_or(0);
     if value_bool(value, "stopped").unwrap_or(false) {
         let reason = value_str(value, "stop_reason").unwrap_or("requested");
-        return [
-            format!("Dev: stopped ({reason})"),
-            "  full report: rerun with --json".into(),
-        ]
-        .join("\n");
+        let mut lines = vec![format!("Dev: stopped ({reason})")];
+        append_recovery_messages(&mut lines, value);
+        lines.push("  full report: rerun with --json".into());
+        return lines.join("\n");
     }
     if value_bool(value, "interrupted").unwrap_or(false) {
         let signal = value_str(value, "termination_signal").unwrap_or("signal");
-        return [
-            format!("Dev: stopped ({signal})"),
-            "  full report: rerun with --json".into(),
-        ]
-        .join("\n");
+        let mut lines = vec![format!("Dev: stopped ({signal})")];
+        append_recovery_messages(&mut lines, value);
+        lines.push("  full report: rerun with --json".into());
+        return lines.join("\n");
     }
 
     let ok = value_bool(value, "ok").unwrap_or(false);
@@ -33,8 +31,18 @@ pub(super) fn format_dev_summary(value: &serde_json::Value) -> String {
     if value_bool(value, "proxy_failed").unwrap_or(false) {
         lines.push("  Proxy: failed".into());
     }
+    if value_bool(value, "cleanup_unconfirmed").unwrap_or(false) {
+        lines.push("  Cleanup: unconfirmed; session retained for inspection".into());
+    } else if let Some(error) = dev_error_message(value) {
+        lines.push(format!("  Error: {error}"));
+    }
+    append_recovery_messages(&mut lines, value);
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn dev_error_message(value: &serde_json::Value) -> Option<&str> {
+    value_str(value, "error").or_else(|| value_str(&value["error"], "message"))
 }
 
 pub(super) fn format_dev_status_summary(value: &serde_json::Value) -> String {
@@ -88,29 +96,37 @@ pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
         .as_array()
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let matched = value_u64(value, "matched_sessions").unwrap_or(sessions.len() as u64);
-    let stopped = value_u64(value, "stopped_sessions").unwrap_or_else(|| {
-        sessions
-            .iter()
-            .filter(|session| {
-                matches!(
-                    value_str(session, "outcome"),
-                    Some("stopped" | "already-stopped")
-                )
-            })
-            .count() as u64
+    let error = dev_error_message(value);
+    let matched = value_u64(value, "matched_sessions")
+        .or_else(|| error.is_none().then_some(sessions.len() as u64));
+    let stopped = value_u64(value, "stopped_sessions").or_else(|| {
+        error.is_none().then(|| {
+            sessions
+                .iter()
+                .filter(|session| {
+                    matches!(
+                        value_str(session, "outcome"),
+                        Some("stopped" | "already-stopped")
+                    )
+                })
+                .count() as u64
+        })
     });
     let status = if !ok {
         "incomplete"
-    } else if matched == 0 {
+    } else if matched == Some(0) {
         "nothing running"
     } else {
         "stopped"
     };
     let mut lines = vec![format!("Dev stop: {status}")];
     append_dev_repo_and_state(&mut lines, value);
-    lines.push(format!("  Sessions matched: {matched}"));
-    lines.push(format!("  Sessions stopped: {stopped}"));
+    if let Some(matched) = matched {
+        lines.push(format!("  Sessions matched: {matched}"));
+    }
+    if let Some(stopped) = stopped {
+        lines.push(format!("  Sessions stopped: {stopped}"));
+    }
     if let Some(apps) = value_u64(value, "stopped_apps") {
         lines.push(format!("  Apps stopped: {apps}"));
     }
@@ -122,8 +138,22 @@ pub(super) fn format_dev_stop_summary(value: &serde_json::Value) -> String {
             lines.push(format!("  Warning: {warning}"));
         }
     }
+    if let Some(error) = error {
+        lines.push(format!("  Error: {error}"));
+    }
+    append_recovery_messages(&mut lines, value);
     lines.push("  full report: rerun with --json".into());
     lines.join("\n")
+}
+
+fn append_recovery_messages(lines: &mut Vec<String>, value: &serde_json::Value) {
+    if let Some(recoveries) = value["recoveries"].as_array() {
+        for recovery in recoveries {
+            if let Some(message) = value_str(recovery, "message") {
+                lines.push(format!("  Recovery: {message}"));
+            }
+        }
+    }
 }
 
 fn append_dev_repo_and_state(lines: &mut Vec<String>, value: &serde_json::Value) {
@@ -154,10 +184,14 @@ mod tests {
             "termination_signal": "SIGINT",
             "first_exit": null,
             "proxy_failed": false,
-            "routes": []
+            "routes": [],
+            "recoveries": [{
+                "message": "retired an earlier dead orphan"
+            }]
         }));
 
         assert!(summary.contains("Dev: stopped (SIGINT)"));
+        assert!(summary.contains("Recovery: retired an earlier dead orphan"));
         assert!(!summary.contains("Routes:"));
         assert!(!summary.contains("failed"));
         assert!(!summary.contains("First exit"));
@@ -171,10 +205,71 @@ mod tests {
             "stopped": true,
             "stop_reason": "dev stop",
             "routes": [],
+            "recoveries": [{
+                "message": "retired an earlier dead orphan"
+            }]
         }));
 
         assert!(summary.contains("Dev: stopped (dev stop)"));
+        assert!(summary.contains("Recovery: retired an earlier dead orphan"));
         assert!(!summary.contains("Dev: ok"));
+    }
+
+    #[test]
+    fn dev_summary_reports_unconfirmed_cleanup_failure() {
+        let summary = format_dev_summary(&json!({
+            "ok": false,
+            "interrupted": false,
+            "stopped": false,
+            "cleanup_unconfirmed": true,
+            "routes": [],
+            "recoveries": [{
+                "message": "retired an earlier dead orphan"
+            }]
+        }));
+
+        assert!(summary.contains("Dev: failed"));
+        assert!(summary.contains("Cleanup: unconfirmed; session retained for inspection"));
+        assert!(summary.contains("Recovery: retired an earlier dead orphan"));
+    }
+
+    #[test]
+    fn dev_summary_reports_replacement_recovery() {
+        let summary = format_dev_summary(&json!({
+            "ok": true,
+            "first_exit": {"app": "web", "exit_status": 0},
+            "proxy_failed": false,
+            "routes": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_123': retired a dead orphan"
+            }]
+        }));
+
+        assert!(summary.contains("Dev: ok"));
+        assert!(summary.contains("Recovery: session 'dev_123': retired a dead orphan"));
+    }
+
+    #[test]
+    fn dev_summary_reports_failure_after_replacement_recovery() {
+        let summary = format_dev_summary(&json!({
+            "ok": false,
+            "error": {
+                "kind": "command_failed",
+                "message": "replacement launch failed"
+            },
+            "first_exit": null,
+            "proxy_failed": false,
+            "routes": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_123': retired a dead orphan"
+            }]
+        }));
+
+        assert!(summary.contains("Dev: failed"));
+        assert!(summary.contains("Error: replacement launch failed"));
+        assert!(summary.contains("Recovery: session 'dev_123': retired a dead orphan"));
     }
 
     #[test]
@@ -219,6 +314,25 @@ mod tests {
     }
 
     #[test]
+    fn dev_status_summary_distinguishes_a_recoverable_orphan_from_running() {
+        let summary = format_dev_status_summary(&json!({
+            "ok": true,
+            "repo_name": "demo",
+            "running": false,
+            "sessions": [{
+                "session_id": "dev_recoverable",
+                "status": "recoverable",
+                "recoverable": true,
+                "supervisor_pid": 4242,
+                "apps": [{"name": "web"}]
+            }]
+        }));
+
+        assert!(summary.contains("Dev status: stopped"));
+        assert!(summary.contains("dev_recoverable: recoverable"));
+    }
+
+    #[test]
     fn dev_stop_summary_distinguishes_idempotent_and_incomplete_results() {
         let nothing_running = format_dev_stop_summary(&json!({
             "ok": true,
@@ -228,6 +342,7 @@ mod tests {
             "stopped_sessions": 0,
             "stopped_apps": 0,
             "sessions": [],
+            "recoveries": [],
             "warnings": []
         }));
         assert!(nothing_running.contains("Dev stop: nothing running"));
@@ -249,5 +364,41 @@ mod tests {
         assert!(incomplete.contains("Sessions matched: 1"));
         assert!(incomplete.contains("Sessions stopped: 0"));
         assert!(incomplete.contains("exact process identity could not be confirmed stopped"));
+
+        let recovered = format_dev_stop_summary(&json!({
+            "ok": true,
+            "matched_sessions": 1,
+            "stopped_sessions": 1,
+            "stopped_apps": 0,
+            "sessions": [],
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_456': retired a dead orphan; retired app diagnostics: web (target 127.0.0.1:4005, last PID 4242, spawn registered)"
+            }],
+            "warnings": []
+        }));
+        assert!(recovered.contains("Dev stop: stopped"));
+        assert!(recovered.contains("Recovery: session 'dev_456'"));
+        assert!(recovered.contains("web (target 127.0.0.1:4005, last PID 4242"));
+        assert!(!recovered.contains("Warning:"));
+
+        let failed_after_recovery = format_dev_stop_summary(&json!({
+            "ok": false,
+            "matched_sessions": 2,
+            "error": {
+                "kind": "command_failed",
+                "message": "later state read failed"
+            },
+            "recoveries": [{
+                "kind": "dead-orphan-retired",
+                "message": "session 'dev_789': retired a dead orphan"
+            }],
+            "warnings": []
+        }));
+        assert!(failed_after_recovery.contains("Dev stop: incomplete"));
+        assert!(failed_after_recovery.contains("Sessions matched: 2"));
+        assert!(!failed_after_recovery.contains("Sessions stopped:"));
+        assert!(failed_after_recovery.contains("Error: later state read failed"));
+        assert!(failed_after_recovery.contains("Recovery: session 'dev_789'"));
     }
 }

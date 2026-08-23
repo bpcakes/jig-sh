@@ -459,19 +459,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nonportable_managed_paths_without_reserved_scaffold_outputs() {
-        for managed_paths in [
-            BTreeSet::from([PathBuf::from("CON")]),
-            BTreeSet::from([PathBuf::from("Owned"), PathBuf::from("owned/child")]),
-        ] {
-            let error = reject_reserved_output_collisions(&managed_paths, &[])
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("not portable to Windows")
-                    || error.contains("Portable planned repository file collision"),
-                "{error}"
-            );
-        }
+    fn rejects_case_folded_managed_path_collisions_without_scaffold_outputs() {
+        let managed_paths = BTreeSet::from([PathBuf::from("Owned"), PathBuf::from("owned/child")]);
+        let error = reject_reserved_output_collisions(&managed_paths, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Portable planned repository file collision"),
+            "{error}"
+        );
     }
 }

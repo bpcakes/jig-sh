@@ -245,7 +245,34 @@ fn run_command(cli: Cli) -> Result<()> {
                     std::time::Duration::from_secs(opts.effective_refresh_seconds()),
                 );
             }
-            let output = status::snapshot(&ctx)?;
+            #[cfg(all(unix, not(test)))]
+            let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+                anyhow::anyhow!("Status was not started because signal supervision is unavailable")
+            })?;
+            #[cfg(all(unix, not(test)))]
+            let cancellation = signal_session.cancellation();
+            #[cfg(all(unix, not(test)))]
+            let mut observer =
+                crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+                    cancellation.cancelled()
+                });
+            #[cfg(all(unix, not(test)))]
+            let outcome = status::snapshot_with_cancellation_and_observer(
+                &ctx,
+                &|| cancellation.cancelled(),
+                &mut observer,
+            );
+            #[cfg(all(unix, not(test)))]
+            let outcome = observer.finish_with(outcome);
+            #[cfg(all(unix, not(test)))]
+            let outcome = crate::codex::finish_signal_supervised(
+                outcome,
+                signal_session.finish(),
+                "Status signal supervision could not retire safely",
+            );
+            #[cfg(any(not(unix), test))]
+            let outcome = status::snapshot(&ctx);
+            let output = outcome?;
             emit(json_output, HumanOutput::Status, &output)
         }
         #[cfg(not(feature = "dev-proxy"))]
@@ -668,7 +695,34 @@ fn dispatch_runtime_command(
     human_output: HumanOutput,
 ) -> Result<()> {
     let ctx = RepoContext::load()?;
-    let output = runtime::dispatch(&ctx, command)?;
+    #[cfg(all(unix, not(test)))]
+    if command.signal_policy() == crate::command::RuntimeSignalPolicy::Native {
+        let output = runtime::dispatch(&ctx, command)?;
+        emit(json_output, human_output, &output)?;
+        return finish_after_json_output(require_json_ok(require_ok, &output), json_output);
+    }
+    #[cfg(all(unix, not(test)))]
+    let signal_session = crate::doctor::DoctorSignalSession::start().map_err(|_| {
+        anyhow::anyhow!("Command was not started because signal supervision is unavailable")
+    })?;
+    #[cfg(all(unix, not(test)))]
+    let cancellation = signal_session.cancellation();
+    #[cfg(all(unix, not(test)))]
+    let mut observer =
+        crate::progress::CliExecutionObserver::with_cancellation(json_output, move || {
+            cancellation.cancelled()
+        });
+    #[cfg(any(not(unix), test))]
+    let mut observer = crate::progress::CliExecutionObserver::for_human_output(json_output);
+    let outcome = runtime::dispatch_with_observer(&ctx, command, &mut observer);
+    let outcome = observer.finish_with(outcome);
+    #[cfg(all(unix, not(test)))]
+    let outcome = crate::codex::finish_signal_supervised(
+        outcome,
+        signal_session.finish(),
+        "Command signal supervision could not retire safely",
+    );
+    let output = outcome?;
     emit(json_output, human_output, &output)?;
     finish_after_json_output(require_json_ok(require_ok, &output), json_output)
 }

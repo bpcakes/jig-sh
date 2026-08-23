@@ -1,8 +1,6 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-#[cfg(windows)]
-use anyhow::Context;
 use anyhow::{Result, bail};
 
 use super::output::{HumanOutput, emit};
@@ -190,51 +188,11 @@ fn input_and_output_are_same_file(input: &Path, output: &Path) -> Result<bool> {
             && input_metadata.ino() == output_metadata.ino())
     }
 
-    #[cfg(windows)]
-    {
-        let _ = (input_metadata, output_metadata);
-        windows_file_identity(input).and_then(|input_identity| {
-            windows_file_identity(output).map(|output_identity| input_identity == output_identity)
-        })
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = (input_metadata, output_metadata);
         Ok(std::fs::canonicalize(input).ok() == std::fs::canonicalize(output).ok())
     }
-}
-
-#[cfg(windows)]
-fn windows_file_identity(path: &Path) -> Result<(u32, u32, u32)> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-
-    let file = std::fs::File::open(path).with_context(|| {
-        format!(
-            "failed to open {} for file identity validation",
-            path.display()
-        )
-    })?;
-    let mut identity = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `identity` remains writable for the call and `file` owns a valid
-    // handle for the complete call duration.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut identity) } == 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
-            format!(
-                "failed to identify {} during sink validation",
-                path.display()
-            )
-        });
-    }
-    Ok((
-        identity.dwVolumeSerialNumber,
-        identity.nFileIndexHigh,
-        identity.nFileIndexLow,
-    ))
 }
 
 fn normalize_absolute_path(path: &Path) -> Result<std::path::PathBuf> {

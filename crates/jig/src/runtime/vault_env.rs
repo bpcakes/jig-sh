@@ -454,19 +454,11 @@ fn reserved_env_name(name: &str) -> bool {
 }
 
 fn comparable_env_name(name: &str) -> String {
-    if cfg!(windows) {
-        name.to_ascii_uppercase()
-    } else {
-        name.to_owned()
-    }
+    name.to_owned()
 }
 
 fn env_names_equal(left: &str, right: &str) -> bool {
-    if cfg!(windows) {
-        left.eq_ignore_ascii_case(right)
-    } else {
-        left == right
-    }
+    left == right
 }
 
 fn line_number_at(input: &[u8], offset: usize) -> usize {
@@ -568,9 +560,9 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_matching_uses_the_platform_environment_rule() {
+    fn duplicate_matching_is_case_sensitive() {
         let result = parse_vault_env_bytes(b"Name=one\nNAME=two\n");
-        assert_eq!(result.is_err(), cfg!(windows));
+        assert!(result.is_ok());
     }
 
     #[test]

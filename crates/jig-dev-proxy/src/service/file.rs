@@ -283,7 +283,7 @@ fn write_service_file(path: &Path, body: &str) -> Result<()> {
     file.write_all(body.as_bytes())?;
     file.sync_data()?;
     drop(file);
-    file_ops::replace_file(&tmp, path, "jig-proxy-service")
+    file_ops::replace_file(&tmp, path)
 }
 
 pub(super) fn prepare_service_parent_directory(parent: &Path) -> Result<()> {

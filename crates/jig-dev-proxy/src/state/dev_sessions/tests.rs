@@ -23,6 +23,7 @@ fn session(session_id: &str) -> DevSessionRecord {
         started_at_ms: timestamp,
         updated_at_ms: timestamp,
         cleanup_required: true,
+        preflight_cleanup_pending: false,
         supervisor: DevProcessIdentity {
             pid: std::process::id(),
             start_token: Some("test-supervisor".into()),
@@ -37,6 +38,8 @@ fn session(session_id: &str) -> DevSessionRecord {
                 hostname: Some("web.demo.localhost".into()),
                 target_host: "127.0.0.1".into(),
                 target_port: None,
+                spawn_state_tracked: true,
+                spawn_pending: false,
                 process: None,
             },
             DevSessionApp {
@@ -44,6 +47,8 @@ fn session(session_id: &str) -> DevSessionRecord {
                 hostname: None,
                 target_host: "::1".into(),
                 target_port: Some(4100),
+                spawn_state_tracked: true,
+                spawn_pending: false,
                 process: Some(DevProcessIdentity {
                     pid: std::process::id(),
                     start_token: None,
@@ -106,30 +111,6 @@ fn resolve_existing_applies_normal_validation_to_present_state() {
 }
 
 #[test]
-fn resolve_existing_recovers_a_session_replace_backup_under_the_shared_lock() {
-    let temp = tempdir().unwrap();
-    let state_dir = temp.path().join("proxy-state");
-    fs::create_dir_all(&state_dir).unwrap();
-    #[cfg(unix)]
-    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let expected = session("dev_recovered");
-    let backup = state_dir.join("dev-sessions.json.4294967295.123456.7.replace-backup");
-    let document = serde_json::to_vec_pretty(&DevSessionsDocument {
-        version: VERSION,
-        sessions: std::slice::from_ref(&expected),
-    })
-    .unwrap();
-    write_private_fixture(&backup, document);
-
-    let store = StateStore::resolve_existing(Some(state_dir))
-        .unwrap()
-        .unwrap();
-
-    assert!(!backup.exists());
-    assert_eq!(store.snapshot_dev_state().unwrap().sessions, vec![expected]);
-}
-
-#[test]
 fn mutation_writes_versioned_private_state_and_round_trips() {
     let temp = tempdir().unwrap();
     let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
@@ -158,6 +139,50 @@ fn mutation_writes_versioned_private_state_and_round_trips() {
             & 0o777,
         0o600
     );
+}
+
+#[test]
+fn older_v1_writer_degrades_new_cleanup_evidence_to_legacy_ambiguity() {
+    let temp = tempdir().unwrap();
+    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
+    let mut expected = session("dev_legacy_cleanup_evidence");
+    expected.preflight_cleanup_pending = true;
+    expected.apps[0]
+        .prepare_spawn(&expected.session_id, 4_005)
+        .unwrap();
+    let mut document = serde_json::to_value(DevSessionsDocument {
+        version: VERSION,
+        sessions: std::slice::from_ref(&expected),
+    })
+    .unwrap();
+    document["sessions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("preflight_cleanup_pending");
+    for app in document["sessions"][0]["apps"].as_array_mut().unwrap() {
+        let app = app.as_object_mut().unwrap();
+        app.remove("spawn_state_tracked");
+        app.remove("spawn_pending");
+    }
+    write_private_fixture(
+        &store.dev_sessions_path(),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    );
+
+    let persisted = store.snapshot_dev_state().unwrap();
+
+    assert_eq!(persisted.sessions.len(), 1);
+    let legacy = &persisted.sessions[0];
+    assert!(legacy.cleanup_required);
+    assert!(!legacy.preflight_cleanup_pending);
+    assert_eq!(
+        legacy.apps[0].spawn_evidence(),
+        DevSessionAppSpawnEvidence::Untracked
+    );
+    assert!(matches!(
+        legacy.apps[1].spawn_evidence(),
+        DevSessionAppSpawnEvidence::Registered(_)
+    ));
 }
 
 #[test]
@@ -337,6 +362,56 @@ fn record_validation_rejects_invalid_identity_control_and_app_data() {
             .unwrap_err()
             .to_string()
             .contains("without requiring cleanup")
+    );
+
+    let mut pending_without_cleanup = session("pending_without_cleanup");
+    pending_without_cleanup.cleanup_required = false;
+    pending_without_cleanup.apps[0].target_port = Some(4005);
+    pending_without_cleanup.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_cleanup])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without requiring cleanup")
+    );
+
+    let mut preflight_without_cleanup = session("preflight_without_cleanup");
+    preflight_without_cleanup.cleanup_required = false;
+    preflight_without_cleanup.preflight_cleanup_pending = true;
+    assert!(
+        validate_records(&[preflight_without_cleanup])
+            .unwrap_err()
+            .to_string()
+            .contains("pending preflight cleanup without requiring cleanup")
+    );
+
+    let mut pending_without_port = session("pending_without_port");
+    pending_without_port.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_port])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without a target port")
+    );
+
+    let mut pending_without_tracking = session("pending_without_tracking");
+    pending_without_tracking.apps[0].target_port = Some(4005);
+    pending_without_tracking.apps[0].spawn_state_tracked = false;
+    pending_without_tracking.apps[0].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_without_tracking])
+            .unwrap_err()
+            .to_string()
+            .contains("pending spawn without tracked spawn state")
+    );
+
+    let mut pending_with_process = session("pending_with_process");
+    pending_with_process.apps[1].spawn_pending = true;
+    assert!(
+        validate_records(&[pending_with_process])
+            .unwrap_err()
+            .to_string()
+            .contains("both a pending spawn and a process identity")
     );
 
     let mut invalid_time = session("invalid_time");

@@ -1,4 +1,3 @@
-
 fn parse_shell_commands(command: &str) -> ShellParse {
     let (command, heredoc_ambiguous) = strip_heredoc_bodies(command);
     let mut lexed = shell_tokens(&command);

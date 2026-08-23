@@ -166,37 +166,7 @@ async fn run_async(settings: ProxySettings, current_exe: std::path::PathBuf) -> 
         }
     };
 
-    #[cfg(windows)]
-    let result = {
-        let mut ctrl_break =
-            tokio::signal::windows::ctrl_break().context("Failed to listen for Ctrl-Break")?;
-        let mut ctrl_close =
-            tokio::signal::windows::ctrl_close().context("Failed to listen for console close")?;
-        let mut ctrl_shutdown =
-            tokio::signal::windows::ctrl_shutdown().context("Failed to listen for shutdown")?;
-        tokio::select! {
-            result = run_bound(settings, store.clone(), current_exe, owns_runtime.clone()) => result,
-            signal = tokio::signal::ctrl_c() => {
-                clear_runtime_files_if_owned(&store, &owns_runtime);
-                signal.context("Failed to listen for Ctrl-C")?;
-                anyhow::bail!("Jig proxy interrupted");
-            }
-            _ = ctrl_break.recv() => {
-                clear_runtime_files_if_owned(&store, &owns_runtime);
-                anyhow::bail!("Jig proxy interrupted");
-            }
-            _ = ctrl_close.recv() => {
-                clear_runtime_files_if_owned(&store, &owns_runtime);
-                anyhow::bail!("Jig proxy console closed");
-            }
-            _ = ctrl_shutdown.recv() => {
-                clear_runtime_files_if_owned(&store, &owns_runtime);
-                anyhow::bail!("Jig proxy shutdown requested");
-            }
-        }
-    };
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     let result = tokio::select! {
         result = run_bound(settings, store.clone(), current_exe, owns_runtime.clone()) => result,
         signal = tokio::signal::ctrl_c() => {

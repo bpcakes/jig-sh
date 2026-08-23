@@ -1,0 +1,1 @@
+Apply the four audited, behavior-preserving execution refactorings in isolated commits. Verify each slice narrowly and finish with all configured gates.

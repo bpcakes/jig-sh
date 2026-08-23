@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
 use crate::context::RepoContext;
+use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     RustFileLocInput, SqlxTodoInput,
@@ -55,13 +56,33 @@ pub(crate) fn probe_codex_marketplace_support(
 }
 
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
+    dispatch_with_observer(ctx, command, &mut NoopExecutionObserver)
+}
+
+pub(crate) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: RuntimeCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    if observer.cancelled() {
+        bail!("Execution was cancelled");
+    }
+    // Each operation owns any cancellation checks after entry so it can stop
+    // before its durable commit point. Re-checking here after a successful
+    // return would turn an already-committed mutation into an apparent failure.
     match command {
         RuntimeCommand::Bootstrap(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::BOOTSTRAP, json!({}), opts)
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::BOOTSTRAP,
+                json!({}),
+                opts,
+                observer,
+            )
         }
-        RuntimeCommand::Check(command) => dispatch_check(ctx, command),
-        RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request),
-        RuntimeCommand::Sqlx(command) => sqlx::dispatch(ctx, command),
+        RuntimeCommand::Check(command) => dispatch_check_with_observer(ctx, command, observer),
+        RuntimeCommand::MigrationAdd(request) => migration::add(ctx, request, observer),
+        RuntimeCommand::Sqlx(command) => sqlx::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
             ctx,
             PolicyDirectCommand::AgentMapGenerate(AgentMapInput {
@@ -76,19 +97,27 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
         ),
         RuntimeCommand::Dev(opts) => crate::dev_proxy::commands::dev(ctx, opts),
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
-        RuntimeCommand::Agent(command) => agent::dispatch(ctx, command),
-        RuntimeCommand::Work(command) => work::dispatch(ctx, command),
-        RuntimeCommand::Loop(command) => loops::dispatch(ctx, command),
-        RuntimeCommand::State(command) => dispatch_state(ctx, command),
+        RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Work(command) => work::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
     }
 }
 
-fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
+fn dispatch_state(
+    ctx: &RepoContext,
+    command: StateCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
-        StateCommand::Summary => crate::state::state_summary(ctx).map(|mut value| {
-            value["command"] = json!("state summary");
-            value
-        }),
+        StateCommand::Summary => {
+            crate::state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
+                |mut value| {
+                    value["command"] = json!("state summary");
+                    value
+                },
+            )
+        }
         StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
         StateCommand::CompactSessions(request) => crate::state::compact_sessions(ctx, request),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
@@ -110,12 +139,12 @@ pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) ->
     work::gates_snapshot(ctx, plan_id)
 }
 
-pub(crate) fn work_gates_snapshot_with_cancellation(
+pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
-    plan_id: Option<String>,
+    plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    work::gates_snapshot_with_cancellation(ctx, plan_id, cancelled)
+) -> Result<std::collections::BTreeMap<String, Value>> {
+    work::open_plan_gate_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
 
 /// Read-only loop workflow status for `jig ui`; reuses `loop status`.
@@ -222,36 +251,63 @@ pub(crate) fn vault_options_for_context(
         .unwrap_or_default()
 }
 
-fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
+fn dispatch_check_with_observer(
+    ctx: &RepoContext,
+    command: CheckCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
-        CheckCommand::Repository(request) => dispatch_repository_check(ctx, request),
-        CheckCommand::Fmt(opts) => dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, opts),
-        CheckCommand::Lint(opts) => dispatch_named_check(ctx, "lint", tool::LINT, opts),
-        CheckCommand::Clippy(opts) => dispatch_named_check(ctx, "clippy", tool::CLIPPY, opts),
-        CheckCommand::Test(opts) => dispatch_named_check(ctx, "test", tool::TEST, opts),
+        CheckCommand::Repository(request) => dispatch_repository_check(ctx, request, observer),
+        CheckCommand::Fmt(opts) => {
+            dispatch_named_check(ctx, "fmt", tool::FMT_CHECK, opts, observer)
+        }
+        CheckCommand::Lint(opts) => dispatch_named_check(ctx, "lint", tool::LINT, opts, observer),
+        CheckCommand::Clippy(opts) => {
+            dispatch_named_check(ctx, "clippy", tool::CLIPPY, opts, observer)
+        }
+        CheckCommand::Test(opts) => dispatch_named_check(ctx, "test", tool::TEST, opts, observer),
         CheckCommand::TestLocked(opts) => {
-            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, opts)
+            dispatch_named_check(ctx, "test-locked", tool::TEST_LOCKED, opts, observer)
         }
-        CheckCommand::TypeScriptLint(opts) => {
-            dispatch_named_check(ctx, "typescript-lint", tool::TYPESCRIPT_LINT, opts)
-        }
+        CheckCommand::TypeScriptLint(opts) => dispatch_named_check(
+            ctx,
+            "typescript-lint",
+            tool::TYPESCRIPT_LINT,
+            opts,
+            observer,
+        ),
         CheckCommand::TypeScriptTypecheck(opts) => dispatch_named_check(
             ctx,
             "typescript-typecheck",
             tool::TYPESCRIPT_TYPECHECK,
             opts,
+            observer,
         ),
-        CheckCommand::TypeScriptBuild(opts) => {
-            dispatch_named_check(ctx, "typescript-build", tool::TYPESCRIPT_BUILD, opts)
+        CheckCommand::TypeScriptBuild(opts) => dispatch_named_check(
+            ctx,
+            "typescript-build",
+            tool::TYPESCRIPT_BUILD,
+            opts,
+            observer,
+        ),
+        CheckCommand::TypeScriptCoverage(opts) => dispatch_named_check(
+            ctx,
+            "typescript-coverage",
+            tool::TYPESCRIPT_COVERAGE,
+            opts,
+            observer,
+        ),
+        CheckCommand::Sqlx(opts) => {
+            dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, opts, observer)
         }
-        CheckCommand::TypeScriptCoverage(opts) => {
-            dispatch_named_check(ctx, "typescript-coverage", tool::TYPESCRIPT_COVERAGE, opts)
+        CheckCommand::Sqlc(opts) => {
+            dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, opts, observer)
         }
-        CheckCommand::Sqlx(opts) => dispatch_named_check(ctx, "sqlx", tool::SQLX_CHECK, opts),
-        CheckCommand::Sqlc(opts) => dispatch_named_check(ctx, "sqlc", tool::SQLC_CHECK, opts),
-        CheckCommand::Schema(opts) => dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, opts),
+        CheckCommand::Schema(opts) => {
+            dispatch_named_check(ctx, "schema", tool::SCHEMA_CHECK, opts, observer)
+        }
         CheckCommand::Contract(opts) => {
-            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, opts)
+            dispatch_named_check(ctx, "contract", tool::CONTRACT_CHECK, opts, observer)
         }
         CheckCommand::AgentMap(opts) => crate::policy::run_check(
             ctx,
@@ -286,6 +342,7 @@ fn dispatch_named_check(
     selector: &str,
     legacy_tool: &str,
     tool: crate::command::ToolRequest,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
         dispatch_repository_check(
@@ -298,15 +355,23 @@ fn dispatch_named_check(
                 fail_fast: false,
                 tool,
             },
+            observer,
         )
     } else {
-        tool_execution::execute_manifest_tool_request(ctx, legacy_tool, json!({}), tool)
+        tool_execution::execute_manifest_tool_request_with_observer(
+            ctx,
+            legacy_tool,
+            json!({}),
+            tool,
+            observer,
+        )
     }
 }
 
 fn dispatch_repository_check(
     ctx: &RepoContext,
     request: crate::command::RepositoryCheckRequest,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
     let plan = crate::repository::plan_run(
@@ -327,7 +392,14 @@ fn dispatch_repository_check(
         }));
     }
 
-    execute_repository_check_plan(ctx, &catalog, plan, request.tool, request.fail_fast)
+    execute_repository_check_plan(
+        ctx,
+        &catalog,
+        plan,
+        request.tool,
+        request.fail_fast,
+        observer,
+    )
 }
 
 fn execute_repository_check_plan(
@@ -336,6 +408,7 @@ fn execute_repository_check_plan(
     plan: jig_contract::RunPlan,
     tool: crate::command::ToolRequest,
     fail_fast: bool,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let (work_plan_id, record_receipts) = tool.into_parts();
     let execution = run_execution::execute_check_run(
@@ -347,7 +420,7 @@ fn execute_repository_check_plan(
             record_receipts,
             fail_fast,
         },
-        &|| false,
+        &|| observer.cancelled(),
     )?;
     let ok = execution.run.result.conclusion == Some(jig_contract::RunConclusion::Success);
 
@@ -362,9 +435,22 @@ fn execute_repository_check_plan(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Value> {
+    call_tool_with_observer(ctx, name, args, &mut NoopExecutionObserver)
+}
+
+pub(crate) fn call_tool_with_observer(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
 
+    if observer.cancelled() {
+        bail!("Execution was cancelled");
+    }
     if ctx.contract_version() >= 6 {
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
             return mcp_repository::call(ctx, tool, args);
@@ -372,7 +458,9 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
     } else {
         match ctx.tool_spec(name) {
             Some(tool) if tool_defs::is_execution_tool(tool) => {
-                return tool_execution::call_manifest_tool(ctx, tool, &args_obj);
+                return tool_execution::call_manifest_tool_with_observer(
+                    ctx, tool, &args_obj, observer,
+                );
             }
             _ => {}
         }
@@ -386,11 +474,11 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
         Some(MemoryTool::Goal) => work::goal_from_args(ctx, args),
         Some(MemoryTool::Start) => work::start_from_args(ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => work::check_from_args(ctx, args),
+        Some(MemoryTool::Check) => work::check_from_args_with_observer(ctx, args, observer),
         Some(MemoryTool::Gates) => work::gates_from_args(ctx, args),
         Some(MemoryTool::Evidence) => work::evidence_from_args(ctx, args),
-        Some(MemoryTool::Review) => work::review_from_args(ctx, args),
-        Some(MemoryTool::Refine) => work::refine_from_args(ctx, args),
+        Some(MemoryTool::Review) => work::review_from_args_with_observer(ctx, args, observer),
+        Some(MemoryTool::Refine) => work::refine_from_args_with_observer(ctx, args, observer),
         Some(MemoryTool::Decide) => work::decide_from_args(ctx, args),
         Some(MemoryTool::Receipts) => work::receipts_from_args(ctx, args),
         Some(MemoryTool::Status) => crate::state::state_summary(ctx),

@@ -46,12 +46,6 @@ unicode-width.workspace = true
 x509-parser.workspace = true
 zeroize.workspace = true
 
-[target.'cfg(not(unix))'.dependencies]
-ctrlc.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true
 

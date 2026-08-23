@@ -14,6 +14,9 @@ use jig_owned_process::{
 use serde_json::{Value, json};
 
 use crate::context::{RepoContext, WorkGate};
+#[cfg(test)]
+use crate::execution::NoopExecutionObserver;
+use crate::execution::{ExecutionCommandError, ExecutionControl};
 use crate::repository_path::validate_repository_directory_path;
 use crate::tool_defs::{self, kind};
 
@@ -364,7 +367,21 @@ fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
 
 #[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    schema::check(ctx)
+    schema_check_with_observer(ctx, &mut NoopExecutionObserver)
+        .map_err(ExecutionCommandError::into_anyhow)
+}
+
+pub(crate) fn schema_check_with_observer(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
+    if observer.cancelled() {
+        return Err(ExecutionCommandError::CancelledBeforeStart);
+    }
+    schema::check_with_control(ctx, ctx.command_timeout().duration(), &|| {
+        observer.cancelled()
+    })
+    .map_err(|error| schema_execution_error(error, ctx.command_timeout().as_secs()))
 }
 
 pub(crate) fn schema_check_with_control(
@@ -373,6 +390,21 @@ pub(crate) fn schema_check_with_control(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
     schema::check_with_control(ctx, timeout, cancelled)
+}
+
+fn schema_execution_error(error: anyhow::Error, timeout_seconds: u64) -> ExecutionCommandError {
+    match error.downcast_ref::<jig_owned_process::OwnedProcessTreeError>() {
+        Some(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart) => {
+            ExecutionCommandError::CancelledBeforeStart
+        }
+        Some(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
+            ExecutionCommandError::Cancelled
+        }
+        Some(jig_owned_process::OwnedProcessTreeError::TimedOut) => ExecutionCommandError::failed(
+            anyhow::anyhow!("Schema check timed out after {timeout_seconds} seconds"),
+        ),
+        _ => ExecutionCommandError::failed(error),
+    }
 }
 
 struct ControlledOutput {

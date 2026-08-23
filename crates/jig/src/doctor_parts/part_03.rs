@@ -1,4 +1,3 @@
-
 fn sqlx_cli_version_check(
     ctx: &RepoContext,
     environment: &DoctorEnvironment,
@@ -30,12 +29,9 @@ fn sqlx_cli_version_check(
     };
     let command = ctx.command_for_key("sqlx_check_command").ok()?;
     let (program, style) = sqlx_cli_version_program(ctx.root(), command)?;
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        &program,
-        environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
-    ) else {
+    let Some(resolution) =
+        resolve_program(ctx.root(), &program, environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "sqlx_cli",
@@ -322,12 +318,8 @@ fn node_runtime_check(
             );
         }
     };
-    let Some(resolution) = resolve_program(
-        ctx.root(),
-        "node",
-        environment.search_path.as_deref(),
-        environment.path_extensions.as_deref(),
-    ) else {
+    let Some(resolution) = resolve_program(ctx.root(), "node", environment.search_path.as_deref())
+    else {
         return Some(
             check(
                 "node_runtime",
@@ -548,7 +540,6 @@ fn version_probe_stdout(
         .env("NO_COLOR", "1")
         .env("LC_ALL", "C")
         .env("HOME", home)
-        .env("USERPROFILE", home)
         .env("TMPDIR", temp.path())
         .env("TMP", temp.path())
         .env("TEMP", temp.path())
@@ -557,11 +548,6 @@ fn version_probe_stdout(
         .stderr(Stdio::piped());
     if let Some(path) = sanitized_probe_search_path(root, executable) {
         command.env("PATH", path);
-    }
-    #[cfg(windows)]
-    if let Some(path_extensions) = sanitized_windows_pathext(environment.path_extensions.as_deref())
-    {
-        command.env("PATHEXT", path_extensions);
     }
     for (key, value) in &environment.probe_environment {
         command.env(key, value);
@@ -593,7 +579,11 @@ const fn version_probe_reason(error: &OwnedProcessTreeError) -> &'static str {
     match error {
         OwnedProcessTreeError::Start(_) => "the version probe could not start",
         OwnedProcessTreeError::TimedOut => "the version probe timed out",
+        OwnedProcessTreeError::CancelledBeforeStart => "the version probe was cancelled",
         OwnedProcessTreeError::Cancelled => "the version probe was cancelled",
+        OwnedProcessTreeError::OutputLimitExceeded(_) => {
+            "the version probe output exceeded the diagnostic capture limit"
+        }
         OwnedProcessTreeError::Await => "the version probe could not be awaited",
         OwnedProcessTreeError::Cleanup => {
             "the version probe process tree could not be cleaned up safely"

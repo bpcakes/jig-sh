@@ -20,6 +20,10 @@ use crate::repository_path::{
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
 
 mod defaults;
+mod execution_config;
+pub(crate) use execution_config::{
+    CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
+};
 mod loop_config;
 mod optional;
 mod runtime;
@@ -43,6 +47,7 @@ pub(crate) use runtime::{
     FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
 };
 
+pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
@@ -156,6 +161,8 @@ struct RepoConfig {
     loop_config: LoopConfig,
     #[serde(default)]
     status: StatusConfig,
+    #[serde(default)]
+    execution: execution_config::ExecutionConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
 }

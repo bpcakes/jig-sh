@@ -27,7 +27,10 @@ const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
-const PTY_EVENT_TIMEOUT: Duration = Duration::from_secs(15);
+// Vault interactions perform deliberately expensive key derivation. This PTY
+// binary runs serially in its own Nextest invocation, so 30 seconds remains a
+// useful bound while allowing headroom on loaded machines.
+const PTY_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 const PTY_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[test]
@@ -106,8 +109,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     assert!(String::from_utf8_lossy(&output[activity_offset..]).contains("field_batch_apply"));
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
+    let browse_offset = output.len();
+    master.write_all(b"\r").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        browse_offset,
+        "Value hidden.",
+        PTY_EVENT_TIMEOUT,
+    );
+
     let confirmation_offset = output.len();
-    master.write_all(b"\rp").unwrap();
+    master.write_all(b"p").unwrap();
     read_until_from(
         &mut master,
         &mut output,
@@ -453,8 +466,8 @@ fn read_until_from(
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for {needle:?}; output: {}",
-            String::from_utf8_lossy(output)
+            "timed out waiting for {needle:?}; recent output: {}",
+            String::from_utf8_lossy(&output[output.len().saturating_sub(4096)..])
         );
         std::thread::sleep(Duration::from_millis(10));
     }

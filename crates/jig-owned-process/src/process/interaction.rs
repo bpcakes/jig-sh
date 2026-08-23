@@ -4,8 +4,13 @@ use std::time::{Duration, Instant};
 
 use super::{
     BoundedProcessOutput, OWNED_PROCESS_OUTPUT_LIMIT, OutputDrain, OwnedProcess,
-    OwnedProcessTreeError, ProcessPipe, spawn_owned_process,
+    OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError, ProcessDeadline,
+    ProcessPipe, spawn_owned_process,
 };
+
+struct IgnoreProcessActivity;
+
+impl OwnedProcessObserver for IgnoreProcessActivity {}
 
 #[derive(Debug)]
 pub enum OwnedProcessTreeInteractionError {
@@ -61,7 +66,7 @@ impl ProcessInteractionStdout {
     /// Finishes the bounded stderr preview captured while stdout was polled.
     pub fn take_stderr_output(&mut self) -> Option<BoundedProcessOutput> {
         if let Some(stderr) = &mut self.stderr {
-            stderr.poll();
+            stderr.poll(OwnedProcessOutputStream::Stderr, &mut IgnoreProcessActivity);
         }
         self.stderr.take().map(OutputDrain::finish)
     }
@@ -70,7 +75,7 @@ impl ProcessInteractionStdout {
 impl Read for ProcessInteractionStdout {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         if let Some(stderr) = &mut self.stderr {
-            stderr.poll();
+            stderr.poll(OwnedProcessOutputStream::Stderr, &mut IgnoreProcessActivity);
         }
         self.pipe.read_available(buffer)
     }
@@ -123,8 +128,8 @@ where
         }
     };
 
-    let deadline = Instant::now().checked_add(timeout);
-    let outcome = interaction(stdin, stdout, deadline);
+    let deadline = ProcessDeadline::after(timeout);
+    let outcome = interaction(stdin, stdout, deadline.as_optional_instant());
     finish_interaction(outcome, process.terminate_and_reap().map(|_| ()))
 }
 

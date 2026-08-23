@@ -56,22 +56,6 @@ fn init_destination_canonicalizes_only_existing_ancestors_of_missing_tails() {
     );
 }
 
-#[cfg(windows)]
-#[test]
-fn init_destination_rejects_incomplete_windows_absolute_forms() {
-    let base = tempdir().unwrap();
-    let base = fs::canonicalize(base.path()).unwrap();
-    for path in [r"C:repo", r"\repo"] {
-        let error = resolve_init_destination(Path::new(path), &base)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("complete absolute drive/UNC"),
-            "{path}: {error}"
-        );
-    }
-}
-
 #[test]
 fn portable_planned_files_reject_component_prefix_and_ascii_case_collisions() {
     for paths in [
@@ -145,103 +129,6 @@ fn retained_directory_and_symlink_handles_reject_recreated_paths() {
         repository_file_identity(&link_commit.handle).unwrap(),
         link_commit.identity
     );
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_real_directory_predicate_rejects_reparse_points() {
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    assert!(windows_directory_attributes_are_real(true, false, 0));
-    assert!(!windows_directory_attributes_are_real(
-        true,
-        false,
-        FILE_ATTRIBUTE_REPARSE_POINT,
-    ));
-    assert!(!windows_directory_attributes_are_real(false, false, 0));
-    assert!(!windows_directory_attributes_are_real(true, true, 0));
-}
-
-#[test]
-fn portable_planned_files_reject_windows_aliases_and_devices() {
-    for path in [
-        "web./app.json",
-        "CON/app.json",
-        "prn.txt/app.json",
-        "AUX/app.json",
-        "nul.json/app.json",
-        "COM1/app.json",
-        "com9.log/app.json",
-        "LPT1/app.json",
-        "lpt9.txt/app.json",
-        "COM¹/app.json",
-        "com².txt/app.json",
-        "LPT³/app.json",
-    ] {
-        let error = validate_portable_planned_file_collisions([Path::new(path)])
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("not portable to Windows"), "{path}: {error}");
-        assert!(error.contains(path), "{path}: {error}");
-    }
-
-    validate_portable_planned_file_collisions([
-        Path::new("console/app.json"),
-        Path::new("com0/app.json"),
-        Path::new("com10/app.json"),
-        Path::new("lpt0/app.json"),
-        Path::new("lpt10/app.json"),
-        Path::new("com⁰/app.json"),
-        Path::new("com⁴/app.json"),
-        Path::new("lpt⁰/app.json"),
-        Path::new("lpt⁴/app.json"),
-    ])
-    .unwrap();
-}
-
-#[test]
-fn portable_planned_files_reject_windows_forbidden_characters_and_controls() {
-    for character in ['<', '>', ':', '"', '|', '?', '*'] {
-        let path = format!("nested/bad{character}name.txt");
-        let error = validate_portable_planned_file_collisions([Path::new(&path)])
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("not portable to Windows"),
-            "{path:?}: {error}"
-        );
-        assert!(error.contains("forbidden character"), "{path:?}: {error}");
-    }
-
-    for byte in (0_u8..=31).chain(std::iter::once(127)) {
-        let path = format!("nested/bad{}name.txt", char::from(byte));
-        let error = validate_portable_planned_file_collisions([Path::new(&path)])
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("not portable to Windows"),
-            "0x{byte:02x}: {error}"
-        );
-        assert!(error.contains("control byte"), "0x{byte:02x}: {error}");
-    }
-
-    validate_portable_planned_file_collisions([
-        Path::new("nested/good+name.txt"),
-        Path::new("nested/good,name.txt"),
-        Path::new("nested/good;name.txt"),
-        Path::new("nested/good[name].txt"),
-    ])
-    .unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn portable_planned_files_reject_raw_backslash_components() {
-    let backslash = Path::new(r"nested\bad\name.txt");
-    let error = validate_portable_planned_file_collisions([backslash])
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("raw backslash"), "{error}");
 }
 
 #[cfg(unix)]
@@ -403,20 +290,9 @@ fn repository_relative_ancestor_validation_rejects_escaping_paths() {
 fn repository_relative_path_validation_rejects_reserved_git_metadata_aliases() {
     for relative in [
         ".git",
-        ".git.",
-        ".git ",
-        "vendor/.GiT.../config",
-        "vendor/.GIT. . /config",
-        "GIT~1/config",
-        "vendor/git~1. . /config",
-        ".git:stream",
-        ".git .:stream",
-        ".git::$INDEX_ALLOCATION",
-        ".git...:alternate-stream",
-        "git~1::$DATA",
+        "vendor/.GiT/config",
         ".g\u{200c}it/config",
         "\u{feff}.G\u{202e}i\u{206a}T/config",
-        "vendor\\.GiT...\\config",
     ] {
         let error = validate_no_reserved_git_metadata_components(Path::new(relative))
             .unwrap_err()
@@ -436,11 +312,6 @@ fn repository_relative_path_validation_allows_git_near_misses() {
         ".gitignore",
         ".gitkeep",
         "git/config",
-        "git~2/config",
-        "git~10/config",
-        "git~1x/config",
-        ".gitx. ",
-        ".gitx:stream",
         ".git .config",
         ".git\u{a0}",
         ".git\u{200b}",

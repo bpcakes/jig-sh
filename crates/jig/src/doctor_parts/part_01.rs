@@ -1,4 +1,12 @@
 pub(crate) fn run() -> Result<Value> {
+    run_with_optional_cancellation(None)
+}
+
+pub(crate) fn run_with_cancellation(cancelled: &dyn Fn() -> bool) -> Result<Value> {
+    run_with_optional_cancellation(Some(cancelled))
+}
+
+fn run_with_optional_cancellation(cancelled: Option<&dyn Fn() -> bool>) -> Result<Value> {
     let cwd = env::current_dir().context("Failed to resolve current directory")?;
     // Doctor is capability-only so it can diagnose an invalid generated
     // launcher contract. Its explicit JIG_REPO_ROOT target therefore remains
@@ -77,7 +85,10 @@ pub(crate) fn run() -> Result<Value> {
     match &ctx_result {
         Ok(ctx) => {
             checks.push(contract_check(ctx));
-            let context_checks = doctor_context_checks(ctx);
+            let context_checks = match cancelled {
+                Some(cancelled) => doctor_context_checks_with_cancellation(ctx, cancelled),
+                None => doctor_context_checks(ctx),
+            };
             checks.push(context_checks.required_tools);
             if let Some(rust_runtime) = context_checks.rust_runtime {
                 checks.push(rust_runtime);
@@ -188,14 +199,7 @@ pub(crate) fn program_available_on_path(program: &str) -> bool {
     let Some(search_path) = env::var_os("PATH") else {
         return false;
     };
-    let path_extensions = env::var_os("PATHEXT");
-    resolve_program(
-        &command_cwd,
-        program,
-        Some(&search_path),
-        path_extensions.as_deref(),
-    )
-    .is_some()
+    resolve_program(&command_cwd, program, Some(&search_path)).is_some()
 }
 
 fn output(repo: Option<Value>, checks: Vec<DoctorCheck>) -> Value {
@@ -448,7 +452,6 @@ impl ShellEnvironmentIssue {
 #[derive(Clone, Debug, Default)]
 struct DoctorEnvironment {
     search_path: Option<OsString>,
-    path_extensions: Option<OsString>,
     database_url: Option<OsString>,
     cargo_alias_sqlx: Option<OsString>,
     cargo_home: Option<OsString>,
@@ -509,21 +512,14 @@ impl DoctorEnvironment {
         );
         Self {
             search_path: env::var_os("PATH"),
-            path_extensions: env::var_os("PATHEXT"),
             database_url: env::var_os("DATABASE_URL"),
             cargo_alias_sqlx: env::var_os("CARGO_ALIAS_SQLX"),
             cargo_home: env::var_os("CARGO_HOME"),
-            home: env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
-            probe_environment: [
-                "SystemRoot",
-                "WINDIR",
-                "COMSPEC",
-                "RUSTUP_HOME",
-                "RUSTUP_TOOLCHAIN",
-            ]
-            .into_iter()
-            .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
-            .collect(),
+            home: env::var_os("HOME"),
+            probe_environment: ["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"]
+                .into_iter()
+                .filter_map(|key| env::var_os(key).map(|value| (key.into(), value)))
+                .collect(),
             shell_environment_issue,
         }
     }
@@ -597,6 +593,21 @@ fn doctor_context_checks(ctx: &RepoContext) -> DoctorContextChecks {
             DoctorProcessControl::allowed_without_signal_session(),
         )
     }
+}
+
+fn doctor_context_checks_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> DoctorContextChecks {
+    let environment = DoctorEnvironment::capture();
+    doctor_context_checks_with_process_control(
+        ctx,
+        &environment,
+        DoctorProcessControl {
+            cancellation: Some(cancelled),
+            unavailable_reason: None,
+        },
+    )
 }
 
 fn doctor_context_checks_with_process_control(

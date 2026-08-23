@@ -1,4 +1,3 @@
-
 fn executable_exists(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;

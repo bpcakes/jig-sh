@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 #[test]
 fn sqlx_driver_probe_invokes_shim_safely_and_times_out() {
@@ -9,7 +8,7 @@ fn sqlx_driver_probe_invokes_shim_safely_and_times_out() {
     let supported = temp.path().join("cargo-sqlx-supported");
     write_test_executable(
         &supported,
-        "#!/bin/sh\n[ -z \"${JIG_DOCTOR_TEST_SECRET+x}\" ] || exit 8\n[ -z \"${DATABASE_URL+x}\" ] || exit 8\n[ \"$HOME\" = \"$USERPROFILE\" ] || exit 8\n[ \"$HOME\" = \"$TMPDIR\" ] || exit 8\n[ \"$HOME\" = \"$TMP\" ] || exit 8\n[ \"$HOME\" = \"$TEMP\" ] || exit 8\n[ \"$LC_ALL\" = C ] || exit 8\n[ \"$NO_COLOR\" = 1 ] || exit 8\n[ \"$1\" = sqlx ] || exit 9\nprintf '%s\\n' 'error: unknown value \"jig-doctor-invalid\" for ssl_mode'\nexit 1\n",
+        "#!/bin/sh\n[ -z \"${JIG_DOCTOR_TEST_SECRET+x}\" ] || exit 8\n[ -z \"${DATABASE_URL+x}\" ] || exit 8\n[ \"$HOME\" = \"$TMPDIR\" ] || exit 8\n[ \"$HOME\" = \"$TMP\" ] || exit 8\n[ \"$HOME\" = \"$TEMP\" ] || exit 8\n[ \"$LC_ALL\" = C ] || exit 8\n[ \"$NO_COLOR\" = 1 ] || exit 8\n[ \"$1\" = sqlx ] || exit 9\nprintf '%s\\n' 'error: unknown value \"jig-doctor-invalid\" for ssl_mode'\nexit 1\n",
     );
     assert_eq!(
         probe_sqlx_driver_with_timeout(
@@ -705,59 +704,13 @@ fn proxy_list_command_preserves_the_portable_launcher_plan() {
             "{key} was not removed from the launcher-backed proxy diagnostic"
         );
     }
-    #[cfg(windows)]
-    {
-        assert_eq!(command.get_program(), OsStr::new("bash"));
-        assert_eq!(
-            args,
-            vec![
-                launcher.into_os_string(),
-                OsString::from("proxy"),
-                OsString::from("list"),
-                OsString::from("--json"),
-            ]
-        );
-    }
-    #[cfg(not(windows))]
-    {
-        assert_eq!(command.get_program(), launcher.as_os_str());
-        assert_eq!(
-            args,
-            vec![
-                OsString::from("proxy"),
-                OsString::from("list"),
-                OsString::from("--json"),
-            ]
-        );
-    }
-}
-
-#[cfg(windows)]
-#[test]
-fn proxy_list_command_converts_verbatim_roots_for_bash_and_its_working_directory() {
-    let (launcher, command) = proxy_list_command(Path::new(r"\\?\C:\repo")).unwrap();
-    let args = command
-        .get_args()
-        .map(OsStr::to_os_string)
-        .collect::<Vec<_>>();
-
-    assert_eq!(launcher, PathBuf::from(r"C:\repo\scripts\jig"));
-    assert_eq!(command.get_program(), OsStr::new("bash"));
-    assert_eq!(command.get_current_dir(), Some(Path::new(r"C:\repo")));
-    assert_eq!(args[0], launcher.as_os_str());
-
-    let (unc_launcher, unc_command) =
-        proxy_list_command(Path::new(r"\\?\UNC\server\share\repo")).unwrap();
+    assert_eq!(command.get_program(), launcher.as_os_str());
     assert_eq!(
-        unc_launcher,
-        PathBuf::from(r"\\server\share\repo\scripts\jig")
-    );
-    assert_eq!(
-        unc_command.get_current_dir(),
-        Some(Path::new(r"\\server\share\repo"))
-    );
-    assert_eq!(
-        unc_command.get_args().next(),
-        Some(unc_launcher.as_os_str())
+        args,
+        vec![
+            OsString::from("proxy"),
+            OsString::from("list"),
+            OsString::from("--json"),
+        ]
     );
 }

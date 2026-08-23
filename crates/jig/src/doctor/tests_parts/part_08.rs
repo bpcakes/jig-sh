@@ -1,4 +1,3 @@
-
 #[cfg(unix)]
 #[test]
 fn required_tools_redacts_every_command_body_and_generic_credential_token() {
@@ -111,7 +110,7 @@ fn doctor_reports_unified_readiness_checks() {
     write_doctor_fixture(temp.path());
     let _cwd = CurrentDirGuard::set(temp.path());
 
-    let output = run().unwrap();
+    let output = run_with_cancellation(&|| false).unwrap();
 
     assert_eq!(output["command"], "doctor");
     assert_eq!(output["repo"]["name"], "demo");
@@ -248,7 +247,6 @@ fn doctor_environment(bin: &Path, database_url: Option<&str>) -> DoctorEnvironme
     let bin = fs::canonicalize(bin).unwrap_or_else(|_| bin.to_path_buf());
     DoctorEnvironment {
         search_path: Some(bin.into_os_string()),
-        path_extensions: None,
         database_url: database_url.map(OsString::from),
         cargo_alias_sqlx: None,
         cargo_home: None,

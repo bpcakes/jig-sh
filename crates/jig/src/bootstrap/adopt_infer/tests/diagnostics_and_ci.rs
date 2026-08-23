@@ -213,7 +213,7 @@ fn github_ci_shape_reports_checks_lockfiles_cache_and_matrix() {
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-24.04, windows-latest]
+        os: [ubuntu-24.04, macos-latest]
         toolchain: [stable, nightly]
     steps:
       - uses: actions/checkout@v6
@@ -254,7 +254,7 @@ fn github_ci_shape_reports_checks_lockfiles_cache_and_matrix() {
     assert!(
         signal_values(&shape["cache_strategy"]).contains(&"setup-rust-toolchain cache disabled")
     );
-    assert!(signal_values(&shape["matrix"]["os"]).contains(&"windows-latest"));
+    assert!(signal_values(&shape["matrix"]["os"]).contains(&"macos-latest"));
     assert!(signal_values(&shape["matrix"]["toolchain"]).contains(&"nightly"));
     assert_eq!(report["metadata"]["ci_shape"]["confidence"], "medium");
 }
@@ -362,12 +362,12 @@ fn multiple_github_runners_are_reported_as_warnings() {
 }
 
 #[test]
-fn windows_runner_is_reported_as_excluded_when_supported_runner_is_available() {
+fn unsupported_runner_is_reported_as_excluded_when_supported_runner_is_available() {
     let temp = tempfile::tempdir().unwrap();
     fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
     fs::write(
         temp.path().join(".github/workflows/test.yml"),
-        "jobs:\n  linux:\n    runs-on: macos-latest\n  windows:\n    runs-on: windows-latest\n",
+        "jobs:\n  supported:\n    runs-on: macos-latest\n  unsupported:\n    runs-on: freebsd-latest\n",
     )
     .unwrap();
 
@@ -395,7 +395,7 @@ fn windows_runner_is_reported_as_excluded_when_supported_runner_is_available() {
 }
 
 #[test]
-fn windows_only_runner_falls_back_to_supported_host_with_warning() {
+fn unsupported_only_runner_falls_back_to_supported_host_with_warning() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(
         temp.path().join("Cargo.toml"),
@@ -412,7 +412,7 @@ sqlx = "0.8"
     fs::create_dir_all(temp.path().join(".github/workflows")).unwrap();
     fs::write(
         temp.path().join(".github/workflows/test.yml"),
-        "jobs:\n  test:\n    runs-on: windows-latest\n  lint:\n    runs-on: Windows-2025\n",
+        "jobs:\n  test:\n    runs-on: freebsd-latest\n  lint:\n    runs-on: solaris-latest\n",
     )
     .unwrap();
 
@@ -446,8 +446,11 @@ sqlx = "0.8"
 }
 
 #[test]
-fn supported_runner_is_preferred_over_more_common_windows_runner() {
-    let runners = BTreeMap::from([("macos-latest".to_string(), 1), ("windows".to_string(), 3)]);
+fn supported_runner_is_preferred_over_more_common_unsupported_runner() {
+    let runners = BTreeMap::from([
+        ("macos-latest".to_string(), 1),
+        ("freebsd-latest".to_string(), 3),
+    ]);
 
     assert_eq!(
         select_github_runner(&runners).as_deref(),

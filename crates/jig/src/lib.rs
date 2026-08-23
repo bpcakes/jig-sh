@@ -9,6 +9,7 @@ mod context;
 #[cfg(feature = "dev-proxy")]
 mod dev_proxy;
 mod doctor;
+mod execution;
 mod frontend_metadata;
 #[cfg(not(feature = "dev-proxy"))]
 mod dev_proxy {
@@ -93,6 +94,12 @@ pub fn error_is_structured_command_failure(error: &anyhow::Error) -> bool {
 
 pub fn error_exit_code(error: &anyhow::Error) -> Option<i32> {
     cli::structured_error_exit_code(error)
+}
+
+/// Returns whether human stderr delivery was abandoned after its shutdown
+/// deadline. Callers must not perform another blocking stderr write afterward.
+pub fn stderr_delivery_abandoned() -> bool {
+    progress::stderr_delivery_abandoned()
 }
 
 #[cfg(all(test, not(feature = "dev-proxy")))]

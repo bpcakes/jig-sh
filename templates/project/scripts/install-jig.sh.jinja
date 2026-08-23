@@ -1211,7 +1211,6 @@ acquire_install_lock() {
   require_python3
   local status
   if python3 -I -c '
-import errno
 import os
 import pathlib
 import secrets
@@ -1225,17 +1224,6 @@ attempts = max(1, int(attempts_text))
 retry_seconds = float(retry_text)
 
 def try_lock(file_descriptor):
-    if os.name == "nt":
-        import msvcrt
-
-        os.lseek(file_descriptor, 0, os.SEEK_SET)
-        try:
-            msvcrt.locking(file_descriptor, msvcrt.LK_NBLCK, 1)
-            return True
-        except OSError as error:
-            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                return False
-            raise
     import fcntl
 
     try:
@@ -1245,12 +1233,6 @@ def try_lock(file_descriptor):
         return False
 
 def unlock(file_descriptor):
-    if os.name == "nt":
-        import msvcrt
-
-        os.lseek(file_descriptor, 0, os.SEEK_SET)
-        msvcrt.locking(file_descriptor, msvcrt.LK_UNLCK, 1)
-        return
     import fcntl
 
     fcntl.flock(file_descriptor, fcntl.LOCK_UN)
@@ -1260,8 +1242,6 @@ owner_path = os.path.join(lock_directory, "owner-v1")
 for attempt in range(attempts):
     try:
         flags = os.O_RDWR | os.O_CREAT
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         file_descriptor = os.open(guard_path, flags, 0o600)
@@ -1276,8 +1256,6 @@ for attempt in range(attempts):
             file_descriptor = None
             print(f"Jig installer guard path is not a standalone regular file: {guard_path}", file=sys.stderr)
             raise SystemExit(1)
-        if os.name == "nt" and os.fstat(file_descriptor).st_size == 0:
-            os.write(file_descriptor, b"\0")
         if try_lock(file_descriptor):
             if os.path.isdir(lock_directory):
                 try:
@@ -1407,10 +1385,7 @@ try:
     os.fsync(file_descriptor)
     operation = f"re-enter Jig installer {installer}"
     command = [bash_executable, installer, *installer_args]
-    if os.name == "nt":
-        status = subprocess.call(command, env=environment, close_fds=False)
-    else:
-        status = subprocess.call(command, env=environment, pass_fds=(file_descriptor,))
+    status = subprocess.call(command, env=environment, pass_fds=(file_descriptor,))
     raise SystemExit(status)
 except OSError as error:
     print(f"Failed to {operation}: {error}", file=sys.stderr)
@@ -1533,7 +1508,6 @@ native_binary_header_is_supported() {
   local bin_path="$1"
   require_python3
   python3 -I - "$bin_path" <<'PY'
-import os
 import sys
 
 try:
@@ -1558,20 +1532,6 @@ try:
         if fat_byte_order is not None:
             architecture_count = int.from_bytes(header[4:8], fat_byte_order)
             raise SystemExit(0 if 1 <= architecture_count <= 16 else 1)
-        if header[:2] == b"MZ":
-            binary.seek(0, os.SEEK_END)
-            file_size = binary.tell()
-            if file_size < 64:
-                raise SystemExit(1)
-            binary.seek(0x3C)
-            pe_offset_bytes = binary.read(4)
-            if len(pe_offset_bytes) != 4:
-                raise SystemExit(1)
-            pe_offset = int.from_bytes(pe_offset_bytes, "little")
-            if pe_offset < 64 or pe_offset + 4 > file_size:
-                raise SystemExit(1)
-            binary.seek(pe_offset)
-            raise SystemExit(0 if binary.read(4) == b"PE\0\0" else 1)
 except (OSError, ValueError):
     pass
 raise SystemExit(1)
@@ -1593,7 +1553,7 @@ resolve_compatible_path_jig() {
   # PATH reuse is an explicit opt-in, but never execute a script wrapper while
   # trying to prove that the candidate itself is a Jig runtime binary. Bash can
   # interpret executable text even without a shebang after execve returns
-  # ENOEXEC, so accept only validated native ELF, Mach-O, or PE headers before
+  # ENOEXEC, so accept only validated native ELF or Mach-O headers before
   # probing it through Python's direct process API.
   native_binary_header_is_supported "$candidate" || return 1
   native_binary_is_compatible "$candidate" || return 1

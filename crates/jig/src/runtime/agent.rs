@@ -6,24 +6,34 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use jig_owned_process::{
-    OwnedProcessTreeError, format_exit_status, require_success, run_owned_process_tree_with_output,
+    OwnedProcessTreeError, ProcessOutputLimits, ProcessOutputOverflowPolicy, format_exit_status,
+    require_success, run_owned_process_tree_with_output,
+    run_owned_process_tree_with_output_policy_and_observer,
 };
 use serde_json::{Value as JsonValue, json};
 
 use crate::command::{AgentBootstrapRequest, AgentCommand};
 use crate::context::{CodexMarketplaceConfig, RepoContext};
+use crate::execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionControl, ExecutionPhase, PhasePosition,
+    ProcessExecutionObserver,
+};
 use crate::progress::CliProgress;
 use crate::runtime::CodexSupportProbeResult;
 
 const JIG_SKILLS_MARKETPLACE_ENV: &str = "JIG_SKILLS_MARKETPLACE";
 const CODEX_SUPPORT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn dispatch(ctx: &RepoContext, command: AgentCommand) -> Result<JsonValue> {
+pub(super) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: AgentCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<JsonValue> {
     // Agent tooling commands describe or mutate local client setup, not repo
     // work evidence, so they intentionally do not record receipts.
     match command {
-        AgentCommand::Doctor => Ok(doctor(ctx)),
-        AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts),
+        AgentCommand::Doctor => Ok(doctor_with_cancellation(ctx, &|| observer.cancelled())),
+        AgentCommand::Bootstrap(opts) => bootstrap(ctx, opts, observer),
     }
 }
 
@@ -52,6 +62,21 @@ pub(super) fn doctor_with_codex_support_probe(
     doctor_with_progress(
         ctx,
         probe,
+        CliProgress::new("agent doctor"),
+        "agent doctor complete",
+    )
+}
+
+fn doctor_with_cancellation(ctx: &RepoContext, cancelled: &dyn Fn() -> bool) -> JsonValue {
+    doctor_with_progress(
+        ctx,
+        |codex_bin| {
+            codex_supports_plugin_marketplaces_with_timeout_and_cancellation(
+                codex_bin,
+                CODEX_SUPPORT_PROBE_TIMEOUT,
+                cancelled,
+            )
+        },
         CliProgress::new("agent doctor"),
         "agent doctor complete",
     )
@@ -175,7 +200,11 @@ fn doctor_with_progress(
     })
 }
 
-fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue> {
+fn bootstrap(
+    ctx: &RepoContext,
+    opts: AgentBootstrapRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<JsonValue> {
     let progress = CliProgress::new("agent bootstrap");
     progress.header("install Codex marketplace");
     progress.info("repo", ctx.root().display());
@@ -189,13 +218,43 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
         "install marketplace",
         format!("{codex_bin_display} plugin marketplace add"),
     );
-    let command_output = Command::new(&codex_bin)
+    let mut command = Command::new(&codex_bin);
+    command
         .args(["plugin", "marketplace", "add", &marketplace_source])
-        .output()
-        .with_context(|| {
-            format!("Failed to run {codex_bin_display} plugin marketplace add {marketplace_source}")
-        });
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let label = "codex marketplace registration";
+    let phase = ExecutionPhase::start(observer, label, PhasePosition::single());
+    let command_output = run_owned_process_tree_with_output_policy_and_observer(
+        &mut command,
+        ctx.command_timeout().duration(),
+        ProcessOutputLimits {
+            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+        },
+        ProcessOutputOverflowPolicy::Error,
+        &mut ProcessExecutionObserver::new(observer, label),
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "Failed to run {codex_bin_display} plugin marketplace add {marketplace_source} under process supervision (timeout: {}s): {error}",
+            ctx.command_timeout().as_secs()
+        )
+    })
+    .and_then(require_complete_marketplace_output);
+    phase.finish(
+        observer,
+        command_output
+            .as_ref()
+            .is_ok_and(|output| output.status.success()),
+    );
     let output = progress.log_blocked_on_err(command_output)?;
+    let output = Output {
+        status: output.status,
+        stdout: output.stdout.map_or_else(Vec::new, |output| output.bytes),
+        stderr: output.stderr.map_or_else(Vec::new, |output| output.bytes),
+    };
     if !output.status.success() {
         progress.blocked(format!(
             "Codex exited with {}",
@@ -215,6 +274,25 @@ fn bootstrap(ctx: &RepoContext, opts: AgentBootstrapRequest) -> Result<JsonValue
         "stdout": String::from_utf8_lossy(&output.stdout),
         "stderr": String::from_utf8_lossy(&output.stderr)
     }))
+}
+
+fn require_complete_marketplace_output(
+    output: jig_owned_process::OwnedProcessTreeOutput,
+) -> Result<jig_owned_process::OwnedProcessTreeOutput> {
+    for (stream, capture) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+        let capture = capture
+            .as_ref()
+            .with_context(|| format!("Codex marketplace registration did not capture {stream}"))?;
+        if capture.truncated {
+            bail!(
+                "Codex marketplace registration exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte {stream} capture limit"
+            );
+        }
+        if !capture.complete {
+            bail!("Codex marketplace registration did not finish capturing {stream}");
+        }
+    }
+    Ok(output)
 }
 
 fn marketplace_requirement_message(count: usize) -> String {

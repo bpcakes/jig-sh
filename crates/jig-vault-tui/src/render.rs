@@ -630,7 +630,7 @@ fn draw_help(frame: &mut Frame, area: Rect, app: &App) {
     lines.extend([
         Line::from(""),
         Line::from(Span::styled(
-            "Values remain hidden. Operational exec/run/inject workflows stay in the CLI.",
+            "Concealed values remain hidden. Text values are visible while typed.",
             Style::default().fg(MUTED),
         )),
         Line::from(""),
@@ -687,12 +687,7 @@ fn draw_management_form(frame: &mut Frame, area: Rect, app: &App, form: &Managem
                     *focus == FieldWriteFocus::Kind,
                     false,
                 ),
-                form_value_line(
-                    "Value",
-                    &value.render_label(),
-                    *focus == FieldWriteFocus::Value,
-                    true,
-                ),
+                field_value_line(*kind, value, *focus == FieldWriteFocus::Value, area.width),
                 editor_value_line(
                     "Value file",
                     value_file,
@@ -1607,6 +1602,35 @@ fn form_value_line(label: &str, value: &str, focused: bool, protected: bool) -> 
     ])
 }
 
+fn field_value_line(
+    kind: jig_vault::FieldKind,
+    value: &crate::secret_input::SecretInput,
+    focused: bool,
+    area_width: u16,
+) -> Line<'static> {
+    if kind == jig_vault::FieldKind::Text
+        && let Some(text) = value.visible_text()
+    {
+        let marker = if focused { "›" } else { " " };
+        let style = if focused {
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let prefix = format!("{marker} Value: ");
+        let available = content_width(area_width)
+            .saturating_sub(prefix.width())
+            .max(1);
+        let text = if text.is_empty() {
+            "(empty)".to_owned()
+        } else {
+            fit_text_end(text, available)
+        };
+        return Line::from(vec![Span::styled(prefix, style), Span::styled(text, style)]);
+    }
+    form_value_line("Value", &value.render_label(), focused, true)
+}
+
 fn editor_value_line(
     label: &str,
     editor: &LineEditor,
@@ -1747,6 +1771,41 @@ fn fit_text(value: &str, max_width: usize) -> String {
     }
     output.push('…');
     output
+}
+
+fn fit_text_end(value: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    let start = tail_window_start(value, max_width);
+    if start == 0 {
+        return sanitize_text(value);
+    }
+    if max_width == 1 {
+        return "…".to_owned();
+    }
+
+    let start = tail_window_start(value, max_width - 1);
+    let mut output = String::from("…");
+    output.push_str(&sanitize_text(&value[start..]));
+    output
+}
+
+fn tail_window_start(value: &str, max_width: usize) -> usize {
+    let mut start = value.len();
+    let mut width = 0_usize;
+    for (index, character) in value.char_indices().rev() {
+        let mut encoded = [0_u8; 4];
+        let character_width = sanitize_text(character.encode_utf8(&mut encoded))
+            .width()
+            .max(1);
+        if width.saturating_add(character_width) > max_width {
+            break;
+        }
+        width += character_width;
+        start = index;
+    }
+    start
 }
 
 fn focus_style(focused: bool) -> Style {

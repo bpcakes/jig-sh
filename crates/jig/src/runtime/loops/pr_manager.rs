@@ -2,15 +2,21 @@ use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
-use crate::context::RepoContext;
+use crate::context::{CommandTimeout, RepoContext};
+use crate::execution::{
+    ExecutionCommandError, ExecutionControl, NoopExecutionObserver,
+    run_authoritative_execution_command,
+};
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
+    CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
+    run_codex_exec,
 };
 use crate::state::now_ms;
 
@@ -23,13 +29,14 @@ pub(super) fn pr_manager_tick(
     workflow: &ResolvedWorkflow,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let codex_home = workflow
         .codex_home_configured
         .as_deref()
         .map(|home| crate::codex::resolve_configured_home_from_dir(home, ctx.root()))
         .transpose()?;
-    let observed = github::github_pr_status_snapshot(ctx)?;
+    let observed = github::github_pr_status_snapshot(ctx, observer)?;
     let pull_requests = observed
         .get("pull_requests")
         .and_then(Value::as_array)
@@ -41,6 +48,9 @@ pub(super) fn pr_manager_tick(
 
     let mut actions = Vec::new();
     for pull_request in pull_requests {
+        if observer.cancelled() {
+            bail!("PR manager tick was cancelled");
+        }
         let candidate = classify_pull_request(pull_request, default_branch);
         match candidate {
             PrCandidate::Skip(action) => actions.push(action),
@@ -60,7 +70,10 @@ pub(super) fn pr_manager_tick(
                     attempt_store,
                     &item,
                     pull_request,
-                    codex_home.as_deref(),
+                    PrManagerExecution {
+                        codex_home: codex_home.as_deref(),
+                        observer: &mut *observer,
+                    },
                 )?;
                 let consumed_tick = pr_manager_action_consumed_tick(&action);
                 actions.push(action);
@@ -79,6 +92,11 @@ enum PrCandidate {
     Skip(Value),
     Idle(PrIdleItem),
     Pending(PrPendingItem),
+}
+
+struct PrManagerExecution<'a> {
+    codex_home: Option<&'a Path>,
+    observer: &'a mut dyn ExecutionControl,
 }
 
 struct PrWorkItem {
@@ -306,7 +324,7 @@ fn handle_actionable_pr(
     attempt_store: &mut AttemptStore,
     item: &PrWorkItem,
     pull_request: &Value,
-    codex_home: Option<&Path>,
+    execution: PrManagerExecution<'_>,
 ) -> Result<Value> {
     if let Some(action) = attempt_blocking_action(workflow, attempt_store, item)? {
         return Ok(action);
@@ -329,10 +347,36 @@ fn handle_actionable_pr(
         }
     };
 
-    let action_result = run_pr_repair(ctx, workflow, item, pull_request, &lease, codex_home);
+    let action_result = run_pr_repair(
+        ctx,
+        workflow,
+        item,
+        pull_request,
+        &lease,
+        execution.codex_home,
+        execution.observer,
+    );
     let _ = lease_store.release(&branch_lease_key, &lease.owner);
+    record_pr_repair_outcome(
+        workflow,
+        attempt_store,
+        item,
+        &lease,
+        execution.codex_home,
+        action_result,
+    )
+}
+
+fn record_pr_repair_outcome(
+    workflow: &ResolvedWorkflow,
+    attempt_store: &mut AttemptStore,
+    item: &PrWorkItem,
+    lease: &impl serde::Serialize,
+    codex_home: Option<&Path>,
+    action_result: Result<PrRepairOutcome>,
+) -> Result<Value> {
     match action_result {
-        Ok(action) => {
+        Ok(PrRepairOutcome::Completed(action)) => {
             let item_version = action
                 .pointer("/push/final_head")
                 .and_then(Value::as_str)
@@ -351,6 +395,7 @@ fn handle_actionable_pr(
             )?;
             Ok(with_attempt(action, attempt))
         }
+        Ok(PrRepairOutcome::Cancelled(detail)) => bail!(detail),
         Err(error) => {
             let attempt = attempt_store.record_attempt_for_version(
                 workflow,
@@ -373,6 +418,31 @@ fn handle_actionable_pr(
         }
     }
 }
+
+enum PrRepairOutcome {
+    Completed(Value),
+    Cancelled(String),
+}
+
+#[derive(Debug)]
+enum PrRepairStepError {
+    Cancelled(String),
+    Failed(anyhow::Error),
+}
+
+impl PrRepairStepError {
+    fn failed(error: impl Into<anyhow::Error>) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+impl From<anyhow::Error> for PrRepairStepError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+type PrRepairStepResult<T> = std::result::Result<T, PrRepairStepError>;
 
 fn attempt_blocking_action(
     workflow: &ResolvedWorkflow,
@@ -426,17 +496,42 @@ fn run_pr_repair(
     pull_request: &Value,
     lease: &impl serde::Serialize,
     codex_home: Option<&Path>,
-) -> Result<Value> {
-    let worktree = prepare_worktree(ctx, workflow, item)?;
-    let base_head = git_stdout(&worktree, ["rev-parse", "HEAD"])?;
+    observer: &mut dyn ExecutionControl,
+) -> Result<PrRepairOutcome> {
+    match run_pr_repair_steps(
+        ctx,
+        workflow,
+        item,
+        pull_request,
+        lease,
+        codex_home,
+        observer,
+    ) {
+        Ok(outcome) => Ok(outcome),
+        Err(PrRepairStepError::Cancelled(detail)) => Ok(PrRepairOutcome::Cancelled(detail)),
+        Err(PrRepairStepError::Failed(error)) => Err(error),
+    }
+}
+
+fn run_pr_repair_steps(
+    ctx: &RepoContext,
+    workflow: &ResolvedWorkflow,
+    item: &PrWorkItem,
+    pull_request: &Value,
+    lease: &impl serde::Serialize,
+    codex_home: Option<&Path>,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<PrRepairOutcome> {
+    let worktree = prepare_worktree(ctx, workflow, item, observer)?;
+    let base_head = git_stdout(ctx, &worktree, ["rev-parse", "HEAD"], observer)?;
     let merge = if item.reasons.iter().any(|reason| reason == "merge_conflict") {
-        Some(start_base_merge(&worktree, &item.base_ref)?)
+        Some(start_base_merge(ctx, &worktree, &item.base_ref, observer)?)
     } else {
         None
     };
     let prompt = pr_worker_prompt(ctx, item, pull_request, merge.as_ref());
     let output_schema = pr_worker_output_schema();
-    let worker = run_codex_exec(
+    let worker = match run_codex_exec(
         ctx,
         CodexExecRequest {
             root: &worktree,
@@ -448,6 +543,7 @@ fn run_pr_repair(
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: Some(&output_schema),
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin(&prompt),
             receipt: WorkerReceiptRequest {
                 purpose: "pr_manager",
@@ -457,24 +553,52 @@ fn run_pr_repair(
                 collect_git_metadata: false,
                 collect_worktree_fingerprint: false,
             },
+            phase: None,
         },
-    )?;
+        observer,
+    )? {
+        CodexExecOutcome::Completed(worker) => worker,
+        CodexExecOutcome::Cancelled {
+            before_start,
+            worker_receipt_id,
+        } => {
+            let timing = if before_start {
+                " before the worker started"
+            } else {
+                " while the worker was running"
+            };
+            return Ok(PrRepairOutcome::Cancelled(format!(
+                "PR manager repair was cancelled{timing}; worker receipt {worker_receipt_id}"
+            )));
+        }
+    };
     if !worker.output.status.success() {
-        bail!(
+        return Err(PrRepairStepError::failed(anyhow!(
             "PR manager worker exited with status {}",
             worker.output.status.code().unwrap_or(1)
-        );
+        )));
     }
 
     let worker_output = parse_pr_worker_output(&worker.output.stdout)?;
-    let push = commit_and_push(&worktree, &item.head_ref, &base_head)?;
-    let review_thread_posts = post_review_thread_updates(ctx, pull_request, &worker_output);
-    let status = if review_thread_posts.failed {
+    let push = commit_and_push(ctx, &worktree, &item.head_ref, &base_head, observer)?;
+    let repair_version = push["final_head"].as_str().unwrap_or(&item.head_sha);
+    let review_thread_posts =
+        post_review_thread_updates(ctx, pull_request, &worker_output, repair_version, observer);
+    let status = if review_thread_posts.cancelled {
+        "cancelled_after_commit"
+    } else if review_thread_posts.failed {
         "failed"
     } else {
         "attempted"
     };
-    Ok(json!({
+    let error = if review_thread_posts.cancelled {
+        Value::String(post_commit_cancellation_error(repair_version))
+    } else if review_thread_posts.failed {
+        Value::String("one or more review thread update intents failed".into())
+    } else {
+        Value::Null
+    };
+    Ok(PrRepairOutcome::Completed(json!({
         "kind": "pr_manager_worker",
         "status": status,
         "pr_number": item.pr_number,
@@ -491,12 +615,14 @@ fn run_pr_repair(
         "worker_receipt_id": worker.worker_receipt_id,
         "push": push,
         "review_thread_posts": review_thread_posts.posts,
-        "error": if review_thread_posts.failed {
-            Value::String("one or more review thread update intents failed".into())
-        } else {
-            Value::Null
-        },
-    }))
+        "error": error,
+    })))
+}
+
+fn post_commit_cancellation_error(repair_version: &str) -> String {
+    format!(
+        "PR manager repair was cancelled after pushing {repair_version}; follow-up review thread updates are incomplete"
+    )
 }
 
 fn pr_worker_output_schema() -> Value {
@@ -574,12 +700,15 @@ fn parse_pr_worker_output(stdout: &[u8]) -> Result<Value> {
 struct ReviewThreadPostResult {
     posts: Value,
     failed: bool,
+    cancelled: bool,
 }
 
 fn post_review_thread_updates(
     ctx: &RepoContext,
     pull_request: &Value,
     worker_output: &Value,
+    repair_version: &str,
+    observer: &mut dyn ExecutionControl,
 ) -> ReviewThreadPostResult {
     let empty = Vec::new();
     let replies = worker_output
@@ -589,7 +718,12 @@ fn post_review_thread_updates(
     let allowed_thread_ids = observed_review_thread_ids(pull_request);
     let mut posts = Vec::new();
     let mut failed = false;
+    let mut cancelled = false;
     for reply in replies {
+        if observer.cancelled() {
+            cancelled = true;
+            break;
+        }
         let thread_id = reply
             .get("thread_id")
             .and_then(Value::as_str)
@@ -629,9 +763,17 @@ fn post_review_thread_updates(
         let reply_response = if body.is_empty() {
             None
         } else {
-            match post_review_thread_reply(ctx, thread_id, body) {
+            match post_review_thread_reply(ctx, thread_id, body, repair_version, observer) {
                 Ok(response) => Some(response),
-                Err(error) => {
+                Err(
+                    ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
+                ) => {
+                    cancelled = true;
+                    thread_failed = true;
+                    reply_error = Value::String("review thread reply was cancelled".into());
+                    None
+                }
+                Err(ExecutionCommandError::Failed(error)) => {
                     failed = true;
                     thread_failed = true;
                     reply_error = Value::String(format!("{error:#}"));
@@ -642,14 +784,30 @@ fn post_review_thread_updates(
         let mut resolve_error = Value::Null;
         let mut resolve_skipped = false;
         let mut resolve_skip_reason = Value::Null;
-        let resolve_response = if resolve && thread_failed && !body.is_empty() {
+        let resolve_response = if cancelled {
+            resolve_skipped = resolve;
+            resolve_skip_reason = if resolve {
+                Value::String("cancelled".into())
+            } else {
+                Value::Null
+            };
+            None
+        } else if resolve && thread_failed && !body.is_empty() {
             resolve_skipped = true;
             resolve_skip_reason = Value::String("reply_failed".into());
             None
         } else if resolve {
-            match resolve_review_thread(ctx, thread_id) {
+            match resolve_review_thread(ctx, thread_id, observer) {
                 Ok(response) => Some(response),
-                Err(error) => {
+                Err(
+                    ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled,
+                ) => {
+                    cancelled = true;
+                    thread_failed = true;
+                    resolve_error = Value::String("review thread resolution was cancelled".into());
+                    None
+                }
+                Err(ExecutionCommandError::Failed(error)) => {
                     failed = true;
                     thread_failed = true;
                     resolve_error = Value::String(format!("{error:#}"));
@@ -661,7 +819,7 @@ fn post_review_thread_updates(
         };
         posts.push(json!({
             "thread_id": thread_id,
-            "status": if thread_failed { "failed" } else { "posted" },
+            "status": if cancelled { "cancelled" } else if thread_failed { "failed" } else { "posted" },
             "replied": reply_response.is_some(),
             "reply_comment_id": reply_response
                 .as_ref()
@@ -673,6 +831,11 @@ fn post_review_thread_updates(
                 .and_then(|value| value.pointer("/data/addPullRequestReviewThreadReply/comment/url"))
                 .cloned()
                 .unwrap_or(Value::Null),
+            "reply_reconciled": reply_response
+                .as_ref()
+                .and_then(|value| value.pointer("/_jig/reconciled"))
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
             "reply_error": reply_error,
             "resolved": resolve_response.is_some(),
             "is_resolved": resolve_response
@@ -680,14 +843,23 @@ fn post_review_thread_updates(
                 .and_then(|value| value.pointer("/data/resolveReviewThread/thread/isResolved"))
                 .cloned()
                 .unwrap_or(Value::Null),
+            "resolve_reconciled": resolve_response
+                .as_ref()
+                .and_then(|value| value.pointer("/_jig/reconciled"))
+                .cloned()
+                .unwrap_or(Value::Bool(false)),
             "resolve_error": resolve_error,
             "resolve_skipped": resolve_skipped,
             "resolve_skip_reason": resolve_skip_reason,
         }));
+        if cancelled {
+            break;
+        }
     }
     ReviewThreadPostResult {
         posts: json!(posts),
         failed,
+        cancelled,
     }
 }
 
@@ -702,8 +874,20 @@ fn observed_review_thread_ids(pull_request: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-fn post_review_thread_reply(ctx: &RepoContext, thread_id: &str, body: &str) -> Result<Value> {
-    github::gh_json(
+fn post_review_thread_reply(
+    ctx: &RepoContext,
+    thread_id: &str,
+    body: &str,
+    repair_version: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let marker = review_thread_reply_marker(thread_id, repair_version);
+    let state = review_thread_state(ctx, thread_id, observer)?;
+    if let Some(comment) = review_thread_comment_with_marker(&state, &marker) {
+        return Ok(reconciled_reply_response(comment));
+    }
+    let body = format!("{body}\n\n{marker}");
+    let result = github::gh_json(
         ctx,
         vec![
             OsString::from("api"),
@@ -716,11 +900,26 @@ fn post_review_thread_reply(ctx: &RepoContext, thread_id: &str, body: &str) -> R
             OsString::from(format!("body={body}")),
         ],
         &[0],
+        observer,
     )
+    .and_then(validate_reply_mutation_response);
+    reconcile_reply_mutation(ctx, thread_id, &marker, result)
 }
 
-fn resolve_review_thread(ctx: &RepoContext, thread_id: &str) -> Result<Value> {
-    github::gh_json(
+fn resolve_review_thread(
+    ctx: &RepoContext,
+    thread_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let state = review_thread_state(ctx, thread_id, observer)?;
+    if state
+        .pointer("/data/node/isResolved")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(reconciled_resolve_response(thread_id));
+    }
+    let result = github::gh_json(
         ctx,
         vec![
             OsString::from("api"),
@@ -731,7 +930,188 @@ fn resolve_review_thread(ctx: &RepoContext, thread_id: &str) -> Result<Value> {
             OsString::from(format!("threadId={thread_id}")),
         ],
         &[0],
+        observer,
     )
+    .and_then(validate_resolve_mutation_response);
+    reconcile_resolve_mutation(ctx, thread_id, result)
+}
+
+fn review_thread_reply_marker(thread_id: &str, repair_version: &str) -> String {
+    format!("<!-- jig-pr-manager:review-reply:{thread_id}:{repair_version} -->")
+}
+
+fn review_thread_state(
+    ctx: &RepoContext,
+    thread_id: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let value = github::gh_json(ctx, review_thread_state_args(thread_id), &[0], observer)?;
+    validate_review_thread_state(value, thread_id)
+}
+
+fn review_thread_state_for_reconciliation(
+    ctx: &RepoContext,
+    thread_id: &str,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let mut observer = NoopExecutionObserver;
+    let timeout = CommandTimeout::from_seconds(30).expect("reconciliation timeout is valid");
+    let value = github::gh_json_with_timeout(
+        ctx,
+        review_thread_state_args(thread_id),
+        &[0],
+        timeout,
+        &mut observer,
+    )?;
+    validate_review_thread_state(value, thread_id)
+}
+
+fn review_thread_state_args(thread_id: &str) -> Vec<OsString> {
+    vec![
+        OsString::from("api"),
+        OsString::from("graphql"),
+        OsString::from("-f"),
+        OsString::from(format!("query={}", review_thread_state_query())),
+        OsString::from("-f"),
+        OsString::from(format!("threadId={thread_id}")),
+    ]
+}
+
+fn validate_review_thread_state(
+    value: Value,
+    thread_id: &str,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let observed_id = value.pointer("/data/node/id").and_then(Value::as_str);
+    let is_resolved = value
+        .pointer("/data/node/isResolved")
+        .and_then(Value::as_bool);
+    let comments = value
+        .pointer("/data/node/comments/nodes")
+        .and_then(Value::as_array);
+    if observed_id != Some(thread_id) || is_resolved.is_none() || comments.is_none() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread state query returned an invalid payload for {thread_id}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_reply_mutation_response(
+    value: Value,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let id = value
+        .pointer("/data/addPullRequestReviewThreadReply/comment/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty());
+    let url = value
+        .pointer("/data/addPullRequestReviewThreadReply/comment/url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty());
+    if id.is_none() || url.is_none() {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread reply mutation returned an invalid payload"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_resolve_mutation_response(
+    value: Value,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    if value
+        .pointer("/data/resolveReviewThread/thread/isResolved")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(ExecutionCommandError::failed(anyhow!(
+            "GitHub review thread resolve mutation did not report a resolved thread"
+        )));
+    }
+    Ok(value)
+}
+
+fn reconcile_reply_mutation(
+    ctx: &RepoContext,
+    thread_id: &str,
+    marker: &str,
+    result: std::result::Result<Value, ExecutionCommandError>,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let error = match result {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
+        && let Some(comment) = review_thread_comment_with_marker(&state, marker)
+    {
+        return Ok(reconciled_reply_response(comment));
+    }
+    Err(error)
+}
+
+fn reconcile_resolve_mutation(
+    ctx: &RepoContext,
+    thread_id: &str,
+    result: std::result::Result<Value, ExecutionCommandError>,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let error = match result {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+    if let Ok(state) = review_thread_state_for_reconciliation(ctx, thread_id)
+        && state
+            .pointer("/data/node/isResolved")
+            .and_then(Value::as_bool)
+            == Some(true)
+    {
+        return Ok(reconciled_resolve_response(thread_id));
+    }
+    Err(error)
+}
+
+fn review_thread_comment_with_marker<'a>(state: &'a Value, marker: &str) -> Option<&'a Value> {
+    state
+        .pointer("/data/node/comments/nodes")?
+        .as_array()?
+        .iter()
+        .find(|comment| {
+            let has_marker = comment
+                .get("body")
+                .and_then(Value::as_str)
+                .is_some_and(|body| body.contains(marker));
+            let has_id = comment
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
+            let has_url = comment
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| !url.is_empty());
+            has_marker && has_id && has_url
+        })
+}
+
+fn reconciled_reply_response(comment: &Value) -> Value {
+    json!({
+        "data": {
+            "addPullRequestReviewThreadReply": {
+                "comment": {
+                    "id": comment.get("id").cloned().unwrap_or(Value::Null),
+                    "url": comment.get("url").cloned().unwrap_or(Value::Null),
+                }
+            }
+        },
+        "_jig": {"reconciled": true},
+    })
+}
+
+fn reconciled_resolve_response(thread_id: &str) -> Value {
+    json!({
+        "data": {
+            "resolveReviewThread": {
+                "thread": {"id": thread_id, "isResolved": true}
+            }
+        },
+        "_jig": {"reconciled": true},
+    })
 }
 
 const fn add_review_thread_reply_mutation() -> &'static str {
@@ -760,11 +1140,32 @@ mutation($threadId: ID!) {
 "
 }
 
+const fn review_thread_state_query() -> &'static str {
+    r"
+query ReviewThreadState($threadId: ID!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      id
+      isResolved
+      comments(last: 100) {
+        nodes {
+          id
+          url
+          body
+        }
+      }
+    }
+  }
+}
+"
+}
+
 fn prepare_worktree(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     item: &PrWorkItem,
-) -> Result<PathBuf> {
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<PathBuf> {
     let worktree = ctx
         .root()
         .join(super::LOOP_CACHE_DIR)
@@ -780,13 +1181,29 @@ fn prepare_worktree(
         .ok_or_else(|| anyhow!("Worktree path has no parent: {}", worktree.display()))?;
     fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
 
-    git_checked(ctx.root(), ["fetch", "origin", &item.head_ref])?;
+    git_checked(
+        ctx,
+        ctx.root(),
+        ["fetch", "origin", &item.head_ref],
+        observer,
+    )?;
     if worktree.join(".git").exists() {
-        clean_reused_worktree(&worktree)?;
-        git_checked(&worktree, ["fetch", "origin", &item.head_ref])?;
-        git_checked(&worktree, ["checkout", "--detach", "FETCH_HEAD"])?;
+        clean_reused_worktree(ctx, &worktree, observer)?;
+        git_checked(
+            ctx,
+            &worktree,
+            ["fetch", "origin", &item.head_ref],
+            observer,
+        )?;
+        git_checked(
+            ctx,
+            &worktree,
+            ["checkout", "--detach", "FETCH_HEAD"],
+            observer,
+        )?;
     } else {
         git_checked(
+            ctx,
             ctx.root(),
             vec![
                 OsString::from("worktree"),
@@ -795,34 +1212,62 @@ fn prepare_worktree(
                 worktree.as_os_str().to_os_string(),
                 OsString::from("FETCH_HEAD"),
             ],
+            observer,
         )?;
     }
 
-    git_checked(&worktree, ["config", "user.name", "Jig PR Manager"])?;
     git_checked(
+        ctx,
+        &worktree,
+        ["config", "user.name", "Jig PR Manager"],
+        observer,
+    )?;
+    git_checked(
+        ctx,
         &worktree,
         [
             "config",
             "user.email",
             "jig-pr-manager@users.noreply.github.com",
         ],
+        observer,
     )?;
     Ok(worktree)
 }
 
-fn clean_reused_worktree(worktree: &Path) -> Result<()> {
-    let _ = git_output(worktree, ["merge", "--abort"]);
-    git_checked(worktree, ["reset", "--hard"])?;
-    git_checked(worktree, ["clean", "-fd"])?;
+fn clean_reused_worktree(
+    ctx: &RepoContext,
+    worktree: &Path,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<()> {
+    match git_output(ctx, worktree, ["merge", "--abort"], observer) {
+        Ok(_) | Err(PrRepairStepError::Failed(_)) => {}
+        Err(cancelled @ PrRepairStepError::Cancelled(_)) => return Err(cancelled),
+    }
+    git_checked(ctx, worktree, ["reset", "--hard"], observer)?;
+    git_checked(ctx, worktree, ["clean", "-fd"], observer)?;
     Ok(())
 }
 
-fn start_base_merge(worktree: &Path, base_ref: &str) -> Result<Value> {
-    let fetch = git_output(worktree, ["fetch", "origin", base_ref])?;
+fn start_base_merge(
+    ctx: &RepoContext,
+    worktree: &Path,
+    base_ref: &str,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<Value> {
+    let fetch = git_output(ctx, worktree, ["fetch", "origin", base_ref], observer)?;
     if !fetch.status.success() {
-        return Err(git_error("git fetch base branch failed", fetch));
+        return Err(PrRepairStepError::failed(git_error(
+            "git fetch base branch failed",
+            fetch,
+        )));
     }
-    let merge = git_output(worktree, ["merge", "--no-edit", "FETCH_HEAD"])?;
+    let merge = git_output(
+        ctx,
+        worktree,
+        ["merge", "--no-edit", "FETCH_HEAD"],
+        observer,
+    )?;
     Ok(json!({
         "exit_status": merge.status.code().unwrap_or(1),
         "stdout": String::from_utf8_lossy(&merge.stdout),
@@ -831,20 +1276,28 @@ fn start_base_merge(worktree: &Path, base_ref: &str) -> Result<Value> {
     }))
 }
 
-fn commit_and_push(worktree: &Path, head_ref: &str, base_head: &str) -> Result<Value> {
-    let dirty_before_commit = git_stdout(worktree, ["status", "--porcelain"])?;
+fn commit_and_push(
+    ctx: &RepoContext,
+    worktree: &Path,
+    head_ref: &str,
+    base_head: &str,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<Value> {
+    let dirty_before_commit = git_stdout(ctx, worktree, ["status", "--porcelain"], observer)?;
     if !dirty_before_commit.trim().is_empty() {
-        git_checked(worktree, ["add", "-A"])?;
+        git_checked(ctx, worktree, ["add", "-A"], observer)?;
         git_checked(
+            ctx,
             worktree,
             [
                 "commit",
                 "-m",
                 &format!("chore: update PR via Jig PR manager ({head_ref})"),
             ],
+            observer,
         )?;
     }
-    let final_head = git_stdout(worktree, ["rev-parse", "HEAD"])?;
+    let final_head = git_stdout(ctx, worktree, ["rev-parse", "HEAD"], observer)?;
     let changed = final_head.trim() != base_head.trim();
     if !changed {
         return Ok(json!({
@@ -856,18 +1309,112 @@ fn commit_and_push(worktree: &Path, head_ref: &str, base_head: &str) -> Result<V
     }
 
     let push_ref = format!("HEAD:refs/heads/{head_ref}");
-    let push = git_output(worktree, ["push", "origin", &push_ref])?;
-    if !push.status.success() {
-        return Err(git_error("git push failed without force", push));
+    let push_args = ["push", "origin", &push_ref];
+    let push_result = git_execution_output(worktree, push_args, ctx.command_timeout(), observer);
+    let push_error = match push_result {
+        Ok(push) if push.status.success() => None,
+        Ok(push) => Some(PrRepairStepError::failed(git_error(
+            "git push failed without force",
+            push,
+        ))),
+        Err(error) => Some(pr_git_execution_error("git push", error)),
+    };
+    if let Some(push_error) = push_error {
+        let reconciliation = reconcile_remote_push(ctx, worktree, head_ref, final_head.trim());
+        if reconciliation.confirmed {
+            return Ok(push_result_value(
+                base_head,
+                &final_head,
+                Some(reconciliation.detail),
+            ));
+        }
+        return Err(match push_error {
+            PrRepairStepError::Cancelled(detail) => PrRepairStepError::Cancelled(format!(
+                "{detail}; push outcome was not confirmed: {}",
+                reconciliation.detail
+            )),
+            PrRepairStepError::Failed(error) => PrRepairStepError::Failed(error.context(format!(
+                "push outcome was not confirmed: {}",
+                reconciliation.detail
+            ))),
+        });
     }
 
-    Ok(json!({
+    Ok(push_result_value(base_head, &final_head, None))
+}
+
+fn push_result_value(base_head: &str, final_head: &str, reconciliation: Option<String>) -> Value {
+    let mut value = json!({
         "status": "pushed",
         "pushed": true,
         "base_head": base_head.trim(),
         "final_head": final_head.trim(),
         "force": false,
-    }))
+    });
+    if let Some(reconciliation) = reconciliation {
+        value["reconciliation"] = Value::String(reconciliation);
+    }
+    value
+}
+
+struct PushReconciliation {
+    confirmed: bool,
+    detail: String,
+}
+
+fn reconcile_remote_push(
+    ctx: &RepoContext,
+    worktree: &Path,
+    head_ref: &str,
+    final_head: &str,
+) -> PushReconciliation {
+    let remote_ref = format!("refs/heads/{head_ref}");
+    let mut observer = NoopExecutionObserver;
+    let timeout_seconds = ctx.command_timeout().as_secs().min(30);
+    let timeout = CommandTimeout::from_seconds(timeout_seconds)
+        .expect("the reconciliation timeout is nonzero and within the command timeout range");
+    let output = git_execution_output(
+        worktree,
+        ["ls-remote", "--exit-code", "origin", &remote_ref],
+        timeout,
+        &mut observer,
+    );
+    match output {
+        Ok(output) if output.status.success() => {
+            let observed = remote_head_from_ls_remote(&output.stdout, &remote_ref);
+            PushReconciliation {
+                confirmed: observed == Some(final_head),
+                detail: match observed {
+                    Some(observed) if observed == final_head => {
+                        format!("remote {remote_ref} confirmed at {observed}")
+                    }
+                    Some(observed) => {
+                        format!("remote {remote_ref} resolved to {observed}; expected {final_head}")
+                    }
+                    None => format!("remote {remote_ref} returned no matching head"),
+                },
+            }
+        }
+        Ok(output) => PushReconciliation {
+            confirmed: false,
+            detail: format!(
+                "remote {remote_ref} reconciliation exited with status {}",
+                output.status.code().unwrap_or(1)
+            ),
+        },
+        Err(error) => PushReconciliation {
+            confirmed: false,
+            detail: format!("remote {remote_ref} reconciliation failed: {error}"),
+        },
+    }
+}
+
+fn remote_head_from_ls_remote<'a>(stdout: &'a [u8], remote_ref: &str) -> Option<&'a str> {
+    std::str::from_utf8(stdout)
+        .ok()?
+        .lines()
+        .filter_map(|line| line.split_once(char::is_whitespace))
+        .find_map(|(head, reference)| (reference.trim() == remote_ref).then_some(head.trim()))
 }
 
 fn pr_worker_prompt(
@@ -908,6 +1455,441 @@ fn with_attempt(mut action: Value, attempt: AttemptRecord) -> Value {
     action
 }
 
+#[cfg(test)]
+mod cancellation_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    struct CancelledControl;
+
+    impl crate::execution::ExecutionObserver for CancelledControl {}
+
+    impl crate::execution::ExecutionCancellation for CancelledControl {
+        fn cancelled(&self) -> bool {
+            true
+        }
+    }
+
+    struct CancelAfterStart(AtomicUsize);
+
+    impl crate::execution::ExecutionObserver for CancelAfterStart {}
+
+    impl crate::execution::ExecutionCancellation for CancelAfterStart {
+        fn cancelled(&self) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst) > 0
+        }
+    }
+
+    struct CancelWhenPresent(PathBuf);
+
+    impl crate::execution::ExecutionObserver for CancelWhenPresent {}
+
+    impl crate::execution::ExecutionCancellation for CancelWhenPresent {
+        fn cancelled(&self) -> bool {
+            self.0.exists()
+        }
+    }
+
+    #[test]
+    fn cancelled_repair_does_not_consume_attempt_budget() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 1,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Example repair".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: "abc123".into(),
+            reasons: vec!["failing_checks".into()],
+        };
+        let mut attempt_store = AttemptStore::new(&ctx);
+
+        let mut observer = CancelledControl;
+        let action_result = run_pr_repair(
+            &ctx,
+            &workflow,
+            &item,
+            &json!({}),
+            &json!({"owner": "test"}),
+            None,
+            &mut observer,
+        )
+        .unwrap();
+        let PrRepairOutcome::Cancelled(detail) = &action_result else {
+            panic!("pre-start Git cancellation must cancel the repair");
+        };
+        assert!(detail.contains("git fetch was cancelled before it started"));
+
+        let error = record_pr_repair_outcome(
+            &workflow,
+            &mut attempt_store,
+            &item,
+            &json!({"owner": "test"}),
+            None,
+            Ok(action_result),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("git fetch was cancelled"));
+        assert!(attempt_store.snapshot().unwrap().is_empty());
+    }
+
+    #[test]
+    fn post_commit_cancellation_records_the_pushed_head() {
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let workflow = ResolvedWorkflow {
+            id: "pr-manager".into(),
+            kind: super::super::PR_MANAGER_KIND.into(),
+            enabled: true,
+            configured: true,
+            lease_ttl_seconds: 60,
+            max_attempts: 2,
+            backoff_seconds: 1,
+            codex_home_configured: None,
+        };
+        let item = PrWorkItem {
+            pr_number: 7,
+            item_key: "pr-7".into(),
+            title: "Example repair".into(),
+            base_ref: "main".into(),
+            head_ref: "repair/example".into(),
+            head_sha: "observed-head".into(),
+            reasons: vec!["failing_checks".into()],
+        };
+        let mut attempt_store = AttemptStore::new(&ctx);
+
+        let action = record_pr_repair_outcome(
+            &workflow,
+            &mut attempt_store,
+            &item,
+            &json!({"owner": "test"}),
+            None,
+            Ok(PrRepairOutcome::Completed(json!({
+                "kind": "pr_manager_worker",
+                "status": "cancelled_after_commit",
+                "push": {"final_head": "pushed-head"},
+            }))),
+        )
+        .unwrap();
+
+        assert_eq!(action["status"], "cancelled_after_commit");
+        assert_eq!(action["attempt"]["item_version"], "pushed-head");
+        assert_eq!(action["attempt"]["last_status"], "attempted");
+        let attempts = attempt_store.snapshot().unwrap();
+        assert_eq!(attempts[0].item_version.as_deref(), Some("pushed-head"));
+    }
+
+    #[test]
+    fn post_commit_cancellation_message_formats_the_head_as_text() {
+        assert_eq!(
+            post_commit_cancellation_error("pushed-head"),
+            "PR manager repair was cancelled after pushing pushed-head; follow-up review thread updates are incomplete"
+        );
+    }
+
+    #[test]
+    fn review_mutations_require_the_expected_success_payload() {
+        let reply_error = validate_reply_mutation_response(json!({"data": {}})).unwrap_err();
+        assert!(reply_error.to_string().contains("invalid payload"));
+
+        let resolve_error = validate_resolve_mutation_response(json!({
+            "data": {"resolveReviewThread": {"thread": {"isResolved": false}}}
+        }))
+        .unwrap_err();
+        assert!(resolve_error.to_string().contains("did not report"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_review_reply_reconciles_the_remote_comment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("gh-reply-reconciliation");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  *ReviewThreadState*)
+    if [ -f remote-reply ]; then
+      cat <<'JSON'
+{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[{"id":"PRRC_REMOTE","url":"https://example.invalid/reply","body":"<!-- jig-pr-manager:review-reply:PRRT_1:pushed-head -->"}]}}}}
+JSON
+    else
+      cat <<'JSON'
+{"data":{"node":{"id":"PRRT_1","isResolved":false,"comments":{"nodes":[]}}}}
+JSON
+    fi
+    ;;
+  *addPullRequestReviewThreadReply*)
+    printf 'mutation\n' >> mutation.log
+    : > remote-reply
+    : > mutation-started
+    sleep 60
+    ;;
+  *)
+    echo "unexpected gh arguments: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+
+        let response = post_review_thread_reply(
+            &ctx,
+            "PRRT_1",
+            "Addressed in the pushed repair.",
+            "pushed-head",
+            &mut observer,
+        )
+        .unwrap();
+
+        assert_eq!(response["_jig"]["reconciled"], true);
+        assert_eq!(
+            response["data"]["addPullRequestReviewThreadReply"]["comment"]["id"],
+            "PRRC_REMOTE"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("mutation.log")).unwrap(),
+            "mutation\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_review_resolution_reconciles_the_remote_thread() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let gh = temp.path().join("gh-resolve-reconciliation");
+        fs::write(
+            &gh,
+            r#"#!/bin/sh
+set -eu
+case "$*" in
+  *ReviewThreadState*)
+    if [ -f remote-resolved ]; then resolved=true; else resolved=false; fi
+    printf '{"data":{"node":{"id":"PRRT_1","isResolved":%s,"comments":{"nodes":[]}}}}\n' "$resolved"
+    ;;
+  *resolveReviewThread*)
+    printf 'mutation\n' >> mutation.log
+    : > remote-resolved
+    : > mutation-started
+    sleep 60
+    ;;
+  *)
+    echo "unexpected gh arguments: $*" >&2
+    exit 2
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let _gh = EnvVarGuard::set("JIG_GH_BIN", gh.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = CancelWhenPresent(temp.path().join("mutation-started"));
+
+        let response = resolve_review_thread(&ctx, "PRRT_1", &mut observer).unwrap();
+
+        assert_eq!(response["_jig"]["reconciled"], true);
+        assert_eq!(
+            response["data"]["resolveReviewThread"]["thread"]["isResolved"],
+            true
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("mutation.log")).unwrap(),
+            "mutation\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn in_flight_git_cancellation_remains_typed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let git = temp.path().join("slow-git");
+        fs::write(&git, "#!/bin/sh\nsleep 60\n").unwrap();
+        fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+        let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, git.as_os_str());
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let mut observer = CancelAfterStart(AtomicUsize::new(0));
+
+        let error = git_output(&ctx, temp.path(), ["fetch"], &mut observer).unwrap_err();
+
+        let PrRepairStepError::Cancelled(detail) = error else {
+            panic!("in-flight Git cancellation must remain typed");
+        };
+        assert!(detail.contains("git fetch was cancelled while it was running"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_push_is_reconciled_when_the_remote_received_the_commit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::test_env::{EnvVarGuard, lock_env};
+
+        fn checked_git(cwd: &Path, args: &[&str]) -> String {
+            let output = Command::new("git")
+                .current_dir(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        struct MarkerCancellation(PathBuf);
+
+        impl crate::execution::ExecutionObserver for MarkerCancellation {}
+
+        impl crate::execution::ExecutionCancellation for MarkerCancellation {
+            fn cancelled(&self) -> bool {
+                self.0.exists()
+            }
+        }
+
+        let _env_lock = lock_env();
+        let temp = tempdir().unwrap();
+        let remote = temp.path().join("remote.git");
+        let worktree = temp.path().join("worktree");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&worktree).unwrap();
+        checked_git(&remote, &["init", "--bare"]);
+        checked_git(&worktree, &["init"]);
+        checked_git(&worktree, &["config", "user.name", "Example User"]);
+        checked_git(
+            &worktree,
+            &["config", "user.email", "example@example.invalid"],
+        );
+        fs::write(worktree.join("example.txt"), "before\n").unwrap();
+        checked_git(&worktree, &["add", "example.txt"]);
+        checked_git(&worktree, &["commit", "-m", "initial"]);
+        checked_git(&worktree, &["branch", "-M", "repair/example"]);
+        checked_git(
+            &worktree,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        checked_git(&worktree, &["push", "-u", "origin", "repair/example"]);
+        let base_head = checked_git(&worktree, &["rev-parse", "HEAD"]);
+        fs::write(worktree.join("example.txt"), "after\n").unwrap();
+
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let marker = temp.path().join("push-completed");
+        let wrapper = temp.path().join("git-wrapper");
+        fs::write(
+            &wrapper,
+            "#!/bin/sh\n\
+             if [ \"$2\" = push ]; then\n\
+               git \"$@\"\n\
+               status=$?\n\
+               if [ \"$status\" -eq 0 ]; then\n\
+                 : > \"$JIG_TEST_CANCEL_MARKER\"\n\
+                 sleep 60\n\
+               fi\n\
+               exit \"$status\"\n\
+             fi\n\
+             exec git \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let _git_bin = EnvVarGuard::set(GIT_BIN_ENV, wrapper.as_os_str());
+        let _marker = EnvVarGuard::set("JIG_TEST_CANCEL_MARKER", marker.as_os_str());
+        let mut observer = MarkerCancellation(marker);
+
+        let push =
+            commit_and_push(&ctx, &worktree, "repair/example", &base_head, &mut observer).unwrap();
+
+        let final_head = checked_git(&worktree, &["rev-parse", "HEAD"]);
+        let remote_head = checked_git(
+            temp.path(),
+            &[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "rev-parse",
+                "refs/heads/repair/example",
+            ],
+        );
+        assert_eq!(remote_head, final_head);
+        assert_eq!(push["pushed"], true);
+        assert!(
+            push["reconciliation"]
+                .as_str()
+                .unwrap()
+                .contains("confirmed at")
+        );
+    }
+
+    #[test]
+    fn remote_head_parser_requires_the_exact_requested_ref() {
+        let stdout = b"abc123\trefs/heads/example\ndef456\trefs/heads/example-old\n";
+
+        assert_eq!(
+            remote_head_from_ls_remote(stdout, "refs/heads/example"),
+            Some("abc123")
+        );
+        assert_eq!(
+            remote_head_from_ls_remote(stdout, "refs/heads/missing"),
+            None
+        );
+    }
+}
+
 fn sanitize_path_component(value: &str) -> String {
     value
         .chars()
@@ -921,38 +1903,117 @@ fn sanitize_path_component(value: &str) -> String {
         .collect()
 }
 
-fn git_checked<I, S>(cwd: &Path, args: I) -> Result<()>
+fn git_checked<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = git_output(cwd, args)?;
+    let output = git_output(ctx, cwd, args, observer)?;
     if !output.status.success() {
-        return Err(git_error("git command failed", output));
+        return Err(PrRepairStepError::failed(git_error(
+            "git command failed",
+            output,
+        )));
     }
     Ok(())
 }
 
-fn git_stdout<I, S>(cwd: &Path, args: I) -> Result<String>
+fn git_stdout<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = git_output(cwd, args)?;
+    let output = git_output(ctx, cwd, args, observer)?;
     if !output.status.success() {
-        return Err(git_error("git command failed", output));
+        return Err(PrRepairStepError::failed(git_error(
+            "git command failed",
+            output,
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn git_output<I, S>(cwd: &Path, args: I) -> Result<std::process::Output>
+fn git_output<I, S>(
+    ctx: &RepoContext,
+    cwd: &Path,
+    args: I,
+    observer: &mut dyn ExecutionControl,
+) -> PrRepairStepResult<Output>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    git_command(cwd, args)
-        .output()
-        .with_context(|| format!("Failed to start git in {}", cwd.display()))
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect::<Vec<_>>();
+    let label = pr_git_label(&args);
+    git_execution_output(cwd, args, ctx.command_timeout(), observer)
+        .map_err(|error| pr_git_execution_error(&label, error))
+}
+
+fn git_execution_output<I, S>(
+    cwd: &Path,
+    args: I,
+    timeout: CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Output, ExecutionCommandError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect::<Vec<_>>();
+    let label = pr_git_label(&args);
+    let mut command = git_command(cwd, &args);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        timeout,
+        crate::execution::internal_execution_output_limit(),
+        &label,
+        observer,
+    )?;
+    Ok(Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
+
+fn pr_git_label(args: &[OsString]) -> String {
+    let operation = args
+        .first()
+        .map(|arg| arg.to_string_lossy())
+        .unwrap_or_else(|| "command".into());
+    format!("PR manager git {operation}")
+}
+
+fn pr_git_execution_error(label: &str, error: ExecutionCommandError) -> PrRepairStepError {
+    match error {
+        ExecutionCommandError::CancelledBeforeStart => {
+            PrRepairStepError::Cancelled(format!("{label} was cancelled before it started"))
+        }
+        ExecutionCommandError::Cancelled => {
+            PrRepairStepError::Cancelled(format!("{label} was cancelled while it was running"))
+        }
+        ExecutionCommandError::Failed(error) => PrRepairStepError::Failed(error),
+    }
 }
 
 fn git_command<I, S>(cwd: &Path, args: I) -> Command

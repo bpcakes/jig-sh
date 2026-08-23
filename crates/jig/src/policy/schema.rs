@@ -15,11 +15,6 @@ use crate::source_projection::{
 
 use super::{NativeToolOutput, controlled_git_text, controlled_output};
 
-#[cfg(test)]
-pub(super) fn check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    check_with_control(ctx, Duration::from_secs(30 * 60), &|| false)
-}
-
 pub(super) fn check_with_control(
     ctx: &RepoContext,
     timeout: Duration,
@@ -265,23 +260,6 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     let target = fs::read_link(source)
         .with_context(|| format!("Failed to read untracked symlink {}", source.display()))?;
     std::os::unix::fs::symlink(&target, destination).with_context(|| {
-        format!(
-            "Failed to copy untracked symlink {} into the schema-check sandbox",
-            source.display()
-        )
-    })
-}
-
-#[cfg(windows)]
-fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
-    let target = fs::read_link(source)
-        .with_context(|| format!("Failed to read untracked symlink {}", source.display()))?;
-    let result = if source.metadata().is_ok_and(|metadata| metadata.is_dir()) {
-        std::os::windows::fs::symlink_dir(&target, destination)
-    } else {
-        std::os::windows::fs::symlink_file(&target, destination)
-    };
-    result.with_context(|| {
         format!(
             "Failed to copy untracked symlink {} into the schema-check sandbox",
             source.display()

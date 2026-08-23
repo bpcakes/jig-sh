@@ -1,10 +1,13 @@
 use std::ffi::{OsStr, OsString};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
+use crate::execution::{
+    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
+};
 use crate::state::now_ms;
 
 use super::WorkflowTick;
@@ -20,16 +23,22 @@ const PR_LIST_LIMIT: usize = 100;
 const PR_LIST_FETCH_LIMIT: usize = PR_LIST_LIMIT + 1;
 const REVIEW_THREAD_PAGE_LIMIT: usize = 10;
 
-pub(super) fn github_pr_status_tick(ctx: &RepoContext) -> Result<WorkflowTick> {
+pub(super) fn github_pr_status_tick(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> Result<WorkflowTick> {
     Ok(WorkflowTick {
-        observed: github_pr_status_snapshot(ctx)?,
+        observed: github_pr_status_snapshot(ctx, observer)?,
         actions: Vec::new(),
     })
 }
 
-pub(super) fn github_pr_status_snapshot(ctx: &RepoContext) -> Result<Value> {
+pub(super) fn github_pr_status_snapshot(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let observed_at_ms = now_ms();
-    let repository = repository_snapshot(ctx)?;
+    let repository = repository_snapshot(ctx, observer)?;
     let pr_list_fetch_limit = PR_LIST_FETCH_LIMIT.to_string();
     let raw_prs = gh_json(
         ctx,
@@ -44,6 +53,7 @@ pub(super) fn github_pr_status_snapshot(ctx: &RepoContext) -> Result<Value> {
             PR_LIST_FIELDS,
         ]),
         &[0],
+        observer,
     )?;
     let raw_prs = raw_prs
         .as_array()
@@ -52,7 +62,10 @@ pub(super) fn github_pr_status_snapshot(ctx: &RepoContext) -> Result<Value> {
 
     let mut pull_requests = Vec::new();
     for raw_pr in raw_prs.iter().take(PR_LIST_LIMIT) {
-        pull_requests.push(pull_request_snapshot(ctx, &repository, raw_pr)?);
+        if observer.cancelled() {
+            return Err(ExecutionCommandError::Cancelled.into_anyhow());
+        }
+        pull_requests.push(pull_request_snapshot(ctx, &repository, raw_pr, observer)?);
     }
 
     let summary = summary_for_pull_requests(&pull_requests, PR_LIST_LIMIT, pr_list_truncated);
@@ -73,7 +86,10 @@ struct RepositorySnapshot {
     value: Value,
 }
 
-fn repository_snapshot(ctx: &RepoContext) -> Result<RepositorySnapshot> {
+fn repository_snapshot(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> Result<RepositorySnapshot> {
     let raw = gh_json(
         ctx,
         os_args([
@@ -83,6 +99,7 @@ fn repository_snapshot(ctx: &RepoContext) -> Result<RepositorySnapshot> {
             "nameWithOwner,name,owner,url,defaultBranchRef",
         ]),
         &[0],
+        observer,
     )?;
     let owner = raw
         .pointer("/owner/login")
@@ -123,13 +140,14 @@ fn pull_request_snapshot(
     ctx: &RepoContext,
     repository: &RepositorySnapshot,
     raw_pr: &Value,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let number = raw_pr
         .get("number")
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("gh pr list returned a PR without a numeric number"))?;
-    let checks = checks_snapshot(ctx, number)?;
-    let review_threads = review_threads_snapshot(ctx, repository, number)?;
+    let checks = checks_snapshot(ctx, number, observer)?;
+    let review_threads = review_threads_snapshot(ctx, repository, number, observer)?;
     let base_ref = raw_pr
         .get("baseRefName")
         .and_then(Value::as_str)
@@ -177,7 +195,11 @@ fn pull_request_snapshot(
     }))
 }
 
-fn checks_snapshot(ctx: &RepoContext, pr_number: u64) -> Result<Value> {
+fn checks_snapshot(
+    ctx: &RepoContext,
+    pr_number: u64,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let output = run_gh(
         ctx,
         os_args([
@@ -187,6 +209,7 @@ fn checks_snapshot(ctx: &RepoContext, pr_number: u64) -> Result<Value> {
             "--json",
             PR_CHECK_FIELDS,
         ]),
+        observer,
     )?;
     let checks = match output.status_code {
         Some(0 | 8) => parse_gh_json(&output.stdout, "gh pr checks")?,
@@ -255,6 +278,7 @@ fn review_threads_snapshot(
     ctx: &RepoContext,
     repository: &RepositorySnapshot,
     pr_number: u64,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let mut nodes = Vec::new();
     let mut has_next_page = true;
@@ -263,12 +287,15 @@ fn review_threads_snapshot(
     let mut truncated = false;
 
     while has_next_page {
+        if observer.cancelled() {
+            return Err(ExecutionCommandError::Cancelled.into_anyhow());
+        }
         if page_count >= REVIEW_THREAD_PAGE_LIMIT {
             truncated = true;
             break;
         }
         page_count += 1;
-        let page = review_thread_page(ctx, repository, pr_number, cursor.as_deref())?;
+        let page = review_thread_page(ctx, repository, pr_number, cursor.as_deref(), observer)?;
         let connection = page
             .pointer("/data/repository/pullRequest/reviewThreads")
             .ok_or_else(|| anyhow!("GitHub GraphQL response did not include reviewThreads"))?;
@@ -304,6 +331,7 @@ fn review_thread_page(
     repository: &RepositorySnapshot,
     pr_number: u64,
     cursor: Option<&str>,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let mut args = vec![
         OsString::from("api"),
@@ -321,7 +349,7 @@ fn review_thread_page(
         args.push(OsString::from("-F"));
         args.push(OsString::from(format!("threadsAfter={cursor}")));
     }
-    gh_json(ctx, args, &[0])
+    Ok(gh_json(ctx, args, &[0], observer)?)
 }
 
 const fn review_threads_query() -> &'static str {
@@ -532,29 +560,80 @@ pub(super) fn gh_json(
     ctx: &RepoContext,
     args: Vec<OsString>,
     allowed_statuses: &[i32],
-) -> Result<Value> {
-    let command_label = command_label(&args);
-    let output = run_gh(ctx, args)?;
-    let status = output.status_code.unwrap_or(-1);
-    if !allowed_statuses.contains(&status) {
-        return Err(output.into_error(&command_label));
-    }
-    parse_gh_json(&output.stdout, &command_label)
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    gh_json_with_timeout(ctx, args, allowed_statuses, ctx.command_timeout(), observer)
 }
 
-fn run_gh(ctx: &RepoContext, args: Vec<OsString>) -> Result<GhOutput> {
+pub(super) fn gh_json_with_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    allowed_statuses: &[i32],
+    timeout: crate::context::CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<Value, ExecutionCommandError> {
+    let command_label = command_label(&args);
+    let output = run_gh_with_timeout(ctx, args, timeout, observer)?;
+    let status = output.status_code.unwrap_or(-1);
+    if !allowed_statuses.contains(&status) {
+        return Err(ExecutionCommandError::failed(
+            output.into_error(&command_label),
+        ));
+    }
+    parse_gh_json(&output.stdout, &command_label).map_err(ExecutionCommandError::failed)
+}
+
+fn run_gh(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
+    run_gh_with_timeout(ctx, args, ctx.command_timeout(), observer)
+}
+
+fn run_gh_with_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    timeout: crate::context::CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
     let gh = std::env::var_os("JIG_GH_BIN").unwrap_or_else(|| OsString::from("gh"));
-    let output = Command::new(&gh)
+    run_gh_with_program_timeout(ctx, args, &gh, timeout, observer)
+}
+
+#[cfg(test)]
+fn run_gh_with_program(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    gh: &OsStr,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
+    run_gh_with_program_timeout(ctx, args, gh, ctx.command_timeout(), observer)
+}
+
+fn run_gh_with_program_timeout(
+    ctx: &RepoContext,
+    args: Vec<OsString>,
+    gh: &OsStr,
+    timeout: crate::context::CommandTimeout,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<GhOutput, ExecutionCommandError> {
+    let command_label = command_label(&args);
+    let execution_label = format!("{} {command_label}", gh.to_string_lossy());
+    let mut command = Command::new(gh);
+    command
         .args(&args)
         .current_dir(ctx.root())
-        .output()
-        .with_context(|| {
-            format!(
-                "Failed to start {} {}",
-                OsStr::new(&gh).to_string_lossy(),
-                command_label(&args)
-            )
-        })?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        timeout,
+        crate::execution::internal_execution_output_limit(),
+        &execution_label,
+        observer,
+    )?;
 
     Ok(GhOutput {
         status_code: output.status.code(),
@@ -583,7 +662,11 @@ fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -619,5 +702,47 @@ mod tests {
         assert_eq!(summary["open_pr_count"], PR_LIST_LIMIT);
         assert_eq!(summary["pr_list_limit"], PR_LIST_LIMIT);
         assert_eq!(summary["pr_list_truncated"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_execution_honors_in_flight_cancellation() {
+        struct CancelAfterStart(PathBuf);
+
+        impl crate::execution::ExecutionObserver for CancelAfterStart {}
+
+        impl crate::execution::ExecutionCancellation for CancelAfterStart {
+            fn cancelled(&self) -> bool {
+                self.0.exists()
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        crate::test_env::TestRepoBuilder::new(temp.path())
+            .config("")
+            .required_commands(Vec::<String>::new())
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let marker = temp.path().join("gh-started");
+        let mut observer = CancelAfterStart(marker.clone());
+        let started = Instant::now();
+
+        let error = run_gh_with_program(
+            &ctx,
+            vec![
+                OsString::from("-c"),
+                OsString::from("printf started > \"$1\"; sleep 30"),
+                OsString::from("fixture-shell"),
+                marker.into_os_string(),
+            ],
+            OsStr::new("sh"),
+            &mut observer,
+        )
+        .err()
+        .expect("cancelled gh command should fail")
+        .to_string();
+
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }

@@ -4,12 +4,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-#[cfg(windows)]
-use std::{
-    ffi::OsString,
-    os::windows::ffi::OsStrExt,
-    path::{Component, Prefix},
-};
 
 pub(crate) const OPTIONAL_CARGO_COMMAND_PREFIX: &str = "if [ -f Cargo.toml ]; then ";
 pub(crate) const OPTIONAL_CARGO_COMMAND_ELSE: &str = "; else ";
@@ -51,132 +45,8 @@ pub(crate) fn is_exported_bash_function_environment_key(key: &OsStr) -> bool {
     key.starts_with(b"BASH_FUNC_") && key.ends_with(b"%%")
 }
 
-#[cfg(windows)]
-pub(crate) fn windows_bash_compatible_path(path: &Path) -> io::Result<PathBuf> {
-    windows_legacy_compatible_path(path)
-}
-
-#[cfg(windows)]
-pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
-    windows_legacy_compatible_path(path)
-}
-
-#[cfg(not(windows))]
 pub(crate) fn git_env_path(path: &Path) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
-}
-
-#[cfg(windows)]
-pub(crate) fn windows_legacy_compatible_path(path: &Path) -> io::Result<PathBuf> {
-    let absolute = std::path::absolute(path)?;
-    let mut components = absolute.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return Err(incompatible_windows_legacy_path(&absolute));
-    };
-
-    let mut compatible = match prefix.kind() {
-        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:\\", char::from(drive))),
-        Prefix::VerbatimUNC(server, share) => {
-            if !is_legacy_windows_path_component(server, false)
-                || !is_legacy_windows_path_component(share, false)
-            {
-                return Err(incompatible_windows_legacy_path(&absolute));
-            }
-            let mut prefix = OsString::from(r"\\");
-            prefix.push(server);
-            prefix.push(r"\");
-            prefix.push(share);
-            prefix.push(r"\");
-            PathBuf::from(prefix)
-        }
-        Prefix::Verbatim(_) | Prefix::DeviceNS(_) => {
-            return Err(incompatible_windows_legacy_path(&absolute));
-        }
-        Prefix::Disk(_) | Prefix::UNC(_, _) => {
-            ensure_legacy_windows_path_length(&absolute)?;
-            return Ok(absolute);
-        }
-    };
-
-    for component in components {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(component) if is_legacy_windows_path_component(component, true) => {
-                compatible.push(component);
-            }
-            _ => return Err(incompatible_windows_legacy_path(&absolute)),
-        }
-    }
-    ensure_legacy_windows_path_length(&compatible)?;
-    Ok(compatible)
-}
-
-#[cfg(windows)]
-fn ensure_legacy_windows_path_length(path: &Path) -> io::Result<()> {
-    // The trailing NUL is part of the classic MAX_PATH boundary used by
-    // non-verbatim Win32 path interfaces.
-    if path.as_os_str().encode_wide().count() >= 260 {
-        return Err(incompatible_windows_legacy_path(path));
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-fn is_legacy_windows_path_component(component: &OsStr, reject_reserved: bool) -> bool {
-    let wide = component.encode_wide().collect::<Vec<_>>();
-    if wide.is_empty()
-        || wide.len() > 255
-        || wide.iter().any(|character| {
-            *character <= 31
-                || b"<>:\"/\\|?*"
-                    .iter()
-                    .copied()
-                    .map(u16::from)
-                    .any(|reserved| *character == reserved)
-        })
-        || matches!(wide.last(), Some(character) if *character == b' ' as u16 || *character == b'.' as u16)
-    {
-        return false;
-    }
-    if !reject_reserved {
-        return true;
-    }
-
-    let stem_end = wide
-        .iter()
-        .position(|character| *character == b'.' as u16)
-        .unwrap_or(wide.len());
-    let stem = wide[..stem_end]
-        .iter()
-        .rposition(|character| *character != b' ' as u16 && *character != b'.' as u16)
-        .map_or(&[][..], |end| &wide[..=end]);
-    let reserved_base = ["CON", "PRN", "AUX", "NUL"]
-        .into_iter()
-        .any(|reserved| wide_eq_ignore_ascii_case(stem, reserved.as_bytes()));
-    let reserved_numbered = stem.len() == 4
-        && (wide_eq_ignore_ascii_case(&stem[..3], b"COM")
-            || wide_eq_ignore_ascii_case(&stem[..3], b"LPT"))
-        && (u16::from(b'1')..=u16::from(b'9')).contains(&stem[3]);
-    !reserved_base && !reserved_numbered
-}
-
-#[cfg(windows)]
-fn wide_eq_ignore_ascii_case(wide: &[u16], ascii: &[u8]) -> bool {
-    wide.len() == ascii.len()
-        && wide.iter().zip(ascii).all(|(wide, ascii)| {
-            *wide <= u16::from(u8::MAX) && (*wide as u8).eq_ignore_ascii_case(ascii)
-        })
-}
-
-#[cfg(windows)]
-fn incompatible_windows_legacy_path(path: &Path) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!(
-            "Windows path cannot be represented safely without verbatim syntax: {}",
-            path.display()
-        ),
-    )
 }
 
 pub(crate) fn optional_cargo_command_branches(command: &str) -> Option<(&str, &str)> {
@@ -229,39 +99,6 @@ mod tests {
             Some(("cargo test", "printf skipped"))
         );
         assert!(optional_cargo_command_branches(&(command + " trailing")).is_none());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_bash_path_policy_normalizes_verbatim_disk_and_unc_paths() {
-        assert_eq!(
-            windows_bash_compatible_path(Path::new(r"\\?\C:\repo\tools")).unwrap(),
-            PathBuf::from(r"C:\repo\tools")
-        );
-        assert_eq!(
-            windows_bash_compatible_path(Path::new(r"\\?\UNC\server\share\repo")).unwrap(),
-            PathBuf::from(r"\\server\share\repo")
-        );
-        assert_eq!(
-            windows_bash_compatible_path(Path::new(r"\\server\share\repo")).unwrap(),
-            PathBuf::from(r"\\server\share\repo")
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_bash_path_policy_rejects_long_and_reserved_legacy_paths() {
-        let long_path = PathBuf::from(r"C:\").join("a".repeat(256));
-        assert_eq!(
-            windows_bash_compatible_path(&long_path).unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
-        );
-        assert_eq!(
-            windows_bash_compatible_path(Path::new(r"\\?\C:\repo\CON"))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::InvalidInput
-        );
     }
 
     #[cfg(unix)]

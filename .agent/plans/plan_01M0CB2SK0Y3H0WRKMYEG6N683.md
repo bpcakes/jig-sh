@@ -1,0 +1,1 @@
+Encapsulate spawn lifecycle transitions, make process observation projections explicit, repair confirmed spawn failures, and add a targeted legacy-orphan escape hatch. Validate each slice with focused tests and finish with full repository gates.

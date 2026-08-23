@@ -203,7 +203,6 @@ if ! grep -Fxq 'INSTALL_LOCK_GUARD_PATH="$INSTALL_ROOT.lock.guard"' "$ROOT_DIR/s
 fi
 for installer_lock_protocol_fragment in \
   'fcntl.flock(file_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)' \
-  'msvcrt.locking(file_descriptor, msvcrt.LK_NBLCK, 1)' \
   'record = f"owner-v1 {os.getpid()} {token}\n".encode("ascii")' \
   'os.mkdir(lock_directory)' \
   'except FileExistsError:' \
@@ -328,3 +327,5 @@ then
   echo "Generated and embedded installer templates drifted." >&2
   exit 1
 fi
+
+"$ROOT_DIR/scripts/check-supported-host-surface.sh"

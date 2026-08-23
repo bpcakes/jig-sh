@@ -533,6 +533,60 @@ fn work_check_runs_configured_tools() {
 }
 
 #[test]
+fn work_check_emits_one_balanced_phase_per_tool_with_aggregate_positions() {
+    #[derive(Default)]
+    struct PhaseObserver(Vec<(String, String, usize, usize)>);
+
+    impl crate::execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, position } => {
+                    self.0.push((
+                        "started".into(),
+                        label.into(),
+                        position.current(),
+                        position.total(),
+                    ))
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.0.push(("finished".into(), label.into(), 0, 0));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+
+    let temp = tempdir().unwrap();
+    write_mutating_check_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = PhaseObserver::default();
+
+    crate::runtime::dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Work(crate::command::WorkCommand::Check(
+            crate::command::WorkCheckRequest {
+                plan_id: "plan_1".into(),
+                tools: Vec::new(),
+            },
+        )),
+        &mut observer,
+    )
+    .unwrap();
+
+    assert_eq!(
+        observer.0,
+        [
+            ("started".into(), "jig.first_check".into(), 1, 2),
+            ("finished".into(), "jig.first_check".into(), 0, 0),
+            ("started".into(), "jig.mutating_check".into(), 2, 2),
+            ("finished".into(), "jig.mutating_check".into(), 0, 0),
+        ]
+    );
+}
+
+#[test]
 fn work_check_rejects_unknown_plan_before_running_tools() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -697,6 +751,211 @@ fn failed_work_check_records_metadata_on_batch_and_stops_later_tools() {
 }
 
 #[test]
+fn cancelled_collect_all_work_check_stops_unstarted_tools() {
+    struct CancelWhenStarted(std::path::PathBuf);
+
+    impl crate::execution::ExecutionObserver for CancelWhenStarted {}
+
+    impl crate::execution::ExecutionCancellation for CancelWhenStarted {
+        fn cancelled(&self) -> bool {
+            self.0.exists()
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+first_check_command = "printf started > first-check-started; sleep 30"
+later_check_command = "printf ran > later-check-ran"
+
+[[work.gates]]
+id = "first"
+kind = "check"
+tool = "jig.first_check"
+
+[[work.gates]]
+id = "later"
+kind = "check"
+tool = "jig.later_check"
+"#,
+        )
+        .required_commands(["first_check_command", "later_check_command"])
+        .tool(json!({
+            "name": "jig.first_check",
+            "kind": "command",
+            "description": "Run the first fixture check.",
+            "command": "first_check_command"
+        }))
+        .tool(json!({
+            "name": "jig.later_check",
+            "kind": "command",
+            "description": "Run the later fixture check.",
+            "command": "later_check_command"
+        }))
+        .write();
+    write_open_plan(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelWhenStarted(temp.path().join("first-check-started"));
+
+    let error = super::super::work::check_tools_collect_failures_with_observer(
+        &ctx,
+        "plan_1",
+        vec!["jig.first_check".into(), "jig.later_check".into()],
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!temp.path().join("later-check-ran").exists());
+    let receipts = read_receipts(temp.path());
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.first_check")
+        .expect("started cancelled check should record a child receipt");
+    assert_eq!(child["evidence"]["status"], "cancelled");
+    let batch = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("cancelled work check should record its batch receipt");
+    assert_eq!(batch["args"]["receipt_ids"], json!([child["id"]]));
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["tool_name"] != "jig.later_check")
+    );
+}
+
+#[test]
+fn cancelled_collect_all_work_check_stops_after_a_native_tool() {
+    #[derive(Default)]
+    struct CancelAfterNativePhase {
+        native_finished: bool,
+    }
+
+    impl crate::execution::ExecutionObserver for CancelAfterNativePhase {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            if matches!(
+                event,
+                crate::execution::ExecutionEvent::PhaseFinished {
+                    label: crate::tool_defs::tool::CONTRACT_CHECK,
+                    ..
+                }
+            ) {
+                self.native_finished = true;
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for CancelAfterNativePhase {
+        fn cancelled(&self) -> bool {
+            self.native_finished
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+later_check_command = "printf ran > later-check-ran"
+"#,
+        )
+        .required_commands(["later_check_command"])
+        .tool(json!({
+            "name": crate::tool_defs::tool::CONTRACT_CHECK,
+            "kind": "native",
+            "description": "Check the fixture contract."
+        }))
+        .tool(json!({
+            "name": "jig.later_check",
+            "kind": "command",
+            "description": "Run the later fixture check.",
+            "command": "later_check_command"
+        }))
+        .write();
+    write_open_plan(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterNativePhase::default();
+
+    let error = super::super::work::check_tools_collect_failures_with_observer(
+        &ctx,
+        "plan_1",
+        vec![
+            crate::tool_defs::tool::CONTRACT_CHECK.into(),
+            "jig.later_check".into(),
+        ],
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!temp.path().join("later-check-ran").exists());
+    let receipts = read_receipts(temp.path());
+    assert!(
+        receipts
+            .iter()
+            .any(|receipt| receipt["tool_name"] == crate::tool_defs::tool::CONTRACT_CHECK)
+    );
+    assert!(
+        receipts
+            .iter()
+            .all(|receipt| receipt["tool_name"] != "jig.later_check")
+    );
+}
+
+#[test]
+fn timed_out_work_check_records_child_and_batch_failure_receipts() {
+    let temp = tempdir().unwrap();
+    write_timeout_check_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let started = std::time::Instant::now();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let receipts = read_receipts(temp.path());
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.timeout_check")
+        .expect("timed-out configured check should record a child receipt");
+    assert_eq!(child["exit_status"], 1);
+    assert!(
+        child["stderr_preview"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(child["evidence"]["kind"], "supervised_command");
+    assert_eq!(child["evidence"]["status"], "error");
+
+    let batch = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.work_check")
+        .expect("failed work check should record a batch receipt");
+    assert_eq!(batch["exit_status"], 1);
+    assert!(
+        batch["stderr_preview"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+    assert_eq!(batch["args"]["receipt_ids"][0], child["id"]);
+}
+
+#[test]
 fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let temp = tempdir().unwrap();
     write_mutating_check_fixture_repo(temp.path());
@@ -778,6 +1037,35 @@ fn work_gate_evaluations_scan_receipts_once_for_multiple_gates() {
 }
 
 #[test]
+fn status_gate_batch_scans_receipts_once_for_multiple_open_plans() {
+    let temp = tempdir().unwrap();
+    write_mutating_check_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let second = crate::state::plans_open(
+        &ctx,
+        crate::state::PlanOpenRequest {
+            title: "Second plan".into(),
+            body: Some("Validate shared gate indexing.".into()),
+            body_file: None,
+        },
+    )
+    .unwrap();
+    let second_id = second["plan_id"].as_str().unwrap().to_string();
+    let plan_ids = vec!["plan_1".to_string(), second_id.clone()];
+
+    crate::state::reset_work_gate_receipt_index_scan_count();
+    let snapshots =
+        super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &plan_ids, &|| false)
+            .unwrap();
+
+    assert_eq!(snapshots.len(), 2);
+    assert!(snapshots.contains_key("plan_1"));
+    assert!(snapshots.contains_key(&second_id));
+    assert_eq!(crate::state::work_gate_receipt_index_scan_count(), 1);
+}
+
+#[test]
 fn work_gates_reports_missing_and_passing_required_gates() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -820,6 +1108,26 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     assert_eq!(passed["plan_state"], "open");
     assert_eq!(passed["gates"][0]["status"], "passed");
     assert!(passed["gates"][0]["receipt_id"].as_str().is_some());
+}
+
+#[test]
+fn empty_open_plan_gate_batch_skips_fingerprint_collection() {
+    use std::cell::Cell;
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let cancellation_checks = Cell::new(0);
+
+    let snapshots = super::super::open_plan_gate_snapshots_with_cancellation(&ctx, &[], &|| {
+        let current = cancellation_checks.get();
+        cancellation_checks.set(current + 1);
+        current > 0
+    })
+    .unwrap();
+
+    assert!(snapshots.is_empty());
+    assert_eq!(cancellation_checks.get(), 1);
 }
 
 #[test]
@@ -1219,6 +1527,30 @@ kind = "unsupported-kind"
 
 #[test]
 fn work_review_records_structured_codex_review_findings() {
+    #[derive(Default)]
+    struct PhaseObserver(Vec<(String, String, usize, usize)>);
+
+    impl crate::execution::ExecutionObserver for PhaseObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, position } => {
+                    self.0.push((
+                        "started".into(),
+                        label.into(),
+                        position.current(),
+                        position.total(),
+                    ))
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.0.push(("finished".into(), label.into(), 0, 0));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for PhaseObserver {}
+
     let _guard = lock_env();
     let temp = tempdir().unwrap();
     write_review_fixture_repo(temp.path());
@@ -1228,15 +1560,17 @@ fn work_review_records_structured_codex_review_findings() {
     write_review_codex_stub(&codex_path);
     let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = PhaseObserver::default();
 
-    let output = dispatch(
+    let output = crate::runtime::dispatch_with_observer(
         &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Review(
-            crate::cli::WorkReviewOpts {
+        RuntimeCommand::Work(crate::command::WorkCommand::Review(
+            crate::command::WorkReviewRequest {
                 plan_id: "plan_1".into(),
                 gates: Vec::new(),
             },
         )),
+        &mut observer,
     )
     .unwrap();
 
@@ -1274,6 +1608,13 @@ fn work_review_records_structured_codex_review_findings() {
     assert_eq!(worker_receipt["evidence"]["provider"], "codex");
     assert_eq!(worker_receipt["evidence"]["runner"], "codex_exec");
     assert_eq!(worker_receipt["evidence"]["mode"], "review");
+    assert_eq!(
+        observer.0,
+        [
+            ("started".into(), "rust-error-handling".into(), 1, 1),
+            ("finished".into(), "rust-error-handling".into(), 0, 0),
+        ]
+    );
 }
 
 #[test]
@@ -1441,6 +1782,48 @@ fn work_refine_runs_fixer_then_review_and_check_gates() {
     )
     .unwrap();
     assert_eq!(gates["overall"], "passed", "{gates:#}");
+}
+
+#[test]
+fn work_refine_keeps_edit_and_iteration_evidence_after_transcript_overflow() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    write_review_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("src.rs"), "fn changed() {}\n").unwrap();
+    let codex_path = temp.path().join("codex-stub.sh");
+    write_verbose_refine_codex_stub(&codex_path);
+    let _codex_bin = EnvVarGuard::set("JIG_CODEX_BIN", &codex_path);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Refine(
+            crate::cli::WorkRefineOpts {
+                plan_id: "plan_1".into(),
+                gates: Vec::new(),
+                max_iterations: 1,
+            },
+        )),
+    )
+    .unwrap();
+
+    assert_eq!(output["status"], "passed", "{output:#}");
+    assert_eq!(output["iterations"].as_array().unwrap().len(), 1);
+    assert!(output["iterations"][0]["receipt_id"].as_str().is_some());
+    assert_eq!(
+        fs::read_to_string(temp.path().join("fixed.txt")).unwrap(),
+        "fixed\n"
+    );
+    let receipts = read_receipts(temp.path());
+    let worker_receipt = receipts
+        .iter()
+        .find(|receipt| {
+            receipt["tool_name"] == WORKER_RUN_TOOL
+                && receipt["evidence"]["purpose"] == "work_refine"
+        })
+        .expect("verbose refinement should record its worker receipt");
+    assert_eq!(worker_receipt["evidence"]["stderr_truncated"], true);
 }
 
 #[test]
@@ -1655,12 +2038,48 @@ if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
 fi
 mkdir -p .agent
 touch .agent/clean-review
-if [ "$*" = "--ask-for-approval never exec --sandbox workspace-write --ephemeral -" ]; then
-  printf 'stdin' > prompt-source.txt
+if [ "$#" -ne 9 ] || [ "$1 $2 $3 $4 $5 $6 $7" != "--ask-for-approval never exec --sandbox workspace-write --ephemeral -o" ] || [ -z "$8" ] || [ "$9" != "-" ]; then
+  echo "unexpected refine args: $*" >&2
+  exit 2
 fi
+printf 'stdin' > prompt-source.txt
+printf 'refined\n' > "$8"
 cat >/dev/null
 printf 'fixed\n' > fixed.txt
-printf 'refined\n'
+"#,
+    );
+}
+
+fn write_verbose_refine_codex_stub(path: &Path) {
+    write_codex_stub(
+        path,
+        r#"#!/bin/sh
+if [ "$1" = "exec" ] && [ "$2" = "review" ]; then
+  out=""
+  prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "-o" ]; then
+      out="$arg"
+    fi
+    prev="$arg"
+  done
+  if [ -f .agent/clean-review ]; then
+    printf '{"summary":"clean","findings":[]}\n' > "$out"
+  else
+    printf '{"summary":"needs work","findings":[{"severity":"critical","path":"src.rs","line":1,"issue":"missing context","evidence":"bare propagation","recommendation":"add context"}]}\n' > "$out"
+  fi
+  exit 0
+fi
+mkdir -p .agent
+touch .agent/clean-review
+if [ "$#" -ne 9 ] || [ "$1 $2 $3 $4 $5 $6 $7" != "--ask-for-approval never exec --sandbox workspace-write --ephemeral -o" ] || [ -z "$8" ] || [ "$9" != "-" ]; then
+  echo "unexpected verbose refine args: $*" >&2
+  exit 2
+fi
+cat >/dev/null
+printf 'refined\n' > "$8"
+printf 'fixed\n' > fixed.txt
+head -c 4194305 /dev/zero >&2
 "#,
     );
 }

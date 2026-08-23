@@ -156,20 +156,8 @@ fn ensure_for_hosts_locked_interruptible(
     Ok(LockOutcome::Acquired(certificate_paths(store)))
 }
 
-// The shared call boundary is fallible because the Windows implementation
-// rejects generation until private-key ACL hardening is available.
-#[allow(clippy::unnecessary_wraps)]
 fn ensure_certificate_generation_supported() -> Result<()> {
-    #[cfg(windows)]
-    {
-        bail!(
-            "TLS certificate generation is not supported on Windows until owner-only private-key ACL hardening is implemented; use macOS or Linux for automatic HTTPS certificate generation."
-        );
-    }
-    #[cfg(not(windows))]
-    {
-        Ok(())
-    }
+    Ok(())
 }
 
 fn write_ca(store: &StateStore, settings: &ProxySettings) -> Result<()> {
@@ -650,19 +638,11 @@ fn write_owner_only_text(path: PathBuf, contents: &str) -> Result<()> {
         file.write_all(contents.as_bytes())?;
         file.sync_data()?;
         drop(file);
-        file_ops::replace_file(&tmp, &path, CERT_FILE_FALLBACK)?;
+        file_ops::replace_file(&tmp, &path)?;
         Ok(())
     }
 
-    #[cfg(windows)]
-    {
-        let _ = (path, contents);
-        bail!(
-            "Jig proxy TLS certificate generation is not supported on Windows until owner-only private-key ACL hardening is implemented; use macOS or Linux for HTTPS proxy certificates"
-        )
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = (path, contents);
         bail!("Jig proxy private key writes are not supported on this platform")

@@ -138,7 +138,7 @@ pub(super) fn validate_go_module(value: &str) -> Result<()> {
         let short = segment.split('.').next().unwrap_or_default();
         if is_windows_reserved_name(short) {
             bail!(
-                "Invalid --go-module '{value}'. Path element component '{short}' is reserved on Windows"
+                "Invalid --go-module '{value}'. Path element component '{short}' is not portable"
             );
         }
         if let Some((_, suffix)) = short.rsplit_once('~')
