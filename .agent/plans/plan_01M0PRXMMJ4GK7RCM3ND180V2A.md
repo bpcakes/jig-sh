@@ -12,13 +12,13 @@ After this work, the repository can state its current Linux/macOS host policy wh
 
 - [x] (2026-08-23 07:38Z) Opened structured work, read `.agent/PLANS.md`, `agent-map.md`, and `crates/jig/AGENTS.md`, and inspected the three affected boundaries and existing regression tests.
 - [x] (2026-08-23 07:38Z) Committed this self-contained execution plan and its structured-work start records as `187ba84`.
-- [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, and passed all 5 supported-host regression tests; commit remains the immediate next action.
-- [x] (2026-08-23 07:49Z) Unified CLI and MCP progress outcome composition, made the primary operation error first on dual failure, and passed 11 MCP plus 12 CLI progress unit tests; commit remains the immediate next action.
-- [x] (2026-08-23 07:55Z) Added an independent monotonic 10ms authoritative-result inspection schedule and passed the deterministic cadence, cancelled-before-start, and live process-group overflow regressions; commit remains the immediate next action.
+- [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, passed all 5 supported-host regression tests, and committed the policy slice as `e3adbd3`.
+- [x] (2026-08-23 07:49Z) Unified CLI and MCP progress outcome composition, made the primary operation error first on dual failure, passed 11 MCP plus 12 CLI progress unit tests, and committed the error-composition slice as `77eacf1`.
+- [x] (2026-08-23 07:55Z) Added an independent monotonic 10ms authoritative-result inspection schedule, passed the deterministic cadence, cancelled-before-start, and live process-group overflow regressions, and committed the worker slice as `da96e1b`.
 - [x] (2026-08-23 08:48Z) Tested a four-slot Nextest reservation for the PTY browser; focused validation passed, but a later complete gate proved the in-process isolation insufficient.
 - [x] (2026-08-23 09:16Z) Tested a 60-second PTY watchdog; focused validation passed, but a later complete gate failed at 62.120 seconds and disproved the slow-operation hypothesis.
-- [x] (2026-08-23 09:41Z) Restored the meaningful 30-second watchdog, split the two PTY tests into a dedicated serial Nextest process, proved exact 2,163/437/2 selector coverage, and passed both PTY tests in 4.410 seconds; commit remains the immediate next action.
-- [ ] Build the development binary, run focused checks, repository gates, and `scripts/jig check test`, then record evidence and finish structured work.
+- [x] (2026-08-23 09:41Z) Restored the meaningful 30-second watchdog, split the two PTY tests into a dedicated serial Nextest process, proved exact 2,163/437/2 selector coverage, passed both PTY tests in 4.410 seconds, and committed the process-isolation correction as `3637978`.
+- [x] (2026-08-23 09:55Z) Rebuilt the development binary; passed format, supported-host, contract, and full 2,602-test gates; verified fresh structured evidence and all required gates satisfied.
 
 ## Surprises & Discoveries
 
@@ -55,6 +55,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - Observation: Nextest's JSON `test-count` includes mismatching test cases from any partially selected binary, so it cannot directly prove partition coverage for a test-name filter.
   Evidence: counting each testcase whose `filter-match.status` is `matches` yields 2,163 broad tests, 437 non-PTY Vault tests, and 2 PTY tests, exactly matching the prior 2,602-test total. The dedicated serial PTY invocation then passed both tests in 4.410 seconds with the restored 30-second watchdog.
 
+- Observation: Process isolation resolves the suite-only PTY blockage while preserving the stricter watchdog.
+  Evidence: the final configured three-process test command passed in 883.7 seconds. The structured `jig.test` receipt exited zero, `work gates` reported fresh contract and test evidence with no unresolved gates, and the total selected coverage remained 2,602 tests.
+
 ## Decision Log
 
 - Decision: Treat changelog and append-only execution records as historical evidence, not as active host-support surface, while retaining tracked-path inventory across the entire repository.
@@ -79,7 +82,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 
 ## Outcomes & Retrospective
 
-Implementation is not complete. At completion this section will record the exact commits, focused tests, full-suite result, any remaining unrelated gate failures, and whether the changes met the intended reduction in bug surface.
+The work met its intended bug-surface reduction. Commit `e3adbd3` separates live support policy from immutable release history; `77eacf1` centralizes deferred progress-delivery outcome composition across CLI and MCP; and `da96e1b` gives authoritative worker-result inspection its own monotonic cadence. The initially plausible test mitigations were kept as separate, bisectable experiments in `4d6daf1` and `b731dd0`; the evidence-driven correction in `3637978` supersedes both by isolating the PTY binary at the process boundary and restoring the 30-second watchdog.
+
+Focused validation passed 5 supported-host integration tests, 11 MCP tests, 12 shared progress tests, three worker supervision regressions, and both serial PTY tests. Final validation passed the real supported-host checker, `jig.fmt_check`, `jig.contract_check`, and the configured 2,602-test suite partitioned as 2,163 broad tests, 437 non-PTY Vault tests, and 2 PTY tests. There are no unresolved required gates.
 
 ## Context and Orientation
 
@@ -231,6 +236,8 @@ Plan revision note (2026-08-23 09:32Z): Rejected both the in-process thread rese
 
 Plan revision note (2026-08-23 09:41Z): Marked the process-isolation correction ready to commit after validating exact partition membership through per-test filter-match statuses and passing both dedicated PTY tests serially with the restored watchdog.
 
+Plan revision note (2026-08-23 09:55Z): Recorded commit `3637978`, the successful 883.7-second full gate, the fresh structured evidence, and final outcomes. All implementation and validation milestones are complete.
+
 
 Policy slice complete: separated active supported-host scanning from immutable release history, restored all 22 deleted historical entries, added the Unreleased breaking cutover, and passed scripts/check-supported-host-surface.sh plus 5/5 supported_host_surface tests.
 
@@ -248,3 +255,6 @@ Vault PTY watchdog follow-up complete: kept every terminal transition bounded wh
 
 
 Vault process-isolation correction ready: restored the 30-second PTY watchdog, removed the ineffective in-process slot override, split vault_tui into a dedicated serial Nextest invocation, proved exact 2163/437/2 test coverage, and passed both PTY tests in 4.410 seconds.
+
+
+Final acceptance passed: format and supported-host checks exit 0; fresh contract and test gates exit 0; the configured suite passed all 2602 tests across exact 2163 broad, 437 non-PTY Vault, and 2 isolated serial PTY selections.
