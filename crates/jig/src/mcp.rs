@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::context::RepoContext;
 use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver, ExecutionStream};
+use crate::progress::combine_progress_delivery;
 use crate::runtime::call_tool_with_observer;
 use crate::tool_defs;
 
@@ -99,8 +100,8 @@ fn handle_tool_call(
             .cloned();
         let mut observer = McpProgressObserver::new(writer, framing, progress_token);
         let tool_result = call_tool_with_observer(ctx, name, args, &mut observer);
-        observer.flush()?;
-        let tool_result = tool_result?;
+        let progress_result = observer.flush();
+        let tool_result = combine_tool_and_progress_results(tool_result, progress_result)?;
         Ok(json!({
             "content": [
                 {
@@ -128,6 +129,17 @@ fn handle_tool_call(
             }
         }),
     }
+}
+
+fn combine_tool_and_progress_results<T>(
+    tool_result: Result<T>,
+    progress_result: Result<()>,
+) -> Result<T> {
+    combine_progress_delivery(
+        tool_result,
+        progress_result,
+        "MCP progress delivery also failed",
+    )
 }
 
 struct McpProgressObserver<'a> {
@@ -354,9 +366,13 @@ mod tests {
     use std::io::Cursor;
     use std::time::Duration;
 
+    use anyhow::anyhow;
     use serde_json::json;
 
-    use super::{McpProgressObserver, MessageFraming, read_message, write_message};
+    use super::{
+        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, read_message,
+        write_message,
+    };
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
 
     #[test]
@@ -467,6 +483,42 @@ mod tests {
         let expected = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
         assert_eq!(&output[..expected.len()], expected);
         assert_eq!(&output[expected.len()..], body);
+    }
+
+    #[test]
+    fn tool_and_progress_results_preserve_success_and_individual_failures() {
+        assert_eq!(
+            combine_tool_and_progress_results(Ok("result"), Ok(())).unwrap(),
+            "result"
+        );
+
+        let tool_error =
+            combine_tool_and_progress_results::<()>(Err(anyhow!("fixture tool failed")), Ok(()))
+                .unwrap_err()
+                .to_string();
+        assert_eq!(tool_error, "fixture tool failed");
+
+        let progress_error =
+            combine_tool_and_progress_results(Ok(()), Err(anyhow!("fixture progress failed")))
+                .unwrap_err()
+                .to_string();
+        assert_eq!(progress_error, "fixture progress failed");
+    }
+
+    #[test]
+    fn tool_failure_remains_primary_when_progress_delivery_also_fails() {
+        let error = combine_tool_and_progress_results::<()>(
+            Err(anyhow!("fixture tool failed")),
+            Err(anyhow!("fixture progress failed")),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.starts_with("fixture tool failed"), "{error}");
+        assert!(
+            error.contains("MCP progress delivery also failed: fixture progress failed"),
+            "{error}"
+        );
     }
 
     #[test]

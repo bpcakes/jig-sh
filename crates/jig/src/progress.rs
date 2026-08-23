@@ -10,6 +10,7 @@ use crate::execution::{ExecutionCancellation, ExecutionEvent, ExecutionObserver}
 const CLI_PROGRESS_OUTPUT_LIMIT: usize = 64 * 1024;
 const CLI_PROGRESS_STRUCTURE_LIMIT: usize = 16 * 1024;
 const CLI_PROGRESS_DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
+const CLI_PROGRESS_COMBINED_FAILURE: &str = "Execution progress also failed to flush";
 static CLI_STDERR_DELIVERY_ABANDONED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn stderr_delivery_abandoned() -> bool {
@@ -302,7 +303,13 @@ impl CliExecutionObserver {
         let rendered = self.take_rendered();
         let writer = match independent_stderr_writer() {
             Ok(writer) => writer,
-            Err(error) => return combine_progress_delivery(outcome, Err(error)),
+            Err(error) => {
+                return combine_progress_delivery(
+                    outcome,
+                    Err(error),
+                    CLI_PROGRESS_COMBINED_FAILURE,
+                );
+            }
         };
         let (outcome, delivery) =
             finish_rendered_with_timeout(outcome, rendered, writer, CLI_PROGRESS_DELIVERY_TIMEOUT);
@@ -380,7 +387,7 @@ where
         Ok(writer) => writer,
         Err(error) => {
             return (
-                combine_progress_delivery(outcome, Err(error)),
+                combine_progress_delivery(outcome, Err(error), CLI_PROGRESS_COMBINED_FAILURE),
                 ProgressDelivery::Complete,
             );
         }
@@ -389,7 +396,7 @@ where
         Ok(result) => {
             let _ = writer.join();
             (
-                combine_progress_delivery(outcome, result),
+                combine_progress_delivery(outcome, result, CLI_PROGRESS_COMBINED_FAILURE),
                 ProgressDelivery::Complete,
             )
         }
@@ -400,6 +407,7 @@ where
                 Err(io::Error::other(
                     "execution progress writer stopped before reporting its result",
                 )),
+                CLI_PROGRESS_COMBINED_FAILURE,
             ),
             ProgressDelivery::Complete,
         ),
@@ -425,16 +433,23 @@ fn independent_stderr_writer() -> io::Result<io::Stderr> {
     Ok(io::stderr())
 }
 
-fn combine_progress_delivery<T>(
+pub(crate) fn combine_progress_delivery<T, E>(
     outcome: anyhow::Result<T>,
-    delivery: io::Result<()>,
-) -> anyhow::Result<T> {
+    delivery: Result<(), E>,
+    combined_failure_context: &str,
+) -> anyhow::Result<T>
+where
+    E: Into<anyhow::Error>,
+{
     match (outcome, delivery) {
         (outcome, Ok(())) => outcome,
         (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(delivery_error)) => Err(error.context(format!(
-            "Execution progress also failed to flush: {delivery_error}"
-        ))),
+        (Err(error), Err(delivery_error)) => {
+            let delivery_error = delivery_error.into();
+            Err(anyhow::anyhow!(
+                "{error:#}\n{combined_failure_context}: {delivery_error:#}"
+            ))
+        }
     }
 }
 
@@ -587,7 +602,8 @@ mod tests {
 
         assert_eq!(delivery, ProgressDelivery::Complete);
         let rendered = format!("{error:#}");
-        assert!(rendered.starts_with("Execution progress also failed to flush"));
+        assert!(rendered.starts_with("fixture operation failed"));
+        assert!(rendered.contains("Execution progress also failed to flush"));
         assert!(rendered.contains("fixture operation failed"));
         assert!(rendered.contains("fixture sink failed"));
     }

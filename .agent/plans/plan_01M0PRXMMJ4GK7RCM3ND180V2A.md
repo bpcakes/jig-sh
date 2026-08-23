@@ -13,7 +13,7 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - [x] (2026-08-23 07:38Z) Opened structured work, read `.agent/PLANS.md`, `agent-map.md`, and `crates/jig/AGENTS.md`, and inspected the three affected boundaries and existing regression tests.
 - [x] (2026-08-23 07:38Z) Committed this self-contained execution plan and its structured-work start records as `187ba84`.
 - [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, and passed all 5 supported-host regression tests; commit remains the immediate next action.
-- [ ] Introduce explicit MCP tool/progress outcome composition, cover simultaneous failure ordering, and commit that slice.
+- [x] (2026-08-23 07:49Z) Unified CLI and MCP progress outcome composition, made the primary operation error first on dual failure, and passed 11 MCP plus 12 CLI progress unit tests; commit remains the immediate next action.
 - [ ] Add an independent time-based authoritative-result inspection schedule, cover its cadence and cancellation behavior, and commit that slice.
 - [ ] Build the development binary, run focused checks, repository gates, and `scripts/jig check test`, then record evidence and finish structured work.
 
@@ -28,6 +28,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - Observation: `crates/jig/src/mcp.rs::handle_tool_call` already defers progress output until after tool execution, but sequential `?` operators give the later flush error unconditional precedence over the earlier tool result.
   Evidence: the function stores `tool_result`, calls `observer.flush()?`, and only then evaluates `tool_result?`.
 
+- Observation: The CLI progress path already had a result-composition helper, but its dual-failure rendering put the progress flush context before the operation error.
+  Evidence: `crates/jig/src/progress.rs::combine_progress_delivery` used `error.context(...)`, and its regression asserted that the rendered error started with `Execution progress also failed to flush`.
+
 - Observation: `WorkerProcessObserver::cancelled` performs filesystem metadata inspection, and the owned-process runner invokes that callback at the transcript polling cadence, which can be about one millisecond while output is continuously readable.
   Evidence: `cancelled` calls `inspect_authoritative_output` directly; the existing overflow regression proves prompt detection but does not constrain inspection frequency.
 
@@ -38,7 +41,7 @@ After this work, the repository can state its current Linux/macOS host policy wh
   Date/Author: 2026-08-23 / Codex
 
 - Decision: Combine the tool execution result and progress flush result in one helper with a complete four-case outcome table.
-  Rationale: An explicit composition boundary makes precedence reviewable and testable. Tool failure is primary when both fail; a flush failure still fails an otherwise successful call; either isolated failure remains unchanged.
+  Rationale: An explicit composition boundary makes precedence reviewable and testable. The existing `progress::combine_progress_delivery` helper is now the shared authority for CLI and MCP progress instead of creating a divergent MCP-only abstraction. The primary operation failure is first when both fail; a flush failure still fails an otherwise successful call; either isolated failure remains unchanged.
   Date/Author: 2026-08-23 / Codex
 
 - Decision: Rate-limit authoritative-result metadata inspection using monotonic time inside `WorkerProcessObserver`, while checking external cancellation first and retaining the unconditional post-exit read and size check.
@@ -67,7 +70,7 @@ The root `AGENTS.md` requires runtime changes to be built as `target/debug/jig` 
 
 Milestone one repairs the policy/history boundary. Add `CHANGELOG.md` to the content scan's excluded historical records, leaving current source, current documentation, and the global tracked-path inventory covered. Add a fake-git regression in `crates/jig/tests/supported_host_surface.rs` that succeeds only when the changelog exclusion is passed to `git grep`; construct any unsupported-host fixture token in pieces so the real repository scan does not reject its own regression. Restore every deleted released entry from the merge-base diff, and add one explicit breaking entry under `Unreleased` explaining that current Jig host execution supports Linux and macOS only. Run the focused integration test and the actual script. Commit this milestone alone.
 
-Milestone two repairs MCP error composition. In `crates/jig/src/mcp.rs`, add a private generic helper that accepts the primary tool `Result<T>` and the progress flush `Result<()>`. Match all four success/failure combinations. If both fail, return one error whose displayed message begins with the tool failure and also reports the progress-delivery failure. Change `handle_tool_call` to call this helper after both operations have completed. Add unit tests proving the dual-failure order and the successful-tool/failed-progress case. Run the crate's MCP unit tests and commit this milestone alone.
+Milestone two repairs progress error composition. Generalize `crates/jig/src/progress.rs::combine_progress_delivery` into the shared authority for CLI and MCP progress delivery, accepting `anyhow::Result<()>` plus a boundary-specific combined-failure label. Match all four success/failure combinations. If both fail, return one error whose displayed message begins with the primary operation failure and also reports the progress-delivery failure. In `crates/jig/src/mcp.rs`, change `handle_tool_call` to evaluate both outcomes and pass them through a thin boundary-specific wrapper around the shared helper. Add unit tests proving all four MCP outcomes and change the existing CLI dual-failure regression to require primary-error-first rendering. Run both MCP and CLI progress unit tests and commit this milestone alone.
 
 Milestone three repairs result inspection cadence. In `crates/jig/src/runtime/worker_runner.rs`, add a small constant inspection interval and an `Instant` deadline to `WorkerProcessObserver`. Replace the unconditional metadata call in `cancelled` with an `inspect_authoritative_output_if_due` helper. Check the execution cancellation source first so an already-cancelled command still yields `CancelledBeforeStart`; otherwise inspect immediately on the first callback and at most once per interval. Retain `read_worker_output_file` after process exit as the authoritative final validation. Add a deterministic unit test that controls the observer's private deadline and proves a missing output file is ignored before the deadline and detected when due. Keep the existing live-overflow and pre-start cancellation regressions passing. Commit this milestone alone.
 
@@ -93,6 +96,7 @@ For the policy slice, edit with `apply_patch`, then run:
 For the MCP slice, edit with `apply_patch`, then run:
 
     cargo test -p jig-sh mcp::tests
+    cargo test -p jig-sh progress::tests
     git diff --check
     git add crates/jig/src/mcp.rs
     git commit -m "fix(mcp): preserve tool errors across progress flush"
@@ -124,7 +128,7 @@ Expected focused commands exit zero and name the requested regression as passed.
 
 The policy repair is accepted when released unsupported-host entries remain in `CHANGELOG.md`, the `Unreleased` section explicitly records the support cutover, `scripts/check-supported-host-surface.sh` exits zero on the real checkout, and `cargo test -p jig-sh --test supported_host_surface` passes. The regression must demonstrate that changelog content is outside the active-content scan without weakening the global path inventory.
 
-The MCP repair is accepted when a unit test supplies both a synthetic tool error and a synthetic progress error and observes both in the result with the tool error first. A separate outcome must demonstrate that a progress error still fails a successful tool call. Existing progress buffering and framing tests must remain green.
+The progress repair is accepted when an MCP unit test supplies both a synthetic tool error and a synthetic progress error and observes both in the result with the tool error first. The complete four-outcome table must demonstrate that a progress error still fails a successful tool call and isolated tool failures remain unchanged. The existing CLI dual-failure regression must also show its operation error first, proving the shared helper carries the same contract across both delivery paths. Existing progress buffering and framing tests must remain green.
 
 The worker repair is accepted when the schedule unit test proves metadata is not re-read before the monotonic deadline and is re-read once due, the existing cancelled-before-start test retains its typed outcome, and the live oversized-result test still terminates the worker process group before its escaped marker can be written.
 
@@ -161,7 +165,7 @@ Initial problematic worker callback:
 
 ## Interfaces and Dependencies
 
-No new third-party dependencies are required. The policy test continues to use `tempfile` and `std::process::Command`. The MCP helper remains private to `crates/jig/src/mcp.rs` and has the conceptual signature `fn combine_tool_and_progress_results<T>(tool_result: anyhow::Result<T>, progress_result: anyhow::Result<()>) -> anyhow::Result<T>`. The worker observer uses `std::time::Instant` and `Duration`; it retains the existing `OwnedProcessObserver` interface and `WorkerResultFileFailure` mapping. No command-line, JSON-RPC schema, durable-state schema, or public Rust API changes are introduced.
+No new third-party dependencies are required. The policy test continues to use `tempfile` and `std::process::Command`. `crates/jig/src/progress.rs` exposes a crate-private generic `combine_progress_delivery` authority that accepts a primary `anyhow::Result<T>`, any delivery `Result<(), E>` whose error converts into `anyhow::Error`, and a boundary-specific combined-failure label; MCP retains a thin private wrapper that supplies its label. The worker observer uses `std::time::Instant` and `Duration`; it retains the existing `OwnedProcessObserver` interface and `WorkerResultFileFailure` mapping. No command-line, JSON-RPC schema, durable-state schema, or public Rust API changes are introduced.
 
 Plan revision note (2026-08-23 07:38Z): Replaced the one-line work-start body with a self-contained execution plan after inspecting the affected policy, MCP, and worker boundaries. The plan records the structural causes, fixes, separate commit strategy, and full-suite acceptance criteria so work can resume from this file alone.
 
@@ -169,5 +173,12 @@ Plan revision note (2026-08-23 07:42Z): Marked the planning commit complete and 
 
 Plan revision note (2026-08-23 07:45Z): Marked the policy implementation and focused validation complete after restoring all 22 deleted historical entries. The five-test integration target and the real checker both pass; the slice is ready to commit.
 
+Plan revision note (2026-08-23 07:48Z): Recorded the MCP composition helper and its four-outcome regression coverage. Focused validation remains before the second implementation commit.
+
+Plan revision note (2026-08-23 07:49Z): Expanded the MCP milestone to reuse and correct the existing CLI progress result-composition authority after discovering it encoded the same structural bug. Updated the work, commands, acceptance criteria, and interface description; all 23 focused tests pass.
+
 
 Policy slice complete: separated active supported-host scanning from immutable release history, restored all 22 deleted historical entries, added the Unreleased breaking cutover, and passed scripts/check-supported-host-surface.sh plus 5/5 supported_host_surface tests.
+
+
+Progress-delivery slice complete: centralized CLI and MCP outcome composition, kept the primary operation error first when delivery also fails, and passed 11 MCP plus 12 CLI progress unit tests.
