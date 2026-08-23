@@ -1,13 +1,36 @@
 #[cfg(target_os = "linux")]
 use std::fs;
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
-#[cfg(windows)]
-use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-};
 
 use crate::types::{Route, RouteMode};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PidObservation {
+    Alive,
+    Absent,
+    Uncertain,
+}
+
+impl PidObservation {
+    pub(crate) const fn is_alive(self) -> bool {
+        matches!(self, Self::Alive)
+    }
+
+    pub(crate) const fn is_absent(self) -> bool {
+        matches!(self, Self::Absent)
+    }
+
+    pub(crate) const fn may_be_alive(self) -> bool {
+        !self.is_absent()
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Alive => "alive",
+            Self::Absent => "absent",
+            Self::Uncertain => "uncertain",
+        }
+    }
+}
 
 pub(crate) fn route_is_alive(route: &Route) -> bool {
     match route.mode {
@@ -19,7 +42,7 @@ pub(crate) fn route_is_alive(route: &Route) -> bool {
 }
 
 fn pid_matches_owner(pid: u32, expected_start_token: Option<&str>) -> bool {
-    if !pid_is_alive(pid) {
+    if observe_pid(pid).is_absent() {
         return false;
     }
     let Some(expected_start_token) = expected_start_token else {
@@ -37,48 +60,73 @@ pub(crate) const fn process_start_tokens_supported() -> bool {
     cfg!(any(target_os = "linux", target_os = "macos"))
 }
 
-pub(crate) fn pid_is_alive(pid: u32) -> bool {
-    #[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn observe_pid(pid: u32) -> PidObservation {
+    #[cfg(unix)]
     {
-        let Some(pid) = i32::try_from(pid).ok() else {
-            return false;
+        let Ok(pid) = i32::try_from(pid) else {
+            return PidObservation::Absent;
         };
+        if pid <= 0 {
+            return PidObservation::Uncertain;
+        }
         #[cfg(target_os = "linux")]
         if linux_process_is_zombie(pid as u32) {
-            return false;
+            return PidObservation::Absent;
         }
-        unsafe {
-            // SAFETY: pid was range-checked above. Signal 0 performs permission
-            // and existence checks without delivering a signal.
-            libc::kill(pid, 0) == 0
+        #[cfg(target_os = "macos")]
+        if let Some(info) = macos_proc_bsdinfo(pid as u32) {
+            return if info.pbi_status == libc::SZOMB {
+                PidObservation::Absent
+            } else {
+                PidObservation::Alive
+            };
         }
+        // SAFETY: pid is positive and representable. Signal 0 observes process
+        // existence/permission without delivering a signal.
+        let result = unsafe { libc::kill(pid, 0) };
+        classify_unix_pid_probe(result, std::io::Error::last_os_error)
     }
-    #[cfg(target_os = "macos")]
-    {
-        macos_proc_bsdinfo(pid).is_some_and(|info| info.pbi_status != libc::SZOMB)
-    }
-    #[cfg(windows)]
-    {
-        unsafe {
-            // SAFETY: OpenProcess does not take ownership of any Rust memory. The
-            // returned handle is closed on every non-null path below.
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return false;
-            }
-            let mut exit_code = 0u32;
-            // SAFETY: `handle` is a live process handle from OpenProcess and
-            // `exit_code` is a valid out pointer for the duration of the call.
-            let ok = GetExitCodeProcess(handle, &mut exit_code);
-            // SAFETY: `handle` was returned by OpenProcess and has not been closed.
-            let _ = CloseHandle(handle);
-            ok != 0 && exit_code == STILL_ACTIVE as u32
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     {
         let _ = pid;
-        false
+        PidObservation::Uncertain
+    }
+}
+
+#[cfg(unix)]
+fn classify_unix_pid_probe(result: i32, error: impl FnOnce() -> std::io::Error) -> PidObservation {
+    if result == 0 {
+        return PidObservation::Alive;
+    }
+    if error().raw_os_error() == Some(libc::ESRCH) {
+        PidObservation::Absent
+    } else {
+        PidObservation::Uncertain
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_pid_probe_only_treats_esrch_as_absence() {
+        assert_eq!(
+            classify_unix_pid_probe(0, || std::io::Error::other("unused")),
+            PidObservation::Alive
+        );
+        assert_eq!(
+            classify_unix_pid_probe(-1, || std::io::Error::from_raw_os_error(libc::ESRCH)),
+            PidObservation::Absent
+        );
+        assert_eq!(
+            classify_unix_pid_probe(-1, || std::io::Error::from_raw_os_error(libc::EPERM)),
+            PidObservation::Uncertain
+        );
+        assert_eq!(
+            classify_unix_pid_probe(-1, || std::io::Error::from_raw_os_error(libc::EIO)),
+            PidObservation::Uncertain
+        );
     }
 }
 
@@ -97,35 +145,6 @@ fn linux_process_is_zombie(pid: u32) -> bool {
                 .and_then(|state| state.chars().next())
         })
         == Some('Z')
-}
-
-#[cfg(test)]
-pub(super) fn windows_tasklist_csv_pid(line: &str) -> Option<u32> {
-    csv_fields(line).get(1)?.parse().ok()
-}
-
-#[cfg(test)]
-fn csv_fields(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut field = String::new();
-    let mut chars = line.chars().peekable();
-    let mut in_quotes = false;
-
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' if in_quotes && chars.peek() == Some(&'"') => {
-                field.push('"');
-                let _ = chars.next();
-            }
-            '"' => in_quotes = !in_quotes,
-            ',' if !in_quotes => {
-                fields.push(std::mem::take(&mut field));
-            }
-            _ => field.push(ch),
-        }
-    }
-    fields.push(field);
-    fields
 }
 
 #[cfg(target_os = "linux")]

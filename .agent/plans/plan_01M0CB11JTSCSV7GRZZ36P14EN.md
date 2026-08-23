@@ -1,0 +1,1 @@
+Align duration labeling across CLI and TUI, apply projection expiry in details, limit reset expiry to projectable windows, correct changelog placement, and verify regressions.

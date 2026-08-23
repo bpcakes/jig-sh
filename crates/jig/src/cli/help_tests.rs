@@ -405,6 +405,8 @@ fn codex_help_distinguishes_homes_from_configuration_profiles() {
     assert_help_contains(&launch_help, "forwarded to Codex without shell parsing");
     assert_help_contains(&launch_help, "searchable terminal picker immediately");
     assert_help_contains(&launch_help, "details load in the background");
+    assert_help_contains(&launch_help, "+ marks the best projected outcome");
+    assert!(!launch_help.contains('★'), "{launch_help}");
     assert_help_contains(&launch_help, "work resolves as ~/.codex-work");
     assert_help_contains(&launch_help, "use ./work to select a relative directory");
     assert_help_contains(&launch_help, "codex and default both select ~/.codex");
@@ -577,6 +579,10 @@ fn dev_help_describes_launch_and_session_management() {
 
     let stop_help = rendered_help(&["dev", "stop"]);
     assert_help_contains(&stop_help, "--state-dir");
+    assert_help_contains(&stop_help, "--forget-ambiguous-orphans");
+    assert_help_contains(&stop_help, "unconfirmed preflight cleanup");
+    assert_help_contains(&stop_help, "unprovable spawn history");
+    assert_help_contains(&stop_help, "never signals stored PIDs");
     assert_help_omits(&stop_help, "--replace");
     assert_help_omits(&stop_help, "--app");
 }

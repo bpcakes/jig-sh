@@ -1,3 +1,4 @@
+// agentic-loc-exception: staged rendering and contract validation share one transactional boundary.
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
@@ -29,6 +30,7 @@ pub(super) struct RenderStageRequest<'a> {
     pub(super) seed_repo_path: Option<&'a Path>,
     pub(super) prior_managed_paths: Option<&'a BTreeSet<PathBuf>>,
     pub(super) reconcile_runtime_config: bool,
+    pub(super) contract_version: Option<u32>,
     pub(super) progress: CliProgress,
 }
 
@@ -53,6 +55,8 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
         request.template,
         request.answers,
         &destination,
+        None,
+        request.contract_version,
     ))?;
     if !request.answers.is_minimal_footprint() {
         request
@@ -121,6 +125,7 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
                 destination.display()
             )
         })?;
+    validate_staged_runtime_contract(&destination, staged_context.contract_version())?;
     crate::policy::validate_contract(&staged_context).with_context(|| {
         format!(
             "Staged render produced an invalid Jig config or contract in {}",
@@ -136,12 +141,139 @@ pub(super) fn stage_render(request: RenderStageRequest<'_>) -> Result<StagedRend
     })
 }
 
+pub(super) fn validate_staged_runtime_contract(
+    destination: &Path,
+    manifest_contract_version: u32,
+) -> Result<()> {
+    let requires_repository_scoped_runtime =
+        manifest_contract_version > crate::context::LAST_VERSION_LOCKED_CONTRACT_VERSION;
+    let launcher_path = destination.join("scripts/jig");
+    let launcher = match fs::read_to_string(&launcher_path) {
+        Ok(launcher) => Some(launcher),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read {}", launcher_path.display()));
+        }
+    };
+
+    if let Some(launcher) = launcher {
+        let inspection = crate::runtime_artifacts::inspect_launcher(&launcher);
+        match inspection.declared_contract_version() {
+            crate::runtime_artifacts::ParsedField::Value(launcher_contract_version)
+                if launcher_contract_version != manifest_contract_version =>
+            {
+                bail!(
+                    "Staged launcher {} declares contract {}, but the staged manifest declares contract {}",
+                    launcher_path.display(),
+                    launcher_contract_version,
+                    manifest_contract_version
+                );
+            }
+            crate::runtime_artifacts::ParsedField::Malformed => {
+                bail!(
+                    "Staged launcher {} has an unreadable CONTRACT_VERSION",
+                    launcher_path.display()
+                );
+            }
+            crate::runtime_artifacts::ParsedField::Missing
+                if requires_repository_scoped_runtime =>
+            {
+                bail!(
+                    "Staged contract-v{} launcher {} does not declare CONTRACT_VERSION",
+                    manifest_contract_version,
+                    launcher_path.display()
+                );
+            }
+            crate::runtime_artifacts::ParsedField::Missing
+            | crate::runtime_artifacts::ParsedField::Value(_) => {}
+        }
+
+        if requires_repository_scoped_runtime && !inspection.uses_repository_scope_protocol() {
+            bail!(
+                "Staged contract-v{} launcher {} does not implement the repository-scoped runtime protocol",
+                manifest_contract_version,
+                launcher_path.display()
+            );
+        }
+    }
+
+    if requires_repository_scoped_runtime {
+        let installer_path = destination.join("scripts/install-jig.sh");
+        let installer = match fs::read_to_string(&installer_path) {
+            Ok(installer) => Some(installer),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to read {}", installer_path.display()));
+            }
+        };
+        if let Some(installer) = installer {
+            if !crate::runtime_artifacts::inspect_installer(&installer)
+                .uses_repository_scope_protocol()
+            {
+                bail!(
+                    "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
+                    manifest_contract_version,
+                    installer_path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn stage_selected_render(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    selected_paths: &BTreeSet<PathBuf>,
+    contract_version: u32,
+    progress: CliProgress,
+) -> Result<StagedRender> {
+    let root = progress
+        .log_blocked_on_err(TempDir::new().context("Failed to create staging directory"))?;
+    let destination = root.path().join("render");
+    progress.step("render templates", "selected managed files");
+    let active_paths = progress.log_blocked_on_err(render_template_files(
+        template,
+        answers,
+        &destination,
+        Some(selected_paths),
+        Some(contract_version),
+    ))?;
+    let missing_paths = selected_paths
+        .difference(&active_paths)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if !missing_paths.is_empty() {
+        bail!(
+            "Embedded template is missing selected managed paths: {}",
+            missing_paths.join(", ")
+        );
+    }
+    progress.log_blocked_on_err(set_scripts_executable(&destination))?;
+    progress.log_blocked_on_err(validate_staged_runtime_contract(
+        &destination,
+        contract_version,
+    ))?;
+    progress.log_blocked_on_err(validate_portable_planned_file_collisions(&active_paths))?;
+
+    Ok(StagedRender {
+        _root: root,
+        destination,
+        active_paths,
+        retirement_paths: BTreeSet::new(),
+    })
+}
+
 fn render_template_files(
     template: &PreparedTemplateSource,
     answers: &RenderAnswers,
     destination: &Path,
+    selected_paths: Option<&BTreeSet<PathBuf>>,
+    contract_version: Option<u32>,
 ) -> Result<BTreeSet<PathBuf>> {
-    let context = render_context(template, answers)?;
+    let context = render_context(template, answers, contract_version)?;
     let mut environment = Environment::new();
     environment.set_syntax(
         SyntaxConfig::builder()
@@ -157,6 +289,7 @@ fn render_template_files(
         context: &context,
         answers,
         destination,
+        selected_paths,
         managed_paths: BTreeSet::new(),
     };
     match template.render_source() {
@@ -208,12 +341,19 @@ struct TemplateRender<'a, 'env> {
     context: &'a JsonValue,
     answers: &'a RenderAnswers,
     destination: &'a Path,
+    selected_paths: Option<&'a BTreeSet<PathBuf>>,
     managed_paths: BTreeSet<PathBuf>,
 }
 
 impl TemplateRender<'_, '_> {
     fn entry(&mut self, relative_template: &Path, source_label: &str, source: &str) -> Result<()> {
         let relative = output_relative_path(relative_template)?;
+        if self
+            .selected_paths
+            .is_some_and(|selected_paths| !selected_paths.contains(&relative))
+        {
+            return Ok(());
+        }
         if managed_paths::should_omit_unmanaged_rendered_path(&relative, self.answers) {
             return Ok(());
         }
@@ -459,7 +599,11 @@ fn jig_block_bounds(
     }
 }
 
-fn render_context(template: &PreparedTemplateSource, answers: &RenderAnswers) -> Result<JsonValue> {
+fn render_context(
+    template: &PreparedTemplateSource,
+    answers: &RenderAnswers,
+    contract_version: Option<u32>,
+) -> Result<JsonValue> {
     let mut context = serde_json::to_value(answers)?
         .as_object()
         .cloned()
@@ -479,6 +623,8 @@ fn render_context(template: &PreparedTemplateSource, answers: &RenderAnswers) ->
             },
             "template_mode": template.template_mode_answer().unwrap_or(""),
             "template_local_path": template.template_local_path_answer().unwrap_or(""),
+            "contract_version": contract_version
+                .unwrap_or(crate::context::CURRENT_CONTRACT_VERSION),
         }),
     );
     Ok(JsonValue::Object(context))
@@ -603,19 +749,9 @@ mod tests {
     fn template_output_paths_reject_reserved_git_metadata_aliases() {
         for relative in [
             ".git/config.jinja",
-            ".git./config.jinja",
-            ".git /config.jinja",
-            "vendor/.GiT.../config.jinja",
-            "vendor/.GIT. . /config.jinja",
-            "GIT~1/config.jinja",
-            "vendor/git~1. . /config.jinja",
-            ".git:stream.jinja",
-            ".git .:stream.jinja",
-            ".git::$INDEX_ALLOCATION.jinja",
-            ".git...:alternate-stream.jinja",
+            "vendor/.GiT/config.jinja",
             ".g\u{200c}it/config.jinja",
             "\u{feff}.G\u{202e}i\u{206a}T/config.jinja",
-            "vendor\\.GiT...\\config.jinja",
         ] {
             let error = output_relative_path(Path::new(relative))
                 .unwrap_err()
@@ -638,11 +774,6 @@ mod tests {
             ".gitignore.jinja",
             ".gitkeep.jinja",
             "git/config.jinja",
-            "git~2/config.jinja",
-            "git~10/config.jinja",
-            "git~1x/config.jinja",
-            ".gitx. .jinja",
-            ".gitx:stream.jinja",
             ".git .config.jinja",
             ".git\u{a0}.jinja",
             ".git\u{200b}.jinja",

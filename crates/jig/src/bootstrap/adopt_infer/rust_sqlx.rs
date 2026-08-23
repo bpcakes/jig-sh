@@ -346,9 +346,7 @@ pub(super) fn infer_sqlx(
         }
         // `prepare --check` intentionally connects to the database while
         // comparing against the configured metadata directory. Adopt renders
-        // this command for POSIX-like local and CI environments.
-        // Windows SQLx checks should be supplied explicitly with
-        // `--sqlx-check-command`.
+        // this command for supported local and CI environments.
         out.check_command = Some(InferredSqlxValue {
             value: format!(
                 "SQLX_OFFLINE=false SQLX_OFFLINE_DIR='{}' cargo sqlx prepare --check{} -- --all-targets",

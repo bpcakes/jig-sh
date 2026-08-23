@@ -10,7 +10,7 @@ confirm it with `cargo nextest --version`, then run `scripts/jig doctor` for the
 remaining repository prerequisites. Focused `cargo test -p <package>` commands
 remain supported for crate development.
 
-Release `jig init` and `jig adopt` builds use the official remote template at the `vVERSION` tag for the running binary. Unreleased local builds use the templates embedded in the binary when `--template` is omitted. Repos rendered from embedded templates record `_src_path = "embedded:jig-sh"`; generated launchers reuse a same-version `jig` on `PATH` and require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before falling back to the configured or official release-tag install path. When you need checkout-driven template metadata during development, pass `--template /path/to/jig-sh --template-mode committed`, or pass `--vcs-ref main` to use the current official branch.
+Release `jig init` and `jig adopt` builds use the official remote template at the `vVERSION` tag for the running binary. Unreleased local builds use the templates embedded in the binary when `--template` is omitted. Repos rendered from embedded templates record `_src_path = "embedded:jig-sh"`; generated launchers reuse managed cached binaries that support the repository contract and requested profile. Reuse of a compatible binary found on `PATH` requires `JIG_INSTALL_ALLOW_PATH_BINARY=1` and prints the selected absolute path. Embedded renders require `JIG_INSTALL_ALLOW_EMBEDDED_SOURCE_FALLBACK=1` before installing from the configured source's current default branch because an embedded render has no immutable source revision. When you need checkout-driven template metadata during development, pass `--template /path/to/jig-sh --template-mode committed`, or pass `--vcs-ref main` to use the current official branch.
 
 When editing `templates/project`, refresh the checked-in embedded-template snapshot before committing:
 
@@ -18,7 +18,7 @@ When editing `templates/project`, refresh the checked-in embedded-template snaps
 JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 ```
 
-During a release, the remote `vVERSION` tag is pushed after the crates publish step succeeds. If you install a freshly published binary before the tag is visible on GitHub, use `--vcs-ref main` or a local `--template` path for the first render, then retry the pinned default after the tag is pushed.
+During a release, the remote `vVERSION` tag is pushed after the crates publish step succeeds. If you install a freshly published binary before the tag is visible on GitHub, use `--vcs-ref main` or a local `--template` path for the first render, then retry the default release template after the tag is pushed.
 
 ## Release
 
@@ -41,7 +41,7 @@ scripts/release.sh publish 0.1.1
 scripts/release.sh github 0.1.1
 ```
 
-- `prepare` — updates all pinned version files and regenerates `CHANGELOG.md`
+- `prepare` — updates workspace package versions and regenerates `CHANGELOG.md`
 - `check` — requires a clean worktree, verifies version wiring and changelog coverage, runs the direct `scripts/jig` CI checks, validates rendered fixtures, and runs crates.io publish dry runs
 - `tag` — creates the annotated local `vVERSION` tag after the same checks
 - `publish` — requires the tag to point at `HEAD`, publishes `jig-dev-proxy`, waits for crates.io to see it, publishes `jig-sh`, then pushes the tag to origin

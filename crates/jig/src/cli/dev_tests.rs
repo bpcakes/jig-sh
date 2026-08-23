@@ -70,6 +70,7 @@ fn parses_dev_status_and_stop_commands() {
         "stop",
         "--state-dir",
         "/tmp/jig-proxy",
+        "--forget-ambiguous-orphans",
     ])
     .unwrap();
     assert!(stop.json);
@@ -79,6 +80,7 @@ fn parses_dev_status_and_stop_commands() {
             ..
         }) => {
             assert_eq!(opts.state_dir, Some(PathBuf::from("/tmp/jig-proxy")));
+            assert!(opts.forget_ambiguous_orphans);
         }
         other => panic!("expected dev stop command, got {other:?}"),
     }

@@ -10,7 +10,10 @@ use zeroize::Zeroizing;
 
 use crate::SecretBytes;
 
-use super::{MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_READS_PER_POLL, checked_deadline};
+use super::{
+    ACTIVE_OUTPUT_POLL_INTERVAL, MAX_CAPTURED_STREAM_BYTES, MAX_STREAM_BYTES_PER_POLL,
+    MAX_STREAM_READS_PER_POLL, checked_deadline,
+};
 
 enum ProcessPipe {
     Stdout(ChildStdout),
@@ -38,12 +41,7 @@ impl ProcessPipe {
         Ok(())
     }
 
-    #[cfg(windows)]
-    fn prepare(&self) -> io::Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn prepare(&self) -> io::Result<()> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -59,50 +57,7 @@ impl ProcessPipe {
         }
     }
 
-    #[cfg(windows)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, HANDLE};
-        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-
-        let handle = match self {
-            Self::Stdout(reader) => reader.as_raw_handle(),
-            Self::Stderr(reader) => reader.as_raw_handle(),
-        } as HANDLE;
-        let mut available = 0_u32;
-        // SAFETY: handle is a live anonymous-pipe read handle and the only
-        // output pointer names a writable u32. This call copies no bytes.
-        let peeked = unsafe {
-            PeekNamedPipe(
-                handle,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if peeked == 0 {
-            let error = io::Error::last_os_error();
-            if matches!(
-                error.raw_os_error(),
-                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32
-            ) {
-                return Ok(0);
-            }
-            return Err(error);
-        }
-        if available == 0 {
-            return Err(io::Error::from(io::ErrorKind::WouldBlock));
-        }
-        let read_limit = buffer.len().min(available as usize);
-        match self {
-            Self::Stdout(reader) => reader.read(&mut buffer[..read_limit]),
-            Self::Stderr(reader) => reader.read(&mut buffer[..read_limit]),
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn read_available(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -133,19 +88,28 @@ impl CappedOutputDrain {
         })
     }
 
-    fn poll(&mut self) -> AnyResult<()> {
+    fn poll(&mut self) -> AnyResult<bool> {
         let Some(reader) = self.reader.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         let mut buffer = Zeroizing::new([0_u8; 8192]);
+        let mut made_progress = false;
+        let mut bytes_read = 0_usize;
         for _ in 0..MAX_STREAM_READS_PER_POLL {
-            match reader.read_available(&mut buffer[..]) {
+            if bytes_read >= MAX_STREAM_BYTES_PER_POLL {
+                return Ok(true);
+            }
+            let remaining_poll_bytes = MAX_STREAM_BYTES_PER_POLL - bytes_read;
+            let read_limit = buffer.len().min(remaining_poll_bytes);
+            debug_assert!(read_limit > 0);
+            match reader.read_available(&mut buffer[..read_limit]) {
                 Ok(0) => {
                     self.complete = true;
                     self.reader = None;
-                    return Ok(());
+                    return Ok(made_progress);
                 }
                 Ok(read) => {
+                    made_progress = true;
                     let Some(new_len) = self.output.len().checked_add(read) else {
                         self.reader = None;
                         bail!("brokered command {} capture length overflowed", self.label);
@@ -161,9 +125,12 @@ impl CappedOutputDrain {
                         );
                     }
                     self.output.extend_from_slice(&buffer[..read])?;
+                    bytes_read += read;
                 }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    return Ok(made_progress);
+                }
                 Err(error) => {
                     self.reader = None;
                     return Err(error).with_context(|| {
@@ -172,7 +139,7 @@ impl CappedOutputDrain {
                 }
             }
         }
-        Ok(())
+        Ok(made_progress)
     }
 
     const fn is_terminal(&self) -> bool {
@@ -211,9 +178,10 @@ impl CappedOutputDrains {
         })
     }
 
-    pub(super) fn poll(&mut self) -> AnyResult<()> {
-        self.stdout.poll()?;
-        self.stderr.poll()
+    pub(super) fn poll(&mut self) -> AnyResult<bool> {
+        let stdout_progress = self.stdout.poll()?;
+        let stderr_progress = self.stderr.poll()?;
+        Ok(stdout_progress || stderr_progress)
     }
 
     pub(super) const fn is_terminal(&self) -> bool {
@@ -223,14 +191,18 @@ impl CappedOutputDrains {
     pub(super) fn finish(mut self, timeout: Duration) -> AnyResult<(SecretBytes, SecretBytes)> {
         let deadline = checked_deadline("brokered output drain", timeout)?;
         while !self.is_terminal() {
-            self.poll()?;
+            let made_progress = self.poll()?;
             if self.is_terminal() {
                 break;
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                 bail!("brokered command output drain exceeded its {timeout:?} deadline");
             };
-            thread::sleep(remaining.min(Duration::from_millis(2)));
+            if made_progress {
+                thread::sleep(remaining.min(ACTIVE_OUTPUT_POLL_INTERVAL));
+            } else {
+                thread::sleep(remaining.min(Duration::from_millis(2)));
+            }
         }
         Ok((self.stdout.into_output()?, self.stderr.into_output()?))
     }

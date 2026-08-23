@@ -3,10 +3,15 @@ use serde_json::{Value, json};
 
 use crate::command::{LoopDispatchRequest, LoopRunRequest, LoopTickRequest};
 use crate::context::RepoContext;
-use crate::state::{ReceiptInput, now_ms, record_receipt};
+#[cfg(test)]
+use crate::execution::NoopExecutionObserver;
+use crate::execution::{
+    AdditionalCancellationControl, ExecutionControl, ExecutionPhase, PhasePosition,
+};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::LOOP_DISPATCH_TOOL;
 
-use super::engine::{ScheduledTick, tick, tick_scheduled};
+use super::engine::{ScheduledTick, tick_scheduled_with_observer, tick_with_observer};
 use super::occurrence::{
     OccurrenceClaim, OccurrenceFinish, OccurrenceGuard, OccurrenceOutcome, OccurrenceStatus,
     OccurrenceStore, ScheduleOccurrence,
@@ -23,11 +28,24 @@ use policy::{
     DispatchStep, DispatchSummary, RunSummary, RunTickDisposition, TerminalDetails, begin_execution,
 };
 
-pub(super) fn dispatch_due(ctx: &RepoContext, _: LoopDispatchRequest) -> Result<Value> {
-    dispatch_due_at(ctx, now_ms())
+#[cfg(test)]
+pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<Value> {
+    dispatch_due_at_with_observer(ctx, dispatch_at_ms, &mut NoopExecutionObserver)
 }
 
-pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<Value> {
+pub(super) fn dispatch_due_with_observer(
+    ctx: &RepoContext,
+    _: LoopDispatchRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    dispatch_due_at_with_observer(ctx, now_ms(), observer)
+}
+
+fn dispatch_due_at_with_observer(
+    ctx: &RepoContext,
+    dispatch_at_ms: u64,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let started = now_ms();
     let workflows = list_workflows(ctx)?;
     let mut occurrences = OccurrenceStore::new(ctx);
@@ -43,6 +61,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
             &known_occurrences,
             &workflow,
             dispatch_at_ms,
+            observer,
         );
         summary.include(&step);
         if let Some(action) = step.action {
@@ -74,7 +93,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
         "reconciled_occurrences": reconciled,
         "actions": actions,
     });
-    let receipt_id = record_receipt(
+    let receipt_id = record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: LOOP_DISPATCH_TOOL,
@@ -92,6 +111,7 @@ pub(super) fn dispatch_due_at(ctx: &RepoContext, dispatch_at_ms: u64) -> Result<
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )?;
     Ok(json!({
         "ok": ok,
@@ -115,6 +135,7 @@ fn dispatch_workflow(
     known_occurrences: &[ScheduleOccurrence],
     workflow: &ResolvedWorkflow,
     dispatch_at_ms: u64,
+    observer: &mut dyn ExecutionControl,
 ) -> DispatchStep {
     let Some(schedule) = workflow.schedule.as_ref() else {
         return DispatchStep::default();
@@ -197,8 +218,15 @@ fn dispatch_workflow(
             return step;
         }
     };
-    let cancelled = || guard.renewal_failed();
-    let tick = tick_scheduled(ctx, &workflow.id, &claim.occurrence_id, &cancelled);
+    let occurrence_cancelled = || guard.renewal_failed();
+    let mut occurrence_control =
+        AdditionalCancellationControl::new(observer, &occurrence_cancelled);
+    let tick = tick_scheduled_with_observer(
+        ctx,
+        &workflow.id,
+        &claim.occurrence_id,
+        &mut occurrence_control,
+    );
     if tick.as_ref().is_ok_and(|tick| {
         tick.value()
             .is_some_and(|value| value["lease_acquired"].as_bool() == Some(false))
@@ -298,7 +326,11 @@ fn dispatch_action(
     })
 }
 
-pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Value> {
+pub(super) fn run_until_with_observer(
+    ctx: &RepoContext,
+    request: LoopRunRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     if request.until != "idle" {
         bail!(
             "Unsupported loop run stop condition '{}'. Use --until idle.",
@@ -327,8 +359,14 @@ pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Va
 
     let mut ticks = Vec::new();
     let mut summary = RunSummary::default();
-    for _ in 0..request.max_ticks {
-        let tick = tick(
+    for index in 0..request.max_ticks {
+        if observer.cancelled() {
+            bail!("Loop execution was cancelled before the next tick started");
+        }
+        let position = PhasePosition::new((index + 1) as usize, request.max_ticks as usize)
+            .expect("loop tick progress is within the configured nonzero maximum");
+        let phase = ExecutionPhase::start(observer, "loop tick", position);
+        let tick = tick_with_observer(
             ctx,
             LoopTickRequest {
                 workflow: request.workflow.clone(),
@@ -336,7 +374,10 @@ pub(super) fn run_until(ctx: &RepoContext, request: LoopRunRequest) -> Result<Va
                 max_attempts: request.max_attempts,
                 backoff_seconds: request.backoff_seconds,
             },
-        )?;
+            observer,
+        );
+        phase.finish(observer, tick.is_ok());
+        let tick = tick?;
         let disposition = RunTickDisposition::from_tick(&tick);
         ticks.push(tick);
         if summary.observe(disposition) {

@@ -32,10 +32,18 @@ function renderApp(initialEntry = "/") {
   return router;
 }
 
+function statusResponse(version = "0.1.0", ready = true) {
+  return new Response(
+    JSON.stringify({
+      version: { name: "<<[ repo_name ]>>", version },
+      ready,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 it("renders application status from the Rust API", async () => {
-  vi.stubGlobal("fetch", vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    .mockResolvedValueOnce(new Response("", { status: 200 })));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(statusResponse()));
 
   renderApp();
   expect(await screen.findByRole("heading", { name: "<<[ title ]>>" })).toBeDefined();
@@ -46,9 +54,7 @@ it("renders application status from the Rust API", async () => {
 });
 
 it("renders a connected API that is not ready", async () => {
-  vi.stubGlobal("fetch", vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    .mockResolvedValueOnce(new Response("", { status: 503 })));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(statusResponse("0.1.0", false)));
 
   renderApp();
 
@@ -57,33 +63,69 @@ it("renders a connected API that is not ready", async () => {
 
 it("shows invalid API responses and retries", async () => {
   const fetchMock = vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ name: false }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    .mockResolvedValueOnce(new Response("", { status: 503 }))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.2.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    .mockResolvedValueOnce(new Response("", { status: 200 }));
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ready: true }), { status: 200, headers: { "Content-Type": "application/json" } }))
+    .mockResolvedValueOnce(statusResponse("0.2.0"));
   vi.stubGlobal("fetch", fetchMock);
 
   renderApp();
-  expect(await screen.findByText(/did not contain string name and version fields/)).toBeDefined();
+  expect(await screen.findByText(/invalid input/i)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByText("0.2.0")).toBeDefined();
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 });
 
-it("reports an unsuccessful API version response", async () => {
-  vi.stubGlobal("fetch", vi.fn()
-    .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
-    .mockResolvedValueOnce(new Response("", { status: 503 })));
+it("reports an unsuccessful API status response", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          code: "dependency_unavailable",
+          message: "A required dependency is unavailable",
+          request_id: "request-public-503",
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+  );
 
   renderApp();
 
-  expect(await screen.findByText(/version request failed with status 503/)).toBeDefined();
+  expect(
+    await screen.findByText(/A required dependency is unavailable \(request request-public-503\)/i),
+  ).toBeDefined();
+});
+
+it("preserves a plain-text upstream error", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(new Response("Gateway timeout", { status: 504 })),
+  );
+
+  renderApp();
+
+  expect(await screen.findByText("Gateway timeout")).toBeDefined();
+});
+
+it("uses a safe fallback for an unrecognized error body", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ internal: "must not be displayed" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+
+  renderApp();
+
+  expect(await screen.findByText("API request failed")).toBeDefined();
+  expect(screen.queryByText(/must not be displayed/i)).toBeNull();
 });
 
 it("renders the not-found route and navigates home", async () => {
-  vi.stubGlobal("fetch", vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ name: "<<[ repo_name ]>>", version: "0.1.0" }), { status: 200, headers: { "Content-Type": "application/json" } }))
-    .mockResolvedValueOnce(new Response("", { status: 200 })));
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(statusResponse()));
 
   renderApp("/missing");
 

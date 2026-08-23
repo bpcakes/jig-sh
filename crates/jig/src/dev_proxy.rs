@@ -517,12 +517,21 @@ fn frontend_dependency_readiness_with_shell_timeout_and_environment(
             "Frontend dependency readiness check timed out for {app_dir} after {:.1} seconds",
             timeout.as_secs_f64()
         ),
+        Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart) => {
+            return Err(FrontendDependencyPreflightCancelled {
+                app_dir: app_dir.to_string(),
+            }
+            .into());
+        }
         Err(jig_owned_process::OwnedProcessTreeError::Cancelled) => {
             return Err(FrontendDependencyPreflightCancelled {
                 app_dir: app_dir.to_string(),
             }
             .into());
         }
+        Err(jig_owned_process::OwnedProcessTreeError::OutputLimitExceeded(stream)) => bail!(
+            "Frontend dependency readiness check exceeded its {stream} output limit for {app_dir}"
+        ),
         Err(jig_owned_process::OwnedProcessTreeError::Await) => {
             bail!("Frontend dependency readiness check could not be awaited for {app_dir}")
         }
@@ -573,12 +582,6 @@ fn dependency_readiness_usage_is_legacy(stderr: &str) -> bool {
     stderr.contains("Usage: scripts/check-webapps.sh") && !stderr.contains("dependencies-ready")
 }
 
-#[cfg(windows)]
-fn bash_requirement_hint() -> &'static str {
-    "Bash is required for generated web-app checks; run Jig from Git Bash or WSL and ensure `bash` is on PATH."
-}
-
-#[cfg(not(windows))]
 const fn bash_requirement_hint() -> &'static str {
     "Bash is required for generated web-app checks; install Bash and ensure `bash` is on PATH."
 }

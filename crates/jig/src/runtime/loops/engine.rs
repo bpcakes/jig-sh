@@ -6,7 +6,8 @@ use crate::command::{
     LoopAcknowledgeOccurrenceRequest, LoopClearAttemptRequest, LoopStatusRequest, LoopTickRequest,
 };
 use crate::context::RepoContext;
-use crate::state::{ReceiptInput, now_ms, record_receipt};
+use crate::execution::{AdditionalCancellationControl, ExecutionControl};
+use crate::state::{ReceiptInput, now_ms, record_receipt, record_receipt_with_cancellation};
 use crate::tool_defs::{LOOP_ACKNOWLEDGE_OCCURRENCE_TOOL, LOOP_CLEAR_ATTEMPT_TOOL, LOOP_TICK_TOOL};
 
 use super::occurrence::{OccurrenceAcknowledgement, OccurrenceStatus, OccurrenceStore};
@@ -62,9 +63,12 @@ impl ScheduledTick {
     }
 }
 
-pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value> {
+pub(super) fn tick_with_observer(
+    ctx: &RepoContext,
+    request: LoopTickRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let started = now_ms();
-    let never_cancelled = || false;
     tick_with_execution(
         ctx,
         request,
@@ -72,16 +76,16 @@ pub(super) fn tick(ctx: &RepoContext, request: LoopTickRequest) -> Result<Value>
         TickExecution {
             item_key: format!("manual-{started}"),
         },
-        &never_cancelled,
+        observer,
     )
     .and_then(ScheduledTick::into_manual_result)
 }
 
-pub(super) fn tick_scheduled(
+pub(super) fn tick_scheduled_with_observer(
     ctx: &RepoContext,
     workflow_id: &str,
     occurrence_id: &str,
-    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<ScheduledTick> {
     tick_with_execution(
         ctx,
@@ -95,7 +99,7 @@ pub(super) fn tick_scheduled(
         TickExecution {
             item_key: occurrence_id.to_string(),
         },
-        cancelled,
+        observer,
     )
 }
 
@@ -104,7 +108,7 @@ fn tick_with_execution(
     request: LoopTickRequest,
     started: u64,
     execution: TickExecution,
-    externally_cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<ScheduledTick> {
     let workflow = resolve_workflow(
         ctx,
@@ -142,14 +146,16 @@ fn tick_with_execution(
                     &acquired,
                     workflow.lease_ttl_seconds,
                 )?;
-                let cancelled = || externally_cancelled() || lease_guard.renewal_failed();
+                let lease_cancelled = || lease_guard.renewal_failed();
+                let mut lease_control =
+                    AdditionalCancellationControl::new(observer, &lease_cancelled);
                 match run_workflow_tick(
                     ctx,
                     &workflow,
                     &execution,
                     &mut lease_store,
                     &mut attempt_store,
-                    &cancelled,
+                    &mut lease_control,
                 ) {
                     Ok(tick) => {
                         observed = tick.observed;
@@ -228,7 +234,7 @@ fn tick_with_execution(
         "error": tick_error,
         "item_key": execution.item_key,
     });
-    let receipt_id = match record_receipt(
+    let receipt_id = match record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: LOOP_TICK_TOOL,
@@ -256,6 +262,7 @@ fn tick_with_execution(
             collect_worktree_fingerprint: true,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     ) {
         Ok(receipt_id) => receipt_id,
         Err(error) => {
@@ -299,6 +306,7 @@ fn tick_with_execution(
     Ok(ScheduledTick::Reported { value, completion })
 }
 
+#[cfg(test)]
 pub(super) fn status(ctx: &RepoContext, request: LoopStatusRequest) -> Result<Value> {
     status_with_cancellation(ctx, request, &|| false)
 }
@@ -393,7 +401,7 @@ fn run_workflow_tick(
     execution: &TickExecution,
     lease_store: &mut LeaseStore,
     attempt_store: &mut AttemptStore,
-    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     match workflow.kind.as_str() {
         CODEX_TASK_KIND => codex_task::codex_task_tick(
@@ -402,12 +410,12 @@ fn run_workflow_tick(
             codex_task::CodexTaskExecution {
                 item_key: &execution.item_key,
             },
-            cancelled,
+            observer,
         ),
-        GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx),
+        GITHUB_PR_STATUS_KIND => github::github_pr_status_tick(ctx, observer),
         NOOP_STATUS_KIND => noop::noop_status_tick(ctx),
         PR_MANAGER_KIND => {
-            pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store, cancelled)
+            pr_manager::pr_manager_tick(ctx, workflow, lease_store, attempt_store, observer)
         }
         _ => bail!(
             "Unsupported loop workflow kind '{}'. Supported kinds: {CODEX_TASK_KIND}, {NOOP_STATUS_KIND}, {GITHUB_PR_STATUS_KIND}, {PR_MANAGER_KIND}.",

@@ -1,0 +1,1 @@
+Make generated runtime installation Bash 3.2-safe and fail closed for unpinned remotes, while keeping doctor and contract diagnostics reachable through the launcher. Add focused fixture coverage and run required gates.

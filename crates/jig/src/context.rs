@@ -9,13 +9,37 @@ use serde::Deserialize;
 
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
+// agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
+
+mod defaults;
+mod execution_config;
+pub(crate) use execution_config::{
+    CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
+};
 mod loop_config;
 mod optional;
+mod runtime;
 mod status_config;
 mod work_config;
 
+pub(crate) use defaults::{
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_PLUGINS,
+    DEFAULT_CODEX_MARKETPLACE_SOURCE, SUPPORTED_WEB_PACKAGE_MANAGERS,
+};
 pub(crate) use optional::REPO_CONTEXT_NOT_FOUND;
+pub(crate) use runtime::{
+    CURRENT_SESSION_FILE, JIG_REPO_ROOT_ENV, LAUNCHER_REPAIR_STAGING_PREFIX,
+    MIN_SUPPORTED_CONTRACT_VERSION, RepoConfigProbe, RuntimeCacheProfile,
+    is_supported_contract_version, runtime_cache_base, runtime_profile_cache_name,
+    runtime_profile_cache_path,
+};
+use runtime::{ContractVersionProbe, non_empty_legacy_jig_version};
+#[cfg(test)]
+pub(crate) use runtime::{
+    FALLBACK_RUNTIME_CACHE_BASE, GIT_RUNTIME_CACHE_BASE, RUNTIME_CACHE_PROFILE_SUFFIX,
+};
 
+pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 pub(crate) use work_config::{
@@ -23,19 +47,10 @@ pub(crate) use work_config::{
     parse_review_scope_arg,
 };
 
-const CURRENT_SESSION_FILE: &str = "jig-current-session.txt";
-const JIG_REPO_ROOT_ENV: &str = "JIG_REPO_ROOT";
-pub(crate) const DEFAULT_CODEX_MARKETPLACE_ID: &str = "jig-skills";
-// jig.sh generated repos default to the shared Jig skills marketplace; forks can
-// override or opt out through agent_tooling.codex.marketplaces in .jig.toml.
-pub(crate) const DEFAULT_CODEX_MARKETPLACE_SOURCE: &str = "bpcakes/jig-skills";
-pub(crate) const DEFAULT_CODEX_MARKETPLACE_PLUGINS: &[&str] = &[
-    "jig-rust@jig-skills",
-    "jig-swift@jig-skills",
-    "jig-typescript@jig-skills",
-    "jig-exec-plans@jig-skills",
-];
-pub(crate) const SUPPORTED_WEB_PACKAGE_MANAGERS: &[&str] = &["bun", "npm", "pnpm", "yarn"];
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 4;
+pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
+pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
+    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 #[derive(Clone, Debug, Deserialize)]
@@ -56,7 +71,8 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     ci_github_runner: String,
-    jig_version: String,
+    #[serde(default)]
+    jig_version: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     template_source_url: String,
@@ -127,6 +143,8 @@ struct RepoConfig {
     loop_config: LoopConfig,
     #[serde(default)]
     status: StatusConfig,
+    #[serde(default)]
+    execution: execution_config::ExecutionConfig,
     #[serde(default)]
     agent_tooling: AgentToolingConfig,
 }
@@ -280,17 +298,12 @@ pub(crate) struct CodexMarketplaceConfig {
 struct ContractManifest {
     contract_version: u32,
     tool_namespace: String,
-    jig_version: String,
+    #[serde(default)]
+    jig_version: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
     required_commands: Vec<String>,
     tools: Vec<ManifestTool>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RepoConfigProbe {
-    pub(crate) repo_name: String,
-    pub(crate) jig_version: String,
 }
 
 #[derive(Clone, Debug)]
@@ -302,11 +315,6 @@ pub(crate) struct RepoContext {
 }
 
 impl RepoContext {
-    pub(crate) fn load() -> Result<Self> {
-        let root = find_repo_root_from_or_env(&std::env::current_dir()?)?;
-        Self::load_from_root(root)
-    }
-
     pub(crate) fn load_from_root(root: PathBuf) -> Result<Self> {
         let config_path = root.join(".jig.toml");
         let config = load_config(&config_path)?;
@@ -317,7 +325,7 @@ impl RepoContext {
         let manifest: ContractManifest = serde_json::from_str(&manifest_text)
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
 
-        if !matches!(manifest.contract_version, 2..=3) {
+        if !is_supported_contract_version(manifest.contract_version) {
             bail!(
                 "Unsupported jig contract version: {}",
                 manifest.contract_version
@@ -326,17 +334,24 @@ impl RepoContext {
         if manifest.tool_namespace != "jig" {
             bail!("Unsupported tool namespace: {}", manifest.tool_namespace);
         }
-        // Versions 2 and 3 share the command-backed manifest schema; v3 changes
-        // the CLI command surface, not the required_commands contract shape.
+        // Supported contract epochs share the command-backed manifest schema.
+        // A contract bump can also cover runtime-owned behavior that is not
+        // represented as an individual manifest field.
         if manifest.required_commands.is_empty() {
             bail!("jig contract manifest does not declare required commands");
         }
-        if config.jig_version != manifest.jig_version {
-            bail!(
-                "jig version mismatch between .jig.toml ({}) and manifest ({})",
-                config.jig_version,
-                manifest.jig_version
-            );
+        if manifest.contract_version <= LAST_VERSION_LOCKED_CONTRACT_VERSION {
+            let config_version =
+                non_empty_legacy_jig_version(config.jig_version.as_deref(), ".jig.toml")?;
+            let manifest_version = non_empty_legacy_jig_version(
+                manifest.jig_version.as_deref(),
+                ".agent/jig-contract.json",
+            )?;
+            if config_version != manifest_version {
+                bail!(
+                    "jig version mismatch between .jig.toml ({config_version}) and manifest ({manifest_version})"
+                );
+            }
         }
 
         let current_session_path = resolve_current_session_path(&root);
@@ -347,6 +362,23 @@ impl RepoContext {
             config,
             manifest,
         })
+    }
+
+    pub(crate) fn supported_contract_version_from_root(root: &Path) -> Result<u32> {
+        let contract_version = Self::declared_contract_version_from_root(root)?;
+        if !is_supported_contract_version(contract_version) {
+            bail!("Unsupported jig contract version: {contract_version}");
+        }
+        Ok(contract_version)
+    }
+
+    pub(crate) fn declared_contract_version_from_root(root: &Path) -> Result<u32> {
+        let manifest_path = root.join(".agent/jig-contract.json");
+        let manifest_text = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
+        let probe: ContractVersionProbe = serde_json::from_str(&manifest_text)
+            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
+        Ok(probe.contract_version)
     }
 
     pub(crate) fn validate_config_file(root: &Path) -> Result<RepoConfigProbe> {
@@ -385,8 +417,8 @@ impl RepoContext {
         &self.config.default_branch
     }
 
-    pub(crate) fn jig_version(&self) -> &str {
-        &self.config.jig_version
+    pub(crate) fn legacy_jig_version(&self) -> Option<&str> {
+        self.config.jig_version.as_deref()
     }
 
     pub(crate) fn is_minimal_footprint(&self) -> bool {

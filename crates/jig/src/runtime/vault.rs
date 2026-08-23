@@ -1,8 +1,6 @@
 use std::io::{ErrorKind, IsTerminal, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-#[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -209,8 +207,7 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
     let result = vault.import_fields(&passphrase, imported.mutations, request.replace)?;
     if let Err(error) = prepared.install() {
         bail!(
-            "vault import succeeded, but destination installation failed: {error}. Safe rerun: {}",
-            recovery_command
+            "vault import succeeded, but destination installation failed: {error}. Safe rerun: {recovery_command}"
         );
     }
 
@@ -713,11 +710,7 @@ fn trusted_repo_scope_dir(scope: &VaultRepoScope) -> Result<String> {
     digest.update(b"jig-vault-repo-scope-v2\0");
     #[cfg(unix)]
     digest.update(repo_root.as_os_str().as_bytes());
-    #[cfg(windows)]
-    for unit in repo_root.as_os_str().encode_wide() {
-        digest.update(unit.to_le_bytes());
-    }
-    #[cfg(all(not(unix), not(windows)))]
+    #[cfg(not(unix))]
     digest.update(repo_root.to_string_lossy().as_bytes());
     digest.update(b"\0");
     digest.update(scope.scope_id.as_bytes());
@@ -1048,10 +1041,10 @@ mod tests {
     fn repo_scope_resolves_under_vault_base_home() {
         let _env = lock_env();
         let temp = tempdir().unwrap();
-        let base = temp.path().join("vault-base");
+        let base = temp.path().canonicalize().unwrap().join("vault-base");
         let repo = temp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let _home = EnvVarGuard::set(VAULT_HOME_ENV, &base);
+        let _home = EnvVarGuard::set(VAULT_HOME_ENV, temp.path().join("vault-base"));
 
         let output = status(VaultStatusRequest {
             vault: VaultRuntimeOptions::repo("scope_123", "demo", &repo),

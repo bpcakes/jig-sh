@@ -270,26 +270,22 @@ fn resolve_onepassword_value(
 
     if stdout_pump.overflowed {
         bail!(
-            "1Password value for variable '{}' exceeds the {MAX_SECRET_VALUE_LEN} byte limit",
-            variable
+            "1Password value for variable '{variable}' exceeds the {MAX_SECRET_VALUE_LEN} byte limit"
         );
     }
     if stderr_pump.overflowed {
         bail!(
-            "1Password CLI diagnostic for variable '{}' exceeded the {MAX_OP_STDERR_LEN} byte safety limit; diagnostic text was suppressed",
-            variable
+            "1Password CLI diagnostic for variable '{variable}' exceeded the {MAX_OP_STDERR_LEN} byte safety limit; diagnostic text was suppressed"
         );
     }
     if let Some(kind) = stdout_pump.failure {
         bail!(
-            "failed to read bounded 1Password stdout for variable '{}' ({kind:?}); captured bytes were discarded",
-            variable
+            "failed to read bounded 1Password stdout for variable '{variable}' ({kind:?}); captured bytes were discarded"
         );
     }
     if let Some(kind) = stderr_pump.failure {
         bail!(
-            "failed to read bounded 1Password stderr for variable '{}' ({kind:?}); captured bytes were discarded",
-            variable
+            "failed to read bounded 1Password stderr for variable '{variable}' ({kind:?}); captured bytes were discarded"
         );
     }
     let status = match wait_outcome {
@@ -323,13 +319,10 @@ fn resolve_onepassword_value(
     }
     drop(stderr_pump.bytes);
     if std::str::from_utf8(stdout_pump.bytes.as_slice()).is_err() {
-        bail!(
-            "1Password value for variable '{}' is not valid UTF-8",
-            variable
-        );
+        bail!("1Password value for variable '{variable}' is not valid UTF-8");
     }
     if stdout_pump.bytes.as_slice().contains(&0) {
-        bail!("1Password value for variable '{}' contains NUL", variable);
+        bail!("1Password value for variable '{variable}' contains NUL");
     }
     Ok(stdout_pump.bytes)
 }
@@ -358,12 +351,7 @@ impl OpPipe {
         Ok(())
     }
 
-    #[cfg(windows)]
-    fn prepare(&self) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn prepare(&self) -> std::io::Result<()> {
         Err(std::io::Error::new(
             ErrorKind::Unsupported,
@@ -379,50 +367,7 @@ impl OpPipe {
         }
     }
 
-    #[cfg(windows)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{ERROR_BROKEN_PIPE, ERROR_NO_DATA, HANDLE};
-        use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-
-        let handle = match self {
-            Self::Stdout(reader) => reader.as_raw_handle(),
-            Self::Stderr(reader) => reader.as_raw_handle(),
-        } as HANDLE;
-        let mut available = 0_u32;
-        // SAFETY: handle is a live anonymous-pipe read handle and `available`
-        // is writable for the duration of this call.
-        let peeked = unsafe {
-            PeekNamedPipe(
-                handle,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null_mut(),
-                &mut available,
-                std::ptr::null_mut(),
-            )
-        };
-        if peeked == 0 {
-            let error = std::io::Error::last_os_error();
-            if matches!(
-                error.raw_os_error(),
-                Some(code) if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32
-            ) {
-                return Ok(0);
-            }
-            return Err(error);
-        }
-        if available == 0 {
-            return Err(std::io::Error::from(ErrorKind::WouldBlock));
-        }
-        let read_limit = buffer.len().min(available as usize);
-        match self {
-            Self::Stdout(reader) => reader.read(&mut buffer[..read_limit]),
-            Self::Stderr(reader) => reader.read(&mut buffer[..read_limit]),
-        }
-    }
-
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     fn read_available(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
         Err(std::io::Error::new(
             ErrorKind::Unsupported,
@@ -568,19 +513,7 @@ fn isolate_op_process(command: &mut Command) {
     command.process_group(0);
 }
 
-#[cfg(windows)]
-fn isolate_op_process(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
-
-    // M4 private destination preflight rejects the import before resolution on
-    // Windows, so this runner is currently unreachable there. Keep direct
-    // process creation explicit without claiming Job Object containment; any
-    // future Windows private-file support must add that boundary first.
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn isolate_op_process(_command: &mut Command) {}
 
 fn terminate_and_reap(child: &mut Child, process_id: u32) {

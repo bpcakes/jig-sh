@@ -438,7 +438,9 @@ fn update_human_summary_reports_managed_file_counts() {
             "files_removed": [],
             "files_unchanged": [".mcp.json"],
             "conflicts": []
-        }
+        },
+        "warnings": ["Embedded launcher templates will replace source-specific customizations."],
+        "next_steps": ["Run `jig adopt /tmp/repo --write --force` before a full update."]
     }));
 
     assert!(summary.contains("update summary"));
@@ -446,5 +448,9 @@ fn update_human_summary_reports_managed_file_counts() {
     assert!(summary.contains("target: /tmp/repo"));
     assert!(summary.contains("answers: .jig.toml"));
     assert!(summary.contains("managed files: 1 created, 2 modified, 0 removed, 1 unchanged"));
+    assert!(summary.contains("warnings:"));
+    assert!(summary.contains("Embedded launcher templates"));
+    assert!(summary.contains("next steps:"));
+    assert!(summary.contains("jig adopt /tmp/repo --write --force"));
     assert!(summary.contains("full report: rerun with --json"));
 }

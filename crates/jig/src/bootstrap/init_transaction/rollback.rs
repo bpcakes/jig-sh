@@ -421,10 +421,18 @@ impl InitMutationTransaction {
         &mut self,
         primary: anyhow::Error,
     ) -> anyhow::Error {
+        self.finish_failed_mutation(primary, "init changes")
+    }
+
+    pub(in crate::bootstrap) fn finish_failed_mutation(
+        &mut self,
+        primary: anyhow::Error,
+        mutation_label: &str,
+    ) -> anyhow::Error {
         match self.rollback() {
             Ok(()) => primary,
             Err(rollback) => anyhow::anyhow!(
-                "{primary:#}\nAdditionally, failed to roll back init changes:\n{rollback:#}"
+                "{primary:#}\nAdditionally, failed to roll back {mutation_label}:\n{rollback:#}"
             ),
         }
     }

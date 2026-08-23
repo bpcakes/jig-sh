@@ -1,3 +1,4 @@
+// agentic-loc-exception: legacy answer normalization remains centralized during contract-v4 rollout.
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -10,7 +11,7 @@ use super::{
     generated_package_manager_version,
 };
 use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, StatusConfig,
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig, StatusConfig,
     config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
     validate_web_package_manager,
 };
@@ -42,7 +43,10 @@ pub(super) struct RenderAnswers {
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
-    jig_version: String,
+    /// Compatibility input for templates pinned before contract v4. Current
+    /// templates intentionally do not persist a Jig product-version pin.
+    #[serde(rename = "jig_version")]
+    legacy_template_jig_version: String,
     template_source_url: String,
     #[serde(serialize_with = "serialize_harness_footprint")]
     harness_footprint: HarnessFootprint,
@@ -77,6 +81,7 @@ pub(super) struct RenderAnswers {
     generated_frontend_dev_apps: Vec<FrontendApp>,
     vault: vault::VaultAnswers,
     status: StatusConfig,
+    execution: ExecutionConfig,
     agent_tooling: AgentToolingAnswers,
 }
 
@@ -341,6 +346,7 @@ struct RawAnswers {
     dev: Option<dev::RawDevAnswers>,
     vault: Option<vault::VaultAnswers>,
     status: Option<StatusConfig>,
+    execution: Option<ExecutionConfig>,
     agent_tooling: Option<AgentToolingAnswers>,
 }
 
@@ -505,6 +511,7 @@ impl RawAnswers {
                 .apps = Some(opts.dev_apps.clone());
         }
         merge_option(&mut self.status, opts.status.clone());
+        merge_option(&mut self.execution, opts.execution.clone());
     }
 
     fn normalize_app_dirs(&mut self) -> Result<()> {
@@ -556,6 +563,7 @@ impl RawAnswers {
             frontend_apps: self.frontend_apps.unwrap_or_default(),
             dev_apps,
             status: self.status,
+            execution: self.execution,
         }
     }
 
@@ -639,6 +647,7 @@ impl RawAnswers {
         vault::validate_answers(&vault)?;
         let status = self.status.unwrap_or_default();
         status.validate()?;
+        let execution = self.execution.unwrap_or_default();
         let legacy_dev_command = self.dev_command.filter(|value| !value.trim().is_empty());
 
         let web_package_manager = self.web_package_manager.unwrap_or_else(|| "bun".into());
@@ -674,7 +683,7 @@ impl RawAnswers {
             ci_github_runner: self
                 .ci_github_runner
                 .unwrap_or_else(|| "ubuntu-latest".into()),
-            jig_version: self
+            legacy_template_jig_version: self
                 .jig_version
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
             template_source_url: self.template_source_url.unwrap_or_default(),
@@ -725,6 +734,7 @@ impl RawAnswers {
             frontend_apps,
             vault,
             status,
+            execution,
             agent_tooling: self.agent_tooling.unwrap_or_default(),
         })
     }

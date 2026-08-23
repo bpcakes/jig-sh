@@ -6,7 +6,7 @@ nextest-version = "0.9.130"
 fail-fast = false
 # Keep process- and environment-heavy tests deterministic on high-core hosts.
 test-threads = 4
-# Surface stalled cross-platform tests promptly; CI jobs retain their hard timeout.
+# Surface stalled supported-host tests promptly; CI jobs retain their hard timeout.
 slow-timeout = { period = "60s" }
 
 [test-groups]
@@ -15,7 +15,9 @@ process-signals = { max-threads = 1 }
 vault-crypto = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime) | test(bootstrap::tests::windows_dependency_checker))'
+# Keep this group at a uniform weight. cargo-nextest 0.9.130 can strand
+# heavier queued group members when unrelated tests saturate global slots.
+filter = 'package(jig-sh) & (test(bootstrap::tests::frontend_adoption) | test(bootstrap::tests::basic::scaffold_generation) | test(bootstrap::tests::basic::scaffold_runtime))'
 test-group = 'frontend-node'
 
 [[profile.default.overrides]]
@@ -24,7 +26,9 @@ test-group = 'frontend-node'
 threads-required = 2
 
 [[profile.default.overrides]]
-filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
+# These tests launch process trees and env-port helpers from a shared local
+# range; serialize them so one test cannot claim another test's probed port.
+filter = '(package(jig-sh) & (binary(codex_launcher) | binary(dev_lifecycle) | binary(dev_sigint))) | package(jig-owned-process) | (package(jig-dev-proxy) & test(processes))'
 test-group = 'process-signals'
 
 [[profile.default.overrides]]

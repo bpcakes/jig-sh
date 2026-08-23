@@ -2,22 +2,22 @@ use std::fs;
 use std::io::{Read, Write, copy};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use tempfile::NamedTempFile;
 
 #[cfg(unix)]
 use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use jig_owned_process::{
-    OwnedProcessTreeError, ProcessOutputLimits, format_exit_status, require_success,
-    run_checked_output_with_context, run_owned_process_tree_with_output_limits,
+    ProcessOutputLimits, format_exit_status, require_success, run_checked_output_with_context,
+    run_owned_process_tree_with_output_limits,
 };
 
 const MAX_INLINE_UNTRACKED_BYTES: u64 = 8 * 1024 * 1024;
@@ -47,18 +47,41 @@ pub(crate) struct GitReceiptMetadata {
 }
 
 pub(crate) fn collect_git_receipt_metadata(root: &Path) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(root, true)
+    collect_git_receipt_metadata_with_options(root, true, GitReceiptCollection::Blocking)
 }
 
 pub(crate) fn collect_git_receipt_metadata_without_worktree_fingerprint(
     root: &Path,
 ) -> GitReceiptMetadata {
-    collect_git_receipt_metadata_with_options(root, false)
+    collect_git_receipt_metadata_with_options(root, false, GitReceiptCollection::Blocking)
+}
+
+pub(crate) fn collect_git_receipt_metadata_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> GitReceiptMetadata {
+    collect_git_receipt_metadata_with_options(
+        root,
+        true,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
+}
+
+pub(crate) fn collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation(
+    root: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> GitReceiptMetadata {
+    collect_git_receipt_metadata_with_options(
+        root,
+        false,
+        GitReceiptCollection::Cancellable(cancelled),
+    )
 }
 
 fn collect_git_receipt_metadata_with_options(
     root: &Path,
     collect_worktree_fingerprint: bool,
+    collection: GitReceiptCollection<'_>,
 ) -> GitReceiptMetadata {
     let (
         changed_paths,
@@ -66,7 +89,7 @@ fn collect_git_receipt_metadata_with_options(
         changed_paths_truncated,
         changed_paths_digest,
         git_status_error,
-    ) = match repo_changed_paths(root) {
+    ) = match repo_changed_paths_inner(root, collection) {
         Ok(changed_paths) => {
             let changed_paths = bounded_changed_paths(changed_paths);
             (
@@ -79,12 +102,12 @@ fn collect_git_receipt_metadata_with_options(
         }
         Err(error) => (Vec::new(), None, false, None, Some(format!("{error:#}"))),
     };
-    let (diff_stat, git_diff_stat_error) = match repo_diff_stat(root) {
+    let (diff_stat, git_diff_stat_error) = match repo_diff_stat_inner(root, collection) {
         Ok(diff_stat) => (diff_stat, None),
         Err(error) => (DiffStat::default(), Some(format!("{error:#}"))),
     };
     let (worktree_fingerprint, worktree_fingerprint_error) = if collect_worktree_fingerprint {
-        match repo_worktree_fingerprint(root) {
+        match repo_worktree_fingerprint_inner(root, collection) {
             Ok(fingerprint) => (Some(fingerprint), None),
             Err(error) => (None, Some(format!("{error:#}"))),
         }
@@ -105,8 +128,17 @@ fn collect_git_receipt_metadata_with_options(
     }
 }
 
+#[cfg(test)]
 fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
-    let output = git_output(
+    repo_changed_paths_inner(root, GitReceiptCollection::Blocking)
+}
+
+fn repo_changed_paths_inner(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Vec<String>> {
+    collection.ensure_active()?;
+    let output = collection.git_output(
         root,
         &[
             "status",
@@ -133,8 +165,9 @@ fn repo_changed_paths(root: &Path) -> Result<Vec<String>> {
     })
 }
 
-fn repo_diff_stat(root: &Path) -> Result<DiffStat> {
-    let output = git_output(
+fn repo_diff_stat_inner(root: &Path, collection: GitReceiptCollection<'_>) -> Result<DiffStat> {
+    collection.ensure_active()?;
+    let output = collection.git_output(
         root,
         &["diff", "--numstat", "--", ".", ":(exclude).agent/**"],
         "git diff --numstat",
@@ -180,30 +213,30 @@ fn changed_paths_digest(paths: &[String]) -> String {
 }
 
 pub(crate) fn repo_worktree_fingerprint(root: &Path) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, FingerprintCollection::Blocking)
+    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Blocking)
 }
 
 pub(crate) fn repo_worktree_fingerprint_with_cancellation(
     root: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    repo_worktree_fingerprint_inner(root, FingerprintCollection::Cancellable(cancelled))
+    repo_worktree_fingerprint_inner(root, GitReceiptCollection::Cancellable(cancelled))
 }
 
-pub(crate) fn is_worktree_fingerprint_cancellation(error: &anyhow::Error) -> bool {
-    error.is::<WorktreeFingerprintCancelled>()
+pub(crate) fn is_git_receipt_collection_cancellation(error: &anyhow::Error) -> bool {
+    error.is::<GitReceiptCollectionCancelled>()
 }
 
 #[derive(Clone, Copy)]
-enum FingerprintCollection<'a> {
+enum GitReceiptCollection<'a> {
     Blocking,
     Cancellable(&'a dyn Fn() -> bool),
 }
 
-impl FingerprintCollection<'_> {
+impl GitReceiptCollection<'_> {
     fn ensure_active(self) -> Result<()> {
         if matches!(self, Self::Cancellable(cancelled) if cancelled()) {
-            return Err(WorktreeFingerprintCancelled.into());
+            return Err(GitReceiptCollectionCancelled.into());
         }
         Ok(())
     }
@@ -237,19 +270,19 @@ impl FingerprintCollection<'_> {
 }
 
 #[derive(Debug)]
-struct WorktreeFingerprintCancelled;
+struct GitReceiptCollectionCancelled;
 
-impl std::fmt::Display for WorktreeFingerprintCancelled {
+impl std::fmt::Display for GitReceiptCollectionCancelled {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("worktree fingerprint collection was cancelled")
+        formatter.write_str("Git receipt metadata collection was cancelled")
     }
 }
 
-impl std::error::Error for WorktreeFingerprintCancelled {}
+impl std::error::Error for GitReceiptCollectionCancelled {}
 
 fn repo_worktree_fingerprint_inner(
     root: &Path,
-    collection: FingerprintCollection<'_>,
+    collection: GitReceiptCollection<'_>,
 ) -> Result<String> {
     collection.ensure_active()?;
     let status = collection.git_output(
@@ -304,7 +337,7 @@ fn repo_worktree_fingerprint_inner(
 fn untracked_file_contents(
     root: &Path,
     status_stdout: &[u8],
-    collection: FingerprintCollection<'_>,
+    collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<u8>> {
     let mut contents = Vec::new();
     let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
@@ -418,7 +451,7 @@ fn append_untracked_path_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
-    collection: FingerprintCollection<'_>,
+    collection: GitReceiptCollection<'_>,
 ) -> Result<()> {
     collection.ensure_active()?;
     let file_type = metadata.file_type();
@@ -458,7 +491,7 @@ fn append_untracked_file_fingerprint(
     full_path: &Path,
     metadata: &fs::Metadata,
     remaining_inline_bytes: &mut u64,
-    collection: FingerprintCollection<'_>,
+    collection: GitReceiptCollection<'_>,
 ) -> Result<()> {
     collection.ensure_active()?;
     if metadata.len() > MAX_INLINE_UNTRACKED_BYTES || metadata.len() > *remaining_inline_bytes {
@@ -490,7 +523,7 @@ fn append_hashed_file_fingerprint(
     contents: &mut Vec<u8>,
     root: &Path,
     full_path: &Path,
-    collection: FingerprintCollection<'_>,
+    collection: GitReceiptCollection<'_>,
 ) -> Result<()> {
     contents.extend_from_slice(b"file-hash\0");
     contents.extend_from_slice(collection.git_hash_file(root, full_path)?.as_bytes());
@@ -529,7 +562,7 @@ fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
     )
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_output_with_cancellation(
     root: &Path,
     args: &[&str],
@@ -555,20 +588,20 @@ fn git_output_with_cancellation(
     Ok(output)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_output_with_cancellation(
     root: &Path,
     args: &[&str],
     label: &str,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Output> {
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     let output = git_output(root, args, label)?;
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     Ok(output)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_git_command_with_cancellation(
     root: &Path,
     command: &mut Command,
@@ -586,8 +619,8 @@ fn run_git_command_with_cancellation(
         cancelled,
     ) {
         Ok(output) => output,
-        Err(OwnedProcessTreeError::Cancelled) => {
-            return Err(WorktreeFingerprintCancelled.into());
+        Err(error) if error.is_cancellation() => {
+            return Err(GitReceiptCollectionCancelled.into());
         }
         Err(error) => {
             return Err(anyhow::Error::new(error)
@@ -654,7 +687,7 @@ fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_hash_object_with_cancellation(
     root: &Path,
     input: &[u8],
@@ -691,7 +724,7 @@ fn write_fingerprint_hash_input(
     input: &[u8],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
-    let collection = FingerprintCollection::Cancellable(cancelled);
+    let collection = GitReceiptCollection::Cancellable(cancelled);
     for chunk in input.chunks(FINGERPRINT_HASH_WRITE_CHUNK) {
         collection.ensure_active()?;
         writer
@@ -705,15 +738,15 @@ fn write_fingerprint_hash_input(
     collection.ensure_active()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_hash_object_with_cancellation(
     root: &Path,
     input: &[u8],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     let hash = git_hash_object(root, input)?;
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     Ok(hash)
 }
 
@@ -756,7 +789,7 @@ fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_hash_file_with_cancellation(
     root: &Path,
     full_path: &Path,
@@ -784,15 +817,15 @@ fn git_hash_file_with_cancellation(
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_hash_file_with_cancellation(
     root: &Path,
     full_path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     let hash = git_hash_file(root, full_path)?;
-    FingerprintCollection::Cancellable(cancelled).ensure_active()?;
+    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
     Ok(hash)
 }
 
@@ -849,6 +882,22 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn cancellation_before_fingerprint_git_spawn_remains_typed() {
+        let temp = tempdir().unwrap();
+        let calls = Cell::new(0);
+        let error = repo_worktree_fingerprint_with_cancellation(temp.path(), &|| {
+            let current = calls.get();
+            calls.set(current + 1);
+            current == 1
+        })
+        .unwrap_err();
+
+        assert!(is_git_receipt_collection_cancellation(&error), "{error:#}");
+        assert_eq!(calls.get(), 2);
+    }
+
     #[test]
     fn fingerprint_hash_staging_checks_cancellation_between_chunks() {
         let input = vec![b'x'; FINGERPRINT_HASH_WRITE_CHUNK * 3];
@@ -862,7 +911,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(is_worktree_fingerprint_cancellation(&error));
+        assert!(is_git_receipt_collection_cancellation(&error));
         assert_eq!(staged.len(), FINGERPRINT_HASH_WRITE_CHUNK);
     }
 
@@ -900,7 +949,43 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_receipt_metadata_starts_no_git_subcollection() {
+        let temp = tempdir().unwrap();
+        let checks = Cell::new(0);
+
+        let metadata = collect_git_receipt_metadata_with_cancellation(temp.path(), &|| {
+            checks.set(checks.get() + 1);
+            true
+        });
+
+        assert!(metadata.changed_paths.is_empty());
+        assert_eq!(metadata.changed_path_count, None);
+        assert_eq!(metadata.diff_stat.files, 0);
+        assert!(
+            metadata
+                .git_status_error
+                .as_deref()
+                .is_some_and(|error| error.contains("collection was cancelled"))
+        );
+        assert!(
+            metadata
+                .git_diff_stat_error
+                .as_deref()
+                .is_some_and(|error| error.contains("collection was cancelled"))
+        );
+        assert!(metadata.worktree_fingerprint.is_none());
+        assert!(
+            metadata
+                .worktree_fingerprint_error
+                .as_deref()
+                .is_some_and(|error| error.contains("collection was cancelled"))
+        );
+        assert_eq!(checks.get(), 3);
+    }
+
+    #[test]
     fn changed_paths_preserve_spaces_and_rename_paths() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -911,7 +996,6 @@ mod tests {
         std::fs::write(temp.path().join("old name.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "old name.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         run_git(temp.path(), &["mv", "old name.txt", "new name.txt"]);
         std::fs::write(temp.path().join("loose note.txt"), "untracked").unwrap();
 
@@ -924,6 +1008,7 @@ mod tests {
 
     #[test]
     fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -936,7 +1021,6 @@ mod tests {
         std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "old\n").unwrap();
         run_git(temp.path(), &["add", "."]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         std::fs::write(temp.path().join("src.rs"), "one\ntwo\n").unwrap();
         std::fs::write(
             temp.path().join(".agent/state/receipts.jsonl"),
@@ -998,6 +1082,7 @@ mod tests {
 
     #[test]
     fn worktree_fingerprint_changes_when_untracked_file_content_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -1008,7 +1093,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         std::fs::write(temp.path().join("new.txt"), "one").unwrap();
         let first = repo_worktree_fingerprint(temp.path()).unwrap();
         std::fs::write(temp.path().join("new.txt"), "two").unwrap();
@@ -1019,6 +1103,7 @@ mod tests {
 
     #[test]
     fn worktree_fingerprint_changes_when_large_untracked_file_content_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -1029,7 +1114,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         let large_path = temp.path().join("large.bin");
         let fixed_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         std::fs::write(
@@ -1060,6 +1144,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn worktree_fingerprint_changes_when_untracked_symlink_target_changes() {
+        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -1070,7 +1155,6 @@ mod tests {
         std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
         run_git(temp.path(), &["add", "tracked.txt"]);
         run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-
         let first_target = temp.path().join("outside-one");
         let second_target = temp.path().join("outside-two");
         let link = temp.path().join("link");

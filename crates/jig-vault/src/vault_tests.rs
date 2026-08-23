@@ -67,7 +67,11 @@ fn audit_events(store: &VaultStore) -> Vec<AuditEvent> {
 fn init_v1(store: &VaultStore, passphrase: &SecretString) {
     store
         .with_lock(|| {
-            let envelope = NewVaultEnvelope::seal_v1(passphrase, now_ms())?;
+            let envelope = NewVaultEnvelope::seal_v1(
+                passphrase,
+                now_ms(),
+                store.initialization_kdf().clone(),
+            )?;
             AuditEvent::append_unlocked(
                 store,
                 envelope.audit_key.as_ref(),

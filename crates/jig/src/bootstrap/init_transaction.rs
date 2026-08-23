@@ -45,13 +45,26 @@ pub(super) struct InitMutationTransaction {
 }
 
 pub(super) const MAX_EXISTING_INIT_RETAINED_GENERATIONS: usize = 256;
-const RETAINED_GENERATION_HANDLES_PER_PATH: usize = 2;
 pub(super) const RETAINED_GENERATION_HANDLE_HEADROOM: usize = 32;
 
+#[cfg(test)]
 pub(super) fn retained_generation_handle_requirement(
     planned: &BTreeSet<PathBuf>,
     repeated_generation_count: usize,
 ) -> usize {
+    retained_generation_handle_requirement_with_preimages(
+        planned,
+        repeated_generation_count,
+        planned.len(),
+    )
+}
+
+pub(super) fn retained_generation_handle_requirement_with_preimages(
+    planned: &BTreeSet<PathBuf>,
+    repeated_generation_count: usize,
+    retained_preimage_count: usize,
+) -> usize {
+    debug_assert!(retained_preimage_count <= planned.len());
     let mut directory_prefixes = BTreeSet::new();
     let mut target_parents = BTreeSet::new();
     for relative in planned {
@@ -65,7 +78,7 @@ pub(super) fn retained_generation_handle_requirement(
     }
     planned
         .len()
-        .saturating_mul(RETAINED_GENERATION_HANDLES_PER_PATH)
+        .saturating_add(retained_preimage_count)
         .saturating_add(repeated_generation_count)
         .saturating_add(directory_prefixes.len())
         .saturating_add(target_parents.len())
@@ -106,9 +119,26 @@ fn current_open_handle_count() -> usize {
     RETAINED_GENERATION_HANDLE_HEADROOM
 }
 
+#[cfg(test)]
 pub(super) fn validate_retained_generation_budget(
     planned: &BTreeSet<PathBuf>,
     repeated_generation_count: usize,
+    soft_limit: Option<usize>,
+    open_handles: usize,
+) -> Result<()> {
+    validate_retained_generation_budget_with_preimages(
+        planned,
+        repeated_generation_count,
+        planned.len(),
+        soft_limit,
+        open_handles,
+    )
+}
+
+pub(super) fn validate_retained_generation_budget_with_preimages(
+    planned: &BTreeSet<PathBuf>,
+    repeated_generation_count: usize,
+    retained_preimage_count: usize,
     soft_limit: Option<usize>,
     open_handles: usize,
 ) -> Result<()> {
@@ -118,12 +148,18 @@ pub(super) fn validate_retained_generation_budget(
             "Existing-destination init plans {planned_generation_count} generated file generations, exceeding the safe retained-generation limit of {MAX_EXISTING_INIT_RETAINED_GENERATIONS}. Use a wholly missing destination so Jig can publish one privately staged tree, or reduce the explicit template/scaffold output set."
         );
     }
-    // Every planned leaf may acquire a preimage before Jig retains its first
-    // snapshot, so reserve both that preimage and the first Jig generation
-    // without relying on the leaf's current existence. Additional publications
-    // are counted explicitly. Current/quarantine/disposal snapshots are
-    // processed one leaf at a time and fit within the fixed transient headroom.
-    let required = retained_generation_handle_requirement(planned, repeated_generation_count);
+    // Planning snapshots pin every pre-existing leaf. A leaf that was missing
+    // at that boundary cannot acquire a preimage later: publication rejects a
+    // concurrently created replacement. Reserve one handle for each first Jig
+    // generation plus only the preimages actually retained at planning time.
+    // Additional publications are counted explicitly. Current/quarantine/
+    // disposal snapshots are processed one leaf at a time and fit within the
+    // fixed transient headroom.
+    let required = retained_generation_handle_requirement_with_preimages(
+        planned,
+        repeated_generation_count,
+        retained_preimage_count,
+    );
     if soft_limit.is_some_and(|limit| open_handles.saturating_add(required) > limit) {
         bail!(
             "Existing-destination init needs capacity for approximately {required} retained file/directory handles in addition to {open_handles} already open handles, but the process soft handle limit is {}. Use a wholly missing destination, reduce the output set, or raise the process file-descriptor limit before retrying.",
@@ -169,6 +205,10 @@ fn verify_tracked_init_directories(
 }
 
 impl InitMutationTransaction {
+    pub(super) fn needs_rollback(&self) -> bool {
+        self.armed
+    }
+
     pub(super) fn create(destination: &Path) -> Result<Self> {
         let (existing_ancestor, missing_tail) = path::split_existing_ancestor(destination)?;
         path::ensure_atomic_noreplace_publication_supported(&existing_ancestor)?;

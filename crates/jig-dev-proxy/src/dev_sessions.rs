@@ -8,19 +8,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use self::management::stop_session_ids_interruptible;
-use self::process_identity::{capture_process_identity, process_identity_observed_alive};
+use self::management::{StopSessionOutcome, stop_session_ids_interruptible};
+use self::process_identity::{capture_process_identity, process_identity_may_be_alive};
 use crate::session_control::SessionControlServer;
 use crate::state::{
     DevProcessIdentity, DevSessionApp, DevSessionControl, DevSessionPhase, DevSessionRecord,
-    LockOutcome, StateStore, now_ms, pid_is_alive, process_start_token,
+    LockOutcome, StateStore, now_ms, observe_pid, process_start_token,
 };
 use crate::types::{AppRunSpec, Route, RouteMode};
 
 mod management;
 mod process_identity;
 
-pub(crate) use management::{status, stop};
+pub(crate) use management::{OrphanRecoveryNotice, status, stop};
 
 const SESSION_ID_RANDOM_BYTES: usize = 16;
 
@@ -31,11 +31,17 @@ pub(crate) struct DevSessionRuntime {
     supervisor: DevProcessIdentity,
     control: SessionControlServer,
     pending_cleanup: Arc<AtomicUsize>,
+    replacement_recoveries: Vec<OrphanRecoveryNotice>,
 }
 
 pub(crate) struct DevCleanupLease {
     pending_cleanup: Arc<AtomicUsize>,
     confirmed: bool,
+}
+
+pub(crate) enum DevSessionStartOutcome {
+    Claimed(DevSessionRuntime),
+    Cancelled(Vec<OrphanRecoveryNotice>),
 }
 
 impl DevCleanupLease {
@@ -59,8 +65,8 @@ impl DevSessionRuntime {
         replace: bool,
     ) -> Result<Self> {
         match Self::start_interruptible(store, repo_name, root, specs, replace, &|| false)? {
-            LockOutcome::Acquired(session) => Ok(session),
-            LockOutcome::Cancelled => {
+            DevSessionStartOutcome::Claimed(session) => Ok(session),
+            DevSessionStartOutcome::Cancelled(_) => {
                 bail!("uncancelled Jig dev session startup was cancelled")
             }
         }
@@ -73,7 +79,7 @@ impl DevSessionRuntime {
         specs: &[AppRunSpec],
         replace: bool,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<Self>> {
+    ) -> Result<DevSessionStartOutcome> {
         let repo = CanonicalRepo::resolve(repo_name, root)?;
         let session_id = new_session_id()?;
         let control = SessionControlServer::start(&session_id)?;
@@ -88,6 +94,7 @@ impl DevSessionRuntime {
             started_at_ms: timestamp,
             updated_at_ms: timestamp,
             cleanup_required: false,
+            preflight_cleanup_pending: false,
             supervisor: supervisor.clone(),
             control: DevSessionControl {
                 port: control.port(),
@@ -100,14 +107,17 @@ impl DevSessionRuntime {
                     hostname: spec.proxy.then(|| spec.hostname.clone()),
                     target_host: spec.target_host.clone(),
                     target_port: spec.explicit_port,
+                    spawn_state_tracked: true,
+                    spawn_pending: false,
                     process: None,
                 })
                 .collect(),
         };
+        let mut replacement_recoveries = Vec::new();
 
         let first_claim = match claim_session_interruptible(&store, &record, cancelled)? {
             LockOutcome::Acquired(claim) => claim,
-            LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+            LockOutcome::Cancelled => return Ok(DevSessionStartOutcome::Cancelled(Vec::new())),
         };
         match first_claim {
             ClaimOutcome::Claimed => {}
@@ -120,41 +130,86 @@ impl DevSessionRuntime {
                 }
                 let target_ids = conflicts.same_repo_session_ids();
                 if cancelled() {
-                    return Ok(LockOutcome::Cancelled);
+                    return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
                 }
                 let stop =
-                    match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled)? {
-                        LockOutcome::Acquired(stop) => stop,
-                        LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                    match stop_session_ids_interruptible(&store, &repo, &target_ids, cancelled) {
+                        StopSessionOutcome::Complete(stop) => stop,
+                        StopSessionOutcome::Cancelled(progress) => {
+                            let (recoveries, warnings) = progress.into_parts();
+                            replacement_recoveries.extend(recoveries);
+                            for warning in warnings {
+                                eprintln!(
+                                    "jig dev --replace stop warning before cancellation: {warning}"
+                                );
+                            }
+                            return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                        }
+                        StopSessionOutcome::Failed { error, progress } => {
+                            let (recoveries, warnings) = progress.into_parts();
+                            replacement_recoveries.extend(recoveries);
+                            let error = attach_replacement_stop_warnings(error, &warnings);
+                            return Err(crate::dev_outcome::with_recovery_notices(
+                                error,
+                                replacement_recoveries,
+                            ));
+                        }
                     };
+                for recovery in &stop.recoveries {
+                    eprintln!("jig dev --replace recovery: {}", recovery.message);
+                }
+                replacement_recoveries.extend(stop.recoveries.iter().cloned());
                 if !stop.ok {
-                    bail!(
+                    let error = anyhow!(
                         "Could not replace the existing Jig dev session safely: {}",
                         stop.warnings.join("; ")
                     );
+                    return Err(crate::dev_outcome::with_recovery_notices(
+                        error,
+                        replacement_recoveries,
+                    ));
                 }
-                match claim_session_interruptible(&store, &record, cancelled)? {
-                    LockOutcome::Cancelled => return Ok(LockOutcome::Cancelled),
+                let second_claim = match claim_session_interruptible(&store, &record, cancelled) {
+                    Ok(claim) => claim,
+                    Err(error) => {
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            error,
+                            replacement_recoveries,
+                        ));
+                    }
+                };
+                match second_claim {
+                    LockOutcome::Cancelled => {
+                        return Ok(DevSessionStartOutcome::Cancelled(replacement_recoveries));
+                    }
                     LockOutcome::Acquired(ClaimOutcome::Claimed) => {}
                     LockOutcome::Acquired(ClaimOutcome::Conflicted(conflicts)) => {
-                        return Err(conflicts.concurrent_launch_error());
+                        return Err(crate::dev_outcome::with_recovery_notices(
+                            conflicts.concurrent_launch_error(),
+                            replacement_recoveries,
+                        ));
                     }
                 }
             }
         }
 
-        Ok(LockOutcome::Acquired(Self {
+        Ok(DevSessionStartOutcome::Claimed(Self {
             store,
             session_id,
             repo_root_identity: repo.root_identity,
             supervisor,
             control,
             pending_cleanup: Arc::new(AtomicUsize::new(0)),
+            replacement_recoveries,
         }))
     }
 
     pub(crate) fn requested_stop(&self) -> bool {
         self.control.stop_requested()
+    }
+
+    pub(crate) fn replacement_recoveries(&self) -> &[OrphanRecoveryNotice] {
+        &self.replacement_recoveries
     }
 
     pub(crate) fn arm_cleanup(&self) -> DevCleanupLease {
@@ -170,32 +225,130 @@ impl DevSessionRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn prepare_cleanup_scope(&self) -> Result<()> {
-        self.store
-            .mutate_dev_sessions(|sessions, _| self.prepare_cleanup_scope_in(sessions))
+    pub(crate) fn begin_preflight_cleanup(&self) -> Result<DevCleanupLease> {
+        match self.begin_preflight_cleanup_interruptible(&|| false)? {
+            LockOutcome::Acquired(cleanup) => Ok(cleanup),
+            LockOutcome::Cancelled => bail!("uncancelled preflight cleanup setup was cancelled"),
+        }
     }
 
-    pub(crate) fn prepare_cleanup_scope_interruptible(
+    pub(crate) fn begin_preflight_cleanup_interruptible(
         &self,
         cancelled: &impl Fn() -> bool,
-    ) -> Result<LockOutcome<()>> {
-        self.store
+    ) -> Result<LockOutcome<DevCleanupLease>> {
+        let mut cleanup = self.arm_cleanup();
+        let outcome = self
+            .store
             .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
-                self.prepare_cleanup_scope_in(sessions)
-            })
+                self.begin_preflight_cleanup_in(sessions)
+            });
+        match outcome {
+            Ok(LockOutcome::Acquired(())) => Ok(LockOutcome::Acquired(cleanup)),
+            Ok(LockOutcome::Cancelled) => {
+                cleanup.confirm();
+                Ok(LockOutcome::Cancelled)
+            }
+            Err(error) => {
+                cleanup.confirm();
+                Err(error)
+            }
+        }
     }
 
-    fn prepare_cleanup_scope_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
+    fn begin_preflight_cleanup_in(&self, sessions: &mut [DevSessionRecord]) -> Result<()> {
         let session = exact_session_mut(
             sessions,
             &self.session_id,
             &self.repo_root_identity,
             &self.supervisor,
         )?;
-        if !session.cleanup_required {
-            session.cleanup_required = true;
-            session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        if session.preflight_cleanup_pending {
+            bail!(
+                "Jig dev session '{}' already has pending preflight cleanup",
+                self.session_id
+            );
         }
+        session.cleanup_required = true;
+        session.preflight_cleanup_pending = true;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
+        Ok(())
+    }
+
+    pub(crate) fn confirm_preflight_cleanup_cancelable(
+        &self,
+        cleanup: &mut DevCleanupLease,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<()>> {
+        let outcome =
+            self.store
+                .mutate_dev_sessions_cleanup_cancelable(cancelled, |sessions, _| {
+                    let session = exact_session_mut(
+                        sessions,
+                        &self.session_id,
+                        &self.repo_root_identity,
+                        &self.supervisor,
+                    )?;
+                    if !session.preflight_cleanup_pending {
+                        bail!(
+                            "Jig dev session '{}' has no pending preflight cleanup to confirm",
+                            self.session_id
+                        );
+                    }
+                    session.preflight_cleanup_pending = false;
+                    session.updated_at_ms = next_timestamp(session.updated_at_ms);
+                    Ok(())
+                })?;
+        if outcome.is_some() {
+            cleanup.confirm();
+        }
+        Ok(outcome)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_app_spawn(&self, app_name: &str, target_port: u16) -> Result<()> {
+        self.store.mutate_dev_sessions(|sessions, _| {
+            self.prepare_app_spawn_in(sessions, app_name, target_port)
+        })
+    }
+
+    pub(crate) fn prepare_app_spawn_interruptible(
+        &self,
+        app_name: &str,
+        target_port: u16,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<LockOutcome<()>> {
+        self.store
+            .mutate_dev_sessions_interruptible(cancelled, |sessions, _| {
+                self.prepare_app_spawn_in(sessions, app_name, target_port)
+            })
+    }
+
+    fn prepare_app_spawn_in(
+        &self,
+        sessions: &mut [DevSessionRecord],
+        app_name: &str,
+        target_port: u16,
+    ) -> Result<()> {
+        let session = exact_session_mut(
+            sessions,
+            &self.session_id,
+            &self.repo_root_identity,
+            &self.supervisor,
+        )?;
+        let app = session
+            .apps
+            .iter_mut()
+            .find(|app| app.name == app_name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Jig dev session '{}' did not contain configured app '{}'",
+                    self.session_id,
+                    app_name
+                )
+            })?;
+        app.prepare_spawn(&self.session_id, target_port)?;
+        session.cleanup_required = true;
+        session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
     }
 
@@ -249,11 +402,40 @@ impl DevSessionRuntime {
                     app_name
                 )
             })?;
-        app.target_port = Some(target_port);
-        app.process = Some(process);
+        app.register_process(target_port, process);
         session.cleanup_required = true;
         session.updated_at_ms = next_timestamp(session.updated_at_ms);
         Ok(())
+    }
+
+    pub(crate) fn confirm_app_spawn_absent_cleanup_cancelable(
+        &self,
+        app_name: &str,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<Option<()>> {
+        self.store
+            .mutate_dev_sessions_cleanup_cancelable(cancelled, |sessions, _| {
+                let session = exact_session_mut(
+                    sessions,
+                    &self.session_id,
+                    &self.repo_root_identity,
+                    &self.supervisor,
+                )?;
+                let app = session
+                    .apps
+                    .iter_mut()
+                    .find(|app| app.name == app_name)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Jig dev session '{}' did not contain configured app '{}'",
+                            self.session_id,
+                            app_name
+                        )
+                    })?;
+                app.confirm_spawn_absent(&self.session_id)?;
+                session.updated_at_ms = next_timestamp(session.updated_at_ms);
+                Ok(())
+            })
     }
 
     pub(crate) fn mark_running_interruptible(
@@ -299,6 +481,38 @@ impl DevSessionRuntime {
                 Ok(true)
             },
         )
+    }
+}
+
+fn attach_replacement_stop_warnings(error: anyhow::Error, warnings: &[String]) -> anyhow::Error {
+    if warnings.is_empty() {
+        error
+    } else {
+        error.context(format!(
+            "Jig dev replacement stop reported warnings before the failure: {}",
+            warnings.join("; ")
+        ))
+    }
+}
+
+#[cfg(test)]
+mod stop_progress_tests {
+    use super::attach_replacement_stop_warnings;
+
+    #[test]
+    fn failed_replacement_stop_keeps_accumulated_warnings_in_the_error_chain() {
+        let warnings = vec![
+            "session 'dev_example': authenticated stop was unavailable".to_owned(),
+            "session 'dev_other': cleanup identity remained uncertain".to_owned(),
+        ];
+
+        let error =
+            attach_replacement_stop_warnings(anyhow::anyhow!("later state read failed"), &warnings);
+        let chain = format!("{error:#}");
+
+        assert!(chain.contains(&warnings[0]), "{chain}");
+        assert!(chain.contains(&warnings[1]), "{chain}");
+        assert!(chain.contains("later state read failed"), "{chain}");
     }
 }
 
@@ -393,7 +607,7 @@ impl ClaimConflicts {
             )
         } else {
             anyhow!(
-                "A live Jig dev session from this repository already claims {}. Run `jig dev stop` to stop all repository sessions, or retry this launch with `jig dev --replace`.",
+                "A registered Jig dev session from this repository already claims {}. Run `jig dev stop` to stop all repository sessions, or retry this launch with `jig dev --replace`.",
                 hosts.join(", ")
             )
         }
@@ -523,22 +737,23 @@ fn overlapping_hostname(left: &DevSessionRecord, right: &DevSessionRecord) -> Op
 }
 
 fn session_owns_route(session: &DevSessionRecord, route: &Route) -> bool {
-    session.apps.iter().any(|app| {
-        app.hostname.as_deref() == Some(route.hostname.as_str())
-            && app.process.as_ref().is_some_and(|identity| {
-                route.owner_pid == Some(identity.pid)
-                    && route.owner_start_token == identity.start_token
-            })
-    })
+    route.mode == RouteMode::Process
+        && session.apps.iter().any(|app| {
+            app.hostname.as_deref() == Some(route.hostname.as_str())
+                && app.process.as_ref().is_some_and(|identity| {
+                    route.owner_pid == Some(identity.pid)
+                        && route.owner_start_token == identity.start_token
+                })
+        })
 }
 
 fn session_observed_alive(session: &DevSessionRecord) -> bool {
-    process_identity_observed_alive(&session.supervisor)
+    process_identity_may_be_alive(&session.supervisor)
         || session
             .apps
             .iter()
             .filter_map(|app| app.process.as_ref())
-            .any(process_identity_observed_alive)
+            .any(process_identity_may_be_alive)
 }
 
 fn route_is_live(route: &Route) -> bool {
@@ -548,7 +763,7 @@ fn route_is_live(route: &Route) -> bool {
             .owner_pid
             .zip(route.owner_start_token.as_deref())
             .is_some_and(|(pid, token)| {
-                pid_is_alive(pid)
+                observe_pid(pid).may_be_alive()
                     && process_start_token(pid)
                         .as_deref()
                         .is_none_or(|current| current == token)
@@ -603,14 +818,7 @@ fn canonical_root_identity(root: &Path) -> String {
         use std::os::unix::ffi::OsStrExt;
         digest.update(root.as_os_str().as_bytes());
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        for unit in root.as_os_str().encode_wide() {
-            digest.update(unit.to_le_bytes());
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     digest.update(root.to_string_lossy().as_bytes());
     format!("sha256:{:x}", digest.finalize())
 }

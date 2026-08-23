@@ -14,8 +14,9 @@ pub(in crate::cli) fn format_info_summary(value: &serde_json::Value) -> String {
             repo["template_commit"].as_str().unwrap_or("<unknown>")
         ),
         format!(
-            "Pinned Jig: {}",
-            repo["jig_version"].as_str().unwrap_or("<unknown>")
+            "Runtime: jig {} · contract v{}",
+            repo["runtime_version"].as_str().unwrap_or("<unknown>"),
+            repo["contract_version"].as_u64().unwrap_or(0)
         ),
     ];
 

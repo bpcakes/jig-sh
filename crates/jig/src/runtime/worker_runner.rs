@@ -2,24 +2,31 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
-use std::thread;
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::{
+    BoundedProcessOutput, OwnedProcessObserver, OwnedProcessOutputStream, OwnedProcessTreeError,
+    ProcessOutputLimits, ProcessOutputOverflowPolicy,
+    run_owned_process_tree_with_output_policy_and_observer,
+};
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
-use wait_timeout::ChildExt;
 
-use crate::context::RepoContext;
-use crate::state::{ReceiptInput, now_ms, record_receipt};
+use crate::context::{CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext};
+use crate::execution::{
+    EXECUTION_OUTPUT_CAPTURE_LIMIT, ExecutionCommandError, ExecutionControl, ExecutionPhase,
+    PhasePosition, ProcessExecutionObserver,
+};
+use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
-const DEFAULT_CODEX_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+// Preserve the supervisor's normal idle responsiveness without repeating a
+// metadata syscall for every faster poll while transcript output is flowing.
+const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexExecMode {
@@ -42,7 +49,7 @@ pub(crate) enum CodexPrompt<'a> {
     Stdin(&'a str),
 }
 
-impl CodexPrompt<'_> {
+impl<'a> CodexPrompt<'a> {
     const fn delivery(self) -> &'static str {
         match self {
             Self::Argument(_) => "argument",
@@ -50,10 +57,10 @@ impl CodexPrompt<'_> {
         }
     }
 
-    fn stdin_prompt(self) -> Option<String> {
+    fn stdin_prompt(self) -> Option<&'a str> {
         match self {
             Self::Argument(_) => None,
-            Self::Stdin(prompt) => Some(prompt.to_string()),
+            Self::Stdin(prompt) => Some(prompt),
         }
     }
 }
@@ -68,6 +75,12 @@ pub(crate) struct WorkerReceiptRequest<'a> {
     pub(crate) collect_worktree_fingerprint: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkerPhase<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) position: PhasePosition,
+}
+
 pub(crate) struct CodexExecRequest<'a> {
     pub(crate) root: &'a Path,
     pub(crate) codex_home: Option<&'a Path>,
@@ -78,9 +91,10 @@ pub(crate) struct CodexExecRequest<'a> {
     pub(crate) ephemeral: bool,
     pub(crate) extra_args: Vec<OsString>,
     pub(crate) output_schema: Option<&'a Value>,
+    pub(crate) transcript_overflow_policy: ProcessOutputOverflowPolicy,
     pub(crate) prompt: CodexPrompt<'a>,
-    pub(crate) cancelled: Option<&'a dyn Fn() -> bool>,
     pub(crate) receipt: WorkerReceiptRequest<'a>,
+    pub(crate) phase: Option<WorkerPhase<'a>>,
 }
 
 pub(crate) struct CodexExecOutput {
@@ -109,13 +123,50 @@ impl fmt::Display for CodexExecFailure {
 
 impl std::error::Error for CodexExecFailure {}
 
+pub(crate) enum CodexExecOutcome {
+    Completed(CodexExecOutput),
+    Cancelled {
+        before_start: bool,
+        worker_receipt_id: String,
+    },
+}
+
+impl CodexExecOutcome {
+    pub(crate) fn into_completed(self) -> Result<CodexExecOutput> {
+        match self {
+            Self::Completed(output) => Ok(output),
+            Self::Cancelled {
+                before_start,
+                worker_receipt_id,
+            } => {
+                let timing = if before_start {
+                    " before it started"
+                } else {
+                    ""
+                };
+                bail!("Codex worker was cancelled{timing}; receipt {worker_receipt_id}")
+            }
+        }
+    }
+}
+
 pub(crate) fn run_codex_exec(
     ctx: &RepoContext,
     request: CodexExecRequest<'_>,
-) -> std::result::Result<CodexExecOutput, CodexExecFailure> {
+    observer: &mut dyn ExecutionControl,
+) -> Result<CodexExecOutcome> {
+    let phase = request
+        .phase
+        .map(|phase| ExecutionPhase::start(observer, phase.label, phase.position));
     let started = now_ms();
-    let result = run_codex_exec_inner(&request);
+    let result = run_codex_exec_inner(ctx, &request, observer);
     let ended = now_ms();
+    if let Some(phase) = phase {
+        phase.finish(
+            observer,
+            result.as_ref().is_ok_and(|run| run.output.status.success()),
+        );
+    }
 
     match result {
         Ok(run) => {
@@ -129,20 +180,24 @@ pub(crate) fn run_codex_exec(
                     exit_status,
                     stdout: &run.provider_stdout,
                     stderr: &run.provider_stderr,
+                    stdout_truncated: run.provider_stdout_truncated,
+                    stderr_truncated: run.provider_stderr_truncated,
                     error: None,
+                    status: "completed",
                 },
-            )
-            .map_err(|error| CodexExecFailure {
-                worker_receipt_id: None,
-                message: format!("Failed to record completed Codex worker receipt: {error:#}"),
-            })?;
-            Ok(CodexExecOutput {
+                observer,
+            )?;
+            Ok(CodexExecOutcome::Completed(CodexExecOutput {
                 output: run.output,
                 provider_stdout: run.provider_stdout,
                 worker_receipt_id: receipt_id,
-            })
+            }))
         }
-        Err(error) => {
+        Err(
+            error
+            @ (ExecutionCommandError::CancelledBeforeStart | ExecutionCommandError::Cancelled),
+        ) => {
+            let before_start = matches!(error, ExecutionCommandError::CancelledBeforeStart);
             let message = format!("{error:#}");
             let receipt_id = record_worker_receipt(
                 ctx,
@@ -153,19 +208,41 @@ pub(crate) fn run_codex_exec(
                     exit_status: 1,
                     stdout: "",
                     stderr: &message,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
                     error: Some(&message),
+                    status: "cancelled",
                 },
-            )
-            .map_err(|receipt_error| CodexExecFailure {
-                worker_receipt_id: None,
-                message: format!(
-                    "Codex worker invocation failed: {message}; failed to record worker receipt: {receipt_error:#}"
-                ),
-            })?;
+                observer,
+            )?;
+            Ok(CodexExecOutcome::Cancelled {
+                before_start,
+                worker_receipt_id: receipt_id,
+            })
+        }
+        Err(ExecutionCommandError::Failed(error)) => {
+            let message = format!("{error:#}");
+            let receipt_id = record_worker_receipt(
+                ctx,
+                &request,
+                WorkerReceiptOutcome {
+                    started_at_ms: started,
+                    ended_at_ms: ended,
+                    exit_status: 1,
+                    stdout: "",
+                    stderr: &message,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    error: Some(&message),
+                    status: "error",
+                },
+                observer,
+            )?;
             Err(CodexExecFailure {
                 worker_receipt_id: Some(receipt_id.clone()),
                 message: format!("Codex worker invocation failed; receipt {receipt_id}: {message}"),
-            })
+            }
+            .into())
         }
     }
 }
@@ -174,9 +251,15 @@ struct CodexRunOutput {
     output: Output,
     provider_stdout: String,
     provider_stderr: String,
+    provider_stdout_truncated: bool,
+    provider_stderr_truncated: bool,
 }
 
-fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput> {
+fn run_codex_exec_inner(
+    ctx: &RepoContext,
+    request: &CodexExecRequest<'_>,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<CodexRunOutput, ExecutionCommandError> {
     let schema_file = if let Some(schema) = request.output_schema {
         let schema_file = NamedTempFile::new().context("Failed to create Codex schema file")?;
         fs::write(
@@ -188,50 +271,65 @@ fn run_codex_exec_inner(request: &CodexExecRequest<'_>) -> Result<CodexRunOutput
     } else {
         None
     };
-    let output_file = if request.output_schema.is_some() {
-        Some(NamedTempFile::new().context("Failed to create Codex output file")?)
-    } else {
-        None
-    };
+    // The last-message file is the authoritative result channel for every
+    // worker. Schema validation is optional and must not decide whether noisy
+    // provider transcripts are allowed to truncate.
+    let output_file = NamedTempFile::new().context("Failed to create Codex output file")?;
 
     let mut command = build_codex_command(
         crate::codex::codex_bin(),
         request,
         schema_file.as_ref().map(NamedTempFile::path),
-        output_file.as_ref().map(NamedTempFile::path),
+        output_file.path(),
     );
     let output = run_worker_command(
         &mut command,
         request.prompt.stdin_prompt(),
-        request.cancelled,
+        codex_timeout(ctx)?,
+        request.receipt.purpose,
+        request.transcript_overflow_policy,
+        Some(output_file.path()),
+        observer,
     )?;
-    let provider_stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let provider_stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let mut output = output;
+    let provider_stdout = String::from_utf8_lossy(&output.output.stdout).into_owned();
+    let provider_stderr = String::from_utf8_lossy(&output.output.stderr).into_owned();
+    let provider_stdout_truncated = output.stdout_truncated;
+    let provider_stderr_truncated = output.stderr_truncated;
+    let mut output = output.output;
 
-    if let Some(output_file) = output_file {
-        let output_metadata = output_file
-            .path()
-            .metadata()
-            .context("Failed to inspect Codex output file")?;
-        if output_metadata.len() > 0 {
-            output.stdout =
-                fs::read(output_file.path()).context("Failed to read Codex output file")?;
-        }
-    }
+    output.stdout = read_worker_output_file(output_file.path())?.unwrap_or_default();
 
     Ok(CodexRunOutput {
         output,
         provider_stdout,
         provider_stderr,
+        provider_stdout_truncated,
+        provider_stderr_truncated,
     })
+}
+
+fn read_worker_output_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    let output_metadata = path
+        .metadata()
+        .context("Failed to inspect Codex output file")?;
+    if output_metadata.len() == 0 {
+        return Ok(None);
+    }
+    if output_metadata.len() > EXECUTION_OUTPUT_CAPTURE_LIMIT as u64 {
+        bail!(
+            "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+        );
+    }
+    fs::read(path)
+        .map(Some)
+        .context("Failed to read Codex output file")
 }
 
 fn build_codex_command(
     bin: impl AsRef<OsStr>,
     request: &CodexExecRequest<'_>,
     schema_path: Option<&Path>,
-    output_path: Option<&Path>,
+    output_path: &Path,
 ) -> Command {
     let mut command = Command::new(bin);
     command.current_dir(request.root);
@@ -255,13 +353,10 @@ fn build_codex_command(
     if let Some(model) = request.model {
         command.arg("--model").arg(model);
     }
-    if let (Some(schema_path), Some(output_path)) = (schema_path, output_path) {
-        command
-            .arg("--output-schema")
-            .arg(schema_path)
-            .arg("-o")
-            .arg(output_path);
+    if let Some(schema_path) = schema_path {
+        command.arg("--output-schema").arg(schema_path);
     }
+    command.arg("-o").arg(output_path);
     match request.prompt {
         CodexPrompt::Argument(prompt) => {
             command.arg(prompt);
@@ -275,115 +370,212 @@ fn build_codex_command(
 
 fn run_worker_command(
     command: &mut Command,
-    stdin_prompt: Option<String>,
-    cancelled: Option<&dyn Fn() -> bool>,
-) -> Result<Output> {
-    let stdout_file = NamedTempFile::new().context("Failed to create worker stdout file")?;
-    let stderr_file = NamedTempFile::new().context("Failed to create worker stderr file")?;
-    command
-        .stdout(
-            stdout_file
-                .reopen()
-                .context("Failed to open worker stdout file")?,
-        )
-        .stderr(
-            stderr_file
-                .reopen()
-                .context("Failed to open worker stderr file")?,
-        );
-    if stdin_prompt.is_some() {
-        command.stdin(Stdio::piped());
-    }
-    configure_worker_process(command);
+    stdin_prompt: Option<&str>,
+    timeout: CommandTimeout,
+    label: &str,
+    transcript_overflow_policy: ProcessOutputOverflowPolicy,
+    authoritative_output_path: Option<&Path>,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<WorkerCommandOutput, ExecutionCommandError> {
+    let prompt_file = stdin_prompt
+        .map(|prompt| -> Result<NamedTempFile> {
+            let file = NamedTempFile::new().context("Failed to create worker stdin file")?;
+            fs::write(file.path(), prompt).context("Failed to write worker prompt")?;
+            command.stdin(file.reopen().context("Failed to open worker stdin file")?);
+            Ok(file)
+        })
+        .transpose()?;
+    let _prompt_file = prompt_file;
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
 
-    let mut child = command.spawn().context("Failed to start worker process")?;
-    let writer = if let Some(prompt) = stdin_prompt {
-        let mut stdin = child.stdin.take().context("Failed to open worker stdin")?;
-        Some(thread::spawn(move || -> Result<()> {
-            stdin
-                .write_all(prompt.as_bytes())
-                .context("Failed to write worker prompt")?;
-            Ok(())
-        }))
-    } else {
-        None
+    let mut process_observer = WorkerProcessObserver::new(
+        ProcessExecutionObserver::new(observer, label),
+        authoritative_output_path,
+    );
+    let process_result = run_owned_process_tree_with_output_policy_and_observer(
+        command,
+        timeout.duration(),
+        ProcessOutputLimits {
+            stdout: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+            stderr: EXECUTION_OUTPUT_CAPTURE_LIMIT,
+        },
+        transcript_overflow_policy,
+        &mut process_observer,
+    );
+    let result_file_failure = process_observer.take_result_file_failure();
+    let output = match (process_result, result_file_failure) {
+        (Ok(_), Some(failure))
+        | (
+            Err(OwnedProcessTreeError::CancelledBeforeStart | OwnedProcessTreeError::Cancelled),
+            Some(failure),
+        ) => return Err(failure.into_execution_error()),
+        (Ok(output), None) => output,
+        (Err(error), _) => return Err(worker_process_error(error, timeout)),
     };
 
-    let status = wait_for_worker(&mut child, codex_timeout()?, cancelled)?;
-
-    if let Some(writer) = writer {
-        writer
-            .join()
-            .map_err(|_| anyhow!("Worker stdin writer thread panicked"))??;
-    }
-
-    Ok(Output {
-        status,
-        stdout: fs::read(stdout_file.path()).context("Failed to read worker stdout")?,
-        stderr: fs::read(stderr_file.path()).context("Failed to read worker stderr")?,
+    let stdout = complete_worker_output(output.stdout, "stdout")?;
+    let stderr = complete_worker_output(output.stderr, "stderr")?;
+    Ok(WorkerCommandOutput {
+        output: Output {
+            status: output.status,
+            stdout: stdout.bytes,
+            stderr: stderr.bytes,
+        },
+        stdout_truncated: stdout.truncated,
+        stderr_truncated: stderr.truncated,
     })
 }
 
-fn wait_for_worker(
-    child: &mut Child,
-    timeout: Duration,
-    cancelled: Option<&dyn Fn() -> bool>,
-) -> Result<ExitStatus> {
-    let started = Instant::now();
-    loop {
-        if cancelled.is_some_and(|cancelled| cancelled()) {
-            terminate_worker_process(child);
-            let _ = child.wait();
-            bail!("Worker process cancelled because its execution lease was lost");
+struct WorkerProcessObserver<'a> {
+    execution: ProcessExecutionObserver<'a>,
+    authoritative_output_path: Option<&'a Path>,
+    last_result_file_inspection: Option<Instant>,
+    result_file_failure: Option<WorkerResultFileFailure>,
+}
+
+impl<'a> WorkerProcessObserver<'a> {
+    fn new(
+        execution: ProcessExecutionObserver<'a>,
+        authoritative_output_path: Option<&'a Path>,
+    ) -> Self {
+        Self {
+            execution,
+            authoritative_output_path,
+            last_result_file_inspection: None,
+            result_file_failure: None,
         }
-        let remaining = timeout.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            terminate_worker_process(child);
-            let _ = child.wait();
-            bail!(
-                "Worker process timed out after {} seconds",
-                timeout.as_secs()
-            );
+    }
+
+    fn take_result_file_failure(&mut self) -> Option<WorkerResultFileFailure> {
+        self.result_file_failure.take()
+    }
+
+    fn inspect_authoritative_output_if_due(&mut self) -> bool {
+        if self.authoritative_output_path.is_none() {
+            return false;
         }
-        if let Some(status) = child
-            .wait_timeout(worker_wait_interval(remaining, cancelled.is_some()))
-            .context("Failed to wait for worker process")?
-        {
-            return Ok(status);
+        let now = Instant::now();
+        if self.last_result_file_inspection.is_some_and(|last| {
+            now.saturating_duration_since(last) < WORKER_RESULT_FILE_INSPECTION_INTERVAL
+        }) {
+            return false;
+        }
+        self.last_result_file_inspection = Some(now);
+        self.inspect_authoritative_output()
+    }
+
+    fn inspect_authoritative_output(&mut self) -> bool {
+        let Some(path) = self.authoritative_output_path else {
+            return false;
+        };
+        let failure = match path.metadata() {
+            Ok(metadata) if !metadata.is_file() => Some(WorkerResultFileFailure::Inspection(
+                "Codex output path is not a regular file".into(),
+            )),
+            Ok(metadata) if metadata.len() > EXECUTION_OUTPUT_CAPTURE_LIMIT as u64 => {
+                Some(WorkerResultFileFailure::CaptureLimitExceeded)
+            }
+            Ok(_) => None,
+            Err(error) => Some(WorkerResultFileFailure::Inspection(format!(
+                "Failed to inspect Codex output file: {error}"
+            ))),
+        };
+        if let Some(failure) = failure {
+            self.result_file_failure = Some(failure);
+            true
+        } else {
+            false
         }
     }
 }
 
-fn worker_wait_interval(remaining: Duration, cancellable: bool) -> Duration {
-    if cancellable {
-        remaining.min(CANCELLATION_POLL_INTERVAL)
-    } else {
-        remaining
+impl OwnedProcessObserver for WorkerProcessObserver<'_> {
+    fn cancelled(&mut self) -> bool {
+        self.execution.cancelled()
+            || self.result_file_failure.is_some()
+            || self.inspect_authoritative_output_if_due()
+    }
+
+    fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
+        self.execution.output(stream, bytes);
+    }
+
+    fn poll(&mut self, elapsed: Duration) {
+        self.execution.poll(elapsed);
     }
 }
 
-#[cfg(unix)]
-fn configure_worker_process(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    command.process_group(0);
+#[derive(Debug)]
+enum WorkerResultFileFailure {
+    CaptureLimitExceeded,
+    Inspection(String),
 }
 
-#[cfg(not(unix))]
-fn configure_worker_process(_command: &mut Command) {}
-
-#[cfg(unix)]
-fn terminate_worker_process(child: &mut Child) {
-    let pgid = child.id() as libc::pid_t;
-    if pgid > 0 {
-        let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+impl WorkerResultFileFailure {
+    fn into_execution_error(self) -> ExecutionCommandError {
+        let error = match self {
+            Self::CaptureLimitExceeded => anyhow!(
+                "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            ),
+            Self::Inspection(message) => anyhow!(message),
+        };
+        ExecutionCommandError::failed(error)
     }
-    let _ = child.kill();
 }
 
-#[cfg(not(unix))]
-fn terminate_worker_process(child: &mut Child) {
-    let _ = child.kill();
+#[derive(Debug)]
+struct WorkerCommandOutput {
+    output: Output,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
+struct CapturedWorkerOutput {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn complete_worker_output(
+    output: Option<BoundedProcessOutput>,
+    stream: &str,
+) -> Result<CapturedWorkerOutput> {
+    let output = output.with_context(|| format!("Failed to capture worker {stream}"))?;
+    if !output.complete {
+        bail!("Failed to capture complete worker {stream}");
+    }
+    Ok(CapturedWorkerOutput {
+        bytes: output.bytes,
+        truncated: output.truncated,
+    })
+}
+
+fn worker_process_error(
+    error: OwnedProcessTreeError,
+    timeout: CommandTimeout,
+) -> ExecutionCommandError {
+    match error {
+        OwnedProcessTreeError::Start(error) => {
+            ExecutionCommandError::failed(anyhow!(error).context("Failed to start worker process"))
+        }
+        OwnedProcessTreeError::TimedOut => ExecutionCommandError::failed(anyhow!(
+            "Worker process timed out after {} seconds",
+            timeout.as_secs()
+        )),
+        OwnedProcessTreeError::CancelledBeforeStart => ExecutionCommandError::CancelledBeforeStart,
+        OwnedProcessTreeError::Cancelled => ExecutionCommandError::Cancelled,
+        OwnedProcessTreeError::OutputLimitExceeded(stream) => {
+            ExecutionCommandError::failed(anyhow!(
+                "Worker {stream} exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            ))
+        }
+        OwnedProcessTreeError::Await => {
+            ExecutionCommandError::failed(anyhow!("Failed to wait for worker process"))
+        }
+        OwnedProcessTreeError::Cleanup => ExecutionCommandError::failed(anyhow!(
+            "Worker process tree could not be cleaned up safely"
+        )),
+    }
 }
 
 struct WorkerReceiptOutcome<'a> {
@@ -392,20 +584,24 @@ struct WorkerReceiptOutcome<'a> {
     exit_status: i32,
     stdout: &'a str,
     stderr: &'a str,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
     error: Option<&'a str>,
+    status: &'static str,
 }
 
 fn record_worker_receipt(
     ctx: &RepoContext,
     request: &CodexExecRequest<'_>,
     outcome: WorkerReceiptOutcome<'_>,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<String> {
-    let status = if outcome.error.is_some() {
-        "error"
-    } else if outcome.exit_status == 0 {
+    let status = if outcome.status == "completed" && outcome.exit_status == 0 {
         "passed"
-    } else {
+    } else if outcome.status == "completed" {
         "failed"
+    } else {
+        outcome.status
     };
     let evidence = json!({
         "kind": "worker_run",
@@ -433,8 +629,10 @@ fn record_worker_receipt(
         "workflow_id": request.receipt.workflow_id,
         "item_key": request.receipt.item_key,
         "error": outcome.error,
+        "stdout_truncated": outcome.stdout_truncated,
+        "stderr_truncated": outcome.stderr_truncated,
     });
-    record_receipt(
+    record_receipt_with_cancellation(
         ctx,
         ReceiptInput {
             tool_name: WORKER_RUN_TOOL,
@@ -460,21 +658,25 @@ fn record_worker_receipt(
             collect_worktree_fingerprint: request.receipt.collect_worktree_fingerprint,
             worktree_fingerprint_override: None,
         },
+        &|| observer.cancelled(),
     )
     .context("Failed to record worker receipt")
 }
 
-fn codex_timeout() -> Result<Duration> {
+fn codex_timeout(ctx: &RepoContext) -> Result<CommandTimeout> {
     let Ok(value) = env::var(CODEX_TIMEOUT_ENV) else {
-        return Ok(DEFAULT_CODEX_TIMEOUT);
+        return Ok(ctx.command_timeout());
     };
+    parse_codex_timeout(&value)
+}
+
+fn parse_codex_timeout(value: &str) -> Result<CommandTimeout> {
     let seconds = value
         .parse::<u64>()
         .with_context(|| format!("Invalid {CODEX_TIMEOUT_ENV} value '{value}'"))?;
-    if seconds == 0 {
-        bail!("{CODEX_TIMEOUT_ENV} must be greater than zero");
-    }
-    Ok(Duration::from_secs(seconds))
+    CommandTimeout::from_seconds(seconds).ok_or_else(|| {
+        anyhow!("{CODEX_TIMEOUT_ENV} must be between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}")
+    })
 }
 
 #[cfg(test)]
@@ -486,14 +688,39 @@ mod tests {
     #[cfg(unix)]
     use std::thread;
     #[cfg(unix)]
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[cfg(unix)]
-    use crate::test_env::{EnvVarGuard, lock_env};
+    use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 
     use std::path::Path;
 
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingControl {
+        output: Vec<u8>,
+    }
+
+    impl crate::execution::ExecutionObserver for RecordingControl {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            if let crate::execution::ExecutionEvent::Output { bytes, .. } = event {
+                self.output.extend_from_slice(bytes);
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for RecordingControl {}
+
+    struct CancelledControl;
+
+    impl crate::execution::ExecutionObserver for CancelledControl {}
+
+    impl crate::execution::ExecutionCancellation for CancelledControl {
+        fn cancelled(&self) -> bool {
+            true
+        }
+    }
 
     #[test]
     fn codex_refine_approval_policy_is_a_top_level_codex_arg() {
@@ -507,8 +734,8 @@ mod tests {
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: None,
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin("fix this"),
-            cancelled: None,
             receipt: WorkerReceiptRequest {
                 purpose: "work_refine",
                 plan_id: Some("plan_1"),
@@ -517,8 +744,17 @@ mod tests {
                 collect_git_metadata: true,
                 collect_worktree_fingerprint: true,
             },
+            phase: Some(WorkerPhase {
+                label: "test worker",
+                position: PhasePosition::single(),
+            }),
         };
-        let command = build_codex_command("codex", &request, None, None);
+        assert_eq!(
+            request.transcript_overflow_policy,
+            ProcessOutputOverflowPolicy::Truncate,
+            "refinement edits are authoritative; its transcript is diagnostic"
+        );
+        let command = build_codex_command("codex", &request, None, Path::new("/tmp/codex-output"));
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -535,6 +771,8 @@ mod tests {
                 "--ephemeral",
                 "--model",
                 "gpt-x",
+                "-o",
+                "/tmp/codex-output",
                 "-",
             ]
         );
@@ -543,7 +781,8 @@ mod tests {
         }));
 
         request.codex_home = None;
-        let inherited_command = build_codex_command("codex", &request, None, None);
+        let inherited_command =
+            build_codex_command("codex", &request, None, Path::new("/tmp/codex-output"));
         assert!(
             inherited_command
                 .get_envs()
@@ -552,27 +791,292 @@ mod tests {
     }
 
     #[test]
-    fn worker_wait_interval_only_polls_cancellable_workers() {
-        let remaining = Duration::from_secs(30 * 60);
-
-        assert_eq!(worker_wait_interval(remaining, false), remaining);
+    fn codex_timeout_override_uses_the_validated_command_timeout_range() {
+        assert_eq!(parse_codex_timeout("1").unwrap().as_secs(), 1);
         assert_eq!(
-            worker_wait_interval(remaining, true),
-            CANCELLATION_POLL_INTERVAL
+            parse_codex_timeout(&MAX_COMMAND_TIMEOUT_SECONDS.to_string())
+                .unwrap()
+                .as_secs(),
+            MAX_COMMAND_TIMEOUT_SECONDS
+        );
+        for value in [
+            "0".to_string(),
+            (MAX_COMMAND_TIMEOUT_SECONDS + 1).to_string(),
+        ] {
+            let error = parse_codex_timeout(&value).unwrap_err().to_string();
+            assert!(error.contains("must be between 1 and 86400"), "{error}");
+        }
+    }
+
+    #[test]
+    fn worker_last_message_file_is_size_bounded() {
+        let output = NamedTempFile::new().unwrap();
+        output
+            .as_file()
+            .set_len((EXECUTION_OUTPUT_CAPTURE_LIMIT + 1) as u64)
+            .unwrap();
+
+        let error = read_worker_output_file(output.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn maximum_worker_timeout_does_not_overflow_deadline() {
+    fn worker_supervision_delivers_stdin_and_observes_output() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "cat"]);
+        let mut control = RecordingControl::default();
+
+        let output = run_worker_command(
+            &mut command,
+            Some("prompt through a file"),
+            CommandTimeout::from_seconds(1).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Error,
+            None,
+            &mut control,
+        )
+        .unwrap();
+
+        assert!(output.output.status.success());
+        assert_eq!(output.output.stdout, b"prompt through a file");
+        assert_eq!(control.output, b"prompt through a file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_supervision_preserves_cancellation_with_result_monitor() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let output_file = NamedTempFile::new().unwrap();
+
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Error,
+            Some(output_file.path()),
+            &mut CancelledControl,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_result_file_inspection_obeys_its_schedule() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("authoritative-output");
+        fs::write(&output_path, b"result").unwrap();
+        let mut control = crate::execution::NoopExecutionObserver;
+        let mut observer = WorkerProcessObserver::new(
+            ProcessExecutionObserver::new(&mut control, "test worker"),
+            Some(&output_path),
+        );
+
+        assert!(!observer.cancelled(), "the first inspection is immediate");
+        fs::remove_file(&output_path).unwrap();
+        observer.last_result_file_inspection = Some(Instant::now());
+        assert!(
+            !observer.cancelled(),
+            "metadata must not be inspected again before the interval"
+        );
+
+        observer.last_result_file_inspection = Some(
+            Instant::now()
+                .checked_sub(WORKER_RESULT_FILE_INSPECTION_INTERVAL)
+                .unwrap(),
+        );
+        assert!(
+            observer.cancelled(),
+            "the missing file is detected once due"
+        );
+        assert!(matches!(
+            observer.take_result_file_failure(),
+            Some(WorkerResultFileFailure::Inspection(message))
+                if message.contains("Failed to inspect Codex output file")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_supervision_rejects_output_beyond_the_capture_limit() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!("head -c {} /dev/zero", EXECUTION_OUTPUT_CAPTURE_LIMIT + 1),
+        ]);
+
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Error,
+            None,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_worker_allows_truncated_provider_transcript() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            &format!("head -c {} /dev/zero", EXECUTION_OUTPUT_CAPTURE_LIMIT + 1),
+        ]);
+
+        let output = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Truncate,
+            None,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+
+        assert!(output.output.status.success());
+        assert_eq!(output.output.stdout.len(), EXECUTION_OUTPUT_CAPTURE_LIMIT);
+        assert!(output.stdout_truncated);
+        assert!(!output.stderr_truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_result_file_limit_terminates_process_group_while_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("escaped-result-writer");
+        let output_file = NamedTempFile::new().unwrap();
+        let script = format!(
+            "(sleep 1; printf leaked > \"$1\") & head -c {} /dev/zero > \"$2\"; wait",
+            EXECUTION_OUTPUT_CAPTURE_LIMIT + 1
+        );
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(script)
+            .arg("worker")
+            .arg(&marker)
+            .arg(output_file.path());
+
+        let started = Instant::now();
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(5).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Truncate,
+            Some(output_file.path()),
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains(&format!(
+                "Codex last-message output exceeded the {EXECUTION_OUTPUT_CAPTURE_LIMIT} byte capture limit"
+            )),
+            "{error}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "result-file overflow was checked only after the worker exited"
+        );
+        thread::sleep(Duration::from_millis(1250));
+        assert!(
+            !marker.exists(),
+            "result-file overflow killed the child process but left its process group running"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn schema_less_worker_uses_last_message_file_as_authoritative_output() {
+        use std::os::unix::fs::PermissionsExt;
+
         let _guard = lock_env();
-        let _timeout = EnvVarGuard::set(CODEX_TIMEOUT_ENV, u64::MAX.to_string());
-        let mut command = Command::new("sh");
-        command.args(["-c", "exit 0"]);
+        let temp = tempfile::tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .required_commands(Vec::<String>::new())
+            .write();
+        let script = temp.path().join("codex-stub.sh");
+        fs::write(
+            &script,
+            r#"#!/bin/sh
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+done
+printf 'diagnostic transcript\n'
+printf 'authoritative result\n' > "$out"
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+        let _codex = EnvVarGuard::set("JIG_CODEX_BIN", &script);
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-        let output = run_worker_command(&mut command, None, None).unwrap();
+        let outcome = run_codex_exec(
+            &ctx,
+            CodexExecRequest {
+                root: temp.path(),
+                codex_home: None,
+                mode: CodexExecMode::Exec,
+                model: None,
+                approval_policy: Some("never"),
+                sandbox: Some("workspace-write"),
+                ephemeral: true,
+                extra_args: Vec::new(),
+                output_schema: None,
+                transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
+                prompt: CodexPrompt::Stdin("example prompt"),
+                receipt: WorkerReceiptRequest {
+                    purpose: "test",
+                    plan_id: None,
+                    workflow_id: None,
+                    item_key: None,
+                    collect_git_metadata: false,
+                    collect_worktree_fingerprint: false,
+                },
+                phase: None,
+            },
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap();
+        let CodexExecOutcome::Completed(output) = outcome else {
+            panic!("worker unexpectedly cancelled");
+        };
 
-        assert!(output.status.success());
+        assert_eq!(output.output.stdout, b"authoritative result\n");
+        assert_eq!(output.provider_stdout, "diagnostic transcript\n");
     }
 
     #[cfg(unix)]
@@ -600,9 +1104,17 @@ wait
 
         let mut command = Command::new(&script);
         command.arg(&marker);
-        let error = run_worker_command(&mut command, None, None)
-            .unwrap_err()
-            .to_string();
+        let error = run_worker_command(
+            &mut command,
+            None,
+            CommandTimeout::from_seconds(1).unwrap(),
+            "test worker",
+            ProcessOutputOverflowPolicy::Error,
+            None,
+            &mut crate::execution::NoopExecutionObserver,
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(error.contains("Worker process timed out after 1 seconds"));
         thread::sleep(Duration::from_millis(3500));

@@ -8,14 +8,17 @@ use crate::command::{
     WorkStartRequest,
 };
 use crate::context::RepoContext;
+use crate::execution::ExecutionControl;
 use crate::state::{
     DecisionAddRequest, PlanAppendRequest, PlanCloseRequest, PlanOpenRequest, ReceiptListFilter,
     SessionEndRequest, current_session, decisions_add, plans_append, plans_close,
     plans_open_prepared, prepare_plan_open, receipts_list, session_end, session_start,
-    state_summary,
+    state_summary_with_cancellation,
 };
 
 mod checks;
+#[cfg(test)]
+pub(in crate::runtime) use checks::check_tools_collect_failures_with_observer;
 mod gates;
 mod goal;
 mod review;
@@ -74,23 +77,33 @@ impl From<&WorkFinishRequest> for PlanCloseRequest {
     }
 }
 
-pub(super) fn dispatch(ctx: &RepoContext, command: WorkCommand) -> Result<Value> {
+pub(super) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: WorkCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
         WorkCommand::Goal(opts) => goal::goal(ctx, opts),
         WorkCommand::Start(opts) => start(ctx, opts.into()),
         WorkCommand::Append(opts) => plans_append(ctx, opts.into()),
-        WorkCommand::Check(opts) => checks::check(ctx, opts),
-        WorkCommand::Gates(opts) => gates::gates(ctx, opts),
-        WorkCommand::Evidence(opts) => gates::evidence(ctx, opts),
-        WorkCommand::Review(opts) => review::review(ctx, opts),
-        WorkCommand::Refine(opts) => review::refine(ctx, opts),
+        WorkCommand::Check(opts) => checks::check_with_observer(ctx, opts, observer),
+        WorkCommand::Gates(opts) => {
+            gates::snapshot_with_cancellation(ctx, opts.plan_id, &|| observer.cancelled())
+        }
+        WorkCommand::Evidence(opts) => {
+            gates::evidence_with_cancellation(ctx, opts, &|| observer.cancelled())
+        }
+        WorkCommand::Review(opts) => review::review_with_observer(ctx, opts, observer),
+        WorkCommand::Refine(opts) => review::refine_with_observer(ctx, opts, observer),
         WorkCommand::Decide(opts) => decisions_add(ctx, opts.into()),
         WorkCommand::Receipts(opts) => receipts_list(ctx, opts.into()),
-        WorkCommand::Status => state_summary(ctx).map(|mut value| {
-            value["command"] = json!("work status");
-            value
-        }),
-        WorkCommand::Finish(opts) => finish(ctx, opts),
+        WorkCommand::Status => {
+            state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(|mut value| {
+                value["command"] = json!("work status");
+                value
+            })
+        }
+        WorkCommand::Finish(opts) => finish_with_cancellation(ctx, opts, &|| observer.cancelled()),
     }
 }
 
@@ -99,12 +112,12 @@ pub(super) fn gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Resu
     gates::gates(ctx, WorkGatesRequest { plan_id })
 }
 
-pub(super) fn gates_snapshot_with_cancellation(
+pub(super) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
-    plan_id: Option<String>,
+    plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    gates::snapshot_with_cancellation(ctx, plan_id, cancelled)
+) -> Result<std::collections::BTreeMap<String, Value>> {
+    gates::open_plan_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
 
 pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
@@ -123,11 +136,19 @@ pub(super) fn start(ctx: &RepoContext, plan: PlanOpenRequest) -> Result<Value> {
 }
 
 pub(super) fn finish(ctx: &RepoContext, opts: WorkFinishRequest) -> Result<Value> {
+    finish_with_cancellation(ctx, opts, &|| false)
+}
+
+fn finish_with_cancellation(
+    ctx: &RepoContext,
+    opts: WorkFinishRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
     // Check before gate evaluation so unknown or already-closed plans report
     // plan-state errors instead of misleading gate failures. plans_close
     // rechecks after gates to preserve the state-layer invariant.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    gates::ensure_required_gates_passed(ctx, &opts.plan_id)?;
+    gates::ensure_required_gates_passed_with_cancellation(ctx, &opts.plan_id, cancelled)?;
 
     let plan = plans_close(ctx, (&opts).into())?;
     let session = match current_session(ctx)? {
@@ -159,9 +180,13 @@ pub(super) fn append_from_args(ctx: &RepoContext, args: Value) -> Result<Value> 
     plans_append(ctx, request.into())
 }
 
-pub(super) fn check_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn check_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let request: WorkCheckRequest = request_from_args(args)?;
-    checks::check(ctx, request)
+    checks::check_with_observer(ctx, request, observer)
 }
 
 pub(super) fn gates_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
@@ -174,14 +199,22 @@ pub(super) fn evidence_from_args(ctx: &RepoContext, args: Value) -> Result<Value
     gates::evidence(ctx, request)
 }
 
-pub(super) fn review_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn review_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let request: WorkReviewRequest = request_from_args(args)?;
-    review::review(ctx, request)
+    review::review_with_observer(ctx, request, observer)
 }
 
-pub(super) fn refine_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {
+pub(super) fn refine_from_args_with_observer(
+    ctx: &RepoContext,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let request: WorkRefineRequest = request_from_args(args)?;
-    review::refine(ctx, request)
+    review::refine_with_observer(ctx, request, observer)
 }
 
 pub(super) fn decide_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {

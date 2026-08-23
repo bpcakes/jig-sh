@@ -767,7 +767,7 @@ fn adopted_yarn_classic_repo_selects_a_compatible_corepack_version() {
 
     fs::write(repo.join("package.json"), r#"{"private":true}"#).unwrap();
     fs::write(repo.join("yarn.lock"), "__metadata:\n  version: 8\n").unwrap();
-    assert_eq!(resolve_spec(), "yarn@4.17.1");
+    assert_eq!(resolve_spec(), "yarn@4.18.0");
 
     let workflow = fs::read_to_string(repo.join(".github/workflows/webapp-checks.yml")).unwrap();
     assert!(workflow.contains("scripts/check-webapps.sh package-manager-spec"));
@@ -1047,7 +1047,7 @@ fn init_renders_web_commands_for_all_supported_package_managers() {
         assert!(workflow.contains("${RUNNER_TEMP:?GitHub Actions did not provide RUNNER_TEMP}"));
         assert!(workflow.contains("mktemp -d \"$RUNNER_TEMP/jig-node-version.XXXXXX\""));
         assert!(workflow.contains("set -o noclobber"));
-        assert!(workflow.contains("'22.22.2' > \"$node_version_file\""));
+        assert!(workflow.contains("'24.19.0' > \"$node_version_file\""));
         assert!(!workflow.contains("> .node-version"));
         assert!(workflow.contains("status=$?"));
         assert!(workflow.contains("if [ \"$status\" -eq 1 ]"));
@@ -1409,13 +1409,13 @@ env | LC_ALL=C sort > "$INSTALL_ENV"
             assert!(
                 workflow.contains(r#"scripts/check-webapps.sh package-manager-spec "$APP_DIR""#)
             );
-            assert!(!workflow.contains("corepack prepare pnpm@11.13.0 --activate"));
+            assert!(!workflow.contains("corepack prepare pnpm@11.22.0 --activate"));
         }
         if package_manager == "yarn" {
             assert!(
                 workflow.contains(r#"scripts/check-webapps.sh package-manager-spec "$APP_DIR""#)
             );
-            assert!(!workflow.contains("corepack prepare yarn@4.17.1 --activate"));
+            assert!(!workflow.contains("corepack prepare yarn@4.18.0 --activate"));
         }
         if matches!(package_manager, "pnpm" | "yarn") {
             assert!(workflow.contains(

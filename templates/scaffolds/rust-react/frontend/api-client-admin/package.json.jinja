@@ -1,0 +1,17 @@
+{
+  "name": "<<[ package_name ]>>-admin-api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./zod": "./src/generated/zod.gen.ts"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "5.101.4",
+    "react": "19.2.8"
+  }
+}

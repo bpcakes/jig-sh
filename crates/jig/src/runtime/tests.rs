@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::{Duration, Instant};
 
 use jig_vault::{SecretBytes, Vault};
 use secrecy::{ExposeSecret, SecretString};
@@ -196,6 +197,7 @@ fn runtime_command_from_cli(command: CommandKind) -> RuntimeCommand {
         CommandKind::Loop(command) => RuntimeCommand::Loop(command.into()),
         CommandKind::State(command) => RuntimeCommand::State(command.into()),
         CommandKind::Init(_)
+        | CommandKind::RuntimeCompatible(_)
         | CommandKind::Presets
         | CommandKind::Adopt(_)
         | CommandKind::Update(_)
@@ -236,6 +238,79 @@ fn dispatch_distinguishes_work_status_from_state_summary() {
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["command"], "work status");
+}
+
+#[test]
+fn runtime_state_summary_polls_operation_cancellation_during_collection() {
+    struct CancelAfterBoundary(std::cell::Cell<usize>);
+
+    impl crate::execution::ExecutionObserver for CancelAfterBoundary {}
+
+    impl crate::execution::ExecutionCancellation for CancelAfterBoundary {
+        fn cancelled(&self) -> bool {
+            let polls = self.0.get() + 1;
+            self.0.set(polls);
+            polls > 1
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterBoundary(std::cell::Cell::new(0));
+
+    let error = dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::State(crate::command::StateCommand::Summary),
+        &mut observer,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(error, "status collection was cancelled");
+}
+
+#[test]
+fn runtime_does_not_reclassify_committed_work_as_cancelled() {
+    struct CancelAfterEntry(std::cell::Cell<usize>);
+
+    impl crate::execution::ExecutionObserver for CancelAfterEntry {}
+
+    impl crate::execution::ExecutionCancellation for CancelAfterEntry {
+        fn cancelled(&self) -> bool {
+            let polls = self.0.get() + 1;
+            self.0.set(polls);
+            polls > 1
+        }
+    }
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = CancelAfterEntry(std::cell::Cell::new(0));
+
+    let output = dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Work(crate::command::WorkCommand::Start(
+            crate::command::WorkStartRequest {
+                title: "Example committed work".into(),
+                body: Some("Regression fixture for the durable commit boundary.".into()),
+                body_file: None,
+            },
+        )),
+        &mut observer,
+    )
+    .unwrap();
+
+    let plan_id = output["plan"]["plan_id"].as_str().unwrap();
+    assert!(
+        crate::state::open_plan_summaries(&ctx)
+            .unwrap()
+            .iter()
+            .any(|plan| plan["plan_id"] == plan_id),
+        "the successful result must identify the committed plan"
+    );
+    assert_eq!(observer.0.get(), 1, "dispatch must not poll after commit");
 }
 
 #[cfg(feature = "dev-proxy")]
@@ -301,6 +376,153 @@ rust_test_command = "printf 'command tool ran\n'"
     assert_eq!(output["ok"], true);
     assert_eq!(output["receipt_id"], serde_json::Value::Null);
     assert!(!temp.path().join(".agent/state/receipts.jsonl").exists());
+}
+
+#[test]
+fn command_tool_streams_both_outputs_through_execution_observer() {
+    #[derive(Default)]
+    struct RecordingObserver {
+        output: Vec<u8>,
+        started: bool,
+        finished: bool,
+    }
+
+    impl crate::execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { .. } => self.started = true,
+                crate::execution::ExecutionEvent::Output { bytes, .. } => {
+                    self.output.extend_from_slice(bytes)
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { .. } => self.finished = true,
+                crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
+"#,
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let mut observer = RecordingObserver::default();
+
+    let output = dispatch_with_observer(
+        &ctx,
+        RuntimeCommand::Check(
+            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: true,
+            })
+            .into(),
+        ),
+        &mut observer,
+    )
+    .unwrap();
+
+    assert_eq!(output["result"]["stdout"], "live stdout");
+    assert_eq!(output["result"]["stderr"], "live stderr");
+    let observed = String::from_utf8(observer.output).unwrap();
+    assert!(observed.contains("live stdout"));
+    assert!(observed.contains("live stderr"));
+    assert!(observer.started);
+    assert!(observer.finished);
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_command_output_limit_can_exceed_the_internal_protocol_bound() {
+    const OUTPUT_BYTES: usize = 4 * 1024 * 1024 + 1;
+
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(format!(
+            r#"
+rust_test_command = "head -c {OUTPUT_BYTES} /dev/zero"
+
+[execution]
+command_output_limit_bytes = {OUTPUT_BYTES}
+"#,
+        ))
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        RuntimeCommand::Check(
+            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+                plan_id: None,
+                no_receipt: true,
+            })
+            .into(),
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        output["result"]["stdout"].as_str().unwrap().len(),
+        OUTPUT_BYTES
+    );
+}
+
+#[test]
+fn command_tool_honors_repository_timeout() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+rust_test_command = "sleep 30"
+
+[execution]
+command_timeout_seconds = 1
+"#,
+        )
+        .contract_version(2)
+        .required_commands(["rust_test_command"])
+        .tool(json!({
+            "name": "jig.test",
+            "kind": "command",
+            "description": "Run configured test command.",
+            "command": "rust_test_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let started = Instant::now();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Check(crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
+            plan_id: None,
+            no_receipt: true,
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[test]

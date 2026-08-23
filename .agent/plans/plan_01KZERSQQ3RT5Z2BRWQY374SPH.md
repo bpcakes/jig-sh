@@ -1,0 +1,1 @@
+Replace time-only runtime installer locks with a cross-language owner-token and process-identity protocol. Verify live-owner exclusion, stale-owner recovery, generation-safe release, template parity, Rust tests, and repository gates.

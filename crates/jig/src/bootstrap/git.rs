@@ -104,7 +104,7 @@ pub(super) fn init_git_repo_with_validation(
             destination.display()
         )
     })?;
-    let staged_destination = staged.path().to_path_buf();
+    let staged_destination = crate::shell::git_env_path(staged.path())?;
     let staged_git = staged_destination.join(".git");
 
     let git_program = external_program(GIT_BIN_ENV, "git");
@@ -215,7 +215,7 @@ pub(super) fn init_git_repo_with_validation(
                 return close_staging_directory(staged, &staged_destination, Err(error));
             }
         };
-    let metadata_stage_path = metadata_stage.path().to_path_buf();
+    let metadata_stage_path = crate::shell::git_env_path(metadata_stage.path())?;
 
     let transfer = (|| {
         staged.require_identity("before transferring initialized Git metadata")?;
@@ -890,12 +890,7 @@ fn null_git_config_path() -> &'static OsStr {
     OsStr::new("/dev/null")
 }
 
-#[cfg(windows)]
-fn null_git_config_path() -> &'static OsStr {
-    OsStr::new("NUL")
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn null_git_config_path() -> &'static OsStr {
     OsStr::new("")
 }
@@ -928,19 +923,11 @@ fn prepare_private_git_template(
         require_absent_git_template_redirect(&private.join(relative))?;
     }
     require_empty_or_absent_alternates(&private.join("objects/info/alternates"))?;
-    Ok(Some(private))
+    Ok(Some(crate::shell::git_env_path(&private)?))
 }
 
 fn inherited_git_template_dir() -> Option<std::ffi::OsString> {
-    env::vars_os().find_map(|(name, value)| {
-        let matches = if cfg!(windows) {
-            name.to_string_lossy()
-                .eq_ignore_ascii_case("GIT_TEMPLATE_DIR")
-        } else {
-            name == "GIT_TEMPLATE_DIR"
-        };
-        matches.then_some(value)
-    })
+    env::var_os("GIT_TEMPLATE_DIR")
 }
 
 fn configured_git_template_dir(
@@ -1216,14 +1203,7 @@ fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
     metadata.mode()
 }
 
-#[cfg(windows)]
-fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
-    use std::os::windows::fs::MetadataExt;
-
-    metadata.file_attributes()
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn git_template_permission_identity(metadata: &fs::Metadata) -> u32 {
     u32::from(metadata.permissions().readonly())
 }
@@ -1302,13 +1282,6 @@ fn open_verified_git_template_file(
         use std::os::unix::fs::OpenOptionsExt;
 
         options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let file = options.open(path).with_context(|| {
         format!(

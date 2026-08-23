@@ -45,7 +45,7 @@ timeout_seconds = 30
 
 The configured `id` must exactly match `provider.id` in the report. Jig runs the argv directly from the repository root; it does not parse a shell command string. Arguments containing control characters are rejected so the renderer answer file remains safely round-trippable. Provider entries default to a 30-second timeout and accept values from 1 through 3,600 seconds. At most 32 providers may be configured.
 
-The runner closes stdin, caps stdout at 8 MiB and stderr at 64 KiB, and owns the complete child process tree. Timeout, cancellation, capture failure, or process-tree cleanup failure invalidates that invocation. Jig also removes inherited Bash startup/option/trace controls, exported Bash functions, and all inherited `GIT_*` variables so ambient repository redirection cannot make the provider inspect another checkout. Other ordinary toolchain and project environment values remain inherited. Provider configuration is committed executable authority; review it like a project-owned script and never place credentials in argv.
+The runner closes stdin, caps stdout at 8 MiB and stderr at 64 KiB, and owns the complete child process tree. Jig schedules at most four providers concurrently, retains configured result order, and stops queued providers from starting after cancellation; active providers receive the same cancellation through their owned-tree supervisor. Timeout, cancellation, capture failure, or process-tree cleanup failure invalidates that invocation. Jig also removes inherited Bash startup/option/trace controls, exported Bash functions, and all inherited `GIT_*` variables so ambient repository redirection cannot make the provider inspect another checkout. Other ordinary toolchain and project environment values remain inherited. Provider configuration is committed executable authority; review it like a project-owned script and never place credentials in argv.
 
 Run:
 
@@ -125,7 +125,7 @@ Provider-level `diagnostics` use `info`, `warning`, or `error`. Diagnostics desc
 
 ## Paths and deterministic output
 
-All `path` fields are relative to the target repository and use `/` separators. They must not be absolute, contain a Windows drive prefix or backslash, include NUL, or contain empty, `.` or `..` components. Line and column values are one-based.
+All `path` fields are relative to the target repository and use `/` separators. They must not be absolute, contain a drive prefix or backslash, include NUL, or contain empty, `.` or `..` components. Line and column values are one-based. The drive-prefix restriction remains part of the version 1 wire contract even though Jig hosts are limited to Linux and macOS; changing what existing v1 consumers accept requires a new protocol major.
 
 Providers should emit deterministic arrays so reports are reviewable and cacheable: inputs by name, work packages by id, dependencies by id, acceptance checks by ordinal, and findings or evidence by stable code/reference. Consumers must not require physical JSON object-key order.
 

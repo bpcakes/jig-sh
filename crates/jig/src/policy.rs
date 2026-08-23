@@ -12,6 +12,11 @@ use jig_owned_process::require_success;
 use serde_json::{Value, json};
 
 use crate::context::RepoContext;
+#[cfg(test)]
+use crate::execution::NoopExecutionObserver;
+use crate::execution::{
+    ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
+};
 use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -124,9 +129,10 @@ pub(crate) fn contract_check(ctx: &RepoContext) -> NativeToolOutput {
     NativeToolOutput {
         exit_status: 0,
         stdout: format!(
-            "jig contract check passed.\n  - manifest: {}\n  - jig version: {}\n  - tool definitions: {}\n",
+            "jig contract check passed.\n  - manifest: {}\n  - contract version: {}\n  - runtime version: {}\n  - tool definitions: {}\n",
             manifest_path.display(),
-            ctx.jig_version(),
+            ctx.contract_version(),
+            env!("CARGO_PKG_VERSION"),
             ctx.tool_specs().len()
         ),
         stderr: String::new(),
@@ -142,9 +148,6 @@ pub(crate) fn validate_contract(
     let jig_script = root.join("scripts/jig");
     let install_script = root.join("scripts/install-jig.sh");
 
-    if ctx.jig_version().is_empty() {
-        errors.push("Missing jig_version in .jig.toml.".to_string());
-    }
     if ctx.tool_specs().iter().any(|tool| tool.kind == "memory") {
         errors.push("Runtime state tools must not be declared in .agent/jig-contract.json.".into());
     }
@@ -162,21 +165,17 @@ pub(crate) fn validate_contract(
     if ctx.sqlx_enabled() && ctx.rust_migration_dir().trim().is_empty() {
         errors.push("sqlx_enabled is true, but rust_migration_dir is empty.".into());
     }
-    match ctx.contract_version() {
-        2 | 3 => {
-            for command_key in ctx.required_commands() {
-                if !ctx.supports_command_key(command_key) {
-                    errors.push(format!(
-                        "Unsupported required command in jig contract: {command_key}."
-                    ));
-                    continue;
-                }
-                if let Err(error) = ctx.command_for_key(command_key) {
-                    errors.push(error.to_string());
-                }
-            }
+    // RepoContext construction has already rejected unsupported contract epochs.
+    for command_key in ctx.required_commands() {
+        if !ctx.supports_command_key(command_key) {
+            errors.push(format!(
+                "Unsupported required command in jig contract: {command_key}."
+            ));
+            continue;
         }
-        other => errors.push(format!("Unsupported contract_version: {other}.")),
+        if let Err(error) = ctx.command_for_key(command_key) {
+            errors.push(error.to_string());
+        }
     }
 
     let tool_names = ctx
@@ -288,20 +287,45 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     })
 }
 
+#[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
+    schema_check_with_observer(ctx, &mut NoopExecutionObserver)
+        .map_err(ExecutionCommandError::into_anyhow)
+}
+
+pub(crate) fn schema_check_with_observer(
+    ctx: &RepoContext,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
     let command_text = ctx.schema_dump_command();
     if command_text.trim().is_empty() {
-        bail!("schema_dump_command is empty");
+        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
+            "schema_dump_command is empty"
+        )));
     }
     let schema_docs_dir = env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
     // A check intentionally reruns the configured dump command, then fails if
     // the dump output path has uncommitted changes.
-    let output = Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .current_dir(ctx.root())
         .arg("-c")
         .arg(command_text)
-        .output()
-        .context("Failed to run schema_dump_command")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        ctx.command_timeout(),
+        ctx.command_output_limit(),
+        "Configured schema dump",
+        observer,
+    )?;
+    let output = std::process::Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    };
     require_success(&output, |_| {
         format!(
             "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
@@ -309,15 +333,23 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         )
-    })?;
-    let status = git_text(
-        ctx.root(),
+    })
+    .map_err(ExecutionCommandError::failed)?;
+    if observer.cancelled() {
+        return Err(ExecutionCommandError::Cancelled);
+    }
+    let status = schema_git_text(
+        ctx,
         &["status", "--porcelain", "--", schema_docs_dir.as_str()],
+        "Schema Git status",
+        observer,
     )?;
     if !status.trim().is_empty() {
-        let diff = git_text(
-            ctx.root(),
+        let diff = schema_git_text(
+            ctx,
             &["--no-pager", "diff", "--", schema_docs_dir.as_str()],
+            "Schema Git diff",
+            observer,
         )?;
         return Ok(NativeToolOutput {
             exit_status: 1,
@@ -332,6 +364,37 @@ pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
         stdout: "Schema dump is up to date.\n".into(),
         stderr: String::new(),
     })
+}
+
+fn schema_git_text(
+    ctx: &RepoContext,
+    args: &[&str],
+    label: &str,
+    observer: &mut dyn ExecutionControl,
+) -> std::result::Result<String, ExecutionCommandError> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(ctx.root())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_authoritative_execution_command(
+        &mut command,
+        ctx.command_timeout(),
+        ctx.command_output_limit(),
+        label,
+        observer,
+    )?;
+    if !output.status.success() {
+        return Err(ExecutionCommandError::failed(anyhow::anyhow!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {

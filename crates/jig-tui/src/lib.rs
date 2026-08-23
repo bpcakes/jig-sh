@@ -70,6 +70,37 @@ pub fn sanitize_text(text: &str) -> String {
         .collect()
 }
 
+/// Formats a bounded percentage without rounding a positive value to zero or
+/// a sub-100 value to 100.
+pub fn format_percent(percent: f64) -> String {
+    let rounded_tenth = (percent * 10.0).round() / 10.0;
+    let displayed = if percent > 0.0 && rounded_tenth <= 0.0 {
+        0.1
+    } else if percent < 100.0 && rounded_tenth >= 100.0 {
+        99.9
+    } else {
+        rounded_tenth
+    };
+    if displayed.round() == displayed {
+        format!("{displayed:.0}%")
+    } else {
+        format!("{displayed:.1}%")
+    }
+}
+
+/// Formats a positive countdown in the largest whole minute, hour, or day unit.
+pub fn format_countdown(seconds: u64) -> String {
+    if seconds < 60 {
+        "<1m".into()
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3_600)
+    } else {
+        format!("{}d", seconds / 86_400)
+    }
+}
+
 /// Deterministic quality score for a case-insensitive fuzzy text match.
 ///
 /// Exact, prefix, substring, and ordered-subsequence matches sort in that
@@ -417,6 +448,22 @@ mod tests {
     }
 
     #[test]
+    fn percentage_formatting_does_not_round_across_bounds() {
+        assert_eq!(format_percent(0.04), "0.1%");
+        assert_eq!(format_percent(99.98), "99.9%");
+        assert_eq!(format_percent(100.0), "100%");
+        assert_eq!(format_percent(42.26), "42.3%");
+    }
+
+    #[test]
+    fn countdown_formatting_uses_the_largest_whole_unit() {
+        assert_eq!(format_countdown(59), "<1m");
+        assert_eq!(format_countdown(60), "1m");
+        assert_eq!(format_countdown(90 * 60), "1h");
+        assert_eq!(format_countdown(2 * 86_400), "2d");
+    }
+
+    #[test]
     fn fuzzy_match_scores_exact_prefix_substring_and_subsequence_in_order() {
         let exact = fuzzy_match_score("Vault", "vault").unwrap();
         let prefix = fuzzy_match_score("vault item", "vault").unwrap();
@@ -489,7 +536,7 @@ mod tests {
 
     #[test]
     fn cooperative_worker_reports_panics() {
-        let mut worker = CooperativeWorker::spawn("test-panic", |_| -> () {
+        let mut worker = CooperativeWorker::spawn("test-panic", |_| {
             panic!("expected worker panic");
         })
         .unwrap();

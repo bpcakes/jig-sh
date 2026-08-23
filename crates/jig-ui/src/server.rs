@@ -556,7 +556,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "ok":true,"command":"ui snapshot","generated_at_ms":1,
                 "repo":{"name":"demo","default_branch":"main","source_commit":null,"source_path":null},
-                "harness":{"jig_version":"test","contract_version":1},
+                "harness":{"runtime_version":"test","contract_version":1},
                 "current_session_id":null,
                 "counts":{"sessions":0,"session_events":0,"plans":0,"plan_events":0,"open_plans":0,"decisions":0},
                 "open_plans":[],"history":[],"failures":[],"tool_stats":[],

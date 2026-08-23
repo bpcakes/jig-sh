@@ -1,11 +1,13 @@
 #![cfg(unix)]
 
 use std::io::Write;
-use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
+
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStringExt;
 
 use jig_vault::{FieldKind, Vault, VaultReference};
 use secrecy::SecretString;
@@ -14,7 +16,14 @@ const PASSPHRASE: &str = "correct horse battery staple";
 const STDERR_SECRET: &str = "op-stderr-value-must-not-leak";
 
 fn private_tempdir() -> tempfile::TempDir {
-    let temp = tempfile::tempdir().unwrap();
+    // macOS exposes its temporary directory through /var, which is a symlink
+    // to /private/var. Vault output correctly rejects symlinked ancestors, so
+    // build fixtures beneath the canonical temporary root.
+    let temp_root = std::env::temp_dir().canonicalize().unwrap();
+    let temp = tempfile::Builder::new()
+        .prefix("jig-vault-import-")
+        .tempdir_in(temp_root)
+        .unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     temp
 }
@@ -415,6 +424,9 @@ fn op_descendants_cannot_hold_pipes_or_survive_after_leader_exit() {
     assert_eq!(value, b"detached-secret");
 }
 
+// macOS filesystems reject invalid-byte path components before Jig can reach
+// its post-commit recovery-path validation.
+#[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_recovery_paths_fail_before_op_or_import_mutation() {
     let temp = private_tempdir();

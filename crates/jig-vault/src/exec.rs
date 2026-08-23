@@ -250,25 +250,11 @@ pub(crate) fn is_vault_passphrase_env(name: &str) -> bool {
 }
 
 fn comparable_env_name(name: &str) -> String {
-    #[cfg(windows)]
-    {
-        name.to_ascii_uppercase()
-    }
-    #[cfg(not(windows))]
-    {
-        name.to_owned()
-    }
+    name.to_owned()
 }
 
 pub(crate) fn env_names_equal(left: &str, right: &str) -> bool {
-    #[cfg(windows)]
-    {
-        left.eq_ignore_ascii_case(right)
-    }
-    #[cfg(not(windows))]
-    {
-        left == right
-    }
+    left == right
 }
 
 fn invalid_input(message: impl Into<String>) -> VaultError {
@@ -395,9 +381,8 @@ mod tests {
         assert!(!request_debug.contains("debug-secret-sentinel"));
     }
 
-    #[cfg(not(windows))]
     #[test]
-    fn unix_environment_name_comparison_is_case_sensitive() {
+    fn environment_name_comparison_is_case_sensitive() {
         let lower =
             ExecEnvBinding::literal(var("token"), SecretBytes::new(b"one".to_vec())).unwrap();
         let upper =

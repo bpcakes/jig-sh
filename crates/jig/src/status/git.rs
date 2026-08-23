@@ -1,21 +1,19 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{process::Stdio, time::Duration};
 
 use jig_contract::status_provider::v1::Input;
 use jig_owned_process::format_exit_status;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
-use jig_owned_process::{
-    OwnedProcessTreeError, ProcessOutputLimits, run_owned_process_tree_with_output_limits,
-};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use jig_owned_process::{ProcessOutputLimits, run_owned_process_tree_with_output_limits};
 use serde::Serialize;
 
 use super::sanitize_observer_environment;
 
 const GIT_STDOUT_LIMIT: usize = 8 * 1024 * 1024;
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const GIT_STDERR_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug)]
@@ -168,7 +166,7 @@ struct GitOutput {
     stdout_truncated: bool,
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn git_output_with_cancellation(
     path: &Path,
     args: &[&str],
@@ -191,13 +189,16 @@ fn git_output_with_cancellation(
         },
         cancelled,
     )
-    .map_err(|error| match error {
-        OwnedProcessTreeError::Cancelled => GitProbeError::Cancelled,
-        error => GitProbeError::Failed(format!(
-            "Failed to run git {} in {}: {error}",
-            args.join(" "),
-            path.display()
-        )),
+    .map_err(|error| {
+        if error.is_cancellation() {
+            GitProbeError::Cancelled
+        } else {
+            GitProbeError::Failed(format!(
+                "Failed to run git {} in {}: {error}",
+                args.join(" "),
+                path.display()
+            ))
+        }
     })?;
     let stdout = output.stdout.ok_or_else(|| {
         GitProbeError::Failed(format!(
@@ -237,7 +238,7 @@ fn git_output_with_cancellation(
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn git_output_with_cancellation(
     path: &Path,
     args: &[&str],
@@ -286,9 +287,10 @@ fn configure_git_environment(command: &mut Command) {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::path::Path;
     use std::process::Command;
 
-    use super::configure_git_environment;
+    use super::{GitProbeError, configure_git_environment, observe_git_checkout_with_cancellation};
 
     #[test]
     fn configured_git_process_observes_optional_locks_disabled() {
@@ -299,5 +301,12 @@ mod tests {
         configure_git_environment(&mut command);
 
         assert!(command.status().unwrap().success());
+    }
+
+    #[test]
+    fn cancellation_before_git_spawn_remains_typed() {
+        let result = observe_git_checkout_with_cancellation(Path::new("."), &|| true);
+
+        assert!(matches!(result, Err(GitProbeError::Cancelled)));
     }
 }

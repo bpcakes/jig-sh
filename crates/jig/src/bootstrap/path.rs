@@ -25,8 +25,8 @@ pub(crate) struct RepositoryEntryIdentity {
 #[derive(Clone, Debug)]
 pub(crate) struct RepositoryDirectoryCommit {
     pub(crate) identity: RepositoryEntryIdentity,
-    // Retaining the directory handle prevents reuse of its device/inode or
-    // volume/file-index identity for the lifetime of the transaction.
+    // Retaining the directory handle prevents reuse of its device/inode
+    // identity for the lifetime of the transaction.
     pub(crate) handle: Arc<File>,
 }
 
@@ -34,13 +34,7 @@ pub(crate) struct RepositoryDirectoryCommit {
 enum RepositoryEntryPlatformIdentity {
     #[cfg(unix)]
     Unix { device: u64, inode: u64 },
-    #[cfg(windows)]
-    Windows {
-        volume_serial: u32,
-        file_index_high: u32,
-        file_index_low: u32,
-    },
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(not(unix))]
     Unsupported,
 }
 
@@ -122,40 +116,6 @@ fn portable_planned_file_components(path: &Path) -> Result<Vec<Vec<u8>>> {
                 .iter()
                 .map(u8::to_ascii_lowercase)
                 .collect::<Vec<_>>();
-            if normalized.contains(&b'\\') {
-                bail!(
-                    "Planned repository file path is not portable to Windows because component {:?} contains a raw backslash; use '/' separators: {}",
-                    component.to_string_lossy(),
-                    path.display()
-                );
-            }
-            if normalized
-                .iter()
-                .any(|byte| is_windows_forbidden_component_byte(*byte))
-            {
-                bail!(
-                    "Planned repository file path is not portable to Windows because component {:?} contains a forbidden character or control byte: {}",
-                    component.to_string_lossy(),
-                    path.display()
-                );
-            }
-            if normalized
-                .last()
-                .is_some_and(|byte| matches!(byte, b'.' | b' '))
-            {
-                bail!(
-                    "Planned repository file path is not portable to Windows because component {:?} ends in a dot or space: {}",
-                    component.to_string_lossy(),
-                    path.display()
-                );
-            }
-            if is_windows_reserved_device_component(&normalized) {
-                bail!(
-                    "Planned repository file path is not portable to Windows because component {:?} uses a reserved device name: {}",
-                    component.to_string_lossy(),
-                    path.display()
-                );
-            }
             Ok(normalized)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -163,24 +123,6 @@ fn portable_planned_file_components(path: &Path) -> Result<Vec<Vec<u8>>> {
         bail!("Planned repository file path cannot be empty");
     }
     Ok(components)
-}
-
-const fn is_windows_forbidden_component_byte(byte: u8) -> bool {
-    byte.is_ascii_control() || matches!(byte, b'<' | b'>' | b':' | b'"' | b'|' | b'?' | b'*')
-}
-
-fn is_windows_reserved_device_component(component: &[u8]) -> bool {
-    let basename = component
-        .split(|byte| *byte == b'.')
-        .next()
-        .unwrap_or(component);
-    matches!(basename, b"con" | b"prn" | b"aux" | b"nul")
-        || (basename.len() == 4
-            && matches!(&basename[..3], b"com" | b"lpt")
-            && matches!(basename[3], b'1'..=b'9'))
-        || (basename.len() == 5
-            && matches!(&basename[..3], b"com" | b"lpt")
-            && matches!(&basename[3..], b"\xc2\xb9" | b"\xc2\xb2" | b"\xc2\xb3"))
 }
 
 fn component_prefix(prefix: &[Vec<u8>], path: &[Vec<u8>]) -> bool {
@@ -261,13 +203,6 @@ fn open_file_no_follow(path: &Path) -> Result<File> {
 
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
     options
         .open(path)
         .with_context(|| format!("Failed to open {} without following links", path.display()))
@@ -287,18 +222,6 @@ fn open_directory_no_follow(path: &Path) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
 
         options.custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-            FILE_SHARE_READ, FILE_SHARE_WRITE,
-        };
-
-        options
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let directory = options.open(path).with_context(|| {
         format!(
@@ -348,43 +271,6 @@ fn open_symlink_no_follow(path: &Path) -> Result<File> {
         .with_context(|| format!("Failed to retain symlink handle {}", path.display()))
 }
 
-#[cfg(windows)]
-fn open_symlink_no_follow(path: &Path) -> Result<File> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-    };
-
-    let encoded = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // SAFETY: `encoded` is NUL terminated. Ownership of a successful handle
-    // is transferred exactly once into `File` below.
-    let handle = unsafe {
-        CreateFileW(
-            encoded.as_ptr(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("Failed to retain symlink handle {}", path.display()));
-    }
-    // SAFETY: `handle` is valid, uniquely owned here, and has the same raw
-    // representation expected by `File::from_raw_handle`.
-    Ok(unsafe { File::from_raw_handle(handle) })
-}
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -392,8 +278,7 @@ fn open_symlink_no_follow(path: &Path) -> Result<File> {
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
-    target_os = "visionos",
-    windows
+    target_os = "visionos"
 )))]
 fn open_symlink_no_follow(path: &Path) -> Result<File> {
     bail!(
@@ -447,14 +332,6 @@ fn metadata_for_symlink(path: &Path) -> Result<fs::Metadata> {
         .with_context(|| format!("Failed to inspect symlink type {}", path.display()))
 }
 
-#[cfg(windows)]
-fn repository_symlink_is_directory(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::FileTypeExt;
-
-    metadata.file_type().is_symlink_dir()
-}
-
-#[cfg(not(windows))]
 const fn repository_symlink_is_directory(_metadata: &fs::Metadata) -> bool {
     // Unix creation does not distinguish file and directory symlinks. Keeping
     // this generation property independent of the mutable target also makes
@@ -493,47 +370,11 @@ pub(crate) fn repository_directory_commit_matches_path(
 }
 
 fn repository_metadata_is_real_directory(metadata: &fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-
-        windows_directory_attributes_are_real(
-            metadata.is_dir(),
-            metadata.file_type().is_symlink(),
-            metadata.file_attributes(),
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.is_dir() && !metadata.file_type().is_symlink()
-    }
+    metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
 pub(crate) fn repository_metadata_is_real_regular_file(metadata: &fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-        metadata.is_file()
-            && !metadata.file_type().is_symlink()
-            && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
-    }
-    #[cfg(not(windows))]
-    {
-        metadata.is_file() && !metadata.file_type().is_symlink()
-    }
-}
-
-#[cfg(windows)]
-fn windows_directory_attributes_are_real(
-    is_directory: bool,
-    is_symlink: bool,
-    attributes: u32,
-) -> bool {
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    is_directory && !is_symlink && attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    metadata.is_file() && !metadata.file_type().is_symlink()
 }
 
 pub(crate) fn write_repository_file_atomic(
@@ -983,19 +824,7 @@ fn create_repository_symlink(target: &Path, link: &Path, _target_is_directory: b
         .with_context(|| format!("Failed to create temporary symlink {}", link.display()))
 }
 
-#[cfg(windows)]
-fn create_repository_symlink(target: &Path, link: &Path, target_is_directory: bool) -> Result<()> {
-    use std::os::windows::fs::{symlink_dir, symlink_file};
-
-    if target_is_directory {
-        symlink_dir(target, link)
-    } else {
-        symlink_file(target, link)
-    }
-    .with_context(|| format!("Failed to create temporary symlink {}", link.display()))
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn create_repository_symlink(
     _target: &Path,
     link: &Path,
@@ -1287,12 +1116,7 @@ fn same_open_file_identity(left: &File, right: &File) -> Result<bool> {
     Ok(repository_file_identity(left)? == repository_file_identity(right)?)
 }
 
-#[cfg(windows)]
-fn same_open_file_identity(left: &File, right: &File) -> Result<bool> {
-    Ok(repository_file_identity(left)? == repository_file_identity(right)?)
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn same_open_file_identity(left: &File, right: &File) -> Result<bool> {
     let left = left.metadata().context("Failed to inspect opened file")?;
     let right = right.metadata().context("Failed to inspect opened file")?;
@@ -1312,31 +1136,7 @@ pub(crate) fn repository_file_identity(file: &File) -> Result<RepositoryEntryIde
     })
 }
 
-#[cfg(windows)]
-pub(crate) fn repository_file_identity(file: &File) -> Result<RepositoryEntryIdentity> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
-    };
-
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `info` is writable for the duration of the call and the raw
-    // handle remains owned by `file`, which outlives the call.
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) } == 0 {
-        return Err(std::io::Error::last_os_error())
-            .context("Failed to identify opened repository file");
-    }
-    Ok(RepositoryEntryIdentity {
-        platform: RepositoryEntryPlatformIdentity::Windows {
-            volume_serial: info.dwVolumeSerialNumber,
-            file_index_high: info.nFileIndexHigh,
-            file_index_low: info.nFileIndexLow,
-        },
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(crate) fn repository_file_identity(_file: &File) -> Result<RepositoryEntryIdentity> {
     bail!("stable repository file identity is unsupported on this platform")
 }
@@ -1355,57 +1155,7 @@ pub(crate) fn repository_path_identity(path: &Path) -> Result<RepositoryEntryIde
     })
 }
 
-#[cfg(windows)]
-pub(crate) fn repository_path_identity(path: &Path) -> Result<RepositoryEntryIdentity> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, CreateFileW, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        GetFileInformationByHandle, OPEN_EXISTING,
-    };
-
-    let encoded = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // SAFETY: `encoded` is a valid NUL-terminated path buffer. The returned
-    // handle is closed on every path below.
-    let handle = unsafe {
-        CreateFileW(
-            encoded.as_ptr(),
-            0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            std::ptr::null(),
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("Failed to identify {}", path.display()));
-    }
-    let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `handle` is valid and `info` is writable for the call.
-    let result = unsafe { GetFileInformationByHandle(handle as HANDLE, &mut info) };
-    // SAFETY: `handle` is owned by this function and is closed exactly once.
-    unsafe { CloseHandle(handle as HANDLE) };
-    if result == 0 {
-        return Err(io::Error::last_os_error())
-            .with_context(|| format!("Failed to identify {}", path.display()));
-    }
-    Ok(RepositoryEntryIdentity {
-        platform: RepositoryEntryPlatformIdentity::Windows {
-            volume_serial: info.dwVolumeSerialNumber,
-            file_index_high: info.nFileIndexHigh,
-            file_index_low: info.nFileIndexLow,
-        },
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub(crate) fn repository_path_identity(_path: &Path) -> Result<RepositoryEntryIdentity> {
     bail!("stable repository path identity is unsupported on this platform")
 }
@@ -1426,18 +1176,7 @@ pub(crate) fn repository_paths_same_filesystem(left: &Path, right: &Path) -> Res
             RepositoryEntryPlatformIdentity::Unix { device: left, .. },
             RepositoryEntryPlatformIdentity::Unix { device: right, .. },
         ) => left == right,
-        #[cfg(windows)]
-        (
-            RepositoryEntryPlatformIdentity::Windows {
-                volume_serial: left,
-                ..
-            },
-            RepositoryEntryPlatformIdentity::Windows {
-                volume_serial: right,
-                ..
-            },
-        ) => left == right,
-        #[cfg(not(any(unix, windows)))]
+        #[cfg(not(unix))]
         _ => false,
     })
 }
@@ -1450,7 +1189,7 @@ pub(crate) fn repository_permission_identity(permissions: &fs::Permissions) -> u
 pub(super) fn validate_no_reserved_git_metadata_components(relative: &Path) -> Result<()> {
     if let Some(component) = reserved_git_metadata_component(relative) {
         bail!(
-            "Unsafe repository path {}: component {component:?} aliases the reserved Git metadata component \".git\" under Git's NTFS/HFS path rules",
+            "Unsafe repository path {}: component {component:?} aliases the reserved Git metadata component \".git\" under Git's HFS path rules",
             relative.display()
         );
     }
@@ -1463,37 +1202,13 @@ fn reserved_git_metadata_component(relative: &Path) -> Option<&str> {
             return None;
         };
         let component = component.to_str()?;
-        component.split('\\').find(|segment| {
-            is_ntfs_git_metadata_alias(segment) || is_hfs_git_metadata_alias(segment)
-        })
+        is_hfs_git_metadata_alias(component).then_some(component)
     })
 }
 
 // Behavioral reference only; this is an independent Rust implementation of Git's
-// protections pinned at f60db8d575adb79761d363e026fb49bddf330c73:
-// https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/path.c#L1394-L1449
+// HFS protection pinned at f60db8d575adb79761d363e026fb49bddf330c73:
 // https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/utf8.c#L698-L787
-// Upstream cases: https://github.com/git/git/blob/f60db8d575adb79761d363e026fb49bddf330c73/t/t0060-path-utils.sh#L438-L527
-fn is_ntfs_git_metadata_alias(component: &str) -> bool {
-    [".git", "git~1"].into_iter().any(|prefix| {
-        let Some(remainder) = strip_ascii_case_prefix(component, prefix) else {
-            return false;
-        };
-        remainder
-            .split_once(':')
-            .map_or(remainder, |(before_stream, _)| before_stream)
-            .bytes()
-            .all(|byte| byte == b'.' || byte == b' ')
-    })
-}
-
-fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
-    value
-        .get(..prefix.len())
-        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
-        .then(|| &value[prefix.len()..])
-}
-
 fn is_hfs_git_metadata_alias(component: &str) -> bool {
     let mut normalized = component
         .chars()
@@ -1680,16 +1395,6 @@ pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathB
         bail!("Init destination must not be empty");
     }
 
-    #[cfg(windows)]
-    if (path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_))))
-        && !path.is_absolute()
-    {
-        bail!(
-            "Init destination must be a normal relative path or a complete absolute drive/UNC path: {}",
-            path.display()
-        );
-    }
-
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -1741,8 +1446,7 @@ const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<(
         target_os = "ios",
         target_os = "tvos",
         target_os = "watchos",
-        target_os = "visionos",
-        windows
+        target_os = "visionos"
     ))]
     {
         Ok(())
@@ -1754,8 +1458,7 @@ const fn ensure_atomic_noreplace_publication_supported_on_platform() -> Result<(
         target_os = "ios",
         target_os = "tvos",
         target_os = "watchos",
-        target_os = "visionos",
-        windows
+        target_os = "visionos"
     )))]
     {
         bail!("atomic no-replace init publication is unsupported on this platform")
@@ -1907,7 +1610,6 @@ fn ensure_atomic_noreplace_publication_supported_with(
             preserved.display()
         );
     }
-    // Windows blocks ancestor renames while verified descendant handles remain open.
     drop((source_identity, occupied_identity));
     let cleanup_parent = probe_path.parent().unwrap_or(parent);
     let mut cleanup_path = None;
@@ -2017,29 +1719,6 @@ pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::R
     }
 }
 
-#[cfg(windows)]
-pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
-
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let destination = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // MOVEFILE_REPLACE_EXISTING is deliberately absent.
-    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) } != 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
 #[cfg(not(any(
     target_os = "linux",
     target_os = "android",
@@ -2047,8 +1726,7 @@ pub(crate) fn rename_entry_noreplace(source: &Path, destination: &Path) -> io::R
     target_os = "ios",
     target_os = "tvos",
     target_os = "watchos",
-    target_os = "visionos",
-    windows
+    target_os = "visionos"
 )))]
 pub(crate) fn rename_entry_noreplace(_source: &Path, _destination: &Path) -> io::Result<()> {
     Err(io::Error::new(

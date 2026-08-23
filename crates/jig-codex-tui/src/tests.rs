@@ -1,15 +1,28 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use jig_tui::format_percent;
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::json;
 
 use crate::{
     Home, HomeUpdate,
-    model::{App, ExitState, Focus, Inspection},
+    model::{App, ExitState, Focus, Inspection, Projection, WindowRole},
     render,
     runtime::{Action, handle_key},
 };
+
+// agentic-loc-exception: shared picker fixtures keep the remaining interaction tests readable; projection rendering cases live in tests/projection_rendering.rs.
+
+const PROJECTION_TOLERANCE: f64 = 1e-9;
+
+#[test]
+fn percent_formatting_never_rounds_a_partial_quota_up_to_complete() {
+    assert_eq!(format_percent(0.04), "0.1%");
+    assert_eq!(format_percent(99.98), "99.9%");
+    assert_eq!(format_percent(100.0), "100%");
+    assert_eq!(format_percent(42.26), "42.3%");
+}
 
 fn homes() -> Vec<Home> {
     vec![
@@ -58,6 +71,22 @@ fn ready_update(index: usize) -> HomeUpdate {
     }
 }
 
+fn projected_update(
+    index: usize,
+    used_percent: f64,
+    duration_minutes: u64,
+    elapsed_fraction: f64,
+    now: u64,
+) -> HomeUpdate {
+    let duration_seconds = duration_minutes * 60;
+    let remaining_seconds = (duration_seconds as f64 * (1.0 - elapsed_fraction)).round() as u64;
+    let mut update = ready_update(index);
+    update.details["rate_limits"][0]["primary"]["used_percent"] = json!(used_percent);
+    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(duration_minutes);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(now + remaining_seconds);
+    update
+}
+
 #[test]
 fn starts_with_visible_loading_rows_and_current_selection() {
     let app = app(homes());
@@ -73,8 +102,19 @@ fn update_is_indexed_and_single_codex_window_is_weekly() {
 
     assert_eq!(app.completed, 1);
     assert_eq!(app.rows[1].account(), "person@example.com");
-    assert_eq!(app.rows[1].usage(), "weekly 25%/7d");
+    assert_eq!(app.rows[1].usage(), "weekly 75% left");
     assert!(matches!(app.rows[0].inspection(), Inspection::Loading));
+}
+
+#[test]
+fn single_codex_window_uses_its_reported_duration_role() {
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(300);
+
+    app.apply_update(update);
+
+    assert_eq!(app.rows[0].usage(), "5h 75% left");
 }
 
 #[test]
@@ -88,7 +128,453 @@ fn duplicate_codex_window_durations_receive_the_same_role() {
 
     app.apply_update(update);
 
-    assert_eq!(app.rows[0].usage(), "5h 10%/5h, 5h 20%/5h");
+    assert_eq!(app.rows[0].usage(), "5h 90% left, 5h 80% left");
+}
+
+#[test]
+fn unrecognized_codex_window_durations_remain_distinguishable() {
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"] =
+        json!({ "used_percent": 10, "duration_minutes": 120 });
+    update.details["rate_limits"][0]["secondary"] =
+        json!({ "used_percent": 20, "duration_minutes": 240 });
+
+    app.apply_update(update);
+
+    assert_eq!(app.rows[0].usage(), "2h 90% left, 4h 80% left");
+}
+
+#[test]
+fn unrecognized_codex_duration_remains_identifiable_in_projection() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 25.0, 120, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining {
+            role: WindowRole::DurationMinutes(120),
+            percent,
+            partial: false,
+        } if (percent - 50.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(app.rows[0].projection().label(), "2h: ~50% left at reset");
+}
+
+#[test]
+fn projection_compares_usage_with_elapsed_window_time() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 25.0, 10_080, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining { percent, .. }
+            if (percent - 50.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(
+        app.rows[0].projection().label(),
+        "weekly: ~50% left at reset"
+    );
+}
+
+#[test]
+fn projection_reports_when_quota_runs_out_before_reset() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 60.0, 10_080, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::ExhaustsEarly { seconds, .. } if seconds == 100_800
+    ));
+    assert_eq!(
+        app.rows[0].projection().label(),
+        "weekly: runs out ~1.2d early"
+    );
+}
+
+#[test]
+fn projection_collects_data_during_the_first_tenth_of_a_window() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 2.0, 10_080, 0.05, NOW), NOW);
+
+    assert_eq!(
+        app.rows[0].projection(),
+        Projection::Collecting {
+            role: WindowRole::Weekly,
+            remaining_percent: 98.0,
+        }
+    );
+    assert_eq!(app.best_projection_index_at(NOW), None);
+}
+
+#[test]
+fn zero_usage_is_rankable_during_the_projection_warmup() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 0.0, 10_080, 0.05, NOW), NOW);
+    app.apply_update_at(projected_update(1, 20.0, 10_080, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining {
+            percent: 100.0,
+            partial: false,
+            ..
+        }
+    ));
+    assert_eq!(app.best_projection_index_at(NOW), Some(0));
+}
+
+#[test]
+fn fallback_usage_bucket_is_projected_but_not_used_for_account_recommendation() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(0, 25.0, 10_080, 0.5, NOW);
+    update.details["rate_limits"][0]["id"] = json!("other");
+
+    app.apply_update_at(update, NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining { percent, .. }
+            if (percent - 50.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(app.best_projection_index_at(NOW), None);
+}
+
+#[test]
+fn valid_projection_survives_an_unavailable_sibling_but_remains_unranked() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(1, 10.0, 10_080, 0.5, NOW);
+    update.details["rate_limits"][0]["secondary"] = json!({
+        "used_percent": 5.0,
+        "duration_minutes": 300,
+        "resets_at": null
+    });
+    app.apply_update_at(update, NOW);
+
+    assert!(matches!(
+        app.rows[1].projection(),
+        Projection::Remaining {
+            role: WindowRole::Weekly,
+            percent,
+            partial: true,
+            ..
+        } if (percent - 80.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(
+        app.rows[1].projection().label(),
+        "weekly: ~80% left · partial"
+    );
+    assert_eq!(app.best_projection_index_at(NOW), None);
+
+    app.selected = Some(1);
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(!rendered.contains("Recommendation:"), "{rendered}");
+}
+
+#[test]
+fn valid_warning_survives_a_collecting_sibling_but_remains_unranked() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(1, 60.0, 10_080, 0.5, NOW);
+    update.details["rate_limits"][0]["secondary"] = json!({
+        "used_percent": 1.0,
+        "duration_minutes": 300,
+        "resets_at": NOW + 17_100
+    });
+    app.apply_update_at(update, NOW);
+
+    assert!(matches!(
+        app.rows[1].projection(),
+        Projection::ExhaustsEarly {
+            role: WindowRole::Weekly,
+            partial: true,
+            ..
+        }
+    ));
+    assert!(
+        app.rows[1]
+            .projection()
+            .label()
+            .contains("runs out ~1.2d early · partial")
+    );
+    assert_eq!(app.best_projection_index_at(NOW), None);
+}
+
+#[test]
+fn exhausted_quota_is_explicit_instead_of_a_future_exhaustion() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 100.0, 10_080, 0.5, NOW), NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Exhausted {
+            role: WindowRole::Weekly,
+            partial: false,
+            ..
+        }
+    ));
+    assert_eq!(
+        app.rows[0].projection().label(),
+        "weekly: exhausted until reset"
+    );
+    assert_eq!(app.best_projection_index_at(NOW), None);
+}
+
+#[test]
+fn overreported_quota_is_clamped_to_zero_remaining_and_exhausted() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["used_percent"] = json!(100.5);
+    app.apply_update_at(update, NOW);
+
+    assert_eq!(app.rows[0].usage(), "weekly 0% left");
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Exhausted {
+            role: WindowRole::Weekly,
+            partial: false,
+        }
+    ));
+}
+
+#[test]
+fn sub_minute_overrun_is_not_rounded_up_to_one_minute() {
+    let projection = Projection::ExhaustsEarly {
+        role: WindowRole::Weekly,
+        seconds: 10,
+        score: -0.1,
+        partial: false,
+    };
+
+    assert_eq!(projection.label(), "weekly: runs out <1m early");
+    assert_eq!(projection.outcome_label(), "runs out <1m early");
+}
+
+#[test]
+fn rounded_overrun_labels_promote_across_unit_boundaries() {
+    let projection = |seconds| Projection::ExhaustsEarly {
+        role: WindowRole::Weekly,
+        seconds,
+        score: -0.1,
+        partial: false,
+    };
+
+    assert_eq!(projection(3_599).label(), "weekly: runs out ~1h early");
+    assert_eq!(projection(86_399).label(), "weekly: runs out ~1d early");
+}
+
+#[test]
+fn exhausted_window_dominates_other_complete_window_projections() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(0, 60.0, 10_080, 0.5, NOW);
+    update.details["rate_limits"][0]["secondary"] = json!({
+        "used_percent": 100.0,
+        "duration_minutes": 300,
+        "resets_at": NOW + 9_000
+    });
+    app.apply_update_at(update, NOW);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Exhausted {
+            role: WindowRole::FiveHour,
+            partial: false,
+        }
+    ));
+    assert_eq!(app.best_projection_index_at(NOW), None);
+}
+
+#[test]
+fn best_projection_uses_burn_pace_not_raw_usage() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 30.0, 10_080, 0.5, NOW), NOW);
+    app.apply_update_at(projected_update(1, 20.0, 10_080, 0.25, NOW), NOW);
+
+    assert_eq!(app.best_projection_index_at(NOW), Some(0));
+    assert_eq!(app.rows[0].display_name(), "codex");
+    assert_eq!(app.rows[1].display_name(), "codex-work");
+}
+
+#[test]
+fn projection_is_fixed_to_the_usage_observation_time() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(
+        projected_update(0, 30.0, 300, 0.2, OBSERVED_AT),
+        OBSERVED_AT,
+    );
+
+    let projection = app.rows[0].projection();
+    assert!(matches!(projection, Projection::ExhaustsEarly { .. }));
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, OBSERVED_AT + 3_600))
+        .unwrap();
+
+    assert_eq!(app.rows[0].projection(), projection);
+    assert_eq!(app.best_projection_index_at(OBSERVED_AT), Some(0));
+}
+
+#[test]
+fn projection_expires_when_its_usage_window_resets() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(0, 25.0, 300, 0.98, OBSERVED_AT);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(OBSERVED_AT + 60);
+    app.apply_update_at(update, OBSERVED_AT);
+
+    assert_eq!(app.best_projection_index_at(OBSERVED_AT), Some(0));
+    assert_eq!(app.best_projection_index_at(OBSERVED_AT + 60), None);
+    assert!(
+        app.rows[0]
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
+            .projection_is_stale()
+    );
+}
+
+#[test]
+fn unprojectable_sibling_reset_expires_quota_but_not_the_visible_projection() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = projected_update(0, 25.0, 10_080, 0.5, OBSERVED_AT);
+    update.details["rate_limits"][0]["secondary"] = json!({
+        "used_percent": 5.0,
+        "duration_minutes": null,
+        "resets_at": OBSERVED_AT + 60
+    });
+    app.apply_update_at(update, OBSERVED_AT);
+
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining { partial: true, .. }
+    ));
+    assert!(
+        app.rows[0]
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
+            .quota_is_stale()
+    );
+    assert!(
+        !app.rows[0]
+            .usage_snapshot_assessment_at(OBSERVED_AT + 60)
+            .projection_is_stale()
+    );
+    assert!(
+        app.rows[0]
+            .usage_snapshot_assessment_at(OBSERVED_AT + 15 * 60)
+            .projection_is_stale()
+    );
+}
+
+#[test]
+fn known_reset_expires_quota_without_projection_metadata() {
+    const OBSERVED_AT: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(null);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(OBSERVED_AT + 60);
+    app.apply_update_at(update, OBSERVED_AT);
+
+    let assessment = app.rows[0].usage_snapshot_assessment_at(OBSERVED_AT + 60);
+    assert!(matches!(assessment.projection(), Projection::Unavailable));
+    assert!(assessment.quota_is_stale());
+    assert!(assessment.projection_is_stale());
+}
+
+#[test]
+fn generic_usage_fallback_keeps_bucket_window_context_without_ranking() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    let mut update = ready_update(0);
+    update.details["rate_limits"][0]["id"] = json!("spark");
+    update.details["rate_limits"][0]["name"] = json!("Spark");
+    update.details["rate_limits"][0]["primary"]["duration_minutes"] = json!(1_440);
+    update.details["rate_limits"][0]["primary"]["resets_at"] = json!(NOW + 43_200);
+    app.apply_update_at(update, NOW);
+
+    assert_eq!(app.rows[0].usage(), "Spark 1d 75% left");
+    assert!(matches!(
+        app.rows[0].projection(),
+        Projection::Remaining {
+            role: WindowRole::Window,
+            percent,
+            partial: false,
+        } if (percent - 50.0).abs() < PROJECTION_TOLERANCE
+    ));
+    assert_eq!(app.best_projection_index_at(NOW), None);
+
+    let backend = TestBackend::new(120, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render::draw_at(frame, &app, NOW))
+        .unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("Spark usage"), "{rendered}");
+    assert!(
+        rendered.contains("At current pace: ~50% left at reset"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("no rankable Codex projection"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Recommendation:"), "{rendered}");
+}
+
+#[test]
+fn filtered_list_recommends_the_best_visible_account() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 10.0, 10_080, 0.5, NOW), NOW);
+    app.apply_update_at(projected_update(1, 30.0, 10_080, 0.5, NOW), NOW);
+    assert_eq!(app.best_projection_index_at(NOW), Some(0));
+
+    for character in "work".chars() {
+        app.push_filter(character);
+    }
+
+    assert_eq!(app.visible_indices(), vec![1]);
+    assert_eq!(app.best_projection_index_at(NOW), Some(1));
+}
+
+#[test]
+fn best_projection_uses_the_tightest_returned_codex_window() {
+    const NOW: u64 = 2_000_000_000;
+    let mut app = app(homes());
+    app.apply_update_at(projected_update(0, 30.0, 10_080, 0.5, NOW), NOW);
+    let mut second = projected_update(1, 10.0, 10_080, 0.5, NOW);
+    second.details["rate_limits"][0]["secondary"] = json!({
+        "used_percent": 60.0,
+        "duration_minutes": 300,
+        "resets_at": NOW + 9_000
+    });
+    app.apply_update_at(second, NOW);
+
+    assert!(matches!(
+        app.rows[1].projection(),
+        Projection::ExhaustsEarly {
+            role: WindowRole::FiveHour,
+            ..
+        }
+    ));
+    assert_eq!(app.best_projection_index_at(NOW), Some(0));
 }
 
 #[test]
@@ -291,25 +777,6 @@ fn end_then_up_moves_immediately_in_the_detail_pane() {
     assert!(app.detail_scroll < max_scroll - 1);
     handle_key(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.detail_scroll, 0);
-}
-
-#[test]
-fn rendering_shows_loading_then_selected_account_and_usage() {
-    let backend = TestBackend::new(120, 30);
-    let mut terminal = Terminal::new(backend).unwrap();
-    let mut app = app(homes());
-
-    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    let loading = terminal.backend().to_string();
-    assert!(loading.contains("Codex Home Picker"), "{loading}");
-    assert!(loading.contains("loading"), "{loading}");
-    assert!(loading.contains("You can launch now"), "{loading}");
-
-    app.apply_update(ready_update(0));
-    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
-    let ready = terminal.backend().to_string();
-    assert!(ready.contains("person@example.com"), "{ready}");
-    assert!(ready.contains("weekly 25%/7d"), "{ready}");
 }
 
 #[test]
@@ -518,3 +985,5 @@ fn bidi_controls_are_sanitized_while_script_joiners_are_preserved() {
         "safe\u{fffd}moc.elpmaxe\u{fffd}\u{200c}\u{200d}"
     );
 }
+
+mod projection_rendering;

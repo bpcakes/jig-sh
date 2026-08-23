@@ -15,10 +15,8 @@ current coordinates are injected. The long-running background proxy process is d
 it starts with a constrained environment and should not be used to run arbitrary
 repo commands.
 
-On Windows, batch shims use an absolute explicit `ComSpec` only after validation;
-when it is absent, Jig resolves native `cmd.exe` from the operating system's
-reported system directory. The same authority supplies `taskkill.exe` and
-`icacls.exe`, so neither PATH shadows nor a hard-coded system drive control
-process cleanup or state ACLs. Foreground route cleanup keeps exact route
-ownership and shares one absolute lock deadline across all children, retries,
-and the final Drop fallback.
+Jig supports this runtime on Linux and macOS. See the repository's
+[platform support policy](../../docs/platform-support.md).
+
+Foreground route cleanup keeps exact route ownership and shares one absolute
+lock deadline across all children, retries, and the final Drop fallback.

@@ -21,13 +21,17 @@ Jig turns any repository into an operating environment for coding agents. Withou
 
 ## Install
 
-**Prerequisites:** Rust 1.85+, Bash, Node.js 22.22.2+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled. On Windows, run Jig from Git Bash or WSL so generated shell checks have Bash available; Git Bash dependency locking also requires its Linux-compatible `/proc` process records.
+**Supported hosts:** Linux and macOS. See [Platform Support](docs/platform-support.md) for feature-specific limits.
+
+**Prerequisites:** Rust 1.88+, Bash, Python 3.8+, Node.js 24.19.0+, the selected web package manager (Bun by default), and your database engine when SQLx is enabled.
 
 ```sh
 cargo install jig-sh
 ```
 
-You only need a global install to run `jig init` or `jig adopt` on a repo for the first time. Generated repos install and pin their own `jig` version automatically through `scripts/install-jig.sh`, so every contributor and CI run uses the same binary.
+You only need a global install to run `jig init` or `jig adopt` on a repo for the first time. Generated repos install their own runtime through `scripts/install-jig.sh`, then reuse it only while its recorded template source revision still matches and it supports the repository's contract epoch and requested build profile. A same-contract `jig update` therefore refreshes the cached runtime when `_commit` advances without pinning the repository to a product release.
+
+Set `JIG_INSTALL_REFRESH=1` for one normal `scripts/jig` invocation, or call `scripts/install-jig.sh --refresh --profile runtime`, to deliberately replace a compatible cached runtime whose source follows an explicitly approved unpinned or embedded-source fallback.
 
 ## Quick start
 
@@ -179,7 +183,7 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, and encrypted backup/absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
+Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, encrypted backup, and Linux-only absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
 
 ### Prompts
 
@@ -208,7 +212,7 @@ scripts/jig proxy alias api --port 8080
 scripts/jig proxy list
 ```
 
-Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process.
+Bare `scripts/jig dev` still launches the configured apps in the foreground. Each successful launch is registered as a repo-scoped dev session, so a terminal or agent that loses the foreground process can inspect it with `dev status` and request a safe, idempotent shutdown with `dev stop`. Use `dev --replace` to stop only conflicting registered sessions from the same canonical repository before launching; Jig refuses to replace another repo's session or an unregistered/ad-hoc process. If a supervisor crashed, spawn state is known, and every exact registered process identity is gone, either explicit command reports the session as recoverable and retires it with its exact-owned stale routes without signaling stored PIDs. A record left by an interrupted spawn or an older Jig can instead be removed with `scripts/jig dev stop --forget-ambiguous-orphans` after checking that no unrecorded process is still running. That explicit repair still refuses live or uncertain registered identities and emits a structured recovery notice recording that ambiguous spawn history cannot prove process absence.
 
 For HTTPS, generate and explicitly trust a local, name-constrained CA:
 
@@ -217,7 +221,7 @@ scripts/jig proxy cert generate
 scripts/jig proxy cert trust --accept-trust-scope
 ```
 
-`--accept-trust-scope` acknowledges platform trust-store mutation. Automatic cert management and process-owned routes are supported on macOS and Linux; on Windows and BSD-like platforms run apps directly with `scripts/jig proxy run --no-proxy` or manage loopback services with `scripts/jig proxy alias`. See [Developer UX](docs/developer-ux.md).
+`--accept-trust-scope` acknowledges platform trust-store mutation. Automatic certificate management and process-owned routes are supported on Linux and macOS. Other hosts are outside Jig's [platform support policy](docs/platform-support.md). See [Developer UX](docs/developer-ux.md).
 
 ## Required repo conventions
 
@@ -241,6 +245,7 @@ JIG_REFRESH_EMBEDDED_TEMPLATE_SNAPSHOT=1 cargo check -p jig-sh
 
 ## Documentation
 
+- [Platform Support](docs/platform-support.md) — supported hosts, CI guarantees, and feature-specific limits
 - [Developer UX](docs/developer-ux.md) — the `jig` command surface and daily workflow
 - [Configuration](docs/configuration.md) — full `.jig.toml` reference and options
 - [Adoption](docs/adoption.md) — bring Jig into an existing repository

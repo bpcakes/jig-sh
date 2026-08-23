@@ -7,7 +7,6 @@ fn adopt_defaults_to_tooling_only_when_sqlx_answers_are_omitted() {
     let template = materialize_template_worktree();
     let repo = temp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
-
     let output = run_adopt(AdoptOpts {
         path: repo.clone(),
         template: Some(template.path().display().to_string()),
@@ -235,6 +234,7 @@ fn adopt_minimal_writes_config_and_agent_scaffolding_only() {
         template: Some(template.path().display().to_string()),
         template_mode: None,
         recopy: true,
+        launcher_only: false,
         force: false,
         vcs_ref: None,
         defaults: true,
@@ -566,13 +566,7 @@ fn tampered_manifest_cannot_manage_linked_worktree_git_file() {
     let _guard = lock_env();
     let template = materialize_template_worktree();
 
-    for alias in [
-        ".git",
-        "GIT~1/config",
-        ".git::$INDEX_ALLOCATION",
-        ".g\u{200c}it/config",
-        "vendor\\.GiT...\\config",
-    ] {
+    for alias in [".git", ".g\u{200c}it/config"] {
         for mode in [
             "update",
             "update-force",

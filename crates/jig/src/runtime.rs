@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::command::{AgentMapCommand, CheckCommand, RuntimeCommand, StateCommand};
 use crate::context::RepoContext;
+use crate::execution::{ExecutionControl, NoopExecutionObserver};
 use crate::policy::{
     AgentMapInput, MigrationImmutabilityInput, PolicyCheckCommand, PolicyDirectCommand,
     RustFileLocInput, SqlxTodoInput,
@@ -52,12 +53,32 @@ pub(crate) fn probe_codex_marketplace_support(
 }
 
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
+    dispatch_with_observer(ctx, command, &mut NoopExecutionObserver)
+}
+
+pub(crate) fn dispatch_with_observer(
+    ctx: &RepoContext,
+    command: RuntimeCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    if observer.cancelled() {
+        bail!("Execution was cancelled");
+    }
+    // Each operation owns any cancellation checks after entry so it can stop
+    // before its durable commit point. Re-checking here after a successful
+    // return would turn an already-committed mutation into an apparent failure.
     match command {
         RuntimeCommand::Bootstrap(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::BOOTSTRAP, json!({}), opts)
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::BOOTSTRAP,
+                json!({}),
+                opts,
+                observer,
+            )
         }
-        RuntimeCommand::Check(command) => dispatch_check(ctx, command),
-        RuntimeCommand::Sqlx(command) => sqlx::dispatch(ctx, command),
+        RuntimeCommand::Check(command) => dispatch_check_with_observer(ctx, command, observer),
+        RuntimeCommand::Sqlx(command) => sqlx::dispatch_with_observer(ctx, command, observer),
         RuntimeCommand::AgentMap(AgentMapCommand::Generate(opts)) => crate::policy::run_direct(
             ctx,
             PolicyDirectCommand::AgentMapGenerate(AgentMapInput {
@@ -72,19 +93,27 @@ pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Val
         ),
         RuntimeCommand::Dev(opts) => crate::dev_proxy::commands::dev(ctx, opts),
         RuntimeCommand::Proxy(command) => crate::dev_proxy::commands::proxy(ctx, command),
-        RuntimeCommand::Agent(command) => agent::dispatch(ctx, command),
-        RuntimeCommand::Work(command) => work::dispatch(ctx, command),
-        RuntimeCommand::Loop(command) => loops::dispatch(ctx, command),
-        RuntimeCommand::State(command) => dispatch_state(ctx, command),
+        RuntimeCommand::Agent(command) => agent::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Work(command) => work::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::Loop(command) => loops::dispatch_with_observer(ctx, command, observer),
+        RuntimeCommand::State(command) => dispatch_state(ctx, command, observer),
     }
 }
 
-fn dispatch_state(ctx: &RepoContext, command: StateCommand) -> Result<Value> {
+fn dispatch_state(
+    ctx: &RepoContext,
+    command: StateCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
-        StateCommand::Summary => crate::state::state_summary(ctx).map(|mut value| {
-            value["command"] = json!("state summary");
-            value
-        }),
+        StateCommand::Summary => {
+            crate::state::state_summary_with_cancellation(ctx, &|| observer.cancelled()).map(
+                |mut value| {
+                    value["command"] = json!("state summary");
+                    value
+                },
+            )
+        }
         StateCommand::Diagnose(request) => Ok(crate::state::state_diagnose(ctx, request)),
         StateCommand::CompactSessions(request) => crate::state::compact_sessions(ctx, request),
         StateCommand::Restore(request) => crate::state::restore_backup(ctx, request),
@@ -106,12 +135,12 @@ pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) ->
     work::gates_snapshot(ctx, plan_id)
 }
 
-pub(crate) fn work_gates_snapshot_with_cancellation(
+pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     ctx: &RepoContext,
-    plan_id: Option<String>,
+    plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
-) -> Result<Value> {
-    work::gates_snapshot_with_cancellation(ctx, plan_id, cancelled)
+) -> Result<std::collections::BTreeMap<String, Value>> {
+    work::open_plan_gate_snapshots_with_cancellation(ctx, plan_ids, cancelled)
 }
 
 /// Read-only loop workflow status for `jig ui`; reuses `loop status`.
@@ -218,56 +247,101 @@ pub(crate) fn vault_options_for_context(
         .unwrap_or_default()
 }
 
-fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
+fn dispatch_check_with_observer(
+    ctx: &RepoContext,
+    command: CheckCommand,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     match command {
-        CheckCommand::Fmt(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::FMT_CHECK, json!({}), opts)
-        }
-        CheckCommand::Clippy(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::CLIPPY, json!({}), opts)
-        }
-        CheckCommand::Test(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::TEST, json!({}), opts)
-        }
+        CheckCommand::Fmt(opts) => tool_execution::execute_manifest_tool_request_with_observer(
+            ctx,
+            tool::FMT_CHECK,
+            json!({}),
+            opts,
+            observer,
+        ),
+        CheckCommand::Clippy(opts) => tool_execution::execute_manifest_tool_request_with_observer(
+            ctx,
+            tool::CLIPPY,
+            json!({}),
+            opts,
+            observer,
+        ),
+        CheckCommand::Test(opts) => tool_execution::execute_manifest_tool_request_with_observer(
+            ctx,
+            tool::TEST,
+            json!({}),
+            opts,
+            observer,
+        ),
         CheckCommand::TestLocked(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::TEST_LOCKED, json!({}), opts)
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::TEST_LOCKED,
+                json!({}),
+                opts,
+                observer,
+            )
         }
-        CheckCommand::TypeScriptLint(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_LINT,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::TypeScriptTypecheck(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_TYPECHECK,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::TypeScriptBuild(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_BUILD,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::TypeScriptCoverage(opts) => tool_execution::execute_manifest_tool_request(
-            ctx,
-            tool::TYPESCRIPT_COVERAGE,
-            json!({}),
-            opts,
-        ),
-        CheckCommand::Sqlx(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SQLX_CHECK, json!({}), opts)
+        CheckCommand::TypeScriptLint(opts) => {
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::TYPESCRIPT_LINT,
+                json!({}),
+                opts,
+                observer,
+            )
         }
-        CheckCommand::Schema(opts) => {
-            tool_execution::execute_manifest_tool_request(ctx, tool::SCHEMA_CHECK, json!({}), opts)
+        CheckCommand::TypeScriptTypecheck(opts) => {
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::TYPESCRIPT_TYPECHECK,
+                json!({}),
+                opts,
+                observer,
+            )
         }
-        CheckCommand::Contract(opts) => tool_execution::execute_manifest_tool_request(
+        CheckCommand::TypeScriptBuild(opts) => {
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::TYPESCRIPT_BUILD,
+                json!({}),
+                opts,
+                observer,
+            )
+        }
+        CheckCommand::TypeScriptCoverage(opts) => {
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::TYPESCRIPT_COVERAGE,
+                json!({}),
+                opts,
+                observer,
+            )
+        }
+        CheckCommand::Sqlx(opts) => tool_execution::execute_manifest_tool_request_with_observer(
             ctx,
-            tool::CONTRACT_CHECK,
+            tool::SQLX_CHECK,
             json!({}),
             opts,
+            observer,
         ),
+        CheckCommand::Schema(opts) => tool_execution::execute_manifest_tool_request_with_observer(
+            ctx,
+            tool::SCHEMA_CHECK,
+            json!({}),
+            opts,
+            observer,
+        ),
+        CheckCommand::Contract(opts) => {
+            tool_execution::execute_manifest_tool_request_with_observer(
+                ctx,
+                tool::CONTRACT_CHECK,
+                json!({}),
+                opts,
+                observer,
+            )
+        }
         CheckCommand::AgentMap(opts) => crate::policy::run_check(
             ctx,
             PolicyCheckCommand::AgentMap(AgentMapInput {
@@ -296,12 +370,24 @@ fn dispatch_check(ctx: &RepoContext, command: CheckCommand) -> Result<Value> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Value> {
+    call_tool_with_observer(ctx, name, args, &mut NoopExecutionObserver)
+}
+
+pub(crate) fn call_tool_with_observer(
+    ctx: &RepoContext,
+    name: &str,
+    args: Value,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
 
     match ctx.tool_spec(name) {
         Some(tool) if tool_defs::is_execution_tool(tool) => {
-            return tool_execution::call_manifest_tool(ctx, tool, &args_obj);
+            return tool_execution::call_manifest_tool_with_observer(
+                ctx, tool, &args_obj, observer,
+            );
         }
         _ => {}
     }
@@ -314,11 +400,11 @@ pub(crate) fn call_tool(ctx: &RepoContext, name: &str, args: Value) -> Result<Va
         Some(MemoryTool::Goal) => work::goal_from_args(ctx, args),
         Some(MemoryTool::Start) => work::start_from_args(ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => work::check_from_args(ctx, args),
+        Some(MemoryTool::Check) => work::check_from_args_with_observer(ctx, args, observer),
         Some(MemoryTool::Gates) => work::gates_from_args(ctx, args),
         Some(MemoryTool::Evidence) => work::evidence_from_args(ctx, args),
-        Some(MemoryTool::Review) => work::review_from_args(ctx, args),
-        Some(MemoryTool::Refine) => work::refine_from_args(ctx, args),
+        Some(MemoryTool::Review) => work::review_from_args_with_observer(ctx, args, observer),
+        Some(MemoryTool::Refine) => work::refine_from_args_with_observer(ctx, args, observer),
         Some(MemoryTool::Decide) => work::decide_from_args(ctx, args),
         Some(MemoryTool::Receipts) => work::receipts_from_args(ctx, args),
         Some(MemoryTool::Status) => crate::state::state_summary(ctx),

@@ -1,9 +1,13 @@
 #![cfg(unix)]
 
+// Load PTY helpers only in their two consumers; `tests/shared` holds helpers
+// that are intentionally separate from the general integration-test support module.
+#[path = "shared/pty.rs"]
+mod pty_support;
 mod support;
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -14,6 +18,8 @@ use std::time::{Duration, Instant};
 
 use wait_timeout::ChildExt;
 
+use pty_support::{read_available, wait_for_child_while_draining};
+
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
 
 #[test]
@@ -22,6 +28,12 @@ fn repository_launcher_preserves_the_invocation_directory_for_codex() {
     let repo = temp.path().join("repo");
     let caller = temp.path().join("caller");
     fs::create_dir_all(repo.join("scripts")).unwrap();
+    fs::create_dir_all(repo.join(".agent")).unwrap();
+    fs::write(
+        repo.join(".agent/jig-contract.json"),
+        r#"{"contract_version":4}"#,
+    )
+    .unwrap();
     fs::create_dir(&caller).unwrap();
     let launcher = write_executable(
         repo.join("scripts/jig"),
@@ -241,13 +253,15 @@ sleep 30
         "\x1b[?1049l",
         Duration::from_secs(1),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after launching; invocations: {}; output: {}",
+                    fs::read_to_string(&invocations).unwrap_or_default(),
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "picker exited with {status}");
     assert_eq!(
         fs::read_to_string(launched).unwrap().trim(),
@@ -287,13 +301,14 @@ fn interactive_picker_supports_more_than_u16_max_terminal_cells() {
         Duration::from_secs(5),
     );
     master.write_all(b"q").unwrap();
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "large picker did not exit after quit; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     assert!(
         status.success(),
@@ -344,14 +359,14 @@ sleep 30
         "Codex homes: 2 found",
         Duration::from_secs(5),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "homes did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -421,14 +436,14 @@ sleep 30
         "Codex resume: dry run",
         Duration::from_secs(5),
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_or_else(|| {
-            child.kill().unwrap();
-            child.wait().unwrap()
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "resume did not exit after inspection; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -503,18 +518,14 @@ sleep 30
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) },
         0
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let status = loop {
-        read_available(&mut master, &mut output);
-        if let Some(status) = child.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            break child.wait().unwrap();
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "picker did not exit after SIGINT; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGINT) || status.code() == Some(130),
         "picker exited with {status}; output: {}",
@@ -702,23 +713,6 @@ fn read_until(file: &mut File, output: &mut Vec<u8>, needle: &str, timeout: Dura
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-}
-
-fn read_available(file: &mut File, output: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(read) => output.extend_from_slice(&buffer[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-            Err(error) if pty_master_reached_eof(&error) => return,
-            Err(error) => panic!("reading PTY output failed: {error}"),
-        }
-    }
-}
-
-fn pty_master_reached_eof(error: &std::io::Error) -> bool {
-    cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO)
 }
 
 fn wait_for_path(path: &Path, timeout: Duration) {

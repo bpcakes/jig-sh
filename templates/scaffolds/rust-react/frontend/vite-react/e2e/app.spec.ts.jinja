@@ -1,19 +1,22 @@
 import { expect, test } from "@playwright/test";
 
 test("renders application status from the live Rust API", async ({ page }) => {
-  const versionResponsePromise = page.waitForResponse(
+  const statusResponsePromise = page.waitForResponse(
     (response) =>
-      response.request().method() === "GET" && response.url().endsWith("/api/version"),
+      response.request().method() === "GET" && response.url().endsWith("/api/status"),
   );
 
   await page.goto("/");
 
-  const versionResponse = await versionResponsePromise;
-  expect(versionResponse.ok()).toBe(true);
-  expect(versionResponse.headers()["x-request-id"]).toBeTruthy();
-  await expect(versionResponse.json()).resolves.toMatchObject({
-    name: "<<[ repo_name ]>>",
-    version: expect.any(String),
+  const statusResponse = await statusResponsePromise;
+  expect(statusResponse.ok()).toBe(true);
+  expect(statusResponse.headers()["x-request-id"]).toBeTruthy();
+  await expect(statusResponse.json()).resolves.toMatchObject({
+    version: {
+      name: "<<[ repo_name ]>>",
+      version: expect.any(String),
+    },
+    ready: true,
   });
   await expect(page.getByRole("heading", { name: "<<[ title ]>>" })).toBeVisible();
   const applicationCard = page.getByRole("group", { name: "Application", exact: true });

@@ -1,0 +1,1 @@
+Correct generated admin readiness tests and PostgreSQL readiness, validate the active Node runtime in doctor, improve first-lock bootstrap UX, split the starter admin bundle, regenerate embedded templates, and dogfood a fresh full fixture.

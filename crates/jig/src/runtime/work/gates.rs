@@ -13,6 +13,7 @@ use crate::state::{
     ensure_plan_exists_with_cancellation, open_plan_summaries,
     open_plan_summaries_with_cancellation, plan_status, plan_status_with_cancellation,
     work_gate_receipt_index, work_gate_receipt_index_with_cancellation,
+    work_gate_receipt_indexes_with_cancellation,
 };
 
 use super::tools::validate_check_tool;
@@ -463,6 +464,22 @@ pub(super) fn snapshot_with_cancellation(
 pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<Value> {
     let plan_id = resolve_work_plan_id(ctx, opts.plan_id)?;
     let report = gate_report(ctx, &plan_id)?;
+    evidence_from_report(report)
+}
+
+pub(super) fn evidence_with_cancellation(
+    ctx: &RepoContext,
+    opts: WorkEvidenceRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_gate_collection_active(cancelled)?;
+    let plan_id = resolve_work_plan_id_with_cancellation(ctx, opts.plan_id, cancelled)?;
+    ensure_gate_collection_active(cancelled)?;
+    let report = gate_report_with_cancellation(ctx, &plan_id, cancelled)?;
+    evidence_from_report(report)
+}
+
+fn evidence_from_report(report: GateReport) -> Result<Value> {
     let latest = latest_passing_gates(&report);
     let mut status = report.to_value();
     let object = status
@@ -473,8 +490,12 @@ pub(super) fn evidence(ctx: &RepoContext, opts: WorkEvidenceRequest) -> Result<V
     Ok(status)
 }
 
-pub(super) fn ensure_required_gates_passed(ctx: &RepoContext, plan_id: &str) -> Result<()> {
-    let report = gate_report(ctx, plan_id)?;
+pub(super) fn ensure_required_gates_passed_with_cancellation(
+    ctx: &RepoContext,
+    plan_id: &str,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let report = gate_report_with_cancellation(ctx, plan_id, cancelled)?;
     if report.gates_ok() {
         return Ok(());
     }
@@ -567,12 +588,30 @@ fn evaluate_gate_report(
     };
     collection.ensure_active()?;
 
+    evaluate_gate_report_from_index(
+        plan_id,
+        plan_state,
+        current_fingerprint,
+        work_gates,
+        &receipt_index,
+        collection,
+    )
+}
+
+fn evaluate_gate_report_from_index(
+    plan_id: &str,
+    plan_state: &'static str,
+    current_fingerprint: crate::state::CurrentWorktreeFingerprint,
+    work_gates: Vec<WorkGate>,
+    receipt_index: &WorkGateReceiptIndex,
+    collection: GateCollection<'_>,
+) -> Result<GateReport> {
     let mut gates = Vec::new();
     let mut required_failures = RequiredGateFailures::default();
 
     for gate in work_gates {
         collection.ensure_active()?;
-        let status = evaluate_gate(&gate, &current_fingerprint, &receipt_index, collection)?;
+        let status = evaluate_gate(&gate, &current_fingerprint, receipt_index, collection)?;
         collection.ensure_active()?;
         required_failures.observe(&status);
         gates.push(status);
@@ -587,6 +626,59 @@ fn evaluate_gate_report(
         gates,
         required_failures,
     })
+}
+
+pub(super) fn open_plan_snapshots_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &[String],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, Value>> {
+    ensure_gate_collection_active(cancelled)?;
+    if plan_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let current_fingerprint = current_worktree_fingerprint_with_cancellation(ctx, cancelled)?;
+    let work_gates = ctx.work_gates();
+    let mut check_tools = BTreeSet::new();
+    let mut review_gate_ids = BTreeSet::new();
+    for gate in &work_gates {
+        ensure_gate_collection_active(cancelled)?;
+        match gate {
+            WorkGate::Check(gate) => {
+                validate_check_tool(ctx, &gate.tool, "Work gate")?;
+                check_tools.insert(gate.tool.clone());
+            }
+            WorkGate::CodexReview(gate) => {
+                review_gate_ids.insert(gate.id.clone());
+            }
+            WorkGate::Unsupported(_) => {}
+        }
+    }
+    let plan_ids_set = plan_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let indexes = work_gate_receipt_indexes_with_cancellation(
+        ctx,
+        &plan_ids_set,
+        &check_tools,
+        &review_gate_ids,
+        cancelled,
+    )?;
+    let mut snapshots = BTreeMap::new();
+    for plan_id in plan_ids {
+        ensure_gate_collection_active(cancelled)?;
+        let index = indexes
+            .get(plan_id)
+            .expect("every requested open plan has a receipt index");
+        let report = evaluate_gate_report_from_index(
+            plan_id,
+            "open",
+            current_fingerprint.clone(),
+            work_gates.clone(),
+            index,
+            GateCollection::Cancellable(cancelled),
+        )?;
+        snapshots.insert(plan_id.clone(), report.to_value());
+    }
+    Ok(snapshots)
 }
 
 fn resolve_plan_state(ctx: &RepoContext, plan_id: &str) -> Result<&'static str> {

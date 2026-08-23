@@ -5,6 +5,10 @@ impl InitMutationTransaction {
         if !self.armed {
             return Ok(());
         }
+        if self.staged_publication.is_some() {
+            self.close_write_staging()
+                .context("Failed to close private write staging before repository publication")?;
+        }
         let staged_boundary = self
             .staged_publication
             .as_ref()

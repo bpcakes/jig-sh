@@ -6,7 +6,7 @@ use crate::types::Route;
 
 use super::{
     DevSessionRecord, DevStateSnapshot, LockOutcome, StateStore, dev_sessions,
-    read_routes_from_path,
+    read_routes_from_path, write_routes_to_path,
 };
 
 impl StateStore {
@@ -56,6 +56,37 @@ impl StateStore {
     ) -> Result<LockOutcome<T>> {
         self.with_route_lock_interruptible(cancelled, |routes_path| {
             self.mutate_dev_sessions_unlocked(routes_path, mutate)
+        })
+    }
+
+    /// Mutates development sessions and routes together under the shared route
+    /// lock. Route state is persisted first, so a partial write retains the
+    /// conservative session record and the whole operation can be retried.
+    ///
+    /// The closure must return before callers perform network work or signal
+    /// processes. This boundary exists for coordinated metadata cleanup, not
+    /// for turning persisted process observations into signaling authority.
+    pub(crate) fn mutate_dev_state_interruptible<T>(
+        &self,
+        cancelled: &impl Fn() -> bool,
+        mutate: impl FnOnce(&mut Vec<DevSessionRecord>, &mut Vec<Route>) -> Result<T>,
+    ) -> Result<LockOutcome<T>> {
+        self.with_route_lock_interruptible(cancelled, |routes_path| {
+            let mut routes = read_routes_from_path(routes_path)?;
+            let original_routes = routes.clone();
+            let sessions_path = self.dev_sessions_path();
+            let mut sessions = dev_sessions::read_from_path(&sessions_path)?;
+            let original_sessions = sessions.clone();
+            let result = mutate(&mut sessions, &mut routes)?;
+            dev_sessions::validate_records(&sessions)?;
+
+            if routes != original_routes {
+                write_routes_to_path(routes_path, &routes)?;
+            }
+            if sessions != original_sessions {
+                dev_sessions::write_to_path(&sessions_path, &sessions)?;
+            }
+            Ok(result)
         })
     }
 

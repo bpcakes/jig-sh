@@ -500,9 +500,10 @@ mod tests {
     }
 
     #[test]
-    fn drop_retires_listener_thread_and_closes_port() {
+    fn drop_retires_listener_thread_and_endpoint() {
         let server = SessionControlServer::start(SESSION_ID).unwrap();
         let address = loopback_address(server.port());
+        let token = server.token().to_owned();
         let mut stalled = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).unwrap();
         stalled.write_all(b"partial").unwrap();
 
@@ -510,7 +511,13 @@ mod tests {
         drop(server);
 
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).is_err());
+        // The kernel may immediately give this released ephemeral port to a
+        // parallel test. Authenticate the endpoint identity instead of
+        // assuming that no process can be listening on the numeric port.
+        assert!(!matches!(
+            ping(address.port(), SESSION_ID, &token),
+            Ok(true)
+        ));
     }
 
     fn different_token(token: &str) -> String {

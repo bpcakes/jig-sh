@@ -30,6 +30,9 @@ pub(crate) struct TestRepoBuilder<'a> {
 
 impl<'a> TestRepoBuilder<'a> {
     pub(crate) fn new(root: &'a Path) -> Self {
+        // Most context tests intentionally start from the last version-locked
+        // epoch so legacy compatibility remains exercised. Tests of current
+        // contract behavior opt into CURRENT_CONTRACT_VERSION explicitly.
         Self {
             root,
             config: String::new(),
@@ -85,10 +88,10 @@ impl<'a> TestRepoBuilder<'a> {
     }
 
     fn config_contents(&self) -> String {
-        let mut config = format!(
-            "{DEFAULT_TEST_CONFIG}repo_name = {:?}\njig_version = {:?}\n",
-            self.repo_name, self.jig_version
-        );
+        let mut config = format!("{DEFAULT_TEST_CONFIG}repo_name = {:?}\n", self.repo_name);
+        if self.contract_version <= crate::context::LAST_VERSION_LOCKED_CONTRACT_VERSION {
+            config.push_str(&format!("jig_version = {:?}\n", self.jig_version));
+        }
         if !self.config.is_empty() {
             config.push('\n');
             config.push_str(&self.config);
@@ -112,13 +115,15 @@ impl<'a> TestRepoBuilder<'a> {
     pub(crate) fn write_contract(self) {
         fs::create_dir_all(self.root.join(".agent")).unwrap();
 
-        let contract = json!({
+        let mut contract = json!({
             "contract_version": self.contract_version,
             "tool_namespace": "jig",
-            "jig_version": self.jig_version,
             "required_commands": self.required_commands,
             "tools": self.tools,
         });
+        if self.contract_version <= crate::context::LAST_VERSION_LOCKED_CONTRACT_VERSION {
+            contract["jig_version"] = json!(self.jig_version);
+        }
         fs::write(
             self.root.join(".agent/jig-contract.json"),
             serde_json::to_string_pretty(&contract).unwrap(),
@@ -139,6 +144,7 @@ pub(crate) fn lock_env() -> EnvLockGuard {
     let cwd_lock = CWD_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::context::RepoContext::clear_prevalidated_launcher_context();
     EnvLockGuard {
         _jig_repo_root: EnvVarGuard::remove("JIG_REPO_ROOT"),
         _jig_invoke_cwd: EnvVarGuard::remove("JIG_INVOKE_CWD"),
@@ -152,6 +158,12 @@ pub(crate) struct EnvLockGuard {
     _jig_invoke_cwd: EnvVarGuard,
     _cwd_lock: MutexGuard<'static, ()>,
     _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for EnvLockGuard {
+    fn drop(&mut self) {
+        crate::context::RepoContext::clear_prevalidated_launcher_context();
+    }
 }
 
 pub(crate) struct CurrentDirGuard {

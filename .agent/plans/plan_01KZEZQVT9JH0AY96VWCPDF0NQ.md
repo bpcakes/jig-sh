@@ -1,0 +1,1 @@
+Implement byte-preserving runtime cache lock paths, complete-only Codex projection recommendations, Bash 3.2-safe installer lock re-entry, and fail-closed untracked source hashing. Add focused regressions, synchronize generated installer copies, run repository gates, and repeat comprehensive review until clean.

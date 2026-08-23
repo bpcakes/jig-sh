@@ -1,3 +1,4 @@
+// agentic-loc-exception: JSON CLI integration coverage shares process-level fixture setup.
 mod support;
 
 use std::fs;
@@ -9,9 +10,7 @@ use std::io::Read;
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;

@@ -784,7 +784,7 @@ fn pem_bundle_contains_der(path: &Path, expected_der: &[u8]) -> Result<bool> {
     Ok(false)
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, target_os = "macos")))]
 pub(super) fn trust_list_jig_ca_uris(output: &[u8]) -> Vec<String> {
     let mut uris = Vec::new();
     let mut current_uri = None::<String>;

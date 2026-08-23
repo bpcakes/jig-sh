@@ -5,7 +5,6 @@ _template_local_path = "<<[ _jig.template_local_path | replace("\\", "\\\\") | r
 repo_name = "<<[ repo_name | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 default_branch = "<<[ default_branch | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 ci_github_runner = "<<[ ci_github_runner | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
-jig_version = "<<[ jig_version | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 template_source_url = "<<[ template_source_url | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 harness_footprint = "<<[ harness_footprint | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 sqlx_enabled = [% if sqlx_enabled %]true[% else %]false[% endif %]
@@ -103,6 +102,10 @@ argv = ["npm", "--prefix=.", "--workspace=.", "--workspaces=true", "--include-wo
 argv = ["<<[ web_package_manager | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>", "run", "dev"]
 [% endif %]
 [% endfor %]
+
+[execution]
+command_timeout_seconds = <<[ execution.command_timeout_seconds ]>>
+command_output_limit_bytes = <<[ execution.command_output_limit_bytes ]>>
 
 [% if status.providers | length == 0 %]
 [status]

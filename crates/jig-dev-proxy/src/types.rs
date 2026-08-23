@@ -12,7 +12,7 @@ pub(crate) enum RouteMode {
     Alias,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Route {
     pub(crate) hostname: RouteHostname,
     pub(crate) target_host: TargetHost,
@@ -216,6 +216,7 @@ pub struct DevStopRequest {
     pub repo_name: String,
     pub root: PathBuf,
     pub state_dir: Option<PathBuf>,
+    pub forget_ambiguous_orphans: bool,
 }
 
 impl DevStopRequest {
@@ -224,7 +225,13 @@ impl DevStopRequest {
             repo_name: repo_name.into(),
             root,
             state_dir,
+            forget_ambiguous_orphans: false,
         }
+    }
+
+    pub const fn with_forget_ambiguous_orphans(mut self, forget: bool) -> Self {
+        self.forget_ambiguous_orphans = forget;
+        self
     }
 }
 

@@ -26,15 +26,20 @@ use super::staged_render::StagedRender;
 use crate::progress::CliProgress;
 
 pub(super) struct ApplyRenderOptions<'a> {
-    pub(super) force: bool,
+    pub(super) conflict_policy: ApplyRenderConflictPolicy<'a>,
     pub(super) dry_run: bool,
     pub(super) allow_answers_overwrite: bool,
     pub(super) allow_contract_overwrite: bool,
     pub(super) allow_manifest_overwrite: bool,
     pub(super) backup_root: Option<&'a Path>,
-    pub(super) conflict_message: &'a str,
     pub(super) progress: CliProgress,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ApplyRenderConflictPolicy<'a> {
+    Accept,
+    Reject(&'a str),
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -81,48 +86,51 @@ pub(super) fn apply_staged_render(
     validate_portable_planned_file_collisions(&staged.active_paths)?;
     preflight_apply_paths(staged, destination, options.backup_root)?;
 
-    let conflicts = if options.force {
-        options.progress.step(
-            "check conflicts",
-            "--force supplied; accepting rendered output",
-        );
-        staged_render_conflicts(
-            staged,
-            destination,
-            options.allow_answers_overwrite,
-            options.allow_contract_overwrite,
-            options.allow_manifest_overwrite,
-        )?
-    } else {
-        options
-            .progress
-            .step("check conflicts", "compare rendered managed paths");
-        let conflicts = options
-            .progress
-            .log_blocked_on_err(staged_render_conflicts(
+    let conflicts = match options.conflict_policy {
+        ApplyRenderConflictPolicy::Accept => {
+            options.progress.step(
+                "check conflicts",
+                "--force supplied; accepting rendered output",
+            );
+            staged_render_conflicts(
                 staged,
                 destination,
                 options.allow_answers_overwrite,
                 options.allow_contract_overwrite,
                 options.allow_manifest_overwrite,
-            ))?;
-        if !conflicts.is_empty() {
-            let message = conflict_count_message(conflicts.len());
-            if options.dry_run {
-                options.progress.info("conflicts", message);
-                for line in conflict_lines(&conflicts) {
-                    options.progress.info("conflict", line);
-                }
-            } else {
-                options.progress.blocked(message);
-                bail!(
-                    "{}\n{}",
-                    options.conflict_message,
-                    conflict_lines(&conflicts).join("\n")
-                );
-            }
+            )?
         }
-        conflicts
+        ApplyRenderConflictPolicy::Reject(conflict_message) => {
+            options
+                .progress
+                .step("check conflicts", "compare rendered managed paths");
+            let conflicts = options
+                .progress
+                .log_blocked_on_err(staged_render_conflicts(
+                    staged,
+                    destination,
+                    options.allow_answers_overwrite,
+                    options.allow_contract_overwrite,
+                    options.allow_manifest_overwrite,
+                ))?;
+            if !conflicts.is_empty() {
+                let message = conflict_count_message(conflicts.len());
+                if options.dry_run {
+                    options.progress.info("conflicts", message);
+                    for line in conflict_lines(&conflicts) {
+                        options.progress.info("conflict", line);
+                    }
+                } else {
+                    options.progress.blocked(message);
+                    bail!(
+                        "{}\n{}",
+                        conflict_message,
+                        conflict_lines(&conflicts).join("\n")
+                    );
+                }
+            }
+            conflicts
+        }
     };
 
     options.progress.step(

@@ -225,7 +225,7 @@ fn authenticated_tampered_audit_fails_and_cleans_owned_staging() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let source_home = temp.path().join("tamper-source");
-    let source = Vault::resolve(Some(source_home)).unwrap();
+    let source = Vault::resolve_for_test(Some(source_home)).unwrap();
     source.init(&test_passphrase()).unwrap();
     let vault_bytes = fs::read(source.root().join("vault.json")).unwrap();
     let audit = fs::read_to_string(source.root().join("audit.jsonl")).unwrap();
@@ -267,7 +267,7 @@ fn creates_and_restores_private_complete_vault() {
     let temp = tempfile::tempdir().unwrap();
     fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let source_home = temp.path().join("source-vault");
-    let source = Vault::resolve(Some(source_home.clone())).unwrap();
+    let source = Vault::resolve_for_test(Some(source_home.clone())).unwrap();
     source.init(&test_passphrase()).unwrap();
     source
         .apply_field_batch(
@@ -454,7 +454,7 @@ fn creates_and_restores_private_complete_vault() {
             0o600
         );
     }
-    let restored_vault = Vault::resolve(Some(restored.root)).unwrap();
+    let restored_vault = Vault::resolve_for_test(Some(restored.root)).unwrap();
     assert_eq!(
         restored_vault
             .list_fields(&test_passphrase())

@@ -1,0 +1,27 @@
+[package]
+name = "<<[ package_name ]>>-admin-http"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+<<[ package_name ]>> = { path = "../<<[ package_name ]>>"[% if db_enabled %], features = ["db"][% endif %] }
+<<[ package_name ]>>-http-common = { path = "../<<[ package_name ]>>-http-common" }
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+tower-http.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tokio.workspace = true
+tower = { workspace = true, features = ["util"] }
+
+[features]
+default = []
+[% if db_enabled %]
+db = ["<<[ package_name ]>>/db"]
+[% endif %]

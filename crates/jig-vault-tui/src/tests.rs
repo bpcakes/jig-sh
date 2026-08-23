@@ -185,31 +185,6 @@ fn protected_input_rejects_symlink_value_sources() {
     assert!(error.contains("must not be a symlink"), "{error}");
 }
 
-#[cfg(windows)]
-#[test]
-fn protected_input_rejects_windows_reparse_value_sources() {
-    use std::os::windows::fs::symlink_file;
-
-    let temp = tempdir().unwrap();
-    let source = temp.path().join("value.bin");
-    let link = temp.path().join("value-link.bin");
-    std::fs::write(&source, b"safe-size-secret").unwrap();
-    if let Err(error) = symlink_file(&source, &link) {
-        if error.kind() == std::io::ErrorKind::PermissionDenied
-            || error.raw_os_error()
-                == Some(windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32)
-        {
-            return;
-        }
-        panic!("failed to create Windows symlink fixture: {error}");
-    }
-
-    let error = SecretInput::from_regular_file(&link)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("symlink or reparse point"), "{error}");
-}
-
 #[test]
 fn snapshot_keeps_canonical_and_legacy_entries_separate() {
     let app = browsing_app();
@@ -1062,7 +1037,7 @@ fn select_legacy(app: &mut App) {
 }
 
 #[test]
-fn create_field_form_separates_metadata_kind_and_protected_value() {
+fn create_field_form_shows_text_input_without_exposing_it_in_debug_or_actions() {
     let mut app = browsing_app();
     app.begin_add();
     assert!(matches!(
@@ -1088,9 +1063,8 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
     let mut terminal = Terminal::new(backend).unwrap();
     terminal.draw(|frame| render::draw(frame, &app)).unwrap();
     let rendered = terminal.backend().to_string();
-    assert!(rendered.contains("bytes"), "{rendered}");
     assert!(
-        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
         "{rendered}"
     );
     let action = submit_key(&mut app);
@@ -1116,6 +1090,52 @@ fn create_field_form_separates_metadata_kind_and_protected_value() {
         }
         other => panic!("unexpected action: {other:?}"),
     }
+}
+
+#[test]
+fn create_field_form_keeps_concealed_input_masked() {
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "NEW_SECRET");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_paste(&mut app, std::str::from_utf8(SENTINEL).unwrap());
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("bytes"), "{rendered}");
+    assert!(
+        !rendered.contains(std::str::from_utf8(SENTINEL).unwrap()),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn text_field_form_accepts_maximum_input_and_keeps_controls_visible() {
+    let mut app = browsing_app();
+    app.begin_add();
+    handle_paste(&mut app, "LONG_TEXT");
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    handle_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    );
+    handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    let suffix = "\nvisible-tail";
+    let mut value = "x".repeat(MAX_SECRET_VALUE_LEN - suffix.len());
+    value.push_str(suffix);
+    handle_paste(&mut app, &value);
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("…"), "{rendered}");
+    assert!(rendered.contains("visible-tail"), "{rendered}");
+    assert!(rendered.contains("Value file"), "{rendered}");
+    assert!(rendered.contains("Enter save"), "{rendered}");
 }
 
 #[test]
@@ -1431,6 +1451,12 @@ fn non_empty_text_replacement_does_not_require_clear_confirmation() {
     app.focus = Focus::Fields;
     app.begin_replace();
     handle_paste(&mut app, "replacement value");
+
+    let backend = TestBackend::new(100, 28);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+    let rendered = terminal.backend().to_string();
+    assert!(rendered.contains("replacement value"), "{rendered}");
 
     match submit_key(&mut app) {
         VaultAction::Mutate {

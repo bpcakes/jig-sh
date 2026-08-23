@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Harden the Rust/React OpenAPI split with an optional, independently deployable admin HTTP crate and binary, transactional all-contract generation, public-artifact boundary scans, and request-ID-bearing JSON API errors.
+- Generate split Utoipa public/admin OpenAPI contracts and separately owned Hey API TypeScript clients in the Rust/React scaffold.
+- Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
+
+### Changed
+- Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
+- Raise the Jig workspace minimum supported Rust version to 1.88 and lift dependency pins that only preserved Rust 1.85 compatibility.
+- Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
+- Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
+- Bootstrap the frontend workspace and create its selected root lockfile before checking PostgreSQL configuration, so database availability no longer blocks frontend setup.
+- Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
+- Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
+- Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
+
+### Fixed
+- Let explicit dev stop and replacement recover definitively dead orphaned session records and exact-owned stale routes without signaling persisted PIDs; persist preflight-cleanup and pre-spawn obligations, distinguish uncertain process observations, preserve ambiguous records by default, add a targeted `dev stop --forget-ambiguous-orphans` repair that never signals stored PIDs or overrides a live or uncertain registered identity, and report successful recoveries with retained app diagnostics and typed forgotten ambiguities separately from blocking warnings.
+- Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
+- Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.
+
 ## v0.2.0 - 2026-08-05
 
 ### Added
@@ -23,12 +45,30 @@
 - Prevent repeated `codex_task` execution through `loop run`, keep scheduled `needs_attention` failures durable, and harden cancellable worker waiting
 - Move the scheduled occurrence ledger out of disposable cache with a fail-closed migration, and add an idempotent acknowledgement transition that resolves attention without reopening an occurrence
 - Keep dev session cleanup signal-responsive
+- Keep runtime installation portable on stock macOS Bash 3.2, source-aware for Git and non-Git checkouts, refreshable for mutable sources, and fail-closed for unpinned remotes or untrusted PATH wrappers.
+- Keep help, `doctor`, contract checks, adoption, and launcher repair reachable when repository configuration is malformed, with traceback-free and directly executable recovery guidance.
+- Keep bare launcher help reachable under a broken repository contract, anchor relative runtime source paths to the repository, and reject non-file launcher paths in Doctor.
+- Make launcher-only repair transactional and self-contained: preflight its recorded source, warn when embedded repair templates replace source-specific launcher customizations, preserve the legacy contract epoch, validate the running repair binary, seed truthfully fingerprinted caches, refresh the cheap identity stamp after a digest fallback, roll back published scripts if real runtime seeding fails, and restore prior caches if the rendered-script transaction cannot commit.
+- Drain noisy owned subprocesses promptly while retaining hard time, memory, capture, cancellation, and cleanup bounds.
 - Keep stale missing Codex-home candidates from blocking a unique session resume
 - Recognize supported Codex app-server missing-thread response variants during resume lookup
 - Preserve session-lookup cancellation even when Codex app-server emits stderr
 
+### Breaking
+- Generated repositories move from contract v3 to v4 and no longer pin `jig_version`/`JIG_VERSION`. Run a current Jig binary with `jig update <repo> --force` to migrate the full harness. If the legacy wrapper cannot start, first run `jig update <repo> --launcher-only --force`, then perform the full update; `doctor` treats the unmigrated launcher as a required migration and exits nonzero while v2/v3 remain runtime-readable. A repaired legacy launcher depends on its seeded compatible cache until full migration, so fresh clones, cacheless CI, or cache cleanup require a current external Jig binary to repeat the narrow repair.
+- Remote runtime installation now requires the repository's immutable hexadecimal `_commit`; legacy unpinned repositories must explicitly acknowledge default-branch installation with `JIG_INSTALL_ALLOW_UNPINNED_REMOTE=1` before migrating their source metadata.
+- A usable remote `_src_path` is now the authoritative runtime source ahead of `template_source_url`; repositories that intentionally relied on the fallback URL must update `_src_path` before their next cache install.
+- The generated launcher passes its contract epoch, build profile, and repository root to the selected binary, which validates the complete repository contract in-process before ordinary command dispatch and reuses that loaded context process-wide. That launcher-provided root is authoritative over an inherited `JIG_REPO_ROOT`. Contract-invalid repositories cannot run `work`, `dev`, `mcp`, `info`, or ordinary gates such as `check fmt` until repaired; `doctor`, `adopt`, `codex`, `init`, `presets`, `update`, and `check contract` retain a capability-only escape hatch.
+- The published `jig-ui` crate changes `HarnessView::jig_version` from `String` to `Option<String>` and adds `runtime_version` so v4 snapshots distinguish a legacy generated pin from the executing runtime. Both fields have Serde defaults so current readers can deserialize older snapshots, and the public `display_runtime_version` helper implements the legacy fallback. Pre-v4 readers cannot deserialize the new v4 snapshot shape.
+- Structured `jig info --json` and `jig doctor --json` output now reports nullable `repo.jig_version`, adds `repo.runtime_version`, and replaces product-version runtime statuses with the contract-oriented `compatible`, `migration needed`, `unreadable`, `missing`, `unsupported`, and `outdated` vocabulary.
+
 ### Changed
 - Return unsuccessful CLI exit codes when loop ticks, dispatches, or runs fail or need attention
+- Replace generated Jig product-version locks with contract-v4 runtime/profile compatibility, contract-keyed caches, explicit PATH-binary trust, and a launcher-only repair path for legacy repositories.
+- Keep Codex usage projections fixed to their inspection sample while showing the sample age in the selected-account details.
+- Keep available-window projections visible and clearly labeled as partial while withholding recommendations until every returned window has projection metadata; usage samples older than 15 minutes are also excluded from ranking.
+- Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
+- Treat `_commit` as an installer source locator rather than a runtime product lock: a proven same-contract runtime, including an explicitly recorded repair seed, may satisfy the cache until the configured source state changes.
 - Plan dev session management
 - Split dev lifecycle modules
 - Close dev session management work
@@ -58,6 +98,7 @@
 - Consolidate SQLx command modules
 
 ### Tests
+- Run rendered-repository and runtime-source behavioral fixtures in pull-request CI.
 - Move doctor tests beside module
 - Move adopt inference tests beside module
 - Move git bootstrap tests beside module

@@ -4,13 +4,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use jig_owned_process::ProcessOutputOverflowPolicy;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::bootstrap::{GIT_BIN_ENV, external_program, scrub_known_repository_git_environment};
 use crate::context::RepoContext;
+use crate::execution::ExecutionControl;
 use crate::runtime::worker_runner::{
-    CodexExecMode, CodexExecRequest, CodexPrompt, WorkerReceiptRequest, run_codex_exec,
+    CodexExecMode, CodexExecOutcome, CodexExecRequest, CodexPrompt, WorkerReceiptRequest,
+    run_codex_exec,
 };
 
 use super::state::LOOP_CACHE_DIR;
@@ -27,7 +30,7 @@ pub(super) fn codex_task_tick(
     ctx: &RepoContext,
     workflow: &ResolvedWorkflow,
     execution: CodexTaskExecution<'_>,
-    cancelled: &dyn Fn() -> bool,
+    observer: &mut dyn ExecutionControl,
 ) -> Result<WorkflowTick> {
     let settings = workflow
         .codex_task
@@ -52,8 +55,8 @@ pub(super) fn codex_task_tick(
             ephemeral: true,
             extra_args: Vec::new(),
             output_schema: None,
+            transcript_overflow_policy: ProcessOutputOverflowPolicy::Truncate,
             prompt: CodexPrompt::Stdin(&prompt),
-            cancelled: Some(cancelled),
             receipt: WorkerReceiptRequest {
                 purpose: "scheduled_codex_task",
                 plan_id: None,
@@ -62,11 +65,13 @@ pub(super) fn codex_task_tick(
                 collect_git_metadata: matches!(settings.checkout, CodexTaskCheckout::Repo),
                 collect_worktree_fingerprint: matches!(settings.checkout, CodexTaskCheckout::Repo),
             },
+            phase: None,
         },
+        observer,
     );
 
     let (action, completion) = match worker {
-        Ok(worker) => {
+        Ok(CodexExecOutcome::Completed(worker)) => {
             let worker_succeeded = worker.output.status.success();
             let checkout = checkout.finish(if worker_succeeded {
                 TaskOutcome::Succeeded
@@ -92,13 +97,47 @@ pub(super) fn codex_task_tick(
                 "worker_receipt_id": worker.worker_receipt_id,
                 "checkout": checkout.report.value(),
                 "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
-                "output": bounded_text(&String::from_utf8_lossy(&worker.output.stdout)),
+                "output": bounded_text(&worker.provider_stdout),
+                "error": error,
+            });
+            (action, completion)
+        }
+        Ok(CodexExecOutcome::Cancelled {
+            before_start,
+            worker_receipt_id,
+        }) => {
+            let checkout = checkout.finish(TaskOutcome::Failed);
+            let timing = if before_start {
+                " before the worker started"
+            } else {
+                " while the worker was running"
+            };
+            let error = combine_task_errors(
+                Some(format!("Scheduled Codex task was cancelled{timing}")),
+                checkout.error,
+            );
+            let completion = WorkflowCompletion {
+                worker_receipt_id: Some(worker_receipt_id.clone()),
+                worktree: checkout.report.retained_worktree(),
+                error: error.clone(),
+            };
+            let action = json!({
+                "kind": "codex_task_worker",
+                "status": "failed",
+                "item_key": execution.item_key,
+                "worker_receipt_id": worker_receipt_id,
+                "checkout": checkout.report.value(),
+                "codex_home_resolved": codex_home.map(|home| home.display().to_string()),
+                "output": Value::Null,
                 "error": error,
             });
             (action, completion)
         }
         Err(error) => {
-            let worker_receipt_id = error.worker_receipt_id().map(str::to_string);
+            let worker_receipt_id = error
+                .downcast_ref::<crate::runtime::worker_runner::CodexExecFailure>()
+                .and_then(|error| error.worker_receipt_id())
+                .map(str::to_string);
             let checkout = checkout.finish(TaskOutcome::Failed);
             let error = combine_task_errors(Some(format!("{error:#}")), checkout.error);
             let completion = WorkflowCompletion {

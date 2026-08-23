@@ -6,6 +6,10 @@ use fs4::fs_std::FileExt;
 
 use super::*;
 
+#[cfg(unix)]
+mod rollback_failure;
+mod verified_route;
+
 fn write_private_routes_fixture(store: &StateStore, contents: impl AsRef<[u8]>) {
     fs::write(store.routes_path(), contents).unwrap();
     #[cfg(unix)]
@@ -197,7 +201,7 @@ fn verified_route_publication_abandons_contended_lock_without_verifying() {
                 created_at_ms: now_ms(),
             },
             &|| true,
-            || {
+            |_| {
                 verifier_calls.set(verifier_calls.get() + 1);
                 Ok(())
             },
@@ -253,53 +257,6 @@ fn cert_locked_route_read_preserves_foreground_cancellation() {
         outcome,
         LockOutcome::Acquired(LockOutcome::Cancelled)
     ));
-}
-
-#[test]
-fn verified_route_rolls_back_if_post_write_verification_fails() {
-    let temp = tempdir().unwrap();
-    let store = StateStore::resolve(Some(temp.path().to_path_buf())).unwrap();
-    let mut calls = 0usize;
-    store
-        .add_route(Route {
-            hostname: "web.localhost".into(),
-            target_host: "127.0.0.1".into(),
-            target_port: 3999,
-            owner_pid: None,
-            owner_start_token: None,
-            mode: RouteMode::Alias,
-            created_at_ms: now_ms(),
-        })
-        .unwrap();
-
-    let error = store
-        .add_verified_route(
-            Route {
-                hostname: "web.localhost".into(),
-                target_host: "127.0.0.1".into(),
-                target_port: 4000,
-                owner_pid: None,
-                owner_start_token: None,
-                mode: RouteMode::Alias,
-                created_at_ms: now_ms(),
-            },
-            || {
-                calls += 1;
-                if calls == 2 {
-                    Err(anyhow::anyhow!("listener changed after publish"))
-                } else {
-                    Ok(())
-                }
-            },
-        )
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("listener changed"));
-    assert_eq!(calls, 2);
-    let routes = store.read_routes(false).unwrap();
-    assert_eq!(routes.len(), 1);
-    assert_eq!(routes[0].target_port, 3999);
 }
 
 #[test]
@@ -849,18 +806,6 @@ fn replace_runtime_files_rewrites_state_under_one_runtime_lock() {
     assert_eq!(store.read_https_port().unwrap(), None);
 }
 
-#[test]
-fn windows_tasklist_csv_pid_reads_second_field_only() {
-    assert_eq!(
-        windows_tasklist_csv_pid(r#""jig.exe","1234","Console","1","10,000 K""#),
-        Some(1234)
-    );
-    assert_eq!(
-        windows_tasklist_csv_pid(r#""bad "",""1234"", suffix","9999","Console","1","1 K""#),
-        Some(9999)
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn state_dir_is_owner_only() {
@@ -996,78 +941,6 @@ fn read_proxy_exe_reports_missing_path() {
             .as_deref()
             .is_some_and(|warning| warning.contains("not available"))
     );
-}
-
-#[test]
-fn resolve_recovers_interrupted_replace_backup() {
-    let temp = tempdir().unwrap();
-    let state_dir = temp.path().join("state");
-    fs::create_dir_all(&state_dir).unwrap();
-    #[cfg(unix)]
-    fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700)).unwrap();
-    let backup = state_dir.join("routes.json.4294967295.123456.7.replace-backup");
-    fs::write(&backup, "[]").unwrap();
-
-    let store = StateStore::resolve(Some(state_dir)).unwrap();
-
-    assert!(!backup.exists());
-    assert_eq!(fs::read_to_string(store.routes_path()).unwrap(), "[]");
-}
-
-#[test]
-fn replace_backup_detection_matches_state_file_name() {
-    let temp = tempdir().unwrap();
-    let routes = temp.path().join("routes.json");
-    let ports = temp.path().join("proxy-port");
-    fs::write(
-        temp.path().join("routes.json.42.123456.7.replace-backup"),
-        "[]",
-    )
-    .unwrap();
-    fs::write(
-        temp.path().join("routes.json.not-a-pid.replace-backup"),
-        "[]",
-    )
-    .unwrap();
-
-    assert!(file_ops::replace_backup_for_path_exists(&routes));
-    assert!(!file_ops::replace_backup_for_path_exists(&ports));
-    assert_eq!(
-        file_ops::replace_backup_parts("routes.json.42.123456.7.replace-backup"),
-        Some(("routes.json", "42"))
-    );
-    assert_eq!(
-        file_ops::replace_backup_parts("routes.json.not-a-pid.replace-backup"),
-        None
-    );
-}
-
-#[test]
-fn missing_route_file_with_replace_backup_fails_closed() {
-    let temp = tempdir().unwrap();
-    let routes = temp.path().join("routes.json");
-    fs::write(
-        temp.path().join("routes.json.42.123456.7.replace-backup"),
-        "[]",
-    )
-    .unwrap();
-
-    let error = missing_file_read_result(&routes, true).unwrap_err();
-
-    assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
-    assert!(error.to_string().contains("temporarily unavailable"));
-}
-
-#[test]
-fn backup_promotion_requires_start_token_support() {
-    if process_start_tokens_supported() {
-        return;
-    }
-    let temp = tempdir().unwrap();
-    let backup = temp.path().join("routes.json.4294967295.replace-backup");
-    fs::write(&backup, "[]").unwrap();
-
-    assert!(!replace_backup_can_be_promoted(&backup, "4294967295"));
 }
 
 #[test]

@@ -308,6 +308,62 @@ dependency_lockfile() {
   fi
 }
 
+expected_dependency_lockfile() {
+[% if web_package_manager == "bun" %]
+  printf '%s\n' "bun.lock"
+[% elif web_package_manager == "npm" %]
+  printf '%s\n' "package-lock.json"
+[% elif web_package_manager == "pnpm" %]
+  printf '%s\n' "pnpm-lock.yaml"
+[% elif web_package_manager == "yarn" %]
+  printf '%s\n' "yarn.lock"
+[% endif %]
+}
+
+dependency_recovery_hint() {
+  local app_dir="$1"
+  local scope="$2"
+  local detail="$3"
+
+  echo "Web dependencies for '$app_dir' are not ready in dependency scope '$scope': $detail." >&2
+  echo "Run 'scripts/check-webapps.sh bootstrap' from the repository root to create the workspace lockfile and install dependencies." >&2
+}
+
+require_dependency_lockfile() {
+  local app_dir="$1"
+  local scope status
+
+  scope="$(dependency_scope "$app_dir")" || {
+    status=$?
+    [ "$status" -eq 1 ] && status=2
+    return "$status"
+  }
+  if dependency_lockfile "$scope" >/dev/null; then
+    return 0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || return "$status"
+  dependency_recovery_hint "$app_dir" "$scope" "missing $(expected_dependency_lockfile)"
+  return 1
+}
+
+require_dependencies_present() {
+  local app_dir="$1"
+  local scope status
+
+  require_dependency_lockfile "$app_dir" || return
+  if dependencies_present "$app_dir"; then
+    return 0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || return "$status"
+  scope="$(dependency_scope "$app_dir")" || return 2
+  dependency_recovery_hint "$app_dir" "$scope" "installed dependency proof is absent or stale"
+  return 1
+}
+
 dependency_stamp_path() {
   local scope="$1"
 
@@ -881,22 +937,6 @@ record_dependency_state() {
   mv -f "$temporary" "$stamp"
 }
 
-is_cygwin_msys_shell() {
-  local kernel
-
-  # OSTYPE is a read-only Bash platform value, so prefer it over mutable
-  # environment hints such as MSYSTEM when deciding whether PIDs belong to
-  # the Cygwin/MSYS namespace rather than native Windows.
-  case "${OSTYPE:-}" in
-    cygwin*|msys*|mingw*|win32*) return 0 ;;
-  esac
-  kernel="$(uname -s 2>/dev/null)" || return 1
-  case "$kernel" in
-    CYGWIN*|MSYS*|MINGW*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 process_stat_start_ticks() {
   local expected_pid="$1"
   local process_stat="$2"
@@ -908,8 +948,8 @@ process_stat_start_ticks() {
     *[1-9]*) ;;
     *) return 1 ;;
   esac
-  # Linux, Cygwin, and MSYS use the Linux-compatible /proc/<pid>/stat
-  # layout. The parenthesized comm field can contain spaces and `)`, so strip
+  # Linux uses the /proc/<pid>/stat layout. The parenthesized comm field can
+  # contain spaces and `)`, so strip
   # through its final delimiter before selecting field 22 (field 20 in the
   # remainder beginning with process state). Validate the PID, state, field
   # count, and start tick token before trusting the result.
@@ -967,34 +1007,6 @@ process_stat_group_id() {
   '
 }
 
-procfs_boot_time_from_stat() {
-  local process_stat="$1"
-
-  printf '%s\n' "$process_stat" | LC_ALL=C awk '
-    BEGIN { valid = 1; found = 0 }
-    $1 == "btime" {
-      if (found || NF != 2 || $2 !~ /^[0-9]+$/ || $2 !~ /[1-9]/) {
-        valid = 0
-        next
-      }
-      value = $2
-      found = 1
-    }
-    END {
-      if (!valid || !found) exit 1
-      print value
-    }
-  '
-}
-
-procfs_boot_time() {
-  local process_stat
-
-  [ -r /proc/stat ] || return 1
-  process_stat="$(< /proc/stat)" || return 1
-  procfs_boot_time_from_stat "$process_stat"
-}
-
 validated_positive_integer() {
   local value="$1"
 
@@ -1027,7 +1039,7 @@ procfs_pid_namespace() {
 
 process_start_identity() {
   local pid="$1"
-  local boot_id boot_time identity pid_namespace process_stat start_ticks
+  local boot_id identity pid_namespace process_stat start_ticks
 
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
@@ -1048,17 +1060,7 @@ process_start_identity() {
       printf 'linux.%s.%s.%s\n' "$boot_id" "$pid_namespace" "$start_ticks"
       return
     fi
-    if is_cygwin_msys_shell; then
-      boot_time="$(procfs_boot_time)" || return 1
-      printf 'cygwin-msys.%s.%s\n' "$boot_time" "$start_ticks"
-      return
-    fi
   fi
-
-  # Do not substitute a weaker wall-clock identity for Cygwin/MSYS procfs.
-  # An incomplete Windows POSIX environment is unverified and therefore
-  # cannot own or recover the dependency lock.
-  is_cygwin_msys_shell && return 1
 
   # BSD ps exposes a wall-clock start value. Force UTC so two coordinators
   # with different TZ environments cannot classify the same live PID as reused.
@@ -1097,7 +1099,7 @@ process_group_id() {
 
 process_liveness_state() {
   local pid="$1"
-  local boot_time probe process_stat
+  local probe
 
   case "$pid" in
     ''|*[!0-9]*) return 2 ;;
@@ -1109,26 +1111,6 @@ process_liveness_state() {
 
   if kill -0 "$pid" 2>/dev/null; then
     return 0
-  fi
-
-  if is_cygwin_msys_shell; then
-    # Native Windows Node uses Windows process identifiers, which are not the
-    # Cygwin/MSYS PID namespace used in lock metadata. Consult that shell's
-    # procfs exclusively and fail closed if it cannot prove the state.
-    boot_time="$(procfs_boot_time)" || return 2
-    if [ -r "/proc/$pid/stat" ]; then
-      process_stat="$(< "/proc/$pid/stat")" || return 2
-      process_stat_start_ticks "$pid" "$process_stat" >/dev/null || return 2
-      return 0
-    fi
-    [ ! -e "/proc/$pid" ] || return 2
-    # Prove that this procfs represents the current MSYS/Cygwin namespace
-    # before treating a missing per-process entry as ESRCH-equivalent.
-    [ -r "/proc/$$/stat" ] || return 2
-    process_stat="$(< "/proc/$$/stat")" || return 2
-    process_stat_start_ticks "$$" "$process_stat" >/dev/null || return 2
-    [ -n "$boot_time" ] || return 2
-    return 1
   fi
 
   # Shell kill does not expose whether failure was ESRCH or EPERM. Node is a
@@ -1152,10 +1134,6 @@ process_group_liveness_state() {
   if kill -0 -- "-$process_group" 2>/dev/null; then
     return 0
   fi
-
-  # Native Windows Node and MSYS/Cygwin use different PID namespaces, so a
-  # negative native PID cannot prove that a POSIX process group is absent.
-  is_cygwin_msys_shell && return 2
 
   # Shell kill collapses ESRCH and EPERM into the same non-zero status. Only
   # an exact ESRCH result proves that every process in the installer's group
@@ -1961,6 +1939,11 @@ run_dependency_install() {
     # The coordinator still owns the generation when handoff fails. Once a
     # handoff succeeds the worker owns cleanup and this call is a harmless no-op.
     release_install_lock
+    if [ "$install_kind" = "frozen" ]; then
+      # Preserve the package manager's primary error, then add one stable
+      # repository-level recovery command for missing or stale dependency state.
+      require_dependencies_present "$app_dir" || true
+    fi
     return "$worker_status"
   fi
 }
@@ -2014,7 +1997,15 @@ run_public_package_script() {
     return "$status"
   }
   "$node_bin" scripts/check-webapp-scripts.mjs "$app_dir" "$script_name"
-  run_package_script "$app_dir" "$script_name"
+  if run_package_script "$app_dir" "$script_name"; then
+    return 0
+  else
+    status=$?
+  fi
+  # `run-script` intentionally never installs. Add recovery guidance only when
+  # the selected script failed and the managed dependency proof is not ready.
+  require_dependencies_present "$app_dir" || true
+  return "$status"
 }
 
 run_check() {
@@ -2115,6 +2106,9 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "typecheck"
 [% endfor %]
+    if [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs check
+    fi
 [% else %]
     echo "No web apps configured."
 [% endif %]
@@ -2124,6 +2118,9 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
 [% endfor %]
+    if [ -f scripts/contracts.mjs ]; then
+      "$node_bin" scripts/contracts.mjs public-check
+    fi
 [% else %]
     echo "No web apps configured."
 [% endif %]

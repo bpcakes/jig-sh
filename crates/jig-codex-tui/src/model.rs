@@ -5,12 +5,23 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use jig_tui::{FuzzyMatchScore, PreparedFuzzyText, sanitize_text};
+use jig_tui::{
+    FuzzyMatchScore, PreparedFuzzyText, format_countdown, format_percent, sanitize_text,
+};
 use serde_json::Value;
 
 use crate::{Home, HomeUpdate};
 
+// agentic-loc-exception: state projection and picker behavior remain co-located while focused projection types live in model/projection.rs.
+
+mod projection;
+
+pub(crate) use projection::{Projection, UsageSnapshotAssessment, WindowRole};
+use projection::{UsageSnapshotFreshness, WindowProjection};
+
 const UNKNOWN: &str = "-";
+const MIN_PROJECTION_ELAPSED_FRACTION: f64 = 0.1;
+const STALE_PROJECTION_AFTER_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone, Debug)]
 pub(crate) struct App {
@@ -84,7 +95,26 @@ impl App {
         self.selected_row().map(|row| row.home.path.clone())
     }
 
+    pub(crate) fn best_projection_index_at(&self, now: u64) -> Option<usize> {
+        let mut best: Option<(usize, f64)> = None;
+        for index in self.visible_indices() {
+            let row = &self.rows[index];
+            let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+            else {
+                continue;
+            };
+            if best.is_none_or(|(_, best_score)| recommendation.score > best_score) {
+                best = Some((index, recommendation.score));
+            }
+        }
+        best.map(|(index, _)| index)
+    }
+
     pub(crate) fn apply_update(&mut self, update: HomeUpdate) {
+        self.apply_update_at(update, unix_timestamp_now());
+    }
+
+    pub(crate) fn apply_update_at(&mut self, update: HomeUpdate, observed_at: u64) {
         let Some(row) = self.rows.get_mut(update.index) else {
             self.record_inspection_error(&format!(
                 "inspection returned unknown home index {}",
@@ -95,7 +125,10 @@ impl App {
         if !matches!(row.inspection(), Inspection::Ready(_)) {
             self.completed += 1;
         }
-        row.set_inspection(Inspection::Ready(Details::from_value(update.details)));
+        row.set_inspection(Inspection::Ready(Details::from_value(
+            update.details,
+            observed_at,
+        )));
         self.reconcile_selection();
     }
 
@@ -363,13 +396,6 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn plan(&self) -> &str {
-        match &self.inspection {
-            Inspection::Ready(details) => &details.plan,
-            Inspection::Loading | Inspection::Unavailable => UNKNOWN,
-        }
-    }
-
     pub(crate) fn usage(&self) -> String {
         match &self.inspection {
             Inspection::Loading => "loading…".into(),
@@ -378,12 +404,30 @@ impl HomeRow {
         }
     }
 
-    pub(crate) fn state(&self) -> &str {
+    #[cfg(test)]
+    pub(crate) fn projection(&self) -> Projection {
         match &self.inspection {
-            Inspection::Loading => "loading",
-            Inspection::Unavailable => "unavailable",
-            Inspection::Ready(details) if details.inspection_error.is_some() => "error",
-            Inspection::Ready(details) => &details.status,
+            Inspection::Loading => Projection::Loading,
+            Inspection::Unavailable => Projection::InspectionUnavailable,
+            Inspection::Ready(details) => details.projection(),
+        }
+    }
+
+    pub(crate) fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
+        match &self.inspection {
+            Inspection::Ready(details) => details.usage_snapshot_assessment_at(now),
+            Inspection::Loading => UsageSnapshotAssessment::at(
+                Projection::Loading,
+                UsageSnapshotFreshness::NotSampled,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
+            Inspection::Unavailable => UsageSnapshotAssessment::at(
+                Projection::InspectionUnavailable,
+                UsageSnapshotFreshness::NotSampled,
+                UsageSnapshotFreshness::NotSampled,
+                false,
+            ),
         }
     }
 }
@@ -404,10 +448,11 @@ pub(crate) struct Details {
     pub(crate) buckets: Vec<RateLimitBucket>,
     pub(crate) inspection_error: Option<String>,
     pub(crate) usage_error: Option<String>,
+    observed_at: u64,
 }
 
 impl Details {
-    fn from_value(mut value: Value) -> Self {
+    fn from_value(mut value: Value, observed_at: u64) -> Self {
         sanitize_value(&mut value);
         let account = value.get("account").filter(|account| account.is_object());
         let inferred_status = if account.is_some() {
@@ -436,6 +481,7 @@ impl Details {
                 .collect(),
             inspection_error: optional_text(&value, "inspection_error"),
             usage_error: optional_text(&value, "usage_error"),
+            observed_at,
         }
     }
 
@@ -454,12 +500,7 @@ impl Details {
         if let Some(error) = &self.usage_error {
             return format!("error: {error}");
         }
-        let Some(bucket) = self
-            .buckets
-            .iter()
-            .find(|bucket| bucket.id == "codex")
-            .or_else(|| self.buckets.first())
-        else {
+        let Some(bucket) = self.primary_bucket() else {
             return if self.status == "not logged in" {
                 "not signed in".into()
             } else {
@@ -467,6 +508,122 @@ impl Details {
             };
         };
         bucket.summary()
+    }
+
+    fn projection(&self) -> Projection {
+        if let Some(projection) = self.blocking_projection() {
+            return projection;
+        }
+        let Some(bucket) = self.primary_bucket() else {
+            return Projection::Unavailable;
+        };
+        bucket.projection_at(self.observed_at)
+    }
+
+    fn usage_snapshot_assessment_at(&self, now: u64) -> UsageSnapshotAssessment {
+        let primary_bucket = self.primary_bucket();
+        let quota_expires_at = primary_bucket.map_or_else(
+            || {
+                self.observed_at
+                    .saturating_add(STALE_PROJECTION_AFTER_SECONDS)
+            },
+            |bucket| bucket.quota_expires_at(self.observed_at),
+        );
+        let projection_expires_at = primary_bucket
+            .and_then(|bucket| bucket.projection_expires_at(self.observed_at))
+            .unwrap_or(quota_expires_at);
+        let has_presented_usage_sample = self.inspection_error.is_none()
+            && self.usage_error.is_none()
+            && self.status != "not logged in"
+            && primary_bucket.is_some_and(RateLimitBucket::has_usage_sample);
+        let quota_freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, quota_expires_at)
+        } else {
+            UsageSnapshotFreshness::NotSampled
+        };
+        let projection_freshness = if has_presented_usage_sample {
+            UsageSnapshotFreshness::sampled_at(now, projection_expires_at)
+        } else {
+            UsageSnapshotFreshness::NotSampled
+        };
+        UsageSnapshotAssessment::at(
+            self.projection(),
+            quota_freshness,
+            projection_freshness,
+            primary_bucket.is_some_and(|bucket| bucket.id == "codex"),
+        )
+    }
+
+    fn primary_bucket(&self) -> Option<&RateLimitBucket> {
+        self.buckets
+            .iter()
+            .find(|bucket| bucket.id == "codex")
+            .or_else(|| self.buckets.first())
+    }
+
+    fn blocking_projection(&self) -> Option<Projection> {
+        if self.inspection_error.is_some() {
+            return Some(Projection::InspectionError);
+        }
+        if self.usage_error.is_some() {
+            return Some(Projection::UsageError);
+        }
+        if self.status == "not logged in" {
+            return Some(Projection::SignedOut);
+        }
+        if self.status != "authenticated" {
+            return Some(Projection::Unavailable);
+        }
+        None
+    }
+
+    pub(crate) fn window_usage_snapshot_assessment_at(
+        &self,
+        bucket: &RateLimitBucket,
+        index: usize,
+        now: u64,
+    ) -> UsageSnapshotAssessment {
+        let expires_at = bucket
+            .windows
+            .get(index)
+            .and_then(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
+            .map_or_else(
+                || {
+                    self.observed_at
+                        .saturating_add(STALE_PROJECTION_AFTER_SECONDS)
+                },
+                |reset| {
+                    reset.min(
+                        self.observed_at
+                            .saturating_add(STALE_PROJECTION_AFTER_SECONDS),
+                    )
+                },
+            );
+        let freshness = bucket
+            .windows
+            .get(index)
+            .filter(|window| window.has_usage_sample())
+            .map_or(UsageSnapshotFreshness::NotSampled, |_| {
+                UsageSnapshotFreshness::sampled_at(now, expires_at)
+            });
+        UsageSnapshotAssessment::at(
+            bucket.window_projection_at(index, self.observed_at),
+            freshness,
+            freshness,
+            false,
+        )
+    }
+
+    pub(crate) fn usage_sample_age_label_at(&self, now: u64) -> Option<String> {
+        if !self.usage_snapshot_assessment_at(now).has_quota_sample() {
+            return None;
+        }
+        let age = now.saturating_sub(self.observed_at);
+        if age < 60 {
+            Some("just now".into())
+        } else {
+            Some(format!("{} ago", format_countdown(age)))
+        }
     }
 }
 
@@ -508,35 +665,151 @@ impl RateLimitBucket {
     pub(crate) fn summary(&self) -> String {
         match self.windows.as_slice() {
             [] => "unavailable".into(),
-            [only] if self.id == "codex" => format!("weekly {}", only.compact()),
-            [only] => only.compact(),
+            [only] if self.id == "codex" => format!(
+                "{} {}",
+                only.codex_role()
+                    .map(|role| role.to_string())
+                    .unwrap_or_else(|| format_duration(only.duration_minutes)),
+                only.remaining()
+            ),
+            [only] => self.generic_summary(std::slice::from_ref(only)),
             [first, second, ..] if self.id == "codex" => [first, second]
                 .into_iter()
                 .map(|window| match window.codex_role() {
-                    Some(role) => format!("{role} {}", window.compact()),
-                    None => window.compact(),
+                    Some(role) => format!("{role} {}", window.remaining()),
+                    None => format!(
+                        "{} {}",
+                        format_duration(window.duration_minutes),
+                        window.remaining()
+                    ),
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            windows => windows
-                .iter()
-                .map(RateLimitWindow::compact)
-                .collect::<Vec<_>>()
-                .join(", "),
+            windows => self.generic_summary(windows),
         }
     }
 
-    pub(crate) fn window_role(&self, index: usize) -> &'static str {
-        if self.id != "codex" {
-            return "window";
+    fn generic_summary(&self, windows: &[RateLimitWindow]) -> String {
+        let summary = windows
+            .iter()
+            .map(|window| {
+                format!(
+                    "{} {}",
+                    format_duration(window.duration_minutes),
+                    window.remaining()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if self.label() == UNKNOWN {
+            summary
+        } else {
+            format!("{} {summary}", self.label())
         }
-        if self.windows.len() == 1 {
-            return "weekly";
+    }
+
+    fn projection_at(&self, now: u64) -> Projection {
+        if self.windows.is_empty() {
+            return Projection::Unavailable;
+        }
+
+        let mut worst: Option<Projection> = None;
+        let mut collecting: Option<(WindowRole, f64)> = None;
+        let mut incomplete = false;
+        for (index, window) in self.windows.iter().enumerate() {
+            let role = self.window_role(index);
+            match window.projection_at(now) {
+                WindowProjection::Unavailable => incomplete = true,
+                WindowProjection::Collecting { remaining_percent } => {
+                    incomplete = true;
+                    if collecting
+                        .is_none_or(|(_, current_remaining)| remaining_percent < current_remaining)
+                    {
+                        collecting = Some((role, remaining_percent));
+                    }
+                }
+                projection => {
+                    let Some((candidate, score)) =
+                        Projection::from_scored_window(role, projection, false)
+                    else {
+                        continue;
+                    };
+                    if worst
+                        .as_ref()
+                        .and_then(Projection::severity_score)
+                        .is_none_or(|worst_score| score < worst_score)
+                    {
+                        worst = Some(candidate);
+                    }
+                }
+            }
+        }
+
+        worst
+            .map(|projection| projection.with_partial(incomplete))
+            .or_else(|| {
+                collecting.map(|(role, remaining_percent)| Projection::Collecting {
+                    role,
+                    remaining_percent,
+                })
+            })
+            .unwrap_or(Projection::Unavailable)
+    }
+
+    pub(crate) fn window_role(&self, index: usize) -> WindowRole {
+        if self.id != "codex" {
+            return WindowRole::Window;
         }
         self.windows
             .get(index)
             .and_then(RateLimitWindow::codex_role)
-            .unwrap_or("window")
+            .unwrap_or(WindowRole::Window)
+    }
+
+    fn quota_expires_at(&self, observed_at: u64) -> u64 {
+        let expiry_cap = observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS);
+        self.windows
+            .iter()
+            .filter(|window| window.has_usage_sample())
+            .filter_map(|window| window.resets_at.and_then(|reset| u64::try_from(reset).ok()))
+            .fold(expiry_cap, u64::min)
+    }
+
+    fn projection_expires_at(&self, observed_at: u64) -> Option<u64> {
+        let expiry_cap = observed_at.saturating_add(STALE_PROJECTION_AFTER_SECONDS);
+        self.windows
+            .iter()
+            .filter(|window| {
+                !matches!(
+                    window.projection_at(observed_at),
+                    WindowProjection::Unavailable
+                )
+            })
+            .fold(None, |expires_at, window| {
+                let window_expires_at = window
+                    .resets_at
+                    .and_then(|reset| u64::try_from(reset).ok())
+                    .map_or(expiry_cap, |reset| reset.min(expiry_cap));
+                Some(expires_at.map_or(window_expires_at, |current: u64| {
+                    current.min(window_expires_at)
+                }))
+            })
+    }
+
+    fn has_usage_sample(&self) -> bool {
+        self.windows.iter().any(RateLimitWindow::has_usage_sample)
+    }
+
+    pub(crate) fn window_projection_at(&self, index: usize, now: u64) -> Projection {
+        let role = self.window_role(index);
+        match self
+            .windows
+            .get(index)
+            .map(|window| window.projection_at(now))
+        {
+            None => Projection::Unavailable,
+            Some(projection) => Projection::from_window(role, projection, false),
+        }
     }
 }
 
@@ -557,50 +830,113 @@ impl RateLimitWindow {
         })
     }
 
-    pub(crate) fn compact(&self) -> String {
-        let used = self
-            .used_percent
-            .map(|used| {
-                if used.fract() == 0.0 {
-                    format!("{used:.0}%")
-                } else {
-                    format!("{used:.1}%")
-                }
-            })
-            .unwrap_or_else(|| "-%".into());
-        format!("{used}/{}", format_duration(self.duration_minutes))
+    pub(crate) fn remaining(&self) -> String {
+        self.valid_used_percent()
+            .map(|used| format!("{} left", format_percent((100.0 - used).max(0.0))))
+            .unwrap_or_else(|| "remaining unavailable".into())
     }
 
-    pub(crate) fn reset_label(&self) -> String {
+    pub(crate) fn usage_detail(&self) -> String {
+        let Some(used) = self.valid_used_percent() else {
+            return format!(
+                "usage unavailable · {} window",
+                format_duration(self.duration_minutes)
+            );
+        };
+        format!(
+            "{} used · {} left · {} window",
+            format_percent(used),
+            format_percent((100.0 - used).max(0.0)),
+            format_duration(self.duration_minutes)
+        )
+    }
+
+    pub(crate) fn reset_label_at(&self, now: u64) -> String {
         let Some(timestamp) = self.resets_at.and_then(|value| u64::try_from(value).ok()) else {
             return "reset unknown".into();
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
         let Some(remaining) = timestamp
             .checked_sub(now)
             .filter(|remaining| *remaining > 0)
         else {
             return "reset due".into();
         };
-        if remaining < 3_600 {
-            format!("resets in {}m", remaining / 60)
-        } else if remaining < 86_400 {
-            format!("resets in {}h", remaining / 3_600)
+        format!("resets in {}", format_countdown(remaining))
+    }
+
+    fn projection_at(&self, now: u64) -> WindowProjection {
+        let Some(used) = self.valid_used_percent() else {
+            return WindowProjection::Unavailable;
+        };
+        if used >= 100.0 {
+            return WindowProjection::Exhausted;
+        }
+        let Some(duration) = self
+            .duration_minutes
+            .filter(|duration| *duration > 0)
+            .and_then(|duration| duration.checked_mul(60))
+        else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(reset) = self.resets_at.and_then(|reset| u64::try_from(reset).ok()) else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(start) = reset.checked_sub(duration) else {
+            return WindowProjection::Unavailable;
+        };
+        let Some(elapsed) = now.checked_sub(start).filter(|elapsed| *elapsed < duration) else {
+            return WindowProjection::Unavailable;
+        };
+        let elapsed_fraction = elapsed as f64 / duration as f64;
+        // Zero measured usage is immediately actionable: regardless of how
+        // young the window is, it has the full quota headroom the picker is
+        // ranking for. Nonzero burn rates still wait for the warmup threshold.
+        if used == 0.0 {
+            return WindowProjection::Remaining { percent: 100.0 };
+        }
+        if elapsed_fraction < MIN_PROJECTION_ELAPSED_FRACTION {
+            return WindowProjection::Collecting {
+                remaining_percent: 100.0 - used,
+            };
+        }
+
+        let projected_used = used / elapsed_fraction;
+        let score = 100.0 - projected_used;
+        if score >= 0.0 {
+            WindowProjection::Remaining { percent: score }
         } else {
-            format!("resets in {}d", remaining / 86_400)
+            let exhaustion_fraction = elapsed_fraction * (100.0 / used);
+            let seconds = ((1.0 - exhaustion_fraction) * duration as f64)
+                .max(0.0)
+                .round() as u64;
+            WindowProjection::ExhaustsEarly { seconds, score }
         }
     }
 
-    fn codex_role(&self) -> Option<&'static str> {
+    fn codex_role(&self) -> Option<WindowRole> {
         match self.duration_minutes {
-            Some(300) => Some("5h"),
-            Some(10_080) => Some("weekly"),
-            _ => None,
+            Some(300) => Some(WindowRole::FiveHour),
+            Some(10_080) => Some(WindowRole::Weekly),
+            Some(minutes) => Some(WindowRole::DurationMinutes(minutes)),
+            None => None,
         }
     }
+
+    fn valid_used_percent(&self) -> Option<f64> {
+        self.used_percent
+            .filter(|used| used.is_finite() && *used >= 0.0)
+    }
+
+    fn has_usage_sample(&self) -> bool {
+        self.valid_used_percent().is_some()
+    }
+}
+
+pub(crate) fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn text_at(value: Option<&Value>, key: &str) -> String {

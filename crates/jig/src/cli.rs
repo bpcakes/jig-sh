@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[cfg(test)]
 use crate::tool_defs::tool;
@@ -74,9 +74,24 @@ struct Cli {
         help = "Print structured JSON results and errors; does not disable interactive prompts"
     )]
     json: bool,
+    #[arg(long = "__launcher-contract-version", hide = true)]
+    launcher_contract_version: Option<u32>,
+    #[arg(long = "__launcher-profile", value_enum, hide = true)]
+    launcher_profile: Option<RuntimeCompatibilityProfile>,
+    #[arg(long = "__launcher-repo-root", hide = true)]
+    launcher_repo_root: Option<PathBuf>,
     #[command(subcommand)]
     command: CommandKind,
 }
+
+#[cfg(test)]
+const LAUNCHER_GLOBAL_FLAGS: &str = "--json";
+#[cfg(test)]
+const LAUNCHER_CAPABILITY_ONLY_SUBCOMMANDS: &str = "adopt,codex,doctor,init,presets,update";
+#[cfg(test)]
+const LAUNCHER_REPOSITORY_SCOPE_SUBCOMMANDS: &str = "agent,agent-map,bootstrap,check,dev,generate-sqlx-unchecked-queries-todo,info,loop,mcp,migration-add,prompt,proxy,schema-dump,setup,sqlx,state,status,ui,vault,work";
+#[cfg(test)]
+const LAUNCHER_CHECK_SUBCOMMANDS: &str = "fmt,clippy,test,test-locked,typescript-lint,typescript-typecheck,typescript-build,typescript-coverage,sqlx,schema,contract,agent-map,agent-guides,rust-file-loc,no-mod-rs,migration-immutability,sqlx-unchecked-non-test";
 
 const ROOT_COMMON_WORKFLOWS: &str = "\
 Common workflows:
@@ -384,6 +399,37 @@ pub(crate) enum CommandKind {
         display_order = root_commands::MCP.display_order
     )]
     Mcp,
+    /// Validate this binary against a generated repository launcher contract.
+    #[command(name = "__runtime-compatible", hide = true)]
+    RuntimeCompatible(RuntimeCompatibleOpts),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct RuntimeCompatibleOpts {
+    #[arg(long, value_enum)]
+    pub(crate) profile: RuntimeCompatibilityProfile,
+    #[arg(long, hide = true)]
+    pub(crate) capability_only: bool,
+    #[arg(long, hide = true)]
+    pub(crate) contract_version: Option<u32>,
+    pub(crate) repo_root: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub(crate) enum RuntimeCompatibilityProfile {
+    Default,
+    Runtime,
+    Mcp,
+}
+
+impl RuntimeCompatibilityProfile {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Runtime => "runtime",
+            Self::Mcp => "mcp",
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

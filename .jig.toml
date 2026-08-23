@@ -5,18 +5,23 @@ _template_local_path = ""
 repo_name = "jig-sh"
 default_branch = "master"
 ci_github_runner = "ubuntu-latest"
-jig_version = "0.2.0"
 template_source_url = "https://github.com/bpcakes/jig-sh.git"
 sqlx_enabled = false
 rust_crate_roots = ["crates"]
 schema_dump_enabled = false
 bootstrap_command = "cargo fetch"
-rust_fmt_check_command = "cargo fmt --all -- --check"
+rust_fmt_check_command = "scripts/check-rust-format.sh"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
-rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace -E 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
-rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'"
+rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' && cargo nextest run -p jig-sh --test vault_tui -j 1"
+rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' && cargo nextest run -p jig-sh --test vault_tui --locked -j 1"
 web_package_manager = "bun"
 frontend_apps = []
+
+[execution]
+# Applies to configured checks and Codex-backed work/loop workers.
+command_timeout_seconds = 1800
+# Applies per stream to authoritative configured-command output capture.
+command_output_limit_bytes = 67108864
 
 [dev]
 # This source repo dogfoods the proxy runtime but does not auto-discover apps.

@@ -58,8 +58,68 @@ pub(crate) struct DevSessionApp {
     pub(crate) target_host: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) target_port: Option<u16>,
+    // A missing v1 field is legacy evidence, not proof that no spawn occurred.
+    // `spawn_evidence` deliberately maps this default to `Untracked`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) spawn_state_tracked: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) spawn_pending: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) process: Option<DevProcessIdentity>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DevSessionAppSpawnEvidence<'a> {
+    Untracked,
+    NotStarted,
+    Pending,
+    Registered(&'a DevProcessIdentity),
+}
+
+impl DevSessionApp {
+    pub(crate) fn spawn_evidence(&self) -> DevSessionAppSpawnEvidence<'_> {
+        if self.spawn_pending {
+            DevSessionAppSpawnEvidence::Pending
+        } else if let Some(process) = self.process.as_ref() {
+            DevSessionAppSpawnEvidence::Registered(process)
+        } else if self.spawn_state_tracked {
+            DevSessionAppSpawnEvidence::NotStarted
+        } else {
+            DevSessionAppSpawnEvidence::Untracked
+        }
+    }
+
+    pub(crate) fn prepare_spawn(&mut self, session_id: &str, target_port: u16) -> Result<()> {
+        if self.process.is_some() {
+            bail!(
+                "Jig dev session '{session_id}' app '{}' already has a registered process",
+                self.name
+            );
+        }
+        self.target_port = Some(target_port);
+        self.spawn_state_tracked = true;
+        self.spawn_pending = true;
+        Ok(())
+    }
+
+    pub(crate) fn register_process(&mut self, target_port: u16, process: DevProcessIdentity) {
+        self.target_port = Some(target_port);
+        self.spawn_state_tracked = true;
+        self.spawn_pending = false;
+        self.process = Some(process);
+    }
+
+    pub(crate) fn confirm_spawn_absent(&mut self, session_id: &str) -> Result<()> {
+        if self.process.is_some() {
+            bail!(
+                "Jig dev session '{session_id}' app '{}' cannot confirm an absent spawn while a process is registered",
+                self.name
+            );
+        }
+        self.spawn_state_tracked = true;
+        self.spawn_pending = false;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,6 +133,10 @@ pub(crate) struct DevSessionRecord {
     pub(crate) updated_at_ms: u64,
     #[serde(default)]
     pub(crate) cleanup_required: bool,
+    // Older v1 writers can omit this narrower obligation. The retained
+    // `cleanup_required` flag and untracked app evidence remain fail-closed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) preflight_cleanup_pending: bool,
     pub(crate) supervisor: DevProcessIdentity,
     pub(crate) control: DevSessionControl,
     pub(crate) apps: Vec<DevSessionApp>,
@@ -151,7 +215,7 @@ pub(super) fn write_to_path(path: &Path, sessions: &[DevSessionRecord]) -> Resul
     file.write_all(b"\n")?;
     file.sync_data()?;
     drop(file);
-    file_ops::replace_file(&tmp, path, STATE_FILE_FALLBACK)
+    file_ops::replace_file(&tmp, path)
 }
 
 pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {
@@ -170,6 +234,12 @@ pub(super) fn validate_records(sessions: &[DevSessionRecord]) -> Result<()> {
         if session.updated_at_ms < session.started_at_ms {
             bail!(
                 "Jig development session '{}' was updated before it started",
+                session.session_id
+            );
+        }
+        if session.preflight_cleanup_pending && !session.cleanup_required {
+            bail!(
+                "Jig development session '{}' has pending preflight cleanup without requiring cleanup",
                 session.session_id
             );
         }
@@ -238,6 +308,34 @@ fn validate_apps(session: &DevSessionRecord) -> Result<()> {
                 app.name
             );
         }
+        if app.spawn_pending && !session.cleanup_required {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without requiring cleanup",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && !app.spawn_state_tracked {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without tracked spawn state",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && app.target_port.is_none() {
+            bail!(
+                "Jig development session '{}' app '{}' has a pending spawn without a target port",
+                session.session_id,
+                app.name
+            );
+        }
+        if app.spawn_pending && app.process.is_some() {
+            bail!(
+                "Jig development session '{}' app '{}' records both a pending spawn and a process identity",
+                session.session_id,
+                app.name
+            );
+        }
         if let Some(process) = app.process.as_ref() {
             if !session.cleanup_required {
                 bail!(
@@ -252,6 +350,10 @@ fn validate_apps(session: &DevSessionRecord) -> Result<()> {
         }
     }
     Ok(())
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn validate_process_identity(label: &str, identity: &DevProcessIdentity) -> Result<()> {

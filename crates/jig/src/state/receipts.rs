@@ -11,8 +11,10 @@ use crate::cancellation::{ensure_status_collection_active, status_collection_can
 use crate::context::RepoContext;
 use crate::git_receipts::{
     GitReceiptMetadata, collect_git_receipt_metadata,
+    collect_git_receipt_metadata_with_cancellation,
     collect_git_receipt_metadata_without_worktree_fingerprint,
-    is_worktree_fingerprint_cancellation, repo_worktree_fingerprint,
+    collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation,
+    is_git_receipt_collection_cancellation, repo_worktree_fingerprint,
     repo_worktree_fingerprint_with_cancellation,
 };
 use crate::tool_defs::tool;
@@ -243,19 +245,47 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     review_gate_ids: &BTreeSet<String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<WorkGateReceiptIndex> {
-    ensure_receipt_scan_active(cancelled)?;
-    ensure_state_layout(ctx)?;
+    let plan_ids = BTreeSet::from([plan_id.to_string()]);
+    let mut indexes = work_gate_receipt_indexes_with_cancellation(
+        ctx,
+        &plan_ids,
+        check_tools,
+        review_gate_ids,
+        cancelled,
+    )?;
+    Ok(indexes
+        .remove(plan_id)
+        .expect("requested plan index was initialized"))
+}
 
-    let mut index = WorkGateReceiptIndex {
-        checks: check_tools
-            .iter()
-            .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
-            .collect(),
-        reviews: BTreeMap::new(),
-    };
-    if check_tools.is_empty() && review_gate_ids.is_empty() {
-        return Ok(index);
+pub(crate) fn work_gate_receipt_indexes_with_cancellation(
+    ctx: &RepoContext,
+    plan_ids: &BTreeSet<String>,
+    check_tools: &BTreeSet<String>,
+    review_gate_ids: &BTreeSet<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<String, WorkGateReceiptIndex>> {
+    ensure_receipt_scan_active(cancelled)?;
+
+    let mut indexes = plan_ids
+        .iter()
+        .map(|plan_id| {
+            (
+                plan_id.clone(),
+                WorkGateReceiptIndex {
+                    checks: check_tools
+                        .iter()
+                        .map(|tool_name| (tool_name.clone(), IndexedCheckReceipts::default()))
+                        .collect(),
+                    reviews: BTreeMap::new(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if plan_ids.is_empty() || (check_tools.is_empty() && review_gate_ids.is_empty()) {
+        return Ok(indexes);
     }
+    ensure_state_layout(ctx)?;
 
     let path = ctx.state_file("receipts.jsonl");
     #[cfg(test)]
@@ -264,9 +294,12 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
     scan_jsonl_raw(&path, cancelled, |record| {
         ensure_receipt_scan_active(cancelled)?;
         let receipt = parse_raw_receipt(record, &path)?;
-        if receipt.plan_id.as_deref() != Some(plan_id) {
+        let Some(plan_id) = receipt.plan_id.as_deref() else {
             return Ok(());
-        }
+        };
+        let Some(index) = indexes.get_mut(plan_id) else {
+            return Ok(());
+        };
 
         let direct_tool_name = index
             .checks
@@ -322,7 +355,7 @@ pub(crate) fn work_gate_receipt_index_with_cancellation(
         Ok(())
     })?;
     ensure_receipt_scan_active(cancelled)?;
-    Ok(index)
+    Ok(indexes)
 }
 
 fn receipt_arg_strings<'a>(receipt: &'a ReceiptRecord, key: &str) -> impl Iterator<Item = &'a str> {
@@ -354,6 +387,15 @@ pub(crate) fn current_worktree_fingerprint_with_cancellation(
     ))
 }
 
+pub(crate) fn current_worktree_fingerprint_for_receipt_with_cancellation(
+    ctx: &RepoContext,
+    cancelled: &dyn Fn() -> bool,
+) -> CurrentWorktreeFingerprint {
+    current_worktree_fingerprint_from_result_for_receipt(
+        repo_worktree_fingerprint_with_cancellation(ctx.root(), cancelled),
+    )
+}
+
 fn current_worktree_fingerprint_from_result(
     result: Result<String>,
 ) -> Result<CurrentWorktreeFingerprint> {
@@ -362,7 +404,7 @@ fn current_worktree_fingerprint_from_result(
             fingerprint: Some(fingerprint),
             error: None,
         }),
-        Err(error) if is_worktree_fingerprint_cancellation(&error) => {
+        Err(error) if is_git_receipt_collection_cancellation(&error) => {
             Err(status_collection_cancellation())
         }
         Err(error) => Ok(CurrentWorktreeFingerprint {
@@ -372,12 +414,44 @@ fn current_worktree_fingerprint_from_result(
     }
 }
 
+fn current_worktree_fingerprint_from_result_for_receipt(
+    result: Result<String>,
+) -> CurrentWorktreeFingerprint {
+    match result {
+        Ok(fingerprint) => CurrentWorktreeFingerprint {
+            fingerprint: Some(fingerprint),
+            error: None,
+        },
+        Err(error) => CurrentWorktreeFingerprint {
+            fingerprint: None,
+            error: Some(format!("{error:#}")),
+        },
+    }
+}
+
 pub(crate) fn record_receipt(ctx: &RepoContext, input: ReceiptInput<'_>) -> Result<String> {
+    record_receipt_inner(ctx, input, None)
+}
+
+pub(crate) fn record_receipt_with_cancellation(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String> {
+    record_receipt_inner(ctx, input, Some(cancelled))
+}
+
+fn record_receipt_inner(
+    ctx: &RepoContext,
+    input: ReceiptInput<'_>,
+    cancelled: Option<&dyn Fn() -> bool>,
+) -> Result<String> {
     ensure_state_layout(ctx)?;
     let mut git_metadata = receipt_git_metadata(
         ctx,
         input.collect_git_metadata,
         input.collect_worktree_fingerprint,
+        cancelled,
     );
     if let Some(override_result) = input.worktree_fingerprint_override {
         match override_result {
@@ -616,15 +690,24 @@ fn receipt_git_metadata(
     ctx: &RepoContext,
     collect_git_metadata: bool,
     collect_worktree_fingerprint: bool,
+    cancelled: Option<&dyn Fn() -> bool>,
 ) -> GitReceiptMetadata {
     if !collect_git_metadata {
         return GitReceiptMetadata::default();
     }
 
-    if collect_worktree_fingerprint {
-        collect_git_receipt_metadata(ctx.root())
-    } else {
-        collect_git_receipt_metadata_without_worktree_fingerprint(ctx.root())
+    match (collect_worktree_fingerprint, cancelled) {
+        (true, Some(cancelled)) => {
+            collect_git_receipt_metadata_with_cancellation(ctx.root(), cancelled)
+        }
+        (false, Some(cancelled)) => {
+            collect_git_receipt_metadata_without_worktree_fingerprint_with_cancellation(
+                ctx.root(),
+                cancelled,
+            )
+        }
+        (true, None) => collect_git_receipt_metadata(ctx.root()),
+        (false, None) => collect_git_receipt_metadata_without_worktree_fingerprint(ctx.root()),
     }
 }
 

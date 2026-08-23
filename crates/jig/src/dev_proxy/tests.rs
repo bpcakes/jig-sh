@@ -5,7 +5,6 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::context::DevConfig;
-#[cfg_attr(windows, allow(unused_imports))]
 use crate::test_env::{EnvVarGuard, TestRepoBuilder, lock_env};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::test_process::{

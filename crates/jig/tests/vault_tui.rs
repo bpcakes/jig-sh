@@ -1,26 +1,59 @@
 #![cfg(unix)]
 
+// Load PTY helpers only in their two consumers; `tests/shared` holds helpers
+// that are intentionally separate from the general integration-test support module.
+#[path = "shared/pty.rs"]
+mod pty_support;
 mod support;
 
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     os::fd::{AsRawFd, FromRawFd},
     os::unix::process::ExitStatusExt,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
 use jig_vault::{FieldKind, SecretBytes, Vault};
 use secrecy::SecretString;
-use wait_timeout::ChildExt;
+
+use pty_support::{read_available, wait_for_child_while_draining};
 
 const ALLOW_PTY_SKIP_ENV: &str = "JIG_ALLOW_PTY_TEST_SKIP";
+const FULL_CLEAR_MARKER: &str = "\u{1b}[2J";
 const PASSPHRASE: &str = "correct horse battery staple";
 const VALUE_SENTINEL: &str = "vault-tui-pty-secret-sentinel";
 const CREATED_VALUE_SENTINEL: &str = "vault-tui-created-value-sentinel";
 const PEEK_BEGIN_MARKER: &str = "BEGIN CONTROLLED VAULT PEEK";
 const PEEK_END_MARKER: &str = "END CONTROLLED VAULT PEEK";
+// Vault interactions perform deliberately expensive key derivation. Allow
+// enough headroom for loaded CI and developer machines. This PTY binary runs
+// serially in its own Nextest invocation so the timeout remains a useful bound.
+const UI_INTERACTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct ChildGuard(Child);
+
+impl std::ops::Deref for ChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for ChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
@@ -45,7 +78,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
@@ -56,6 +89,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         .stderr(Stdio::from(stderr))
         .spawn()
         .unwrap();
+    let mut child = ChildGuard(child);
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -63,7 +97,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut master,
         &mut output,
         "API_TOKEN",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
 
@@ -76,7 +110,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         create_offset,
         "Vault updated.",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
 
@@ -87,7 +121,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         tools_offset,
         "Enter run/open",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     let activity_offset = output.len();
     master.write_all(b"activity\r").unwrap();
@@ -96,18 +130,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         activity_offset,
         "field_batch_apply",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(!String::from_utf8_lossy(&output).contains(VALUE_SENTINEL));
     assert!(!String::from_utf8_lossy(&output).contains(CREATED_VALUE_SENTINEL));
     let browse_offset = output.len();
-    master.write_all(b"\x1b").unwrap();
+    master.write_all(b"\r").unwrap();
     read_until_from(
         &mut master,
         &mut output,
         browse_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
 
     let confirmation_offset = output.len();
@@ -117,7 +151,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         confirmation_offset,
         "PEEK",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     let peek_offset = output.len();
     master.write_all(b"PEEK\r").unwrap();
@@ -126,7 +160,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         peek_offset,
         PEEK_END_MARKER,
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(
         String::from_utf8_lossy(&output[peek_offset..]).contains(CREATED_VALUE_SENTINEL),
@@ -139,13 +173,14 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         cleared_offset,
         "Value hidden.",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
     assert!(
         !String::from_utf8_lossy(&output[cleared_offset..]).contains(CREATED_VALUE_SENTINEL),
         "controlled Peek value survived into the metadata redraw"
     );
 
+    let resize_offset = output.len();
     resize_terminal(&slave, 70, 22);
     // SAFETY: the child PID is live and SIGWINCH has its ordinary terminal
     // resize meaning.
@@ -153,12 +188,34 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGWINCH) },
         0
     );
-    master.write_all(b"L").unwrap();
-    read_until(
+    read_until_from(
         &mut master,
         &mut output,
+        resize_offset,
+        FULL_CLEAR_MARKER,
+        UI_INTERACTION_TIMEOUT,
+    );
+    let resized_frame_offset = resize_offset
+        + output[resize_offset..]
+            .windows(FULL_CLEAR_MARKER.len())
+            .position(|window| window == FULL_CLEAR_MARKER.as_bytes())
+            .expect("resize redraw emitted the awaited full-clear marker")
+        + FULL_CLEAR_MARKER.len();
+    read_until_from(
+        &mut master,
+        &mut output,
+        resized_frame_offset,
+        "Production",
+        UI_INTERACTION_TIMEOUT,
+    );
+    let lock_offset = output.len();
+    master.write_all(b"L").unwrap();
+    read_until_from(
+        &mut master,
+        &mut output,
+        lock_offset,
         "Vault passphrase",
-        Duration::from_secs(3),
+        UI_INTERACTION_TIMEOUT,
     );
 
     let resume_offset = output.len();
@@ -169,21 +226,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
         &mut output,
         resume_offset,
         "API_TOKEN",
-        Duration::from_secs(8),
+        UI_INTERACTION_TIMEOUT,
     );
     master.write_all(b"\x03").unwrap();
 
-    let status = child
-        .wait_timeout(Duration::from_secs(5))
-        .unwrap()
-        .unwrap_or_else(|| {
-            let _ = child.kill();
-            panic!(
-                "vault TUI did not exit after q; output: {}",
-                String::from_utf8_lossy(&output)
-            )
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(5))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after Ctrl-C; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(status.success(), "vault TUI exited with {status}");
     let restored = terminal_attributes(&slave);
     assert_eq!(
@@ -242,7 +296,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = Command::new(env!("CARGO_BIN_EXE_jig"))
+    let child = Command::new(env!("CARGO_BIN_EXE_jig"))
         .args(["vault", "tui", "--home"])
         .arg(&home)
         .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
@@ -252,6 +306,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         .stderr(Stdio::from(stderr))
         .spawn()
         .unwrap();
+    let mut child = ChildGuard(child);
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -267,17 +322,14 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
         0
     );
-    let status = child
-        .wait_timeout(Duration::from_secs(8))
-        .unwrap()
-        .unwrap_or_else(|| {
-            let _ = child.kill();
-            panic!(
-                "vault TUI did not exit after SIGTERM; output: {}",
-                String::from_utf8_lossy(&output)
-            )
-        });
-    read_available(&mut master, &mut output);
+    let status =
+        wait_for_child_while_draining(&mut child, &mut master, &mut output, Duration::from_secs(8))
+            .unwrap_or_else(|| {
+                panic!(
+                    "vault TUI did not exit after SIGTERM; output: {}",
+                    String::from_utf8_lossy(&output)
+                )
+            });
     assert!(
         status.signal() == Some(libc::SIGTERM) || status.code() == Some(143),
         "vault TUI exited with {status}; output: {}",
@@ -443,24 +495,9 @@ fn read_until_from(
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for {needle:?}; output: {}",
-            String::from_utf8_lossy(output)
+            "timed out waiting for {needle:?}; recent output: {}",
+            String::from_utf8_lossy(&output[output.len().saturating_sub(4096)..])
         );
         std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn read_available(file: &mut File, output: &mut Vec<u8>) {
-    let mut buffer = [0_u8; 4096];
-    loop {
-        match file.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(read) => output.extend_from_slice(&buffer[..read]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return,
-            Err(error) if cfg!(target_os = "linux") && error.raw_os_error() == Some(libc::EIO) => {
-                return;
-            }
-            Err(error) => panic!("reading PTY failed: {error}"),
-        }
     }
 }

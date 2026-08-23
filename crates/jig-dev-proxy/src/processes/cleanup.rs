@@ -4,9 +4,6 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(not(unix))]
-use std::sync::Mutex;
-
 use anyhow::{Result, bail};
 
 pub(crate) use self::termination_reason::TerminationReason;
@@ -46,11 +43,6 @@ pub(super) fn new_route_cleanup_deadline() -> SharedRouteCleanupDeadline {
 pub(super) fn shared_route_cleanup_deadline(deadline: &SharedRouteCleanupDeadline) -> Instant {
     *deadline.get_or_init(|| Instant::now() + STATE_LOCK_TIMEOUT)
 }
-
-#[cfg(not(unix))]
-static CTRL_C_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
-#[cfg(not(unix))]
-static CTRL_C_INSTALL_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) struct RunningChild {
     pub(super) name: String,
@@ -225,13 +217,8 @@ impl TerminationSession {
         }
         #[cfg(not(unix))]
         {
-            if let Err(error) = ensure_ctrl_c_handler() {
-                reset_session_state();
-                return Err(anyhow::anyhow!(
-                    "jig proxy could not install Ctrl-C cleanup handler: {error}"
-                ));
-            }
-            Ok(Self { generation })
+            reset_session_state();
+            bail!("jig proxy foreground cleanup is supported only on Unix hosts")
         }
     }
 }
@@ -465,7 +452,8 @@ fn terminate_after_exit_claim(signal: i32) -> ! {
 
 #[cfg(not(unix))]
 fn terminate_after_exit_claim(signal: i32) -> ! {
-    // ctrlc invokes this callback on a regular handler thread on non-Unix.
+    // This is retained for non-Unix test compilation; production sessions are
+    // rejected before a termination handler can be installed.
     std::process::exit(128 + signal)
 }
 
@@ -698,24 +686,6 @@ const fn signal_label(signal: i32) -> &'static str {
         let _ = signal;
         "Ctrl-C"
     }
-}
-
-#[cfg(not(unix))]
-fn ensure_ctrl_c_handler() -> std::result::Result<(), String> {
-    if CTRL_C_HANDLER_INSTALLED.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-    let _guard = CTRL_C_INSTALL_LOCK
-        .lock()
-        .map_err(|_| "Ctrl-C installation lock was poisoned".to_string())?;
-    if CTRL_C_HANDLER_INSTALLED.load(Ordering::SeqCst) {
-        return Ok(());
-    }
-    const CTRL_C_SIGNAL: i32 = 2;
-    ctrlc::set_handler(|| handle_termination_signal(CTRL_C_SIGNAL))
-        .map_err(|error| error.to_string())?;
-    CTRL_C_HANDLER_INSTALLED.store(true, Ordering::SeqCst);
-    Ok(())
 }
 
 #[cfg(test)]

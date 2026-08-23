@@ -1,0 +1,60 @@
+use std::{fs, path::PathBuf, process::ExitCode};
+
+use ::<<[ module_name ]>>_admin_http as admin_http_crate;
+use anyhow::{Context, bail};
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Admin OpenAPI export failed: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    let output = parse_output_path()?.unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("openapi/admin.json")
+    });
+    let contents = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&admin_http_crate::openapi())
+            .context("Failed to serialize admin OpenAPI document")?
+    );
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create admin OpenAPI output directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(&output, contents).with_context(|| {
+        format!(
+            "Failed to write admin OpenAPI document to {}",
+            output.display()
+        )
+    })
+}
+
+fn parse_output_path() -> anyhow::Result<Option<PathBuf>> {
+    let mut arguments = std::env::args_os().skip(1);
+    match (arguments.next(), arguments.next(), arguments.next()) {
+        (None, None, None) => Ok(None),
+        (Some(flag), Some(path), None) if flag == "--output" => Ok(Some(path.into())),
+        (Some(argument), _, trailing) => bail!(
+            "unexpected argument {argument:?}{}; expected only --output <path>",
+            if trailing.is_some() {
+                " (and trailing arguments)"
+            } else {
+                ""
+            }
+        ),
+        (None, Some(_), _) | (None, None, Some(_)) => {
+            unreachable!("an iterator cannot yield a later argument first")
+        }
+    }
+}

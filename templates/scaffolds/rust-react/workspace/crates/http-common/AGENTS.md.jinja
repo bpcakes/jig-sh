@@ -1,0 +1,25 @@
+# HTTP common crate guide
+
+## Purpose
+
+`<<[ package_name ]>>-http-common` owns transport types and behavior shared by independently deployable HTTP surfaces. It must not depend on either the public or admin HTTP crate.
+
+## Key entrypoints
+
+- `src/lib.rs`: standard API error responses and request-ID extraction.
+
+## Edit here for X
+
+- Add transport-wide error fields, response conversion, or safe generic constructors here.
+- Keep resource-specific error codes and messages in the owning public or admin HTTP crate.
+
+## Invariants
+
+- Error messages returned to clients are safe to disclose and never contain internal error chains, credentials, SQL, or filesystem paths.
+- Every JSON API error includes a stable machine-readable code, a safe message, and the propagated request ID.
+- This crate remains independent of both deployable HTTP surfaces.
+
+## Common commands
+
+- `cargo test -p <<[ package_name ]>>-http-common`
+- `cargo clippy -p <<[ package_name ]>>-http-common --all-targets -- -D warnings`

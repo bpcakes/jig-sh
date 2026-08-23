@@ -282,15 +282,6 @@ fn replace_file(path: &Path, contents: &[u8]) {
             tmp_path.display()
         )
     });
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path).unwrap_or_else(|error| {
-            panic!(
-                "failed to replace embedded template snapshot {}: {error}",
-                path.display()
-            )
-        });
-    }
     fs::rename(&tmp_path, path).unwrap_or_else(|error| {
         let _ = fs::remove_file(&tmp_path);
         panic!(

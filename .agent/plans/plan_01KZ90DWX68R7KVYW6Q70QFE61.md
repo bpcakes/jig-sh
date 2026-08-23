@@ -1,0 +1,3 @@
+Make contract-v4 caches source-aware, harden manifest parsing and diagnostics, improve launcher repair guidance, update README, and add regression coverage.
+
+Implemented source-aware runtime cache stamps, resolve-only launcher cache selection, strict JSON parsing diagnostics, direct-binary doctor recovery guidance, documentation updates, and regression fixtures. Focused source-normalization and Rust tests pass.

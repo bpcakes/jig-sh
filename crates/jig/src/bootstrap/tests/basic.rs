@@ -236,6 +236,7 @@ fn update_opts(repo: &Path, template: &Path, force: bool) -> UpdateOpts {
         template: Some(template.display().to_string()),
         template_mode: None,
         recopy: true,
+        launcher_only: false,
         force,
         vcs_ref: None,
         defaults: true,
