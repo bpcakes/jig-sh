@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use jig_owned_process::{
@@ -23,6 +23,9 @@ use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::WORKER_RUN_TOOL;
 
 const CODEX_TIMEOUT_ENV: &str = "JIG_CODEX_TIMEOUT_SECS";
+// Preserve the supervisor's normal idle responsiveness without repeating a
+// metadata syscall for every faster poll while transcript output is flowing.
+const WORKER_RESULT_FILE_INSPECTION_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CodexExecMode {
@@ -402,6 +405,7 @@ fn run_worker_command(
 struct WorkerProcessObserver<'a> {
     execution: ProcessExecutionObserver<'a>,
     authoritative_output_path: Option<&'a Path>,
+    last_result_file_inspection: Option<Instant>,
     result_file_failure: Option<WorkerResultFileFailure>,
 }
 
@@ -413,12 +417,27 @@ impl<'a> WorkerProcessObserver<'a> {
         Self {
             execution,
             authoritative_output_path,
+            last_result_file_inspection: None,
             result_file_failure: None,
         }
     }
 
     fn take_result_file_failure(&mut self) -> Option<WorkerResultFileFailure> {
         self.result_file_failure.take()
+    }
+
+    fn inspect_authoritative_output_if_due(&mut self) -> bool {
+        if self.authoritative_output_path.is_none() {
+            return false;
+        }
+        let now = Instant::now();
+        if self.last_result_file_inspection.is_some_and(|last| {
+            now.saturating_duration_since(last) < WORKER_RESULT_FILE_INSPECTION_INTERVAL
+        }) {
+            return false;
+        }
+        self.last_result_file_inspection = Some(now);
+        self.inspect_authoritative_output()
     }
 
     fn inspect_authoritative_output(&mut self) -> bool {
@@ -450,7 +469,7 @@ impl OwnedProcessObserver for WorkerProcessObserver<'_> {
     fn cancelled(&mut self) -> bool {
         self.execution.cancelled()
             || self.result_file_failure.is_some()
-            || self.inspect_authoritative_output()
+            || self.inspect_authoritative_output_if_due()
     }
 
     fn output(&mut self, stream: OwnedProcessOutputStream, bytes: &[u8]) {
@@ -826,6 +845,42 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_result_file_inspection_obeys_its_schedule() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("authoritative-output");
+        fs::write(&output_path, b"result").unwrap();
+        let mut control = crate::execution::NoopExecutionObserver;
+        let mut observer = WorkerProcessObserver::new(
+            ProcessExecutionObserver::new(&mut control, "test worker"),
+            Some(&output_path),
+        );
+
+        assert!(!observer.cancelled(), "the first inspection is immediate");
+        fs::remove_file(&output_path).unwrap();
+        observer.last_result_file_inspection = Some(Instant::now());
+        assert!(
+            !observer.cancelled(),
+            "metadata must not be inspected again before the interval"
+        );
+
+        observer.last_result_file_inspection = Some(
+            Instant::now()
+                .checked_sub(WORKER_RESULT_FILE_INSPECTION_INTERVAL)
+                .unwrap(),
+        );
+        assert!(
+            observer.cancelled(),
+            "the missing file is detected once due"
+        );
+        assert!(matches!(
+            observer.take_result_file_failure(),
+            Some(WorkerResultFileFailure::Inspection(message))
+                if message.contains("Failed to inspect Codex output file")
+        ));
     }
 
     #[cfg(unix)]

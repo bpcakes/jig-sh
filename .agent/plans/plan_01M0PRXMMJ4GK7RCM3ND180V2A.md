@@ -14,7 +14,7 @@ After this work, the repository can state its current Linux/macOS host policy wh
 - [x] (2026-08-23 07:38Z) Committed this self-contained execution plan and its structured-work start records as `187ba84`.
 - [x] (2026-08-23 07:45Z) Restored accurate released host-support history, added a current breaking-change note, narrowed the active-host content guard, and passed all 5 supported-host regression tests; commit remains the immediate next action.
 - [x] (2026-08-23 07:49Z) Unified CLI and MCP progress outcome composition, made the primary operation error first on dual failure, and passed 11 MCP plus 12 CLI progress unit tests; commit remains the immediate next action.
-- [ ] Add an independent time-based authoritative-result inspection schedule, cover its cadence and cancellation behavior, and commit that slice.
+- [x] (2026-08-23 07:55Z) Added an independent monotonic 10ms authoritative-result inspection schedule and passed the deterministic cadence, cancelled-before-start, and live process-group overflow regressions; commit remains the immediate next action.
 - [ ] Build the development binary, run focused checks, repository gates, and `scripts/jig check test`, then record evidence and finish structured work.
 
 ## Surprises & Discoveries
@@ -33,6 +33,9 @@ After this work, the repository can state its current Linux/macOS host policy wh
 
 - Observation: `WorkerProcessObserver::cancelled` performs filesystem metadata inspection, and the owned-process runner invokes that callback at the transcript polling cadence, which can be about one millisecond while output is continuously readable.
   Evidence: `cancelled` calls `inspect_authoritative_output` directly; the existing overflow regression proves prompt detection but does not constrain inspection frequency.
+
+- Observation: A 10ms result-file schedule preserves the supervisor's prior idle-path inspection responsiveness while bounding chatty-path metadata calls independently of transcript readiness.
+  Evidence: `worker_result_file_inspection_obeys_its_schedule` forces the private monotonic timestamp before and at the interval boundary; the missing file is ignored before the boundary and detected once due. The existing live overflow test still completes in about 1.35 seconds and prevents the escaped marker.
 
 ## Decision Log
 
@@ -72,7 +75,7 @@ Milestone one repairs the policy/history boundary. Add `CHANGELOG.md` to the con
 
 Milestone two repairs progress error composition. Generalize `crates/jig/src/progress.rs::combine_progress_delivery` into the shared authority for CLI and MCP progress delivery, accepting `anyhow::Result<()>` plus a boundary-specific combined-failure label. Match all four success/failure combinations. If both fail, return one error whose displayed message begins with the primary operation failure and also reports the progress-delivery failure. In `crates/jig/src/mcp.rs`, change `handle_tool_call` to evaluate both outcomes and pass them through a thin boundary-specific wrapper around the shared helper. Add unit tests proving all four MCP outcomes and change the existing CLI dual-failure regression to require primary-error-first rendering. Run both MCP and CLI progress unit tests and commit this milestone alone.
 
-Milestone three repairs result inspection cadence. In `crates/jig/src/runtime/worker_runner.rs`, add a small constant inspection interval and an `Instant` deadline to `WorkerProcessObserver`. Replace the unconditional metadata call in `cancelled` with an `inspect_authoritative_output_if_due` helper. Check the execution cancellation source first so an already-cancelled command still yields `CancelledBeforeStart`; otherwise inspect immediately on the first callback and at most once per interval. Retain `read_worker_output_file` after process exit as the authoritative final validation. Add a deterministic unit test that controls the observer's private deadline and proves a missing output file is ignored before the deadline and detected when due. Keep the existing live-overflow and pre-start cancellation regressions passing. Commit this milestone alone.
+Milestone three repairs result inspection cadence. In `crates/jig/src/runtime/worker_runner.rs`, add a 10ms inspection interval and a last-inspection `Instant` to `WorkerProcessObserver`. Replace the unconditional metadata call in `cancelled` with an `inspect_authoritative_output_if_due` helper. Check the execution cancellation source first so an already-cancelled command still yields `CancelledBeforeStart`; otherwise inspect immediately on the first callback and at most once per interval. Retain `read_worker_output_file` after process exit as the authoritative final validation. Add a deterministic unit test that controls the observer's private monotonic timestamp and proves a missing output file is ignored before the interval and detected when due. Keep the existing live-overflow and pre-start cancellation regressions passing. Commit this milestone alone.
 
 After all three milestones, format the workspace, rebuild the development binary, run the supported-host and crate-focused tests, run the configured contract gate, and run `JIG_DEV_BIN=target/debug/jig scripts/jig check test` as the full-suite acceptance command. Use `scripts/jig work check`, `work evidence`, `work gates`, and `work receipts` to connect the results to this plan. Update every living section of this plan, append a final structured-work progress record, finish the work only after required gates pass, and commit the plan and append-only evidence.
 
@@ -177,8 +180,15 @@ Plan revision note (2026-08-23 07:48Z): Recorded the MCP composition helper and 
 
 Plan revision note (2026-08-23 07:49Z): Expanded the MCP milestone to reuse and correct the existing CLI progress result-composition authority after discovering it encoded the same structural bug. Updated the work, commands, acceptance criteria, and interface description; all 23 focused tests pass.
 
+Plan revision note (2026-08-23 07:54Z): Recorded the worker observer's independent monotonic inspection schedule and deterministic regression. Focused cancellation and live-overflow validation remain before the third implementation commit.
+
+Plan revision note (2026-08-23 07:55Z): Marked the worker scheduling milestone complete after all three focused regressions passed, and recorded why the 10ms interval preserves the prior idle-path behavior while bounding chatty-path filesystem work.
+
 
 Policy slice complete: separated active supported-host scanning from immutable release history, restored all 22 deleted historical entries, added the Unreleased breaking cutover, and passed scripts/check-supported-host-surface.sh plus 5/5 supported_host_surface tests.
 
 
 Progress-delivery slice complete: centralized CLI and MCP outcome composition, kept the primary operation error first when delivery also fails, and passed 11 MCP plus 12 CLI progress unit tests.
+
+
+Worker inspection slice complete: decoupled authoritative result metadata checks from transcript readiness with an immediate then 10ms monotonic cadence. The deterministic cadence test, cancelled-before-start regression, and live overflow/process-group cleanup regression all pass.
