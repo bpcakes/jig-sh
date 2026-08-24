@@ -8,14 +8,15 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 - [x] Gate generated contracts plus CLI and MCP execution.
 - [x] Add flat and versioned fixtures for rendering, rejection, and recursive immutability.
 - [x] Regenerate embedded template snapshots and validate the required contract and test gates.
+- [x] Revalidate the final local commits with the focused migration suite, template consistency, formatting, the complete standard `jig-sh` suite, and a lint pass that exempts only unrelated Rust 1.97 baseline lints.
 - [ ] Publish a source commit that downstream consumers can pin.
 
 ## Surprises & Discoveries
 
 - Existing migration immutability parsing already handles nested paths; tests must prove that remains true under each layout.
 - Downstream consumers need the config, generated contract, managed guidance, and source pin updated together because older Jig binaries reject unknown config fields.
-- The repository Clippy command is currently blocked on an unrelated pre-existing `collapsible_if` warning in `crates/jig/build.rs:300` under Rust 1.97. The file is outside this change; the required contract and test gates pass.
-- The full Nextest gate passed once before the final capability-condition tightening. After that one-line change, two reruns each passed 2,205 of 2,206 tests but the unrelated `runtime::worker_runner::tests::worker_supervision_rejects_output_beyond_the_capture_limit` failed process-tree cleanup under Nextest; the same test passes with the standard Rust test harness. The complete standard library suite passed 1,577 tests with 2 ignored.
+- The repository Clippy command is currently blocked on unrelated pre-existing Rust 1.97 lints: `collapsible_if` in `crates/jig/build.rs:300` and `manual_is_multiple_of` in `crates/jig-vault/src/redact.rs:330`. A targeted all-targets lint pass for `jig-contract`, `jig-sqlx`, and `jig-sh` passes with only those two baseline lints exempted.
+- The full Nextest gate passed once before the final capability-condition tightening. Three reruns after that change each passed 2,205 of 2,206 tests but the unrelated `runtime::worker_runner::tests::worker_supervision_rejects_output_beyond_the_capture_limit` failed process-tree cleanup under Nextest; the exact test passes alone under Nextest and in the complete standard harness. The fresh complete standard `jig-sh` suite passed 1,577 tests with 2 ignored plus every integration target.
 
 ## Decision Log
 
@@ -26,7 +27,7 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 
 ## Outcomes & Retrospective
 
-The implementation, focused acceptance tests, formatting, contract gate, complete standard library suite, and one full structured test gate pass. Later full-gate reruns are blocked only by the documented unrelated Nextest process-cleanup failure. The upstream source commit and downstream pin/regeneration remain pending.
+The implementation is committed locally as `dbd12c5` plus the template-output cleanup `2f1a744`. Focused acceptance tests, formatting, template consistency, the contract gate, the complete standard suite, the isolated Nextest regression, and the scoped lint pass all succeed. Later full-gate reruns are blocked only by the documented unrelated Nextest process-cleanup flake. Publishing a reachable upstream source revision and then pinning/regenerating the downstream harness remain pending.
 
 ## Context and orientation
 
@@ -43,7 +44,7 @@ Define a serde-backed RustMigrationLayout enum and expose migration-add availabi
 3. Update project templates and embedded snapshots using the repository generator.
 4. Add focused policy, runtime, and bootstrap tests.
 5. Run formatting, focused tests, contract checks, full tests, and work evidence/gates.
-6. Commit the upstream source only after validation so a downstream source pin can resolve it.
+6. Publish the validated upstream source commits so a downstream source pin can resolve them.
 
 ## Validation and acceptance
 
