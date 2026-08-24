@@ -10,12 +10,14 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 - [x] Regenerate embedded template snapshots and validate the required contract and test gates.
 - [x] Revalidate the final local commits with the focused migration suite, template consistency, formatting, the complete standard `jig-sh` suite, and a lint pass that exempts only unrelated Rust 1.97 baseline lints.
 - [x] Publish the validated branch and open upstream pull request https://github.com/bpcakes/jig-sh/pull/11 so downstream consumers can pin a reachable source revision.
+- [x] Resolve the PR's change-sensitive Rust LOC gate by extracting migration/vault config types and the new migration-layout policy tests, then rerun the focused and complete standard suites.
 
 ## Surprises & Discoveries
 
 - Existing migration immutability parsing already handles nested paths; tests must prove that remains true under each layout.
 - Downstream consumers need the config, generated contract, managed guidance, and source pin updated together because older Jig binaries reject unknown config fields.
-- The repository Clippy command is currently blocked on unrelated pre-existing Rust 1.97 lints: `collapsible_if` in `crates/jig/build.rs:300` and `manual_is_multiple_of` in `crates/jig-vault/src/redact.rs:330`. A targeted all-targets lint pass for `jig-contract`, `jig-sqlx`, and `jig-sh` passes with only those two baseline lints exempted.
+- The repository Clippy command is currently blocked on unrelated pre-existing Rust 1.97 lint drift across untouched crates, primarily `collapsible_if` plus `manual_is_multiple_of` in `jig-vault`. The migration-layout targets pass when those baseline lint categories are allowed; this PR does not mix a repository-wide Clippy cleanup into the feature.
+- The first PR run correctly rejected three touched legacy files under the Rust LOC policy. The final organization returns `cli/tests.rs` to its base contents, reduces `context.rs` to 991 lines, and reduces `policy/tests.rs` to 735 lines; the change-sensitive LOC gate then passes.
 - The full Nextest gate passed once before the final capability-condition tightening. Three reruns after that change each passed 2,205 of 2,206 tests but the unrelated `runtime::worker_runner::tests::worker_supervision_rejects_output_beyond_the_capture_limit` failed process-tree cleanup under Nextest; the exact test passes alone under Nextest and in the complete standard harness. The fresh complete standard `jig-sh` suite passed 1,577 tests with 2 ignored plus every integration target.
 
 ## Decision Log
@@ -27,7 +29,7 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 
 ## Outcomes & Retrospective
 
-The implementation is committed as `dbd12c5` plus the template-output cleanup `2f1a744` and published on `codex/migration-layout` in pull request #11. Focused acceptance tests, formatting, template consistency, the contract gate, the complete standard suite, the isolated Nextest regression, and the scoped lint pass all succeed. Later full-gate reruns are blocked only by the documented unrelated Nextest process-cleanup flake. Downstream consumers can now pin the reachable PR head and regenerate their managed harness.
+The implementation is committed as `dbd12c5` plus the template-output cleanup `2f1a744` and published on `codex/migration-layout` in pull request #11. Focused acceptance tests, formatting, template consistency, the contract gate, the complete standard suite, the isolated Nextest regression, and the scoped lint pass all succeed. The post-publication LOC remediation also passes the 32-test migration slice and a fresh complete standard run of 1,577 library tests with 2 ignored plus every integration target. Remaining full-gate failures are the documented unrelated Nextest process-cleanup flake and repository-wide Rust 1.97 Clippy baseline drift. Downstream consumers can pin the reachable PR head and regenerate their managed harness.
 
 ## Context and orientation
 

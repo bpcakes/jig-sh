@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use clap::ValueEnum;
 use jig_contract::{FeatureContext, ManifestTool};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
@@ -18,9 +17,11 @@ pub(crate) use execution_config::{
     CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
 };
 mod loop_config;
+mod migration;
 mod optional;
 mod runtime;
 mod status_config;
+mod vault_config;
 mod work_config;
 
 pub(crate) use defaults::{
@@ -42,7 +43,9 @@ pub(crate) use runtime::{
 
 pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
+pub(crate) use migration::RustMigrationLayout;
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
+use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
     parse_review_scope_arg,
@@ -161,28 +164,6 @@ enum HarnessFootprintConfig {
     Minimal,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-#[value(rename_all = "snake_case")]
-pub(crate) enum RustMigrationLayout {
-    #[default]
-    FlatMigrations,
-    VersionedArtifacts,
-}
-
-impl RustMigrationLayout {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::FlatMigrations => "flat_migrations",
-            Self::VersionedArtifacts => "versioned_artifacts",
-        }
-    }
-
-    pub(crate) const fn allows_migration_add(self) -> bool {
-        matches!(self, Self::FlatMigrations)
-    }
-}
-
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -196,39 +177,6 @@ pub(crate) struct FrontendAppConfig {
     pub(crate) kind: Option<String>,
     #[serde(default)]
     pub(crate) role: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct VaultConfig {
-    #[serde(default)]
-    scope: VaultScopeConfig,
-    #[serde(default)]
-    scope_id: Option<String>,
-    #[serde(default)]
-    allow_global: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum VaultScopeConfig {
-    #[default]
-    Legacy,
-    Repo,
-}
-
-impl VaultConfig {
-    pub(crate) fn repo_scope_id(&self) -> Option<&str> {
-        if self.scope == VaultScopeConfig::Repo {
-            self.scope_id.as_deref()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) const fn allow_global(&self) -> bool {
-        self.allow_global
-    }
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]

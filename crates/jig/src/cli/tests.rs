@@ -354,8 +354,6 @@ fn adopt_parses_sqlx_inventory_remediation_flags() {
             "true",
             "--rust-migration-dir",
             "migrations",
-            "--rust-migration-layout",
-            "versioned_artifacts",
         ];
         args.extend(extra_args);
 
@@ -367,10 +365,6 @@ fn adopt_parses_sqlx_inventory_remediation_flags() {
                 assert_eq!(
                     opts.answers.rust_migration_dir.as_deref(),
                     Some("migrations")
-                );
-                assert_eq!(
-                    opts.answers.rust_migration_layout,
-                    Some(crate::context::RustMigrationLayout::VersionedArtifacts)
                 );
                 assert_eq!(
                     opts.answers.schema_dump_enabled,
