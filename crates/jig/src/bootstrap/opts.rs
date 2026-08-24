@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Args;
 
 use super::{DevApp, FrontendApp, parse_frontend_app};
-use crate::context::{ExecutionConfig, StatusConfig};
+use crate::context::{ExecutionConfig, RustMigrationLayout, StatusConfig};
 
 #[derive(Args, Clone, Debug, Default)]
 pub struct AnswerOpts {
@@ -79,6 +79,13 @@ pub struct AnswerOpts {
         help = "SQL migration directory for SQLx-enabled repos"
     )]
     pub rust_migration_dir: Option<String>,
+    #[arg(
+        long,
+        help_heading = "Common Answers",
+        value_enum,
+        help = "SQL migration layout: flat_migrations or versioned_artifacts"
+    )]
+    pub rust_migration_layout: Option<RustMigrationLayout>,
     #[arg(
         long,
         help_heading = "Common Answers",

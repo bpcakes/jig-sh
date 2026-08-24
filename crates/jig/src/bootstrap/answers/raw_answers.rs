@@ -17,6 +17,7 @@ pub(super) struct RawAnswers {
     pub(super) rust_crate_roots: Option<Vec<String>>,
     pub(super) rust_migration_dir: Option<String>,
     pub(super) migration_dir: Option<String>,
+    pub(super) rust_migration_layout: Option<RustMigrationLayout>,
     pub(super) rust_sqlx_metadata_dir: Option<String>,
     pub(super) schema_dump_enabled: Option<bool>,
     pub(super) schema_dump_command: Option<String>,
@@ -255,6 +256,7 @@ impl RawAnswers {
             opts.rust_migration_dir.clone(),
         );
         merge_option(&mut self.migration_dir, opts.migration_dir.clone());
+        merge_option(&mut self.rust_migration_layout, opts.rust_migration_layout);
         merge_option(
             &mut self.rust_sqlx_metadata_dir,
             opts.rust_sqlx_metadata_dir.clone(),
@@ -348,6 +350,7 @@ impl RawAnswers {
             rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
             rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),
             migration_dir: self.migration_dir.filter(|value| !value.is_empty()),
+            rust_migration_layout: self.rust_migration_layout,
             rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
             schema_dump_enabled: self.schema_dump_enabled,
             schema_dump_command: self.schema_dump_command,
@@ -433,6 +436,7 @@ impl RawAnswers {
             .or(default_repo_name)
             .ok_or_else(|| anyhow::anyhow!("Missing required answer: repo_name"))?;
         let sqlx_enabled = self.sqlx_enabled.unwrap_or(true);
+        let rust_migration_layout = self.rust_migration_layout.unwrap_or_default();
         if backend_language.is_go() && sqlx_enabled {
             bail!(
                 "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
@@ -546,6 +550,7 @@ impl RawAnswers {
             },
             rust_migration_dir,
             migration_dir,
+            rust_migration_layout,
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
             schema_dump_command,

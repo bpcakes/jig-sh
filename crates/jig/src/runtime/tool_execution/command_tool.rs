@@ -1,3 +1,7 @@
+use std::process::{Command, Stdio};
+
+use anyhow::Context;
+
 use super::*;
 
 pub(super) struct CommandToolInvocation<'a> {
@@ -300,26 +304,6 @@ pub(super) fn maybe_record_receipt(
     } else {
         Ok(None)
     }
-}
-
-pub(super) fn tool_failure_message(
-    tool_name: &str,
-    command_key: Option<&str>,
-    exit_status: i32,
-    stdout: &str,
-    stderr: &str,
-) -> Option<String> {
-    if exit_status == 0 {
-        return None;
-    }
-    Some(match command_key {
-        Some(command_key) => format!(
-            "{tool_name} failed with status {exit_status}\ncommand key: {command_key}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-        None => format!(
-            "{tool_name} failed with status {exit_status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-    })
 }
 
 fn run_configured_command(

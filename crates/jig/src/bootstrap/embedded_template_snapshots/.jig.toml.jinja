@@ -18,6 +18,7 @@ migration_dir = "<<[ migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"
 [% endif %]
 [% if sqlx_enabled %]
 rust_migration_dir = "<<[ migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_migration_layout = "<<[ rust_migration_layout ]>>"
 rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]
@@ -224,5 +225,5 @@ marketplaces = []
 id = "<<[ marketplace.id | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 source = "<<[ marketplace.source | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 plugins = [[% for plugin in marketplace.plugins %]"<<[ plugin | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
-[% endfor %]
-[% endif %]
+[% endfor -%]
+[% endif -%]

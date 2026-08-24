@@ -114,7 +114,7 @@
       "command": "sqlx_check_command"
     },
 [% endif %]
-[% if sqlx_enabled or (backend_language == "go" and go_database == "postgres") %]
+[% if (sqlx_enabled and rust_migration_layout == "flat_migrations") or (backend_language == "go" and go_database == "postgres") %]
     {
       "name": "jig.migration_add",
       "kind": "native",

@@ -266,8 +266,10 @@ impl<'a> ModelBuilder<'a> {
         )?;
         if adapters.iter().any(|adapter| adapter == "sqlx") {
             let schema_dump_enabled = self.answers.schema_dump_enabled();
+            let migration_add_enabled = self.answers.migration_add_enabled();
             self.add_adapter_actions(BACKEND_COMPONENT, "sqlx", CommandScope::Component, |id| {
-                schema_dump_enabled || !matches!(id, "schema" | "schema-dump")
+                (schema_dump_enabled || !matches!(id, "schema" | "schema-dump"))
+                    && (migration_add_enabled || id != "migration-add")
             })?;
         }
         if adapters.iter().any(|adapter| adapter == "go-postgres") {

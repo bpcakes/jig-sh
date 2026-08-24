@@ -16,8 +16,9 @@ use crate::backend::{
     BackendLanguage, GO_POSTGRES_MIGRATION_DIR, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase,
 };
 use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig, StatusConfig,
-    config_app_dirs_match, default_codex_marketplace_plugins, validate_web_package_manager,
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
+    RustMigrationLayout, StatusConfig, config_app_dirs_match, default_codex_marketplace_plugins,
+    validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::repository_path::{
@@ -67,6 +68,7 @@ pub(super) struct RenderAnswers {
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
     migration_dir: Option<String>,
+    rust_migration_layout: RustMigrationLayout,
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: bool,
     schema_dump_command: String,
@@ -124,6 +126,7 @@ pub(super) struct AnswerInputShape {
 const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
     "migration_dir",
     "rust_migration_dir",
+    "rust_migration_layout",
     "rust_sqlx_metadata_dir",
     "schema_dump_command",
     "schema_check_command",
@@ -497,6 +500,10 @@ impl RenderAnswers {
         self.schema_dump_enabled
     }
 
+    pub(super) const fn migration_add_enabled(&self) -> bool {
+        !self.sqlx_enabled || self.rust_migration_layout.allows_migration_add()
+    }
+
     pub(super) fn migration_dir(&self) -> Option<&str> {
         self.migration_dir
             .as_deref()
@@ -577,6 +584,7 @@ fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
             .rust_migration_dir
             .as_deref()
             .is_some_and(|value| !value.is_empty()),
+        "rust_migration_layout" => answers.rust_migration_layout.is_some(),
         "rust_sqlx_metadata_dir" => answers.rust_sqlx_metadata_dir.is_some(),
         "schema_dump_command" => answers.schema_dump_command.is_some(),
         "schema_check_command" => answers.schema_check_command.is_some(),

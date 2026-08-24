@@ -380,6 +380,9 @@ fn migration_command(ctx: &RepoContext) -> Value {
             Some("Set migration_dir in .jig.toml, then run `jig update --recopy`."),
         );
     }
+    if ctx.sqlx_enabled() && !ctx.migration_add_enabled() {
+        return ready_command(root_commands::SQLX);
+    }
     manifest_command(
         ctx,
         root_commands::MIGRATION,

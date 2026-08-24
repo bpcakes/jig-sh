@@ -886,11 +886,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn worker_supervision_rejects_output_beyond_the_capture_limit() {
-        let mut command = Command::new("/bin/sh");
-        command.args([
-            "-c",
-            &format!("head -c {} /dev/zero", EXECUTION_OUTPUT_CAPTURE_LIMIT + 1),
-        ]);
+        let mut command = Command::new("yes");
 
         let error = run_worker_command(
             &mut command,

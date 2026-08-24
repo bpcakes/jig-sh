@@ -42,7 +42,9 @@ pub(crate) use runtime::{
 
 pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
+pub(crate) use migration::RustMigrationLayout;
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
+use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
     WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg, parse_work_gate,
@@ -92,6 +94,9 @@ struct RepoConfig {
     rust_migration_dir: String,
     #[serde(default)]
     migration_dir: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    rust_migration_layout: RustMigrationLayout,
     #[allow(dead_code)]
     #[serde(default)]
     rust_sqlx_metadata_dir: String,
@@ -222,39 +227,6 @@ pub(crate) struct FrontendAppConfig {
     pub(crate) kind: Option<String>,
     #[serde(default)]
     pub(crate) role: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct VaultConfig {
-    #[serde(default)]
-    scope: VaultScopeConfig,
-    #[serde(default)]
-    scope_id: Option<String>,
-    #[serde(default)]
-    allow_global: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum VaultScopeConfig {
-    #[default]
-    Legacy,
-    Repo,
-}
-
-impl VaultConfig {
-    pub(crate) fn repo_scope_id(&self) -> Option<&str> {
-        if self.scope == VaultScopeConfig::Repo {
-            self.scope_id.as_deref()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) const fn allow_global(&self) -> bool {
-        self.allow_global
-    }
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -571,6 +543,14 @@ impl RepoContext {
         }
     }
 
+    pub(crate) const fn rust_migration_layout(&self) -> RustMigrationLayout {
+        self.config.rust_migration_layout
+    }
+
+    pub(crate) fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled() && self.rust_migration_layout().allows_migration_add()
+    }
+
     pub(crate) fn schema_dump_command(&self) -> &str {
         &self.config.schema_dump_command
     }
@@ -720,6 +700,7 @@ struct RepositoryExecutionAuthority<'a> {
     rust_crate_roots: &'a [String],
     migration_dir: &'a str,
     rust_migration_dir: &'a str,
+    rust_migration_layout: RustMigrationLayout,
     rust_sqlx_metadata_dir: &'a str,
     schema_dump_enabled: bool,
     commands: BTreeMap<String, &'a str>,
@@ -747,6 +728,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_crate_roots,
         rust_migration_dir,
         migration_dir,
+        rust_migration_layout,
         rust_sqlx_metadata_dir,
         schema_dump_enabled,
         schema_dump_command: _,
@@ -790,6 +772,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_crate_roots,
         migration_dir,
         rust_migration_dir,
+        rust_migration_layout: *rust_migration_layout,
         rust_sqlx_metadata_dir,
         schema_dump_enabled: *schema_dump_enabled,
         commands: effective_commands,
@@ -819,6 +802,10 @@ impl FeatureContext for RepoContext {
 
     fn schema_dump_enabled(&self) -> bool {
         self.schema_dump_enabled()
+    }
+
+    fn migration_add_enabled(&self) -> bool {
+        self.migration_add_enabled()
     }
 
     fn frontend_app_count(&self) -> usize {
@@ -958,9 +945,11 @@ mod contract_tests;
 mod defaults;
 mod execution_config;
 mod loop_config;
+mod migration;
 mod optional;
 mod runtime;
 mod status_config;
 #[cfg(test)]
 mod tests;
+mod vault_config;
 mod work_config;

@@ -74,6 +74,12 @@ pub fn repository_adapter(id: &str) -> Option<&'static RepositoryAdapterDescript
         .find(|adapter| adapter.id == id)
 }
 
+pub fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    FEATURES
+        .iter()
+        .find_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+}
+
 fn native_tool(tool_name: &str) -> Option<&'static NativeToolDescriptor> {
     FEATURES
         .iter()

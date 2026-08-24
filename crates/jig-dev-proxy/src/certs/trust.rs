@@ -456,10 +456,10 @@ pub(super) fn security_find_certificate_fingerprints(
             pem.push_str(line);
             pem.push('\n');
             if line == "-----END CERTIFICATE-----" {
-                if let Some(sha1) = pending_sha1.take() {
-                    if let Some(sha256) = pem_sha256_hex(&pem) {
-                        fingerprints.push(CertificateFingerprints { sha1, sha256 });
-                    }
+                if let Some(sha1) = pending_sha1.take()
+                    && let Some(sha256) = pem_sha256_hex(&pem)
+                {
+                    fingerprints.push(CertificateFingerprints { sha1, sha256 });
                 }
                 in_pem = false;
             }

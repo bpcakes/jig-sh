@@ -180,6 +180,7 @@ pub struct FeatureDescriptor {
     pub repository_adapters: &'static [RepositoryAdapterDescriptor],
     pub required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
     pub unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
+    pub tool_admission_error: fn(&dyn FeatureContext, &str) -> Option<String>,
 }
 
 impl FeatureDescriptor {
@@ -196,17 +197,27 @@ impl FeatureDescriptor {
             repository_adapters,
             required_tools,
             unavailable_tool_message,
+            tool_admission_error: no_tool_admission_error,
         }
     }
+
+    pub const fn with_tool_admission_error(
+        mut self,
+        tool_admission_error: fn(&dyn FeatureContext, &str) -> Option<String>,
+    ) -> Self {
+        self.tool_admission_error = tool_admission_error;
+        self
+    }
+}
+
+fn no_tool_admission_error(_ctx: &dyn FeatureContext, _tool_name: &str) -> Option<String> {
+    None
 }
 
 pub trait FeatureContext {
     fn contract_version(&self) -> u32;
     fn required_commands(&self) -> &[String];
     fn sqlx_enabled(&self) -> bool;
-    fn migration_authoring_enabled(&self) -> bool {
-        self.sqlx_enabled() || self.go_postgres_enabled()
-    }
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
     fn go_backend_enabled(&self) -> bool {
@@ -214,6 +225,12 @@ pub trait FeatureContext {
     }
     fn go_postgres_enabled(&self) -> bool {
         false
+    }
+    fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled()
+    }
+    fn migration_authoring_enabled(&self) -> bool {
+        self.migration_add_enabled() || self.go_postgres_enabled()
     }
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()

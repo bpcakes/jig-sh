@@ -4,6 +4,12 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     if !ctx.migration_policy_enabled() {
         bail!("migration add requires a configured SQLx or Go/PostgreSQL migration backend");
     }
+    if ctx.sqlx_enabled() && !ctx.migration_add_enabled() {
+        bail!(
+            "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
+            ctx.rust_migration_layout().as_str()
+        );
+    }
     let migration_dir = ctx
         .migration_relative_dir()
         .context("migration_dir is empty, unsafe, or has no legacy rust_migration_dir fallback")?;
