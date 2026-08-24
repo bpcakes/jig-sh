@@ -90,6 +90,31 @@ migration_add_command = "printf migration"
 }
 
 #[test]
+fn contract_validation_preserves_legacy_required_migration_tool_mapping() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+harness_footprint = "minimal"
+sqlx_enabled = false
+migration_add_command = "printf migration"
+"#,
+        )
+        .contract_version(2)
+        .required_commands(["migration_add_command"])
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = validate_contract(&ctx).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Missing required jig tool definition: jig.migration_add")
+    );
+}
+
+#[test]
 fn migration_immutability_remains_recursive_for_both_layouts() {
     for layout in ["flat_migrations", "versioned_artifacts"] {
         let temp = tempdir().unwrap();

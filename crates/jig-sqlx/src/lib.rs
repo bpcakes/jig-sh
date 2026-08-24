@@ -31,7 +31,7 @@ fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     if sqlx_enabled || ctx.has_required_command(SQLX_CHECK_COMMAND) {
         required.push(tool::SQLX_CHECK);
     }
-    if ctx.migration_add_enabled() {
+    if ctx.migration_add_enabled() || ctx.has_required_command(MIGRATION_ADD_COMMAND) {
         required.push(tool::MIGRATION_ADD);
     }
     if schema_dump_enabled || ctx.has_required_command(SCHEMA_CHECK_COMMAND) {
