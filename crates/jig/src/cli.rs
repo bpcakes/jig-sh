@@ -215,8 +215,8 @@ Quick start:
   jig vault exec --env-file .env.jig -- command
   jig vault import onepassword --env-file .env.op --item Production --out-env .env.jig
   jig vault passphrase change
-  jig vault backup create --out ./project-vault.backup
-  jig vault backup restore --in ./project-vault.backup --home ./restored-vault
+  jig vault backup create --out ../ExampleProject-vault.backup
+  jig vault backup restore --in ../ExampleProject-vault.backup
 
 Compatibility commands (concealed fields and constrained execution):
   jig vault secret set api_token --value-prompt

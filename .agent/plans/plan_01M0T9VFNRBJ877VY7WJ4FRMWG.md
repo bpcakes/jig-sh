@@ -1,0 +1,1 @@
+Make newly created restore parents crash-durable, reject parent traversal through missing components before mutation, and document/test intentional persistence of verified empty parents after failed restore authentication.

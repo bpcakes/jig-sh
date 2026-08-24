@@ -3,7 +3,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result as AnyResult, bail};
 use secrecy::SecretString;
@@ -68,14 +68,7 @@ pub(super) fn preflight_target(target_home: PathBuf) -> AnyResult<RestoreTarget>
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    reject_symlinked_ancestors(&parent)?;
-    let parent = fs::canonicalize(&parent).with_context(|| {
-        format!(
-            "restore target parent must already exist as a safe directory: {}",
-            parent.display()
-        )
-    })?;
-    reject_symlinked_ancestors(&parent)?;
+    let parent = prepare_target_parent(&parent)?;
     let metadata = validate_parent(&parent)?;
     let home = parent.join(file_name);
     require_absent(&home)?;
@@ -85,6 +78,150 @@ pub(super) fn preflight_target(target_home: PathBuf) -> AnyResult<RestoreTarget>
         parent_device: metadata.dev(),
         parent_inode: metadata.ino(),
     })
+}
+
+fn prepare_target_parent(parent: &Path) -> AnyResult<PathBuf> {
+    let current_dir = std::env::current_dir()
+        .context("failed to resolve current directory for restore target")?;
+    prepare_target_parent_from(parent, &current_dir)
+}
+
+fn prepare_target_parent_from(parent: &Path, current_dir: &Path) -> AnyResult<PathBuf> {
+    let parent = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        current_dir.join(parent)
+    };
+    let missing = validate_creation_ancestors(&parent)?;
+    create_private_parent_chain(&missing)?;
+    reject_symlinked_ancestors(&parent)?;
+    let parent = fs::canonicalize(&parent).with_context(|| {
+        format!(
+            "failed to resolve private restore target parent {}",
+            parent.display()
+        )
+    })?;
+    reject_symlinked_ancestors(&parent)?;
+    Ok(parent)
+}
+
+fn validate_creation_ancestors(path: &Path) -> AnyResult<Vec<PathBuf>> {
+    let mut checked_creation_boundary = false;
+    let mut missing = Vec::new();
+    for ancestor in path.ancestors() {
+        let metadata = match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if matches!(
+                    ancestor.components().next_back(),
+                    Some(Component::ParentDir)
+                ) {
+                    bail!(
+                        "restore target parent cannot traverse through a missing component before {}",
+                        ancestor.display()
+                    );
+                }
+                if !checked_creation_boundary {
+                    missing.push(ancestor.to_path_buf());
+                }
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect restore target creation ancestor {}",
+                        ancestor.display()
+                    )
+                });
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            bail!(
+                "refusing to create restore target parent through symlinked ancestor {}",
+                ancestor.display()
+            );
+        }
+        if !metadata.is_dir() {
+            bail!(
+                "restore target creation ancestor is not a directory: {}",
+                ancestor.display()
+            );
+        }
+        if !checked_creation_boundary {
+            let mode = metadata.permissions().mode() & 0o7777;
+            let owner = metadata.uid();
+            if !creation_boundary_is_safe(mode, owner, unsafe { libc::geteuid() }) {
+                bail!(
+                    "refusing to create restore target parent below shared-writable ancestor {}",
+                    ancestor.display()
+                );
+            }
+            checked_creation_boundary = true;
+        }
+    }
+    if checked_creation_boundary {
+        Ok(missing)
+    } else {
+        bail!(
+            "restore target has no existing directory ancestor: {}",
+            path.display()
+        )
+    }
+}
+
+fn creation_boundary_is_safe(mode: u32, owner: u32, effective_user: u32) -> bool {
+    let shared_writable = mode & 0o022 != 0;
+    let sticky = mode & 0o1000 != 0;
+    let trusted_sticky_owner = owner == effective_user || owner == 0;
+    !shared_writable || (sticky && trusted_sticky_owner)
+}
+
+fn create_private_parent_chain(missing: &[PathBuf]) -> AnyResult<()> {
+    for path in missing.iter().rev() {
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder.create(path).with_context(|| {
+            format!(
+                "failed to create private restore target parent {}",
+                path.display()
+            )
+        })?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
+            format!(
+                "failed to restrict restore target parent {}",
+                path.display()
+            )
+        })?;
+        let metadata = fs::symlink_metadata(path).with_context(|| {
+            format!(
+                "failed to inspect created restore target parent {}",
+                path.display()
+            )
+        })?;
+        validate_owned_directory(path, &metadata)?;
+        if metadata.permissions().mode() & 0o777 != 0o700 {
+            bail!(
+                "created restore target parent is not owner-only: {}",
+                path.display()
+            );
+        }
+        sync_directory(path).with_context(|| {
+            format!(
+                "failed to sync created restore target parent {}",
+                path.display()
+            )
+        })?;
+        let containing_parent = path
+            .parent()
+            .context("created restore target parent must have an existing containing directory")?;
+        sync_directory(containing_parent).with_context(|| {
+            format!(
+                "failed to sync directory entry for created restore target parent {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 pub(super) fn restore(
@@ -505,11 +642,190 @@ fn vault_error_as_classified(error: VaultError) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::CommandExt;
+
+    const UMASK_CHILD_ENV: &str = "JIG_VAULT_RESTORE_UMASK_CHILD";
 
     fn private_tempdir() -> tempfile::TempDir {
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         temp
+    }
+
+    fn rerun_current_test_with_umask(mode: libc::mode_t) -> bool {
+        if std::env::var_os(UMASK_CHILD_ENV).is_some() {
+            return false;
+        }
+        let test_name = std::thread::current()
+            .name()
+            .expect("test harness thread has no name")
+            .to_owned();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg(&test_name)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(UMASK_CHILD_ENV, "1");
+        unsafe {
+            command.pre_exec(move || {
+                libc::umask(mode);
+                Ok(())
+            });
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "test subprocess failed under umask {mode:03o}:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
+    #[test]
+    fn preflight_creates_private_missing_parents_but_keeps_the_vault_home_absent() {
+        if rerun_current_test_with_umask(0o777) {
+            return;
+        }
+        let temp = private_tempdir();
+        let parent = temp.path().join("vault-base/scopes");
+        let home = parent.join("repo-scope");
+
+        let target = preflight_target(home.clone()).unwrap();
+
+        assert_eq!(target.parent, fs::canonicalize(&parent).unwrap());
+        assert_eq!(
+            target.home,
+            fs::canonicalize(&parent).unwrap().join("repo-scope")
+        );
+        assert!(!home.exists());
+        for created in [temp.path().join("vault-base"), parent] {
+            assert_eq!(
+                fs::metadata(created).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_refuses_to_create_parents_below_a_group_writable_ancestor() {
+        let temp = private_tempdir();
+        let shared = temp.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o770)).unwrap();
+        let parent = shared.join("vault-base/scopes");
+
+        let error = preflight_target(parent.join("repo-scope"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("shared-writable ancestor"), "{error}");
+        assert!(!parent.exists());
+    }
+
+    #[test]
+    fn preflight_allows_a_sticky_shared_writable_boundary_owned_by_the_current_user() {
+        let temp = private_tempdir();
+        let shared = temp.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o1770)).unwrap();
+        let parent = shared.join("vault-base/scopes");
+
+        let target = preflight_target(parent.join("repo-scope")).unwrap();
+
+        assert_eq!(target.parent, fs::canonicalize(&parent).unwrap());
+        assert!(!target.home.exists());
+    }
+
+    #[test]
+    fn sticky_boundary_policy_rejects_an_untrusted_directory_owner() {
+        let effective_user = unsafe { libc::geteuid() };
+        let other_user = if effective_user == u32::MAX {
+            1
+        } else {
+            effective_user + 1
+        };
+
+        assert!(creation_boundary_is_safe(
+            0o1770,
+            effective_user,
+            effective_user
+        ));
+        assert!(creation_boundary_is_safe(0o1777, 0, effective_user));
+        assert!(!creation_boundary_is_safe(
+            0o1770,
+            other_user,
+            effective_user
+        ));
+        assert!(!creation_boundary_is_safe(
+            0o0770,
+            effective_user,
+            effective_user
+        ));
+    }
+
+    #[test]
+    fn preflight_resolves_a_bare_relative_missing_parent_from_the_current_directory() {
+        let temp = private_tempdir();
+        let parent = Path::new("recovery/vault-base/scopes");
+
+        let prepared = prepare_target_parent_from(parent, temp.path()).unwrap();
+
+        let expected = temp.path().join(parent);
+        assert_eq!(prepared, fs::canonicalize(&expected).unwrap());
+        assert!(expected.is_dir());
+    }
+
+    #[test]
+    fn preflight_rejects_parent_traversal_through_a_missing_component_without_mutation() {
+        let temp = private_tempdir();
+        let parent = Path::new("recovery/../vault-base/scopes");
+
+        let error = prepare_target_parent_from(parent, temp.path())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cannot traverse through a missing component"));
+        assert!(!temp.path().join("recovery").exists());
+        assert!(!temp.path().join("vault-base").exists());
+    }
+
+    #[test]
+    fn preflight_preserves_leading_parent_traversal_when_the_prefix_exists() {
+        let temp = private_tempdir();
+        let invocation_dir = temp.path().join("invocation");
+        fs::create_dir(&invocation_dir).unwrap();
+        fs::set_permissions(&invocation_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let parent = Path::new("../recovery/vault-base/scopes");
+
+        let prepared = prepare_target_parent_from(parent, &invocation_dir).unwrap();
+
+        let expected = temp.path().join("recovery/vault-base/scopes");
+        assert_eq!(prepared, fs::canonicalize(&expected).unwrap());
+        assert!(expected.is_dir());
+    }
+
+    #[test]
+    fn preflight_refuses_an_existing_symlink_above_the_creation_boundary() {
+        if rerun_current_test_with_umask(0o000) {
+            return;
+        }
+        let temp = private_tempdir();
+        let real = temp.path().join("real");
+        let existing = real.join("existing");
+        fs::create_dir_all(&existing).unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o700)).unwrap();
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let parent = link.join("existing/vault-base/scopes");
+
+        let error = preflight_target(parent.join("repo-scope"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("symlinked ancestor"), "{error}");
+        assert!(!existing.join("vault-base").exists());
     }
 
     #[test]

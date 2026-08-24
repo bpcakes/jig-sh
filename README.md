@@ -183,7 +183,18 @@ scripts/jig vault exec --env-file .env.jig -- command
 scripts/jig vault audit verify
 ```
 
-Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, encrypted backup, and Linux-only absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
+To copy a repo-scoped vault to another machine, create an encrypted backup outside the source checkout, copy the backup securely, then restore it from the destination checkout. A checkout configured with `[vault].scope = "repo"` selects its repo-scoped vault home automatically:
+
+```sh
+# Source machine
+scripts/jig vault backup create --out ../ExampleProject-vault.backup
+
+# Destination machine, from the cloned repo (Linux only)
+scripts/jig vault backup restore --in ../ExampleProject-vault.backup
+scripts/jig vault audit verify
+```
+
+Do not commit vault backups. On a destination without repo-scoped vault configuration, pass `--global` to make selection of the legacy user-level vault deliberate, or `--home` to choose a specific recovery or test location. Omitting both retains the legacy user-level selection for contract-v4 compatibility. Both field kinds are encrypted: concealed fields contribute output-redaction patterns, while text fields are contextual values that remain visible when passed to a command. `vault exec` is a transparent, streaming developer wrapper; the compatible `vault secret` and constrained `vault run` commands remain available for the older cleaned-environment, closed-stdin, capped-output workflow. Controlled `read` and `inject`, one-time 1Password dotenv import, passphrase rotation, encrypted backup, and Linux-only absent-home restore complete the local workflow. Terminal use prompts for the passphrase; non-interactive callers export `JIG_VAULT_PASSPHRASE`. See [Configuration](docs/configuration.md#vault-runtime) for compatibility, recovery, scope, and audit limits.
 
 ### Prompts
 

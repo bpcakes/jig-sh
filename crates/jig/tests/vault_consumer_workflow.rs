@@ -259,7 +259,10 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let repo = temp.path().join("vault-consumer-fixture");
+    let destination_repo = temp.path().join("vault-consumer-destination");
     let vault_base = temp.path().join("vault-base");
+    let destination_vault_base = temp.path().join("destination-vault-base");
+    let destination_vault_base_override = Path::new("../destination-vault-base");
     let fake_bin = temp.path().join("fake-bin");
     let fixture_dir = temp.path().join("fixture-input");
     let runtime_dir = temp.path().join("rendered-output");
@@ -267,6 +270,7 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     private_dir(&fixture_dir);
     private_dir(&runtime_dir);
     write_synthetic_repo(&repo);
+    write_synthetic_repo(&destination_repo);
     install_fake_op(&fake_bin);
 
     let source_env = fixture_dir.join("onepassword-source.env");
@@ -274,7 +278,6 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     let op_log = fixture_dir.join("op.log");
     let rendered_config = runtime_dir.join("config");
     let backup = temp.path().join("project-vault.backup");
-    let restored_home = temp.path().join("restored-vault");
     std::fs::write(
         &source_env,
         format!(
@@ -429,28 +432,37 @@ fn synthetic_consumer_cutover_covers_the_general_project_vault_workflow() {
     assert_eq!(backup_json["backup_version"], 1);
     assert!(backup_json["bytes_written"].as_u64().unwrap() > 0);
     assert_no_encrypted_payload_plaintext(&std::fs::read(&backup).unwrap(), "encrypted backup");
+    assert!(!destination_vault_base.exists());
 
-    let restored = jig_command(&repo, &vault_base, ROTATED_PASSPHRASE, None)
-        .args(["--json", "vault", "backup", "restore", "--in"])
-        .arg(&backup)
-        .arg("--home")
-        .arg(&restored_home)
-        .output()
-        .unwrap();
+    let restored = jig_command(
+        &destination_repo,
+        destination_vault_base_override,
+        ROTATED_PASSPHRASE,
+        None,
+    )
+    .args(["--json", "vault", "backup", "restore", "--in"])
+    .arg(&backup)
+    .output()
+    .unwrap();
     let restored_json = structured_output("vault restore", &restored);
     assert_eq!(restored_json["restored"], true);
     assert_eq!(restored_json["format_version"], 2);
-    assert_eq!(
-        restored_json["vault_home"],
-        restored_home.display().to_string()
+    assert_eq!(restored_json["vault_scope"], "repo");
+    let restored_home = PathBuf::from(
+        restored_json["vault_home"]
+            .as_str()
+            .expect("restore omitted destination vault home"),
     );
+    assert!(restored_home.starts_with(destination_vault_base.join("scopes")));
+    assert_ne!(restored_home, source_home);
+    assert!(restored_home.join("vault.json").is_file());
 
     let restored_exec = run_exec(
-        &repo,
-        &vault_base,
+        &destination_repo,
+        destination_vault_base_override,
         ROTATED_PASSPHRASE,
         &generated_env,
-        Some(&restored_home),
+        None,
         "printf 'restored-password=%s repository=%s compression=%s\\n' \"$RESTIC_PASSWORD\" \"$RESTIC_REPOSITORY\" \"$RESTIC_COMPRESSION\"; printf 'restored-error=%s\\n' \"$RESTIC_PASSWORD\" >&2; exit 23",
     );
     assert_eq!(restored_exec.status.code(), Some(23));

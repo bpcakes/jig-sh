@@ -320,7 +320,8 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
         assert!(!refused_existing.status.success());
         assert!(existing_target.read_dir().unwrap().next().is_none());
 
-        let restored_home = temp.path().join("restored-vault-home");
+        let restored_parent = temp.path().join("restore-base/scopes");
+        let restored_home = restored_parent.join("restored-vault-home");
         let wrong_passphrase = jig_with_passphrases(
             [
                 "--json".as_ref(),
@@ -343,6 +344,13 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
                 .contains("authenticate backup archive")
         );
         assert_contains_no_lifecycle_secrets(&wrong_passphrase_output);
+        for created in [temp.path().join("restore-base"), restored_parent.clone()] {
+            assert!(created.is_dir());
+            assert_eq!(
+                std::fs::metadata(created).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
 
         let restored = jig_with_passphrases(
             [
@@ -392,5 +400,32 @@ fn passphrase_change_backup_and_restore_preserve_state_without_leaks() {
                 .any(|part| part == b"backup_restore")
         );
         assert_contains_no_lifecycle_secrets(&restored_audit);
+
+        let legacy_home = temp.path().join("legacy-restored-vault");
+        let mut legacy_restore = Command::new(env!("CARGO_BIN_EXE_jig"));
+        legacy_restore
+            .current_dir(temp.path())
+            .args(["--json", "vault", "backup", "restore", "--in"])
+            .arg(&backup_one)
+            .env("JIG_VAULT_HOME", &legacy_home)
+            .env("JIG_VAULT_PASSPHRASE", BACKUP_PASSPHRASE)
+            .env_remove("JIG_VAULT_NEW_PASSPHRASE")
+            .env_remove("JIG_REPO_ROOT")
+            .env_remove("JIG_INVOKE_CWD");
+        let legacy_restored = legacy_restore.output().unwrap();
+        let legacy_output = combined_output(&legacy_restored);
+        assert!(
+            legacy_restored.status.success(),
+            "{}",
+            String::from_utf8_lossy(&legacy_output)
+        );
+        let legacy_json = output_json(&legacy_restored);
+        assert_eq!(legacy_json["vault_scope"], "legacy");
+        assert_eq!(legacy_json["vault_home"], legacy_home.display().to_string());
+        assert_contains_no_lifecycle_secrets(&legacy_output);
+        Vault::resolve(Some(legacy_home))
+            .unwrap()
+            .verify_audit(&backup_passphrase)
+            .unwrap();
     }
 }
