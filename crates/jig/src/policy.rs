@@ -17,7 +17,7 @@ use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
 };
-use crate::tool_defs::{self, kind, tool};
+use crate::tool_defs::{self, kind};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 // New or growing files above this fail unless an explicit exception is present.
@@ -189,19 +189,13 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
+        if let Some(error) = jig_features::tool_admission_error(ctx, &tool.name) {
+            errors.push(error);
+        }
         match tool.kind.as_str() {
             kind::NATIVE => {
                 if !jig_features::is_supported_native_tool(&tool.name) {
                     errors.push(format!("Unsupported native tool: {}.", tool.name));
-                } else if tool.name == tool::MIGRATION_ADD
-                    && ctx.sqlx_enabled()
-                    && !ctx.migration_add_enabled()
-                {
-                    errors.push(format!(
-                        "Unavailable native tool {} for rust_migration_layout = \"{}\".",
-                        tool.name,
-                        ctx.rust_migration_layout().as_str()
-                    ));
                 }
             }
             kind::COMMAND => {

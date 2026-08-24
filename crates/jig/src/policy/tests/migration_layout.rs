@@ -49,9 +49,44 @@ sqlx_check_command = "true"
 
     let error = validate_contract(&ctx).unwrap_err();
 
-    assert!(error.to_string().contains(
-        "Unavailable native tool jig.migration_add for rust_migration_layout = \"versioned_artifacts\""
-    ));
+    assert!(
+        error
+            .to_string()
+            .contains("configured Rust migration layout does not permit flat migration stubs")
+    );
+    assert!(error.to_string().contains("jig update --recopy"));
+}
+
+#[test]
+fn contract_validation_rejects_command_backed_migration_add_for_versioned_artifacts() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+harness_footprint = "minimal"
+sqlx_enabled = true
+rust_migration_dir = "schema"
+rust_migration_layout = "versioned_artifacts"
+migration_add_command = "printf migration"
+"#,
+        )
+        .required_commands(["migration_add_command"])
+        .tool(json!({
+            "name": tool::MIGRATION_ADD,
+            "kind": kind::COMMAND,
+            "description": "Add migration.",
+            "command": "migration_add_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = validate_contract(&ctx).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("configured Rust migration layout does not permit flat migration stubs")
+    );
 }
 
 #[test]

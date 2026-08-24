@@ -95,7 +95,41 @@ rust_migration_layout = "versioned_artifacts"
     assert!(
         error
             .to_string()
-            .contains("rust_migration_layout = \"versioned_artifacts\"")
+            .contains("configured Rust migration layout does not permit flat migration stubs")
+    );
+    assert!(!temp.path().join("schema").exists());
+}
+
+#[test]
+fn mcp_rejects_command_backed_migration_add_for_versioned_artifacts_without_mutation() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+rust_migration_dir = "schema"
+rust_migration_layout = "versioned_artifacts"
+migration_add_command = "mkdir -p schema && touch schema/should-not-exist.sql"
+"#,
+        )
+        .contract_version(2)
+        .required_commands(["migration_add_command"])
+        .tool(json!({
+            "name": "jig.migration_add",
+            "kind": "command",
+            "description": "Add migration.",
+            "command": "migration_add_command"
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error =
+        call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("configured Rust migration layout does not permit flat migration stubs")
     );
     assert!(!temp.path().join("schema").exists());
 }

@@ -20,7 +20,8 @@ pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
     NATIVE_TOOLS,
     required_tools,
     unavailable_tool_message,
-);
+)
+.with_tool_admission_error(tool_admission_error);
 
 fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     let mut required = Vec::new();
@@ -53,9 +54,20 @@ fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option
         tool::SQLX_CHECK | tool::MIGRATION_ADD if !ctx.sqlx_enabled() => Some(format!(
             "{tool_name} is not available because sqlx_enabled = false in .jig.toml. Enable SQLx, then run `jig update --recopy`, or remove this command/gate."
         )),
-        tool::MIGRATION_ADD if !ctx.migration_add_enabled() => Some(format!(
-            "{tool_name} is not available because rust_migration_layout = \"versioned_artifacts\" in .jig.toml. Versioned schema artifacts must be advanced with a repository-owned forward-only version, not a flat migration stub."
-        )),
+        tool::MIGRATION_ADD if !ctx.migration_add_enabled() => {
+            Some(migration_add_layout_error(tool_name))
+        }
         _ => None,
     }
+}
+
+fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    (tool_name == tool::MIGRATION_ADD && ctx.sqlx_enabled() && !ctx.migration_add_enabled())
+        .then(|| migration_add_layout_error(tool_name))
+}
+
+fn migration_add_layout_error(tool_name: &str) -> String {
+    format!(
+        "{tool_name} is not available because the configured Rust migration layout does not permit flat migration stubs. Advance the repository with its forward-only versioning workflow, then run `jig update --recopy` to remove any stale migration-add declaration."
+    )
 }

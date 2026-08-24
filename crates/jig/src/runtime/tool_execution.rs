@@ -213,6 +213,9 @@ fn execute_manifest_tool_with_options(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
+    if let Some(error) = jig_features::tool_admission_error(ctx, tool_name) {
+        bail!(error);
+    }
     let tool = ctx
         .tool_spec(tool_name)
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
