@@ -54,6 +54,12 @@ pub fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Op
         .find_map(|feature| (feature.unavailable_tool_message)(ctx, tool_name))
 }
 
+pub fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    FEATURES
+        .iter()
+        .find_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+}
+
 fn native_tool(tool_name: &str) -> Option<&'static NativeToolDescriptor> {
     FEATURES
         .iter()
