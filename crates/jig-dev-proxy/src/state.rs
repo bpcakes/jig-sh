@@ -813,14 +813,14 @@ impl LockedFile {
 
 impl Drop for LockedFile {
     fn drop(&mut self) {
-        if !self.unlocked {
-            if let Err(error) = FileExt::unlock(&self.file) {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "jig proxy failed to unlock {} while dropping lock guard: {error}",
-                    self.label
-                );
-            }
+        if !self.unlocked
+            && let Err(error) = FileExt::unlock(&self.file)
+        {
+            let _ = writeln!(
+                std::io::stderr(),
+                "jig proxy failed to unlock {} while dropping lock guard: {error}",
+                self.label
+            );
         }
     }
 }

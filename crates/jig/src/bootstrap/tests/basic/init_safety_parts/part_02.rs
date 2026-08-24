@@ -326,11 +326,10 @@ fn guarded_publication_rejects_root_and_nested_parent_swaps_without_touching_for
                 if path::repository_path_identity(&root)? != root_identity {
                     bail!("root changed at guarded publication boundary");
                 }
-                if let Some(expected) = &nested_identity {
-                    if path::repository_path_identity(&root.join("scripts"))? != *expected {
+                if let Some(expected) = &nested_identity
+                    && path::repository_path_identity(&root.join("scripts"))? != *expected {
                         bail!("nested parent changed at guarded publication boundary");
                     }
-                }
                 Ok(())
             },
         )

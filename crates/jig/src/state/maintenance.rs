@@ -319,16 +319,15 @@ fn create_state_backup(
             backup_dir.display()
         )
     })?;
-    if let Some((expected_bytes, expected_sha256)) = expected {
-        if backup.uncompressed_bytes != expected_bytes
-            || backup.uncompressed_sha256 != expected_sha256
-        {
-            bail!(
-                "{} state changed while its recovery backup was being written; backup retained at {}",
-                stream.name,
-                backup_dir.display()
-            );
-        }
+    if let Some((expected_bytes, expected_sha256)) = expected
+        && (backup.uncompressed_bytes != expected_bytes
+            || backup.uncompressed_sha256 != expected_sha256)
+    {
+        bail!(
+            "{} state changed while its recovery backup was being written; backup retained at {}",
+            stream.name,
+            backup_dir.display()
+        );
     }
     let manifest = StateBackupManifest {
         version: BACKUP_MANIFEST_VERSION,

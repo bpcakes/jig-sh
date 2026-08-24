@@ -153,14 +153,14 @@ fn validate_raw_vault_command(
         bail!("{name} refuses to reveal bytes to a terminal without --reveal");
     }
 
-    if let crate::command::VaultCommand::Inject(request) = command {
-        if let Some(output) = &request.out_file {
-            if !request.overwrite && input_and_output_are_same_file(&request.input, output)? {
-                bail!(
-                    "vault inject input and output refer to the same file; pass --overwrite to request atomic replacement"
-                );
-            }
-        }
+    if let crate::command::VaultCommand::Inject(request) = command
+        && let Some(output) = &request.out_file
+        && !request.overwrite
+        && input_and_output_are_same_file(&request.input, output)?
+    {
+        bail!(
+            "vault inject input and output refer to the same file; pass --overwrite to request atomic replacement"
+        );
     }
 
     Ok(())

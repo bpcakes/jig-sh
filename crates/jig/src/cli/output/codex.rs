@@ -173,9 +173,9 @@ fn format_codex_window(window: &serde_json::Value) -> Option<String> {
 }
 
 fn format_codex_duration(minutes: u64) -> String {
-    if minutes > 0 && minutes % (60 * 24) == 0 {
+    if minutes > 0 && minutes.is_multiple_of(60 * 24) {
         format!("{}d", minutes / (60 * 24))
-    } else if minutes > 0 && minutes % 60 == 0 {
+    } else if minutes > 0 && minutes.is_multiple_of(60) {
         format!("{}h", minutes / 60)
     } else {
         format!("{minutes}m")

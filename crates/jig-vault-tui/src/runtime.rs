@@ -38,14 +38,14 @@ pub(crate) fn run(
     let mut app = App::new(backend.descriptor());
     let external_cancellation: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
     let mut worker = None;
-    if let Some(passphrase) = initial_passphrase {
-        if app.descriptor.home_state.is_initialized() {
-            app.begin_loading("Unlocking vault");
-            worker = Some(ActionWorker::spawn(
-                Arc::clone(&backend),
-                BackendRequest::Unlock(passphrase),
-            )?);
-        }
+    if let Some(passphrase) = initial_passphrase
+        && app.descriptor.home_state.is_initialized()
+    {
+        app.begin_loading("Unlocking vault");
+        worker = Some(ActionWorker::spawn(
+            Arc::clone(&backend),
+            BackendRequest::Unlock(passphrase),
+        )?);
     }
     let mut dirty = true;
     let mut viewport = ViewportSize::new(0, 0);
@@ -57,12 +57,12 @@ pub(crate) fn run(
             return finish(&mut terminal, &mut worker, &backend, &mut app);
         }
 
-        if let Some(active) = &mut worker {
-            if let Some(completion) = active.try_finish() {
-                worker = None;
-                apply_completion(&mut app, &backend, completion);
-                dirty = true;
-            }
+        if let Some(active) = &mut worker
+            && let Some(completion) = active.try_finish()
+        {
+            worker = None;
+            apply_completion(&mut app, &backend, completion);
+            dirty = true;
         }
 
         let now = Instant::now();
@@ -1043,10 +1043,10 @@ fn handle_protected_editing_key(app: &mut App, key: KeyEvent) -> RuntimeAction {
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
         {
-            if let Some(input) = app.protected_input_mut() {
-                if input.push_char(character).is_err() {
-                    app.set_error("Protected input exceeds the vault value size limit.");
-                }
+            if let Some(input) = app.protected_input_mut()
+                && input.push_char(character).is_err()
+            {
+                app.set_error("Protected input exceeds the vault value size limit.");
             }
             RuntimeAction::Redraw
         }

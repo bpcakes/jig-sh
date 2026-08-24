@@ -189,13 +189,13 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
         return Ok(output);
     }
 
-    if !request.replace {
-        if let Some((entry, _)) = entries.iter().zip(&existing).find(|(_, exists)| **exists) {
-            bail!(
-                "vault field '{}' already exists; pass --replace to replace existing import fields",
-                entry.reference
-            );
-        }
+    if !request.replace
+        && let Some((entry, _)) = entries.iter().zip(&existing).find(|(_, exists)| **exists)
+    {
+        bail!(
+            "vault field '{}' already exists; pass --replace to replace existing import fields",
+            entry.reference
+        );
     }
 
     let imported = super::vault_import::resolve_import(environment)?;

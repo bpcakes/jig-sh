@@ -340,17 +340,16 @@ pub(crate) fn work_gate_receipt_indexes_with_cancellation(
             }
         }
 
-        if receipt.tool_name == tool::WORK_REVIEW {
-            if let Some(gate_id) = receipt
+        if receipt.tool_name == tool::WORK_REVIEW
+            && let Some(gate_id) = receipt
                 .args
                 .get("gate_id")
                 .and_then(Value::as_str)
                 .filter(|gate_id| review_gate_ids.contains(*gate_id))
-            {
-                index
-                    .reviews
-                    .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
-            }
+        {
+            index
+                .reviews
+                .insert(gate_id.to_string(), work_review_receipt_status(&receipt));
         }
         Ok(())
     })?;

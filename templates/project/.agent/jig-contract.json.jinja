@@ -90,12 +90,12 @@
       "kind": "command",
       "description": "Run the configured SQLx check command.",
       "command": "sqlx_check_command"
-    },
+    }[% if rust_migration_layout == "flat_migrations" %],
     {
       "name": "jig.migration_add",
       "kind": "native",
       "description": "Add timestamped SQL migration stubs."
-    },
+    }[% endif %],
 [% endif %]
     {
       "name": "jig.contract_check",

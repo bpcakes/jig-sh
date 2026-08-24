@@ -299,10 +299,9 @@ fn git_dirs(manifest_dir: &str) -> Vec<PathBuf> {
     ] {
         if let Some(path) =
             git_output(manifest_dir, &args).map(|path| absolute_git_path(manifest_dir, path))
+            && !dirs.contains(&path)
         {
-            if !dirs.contains(&path) {
-                dirs.push(path);
-            }
+            dirs.push(path);
         }
     }
     dirs

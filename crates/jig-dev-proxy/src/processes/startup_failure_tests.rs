@@ -13,10 +13,10 @@ fn write_process_test_marker(path: &Path, contents: &str) {
 fn wait_for_process_test_marker(path: &Path, child: &mut Child, label: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if !contents.trim().is_empty() {
-                return contents;
-            }
+        if let Ok(contents) = fs::read_to_string(path)
+            && !contents.trim().is_empty()
+        {
+            return contents;
         }
         if let Some(status) = child.try_wait().unwrap() {
             panic!("{label} exited before publishing its marker: {status}");

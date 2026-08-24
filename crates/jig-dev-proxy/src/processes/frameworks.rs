@@ -127,10 +127,10 @@ pub(crate) fn inject_framework_flags(argv: &mut Vec<String>, kind: &AppKind, por
     if kind != &AppKind::Vite && !detected_vite {
         return;
     }
-    if let Some(separator_index) = package_manager_run_separator_index(argv) {
-        if !argv.iter().any(|arg| arg == "--") {
-            argv.insert(separator_index, "--".into());
-        }
+    if let Some(separator_index) = package_manager_run_separator_index(argv)
+        && !argv.iter().any(|arg| arg == "--")
+    {
+        argv.insert(separator_index, "--".into());
     }
     if !contains_flag(argv, "--port") && !contains_flag(argv, "-p") {
         argv.push("--port".into());

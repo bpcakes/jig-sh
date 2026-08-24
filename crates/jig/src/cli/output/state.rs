@@ -69,18 +69,18 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         lines.push("  Session recursion: not analyzed (rerun with --deep)".into());
         lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
     }
-    if let Some(recommendations) = value["recommendations"].as_array() {
-        if !recommendations.is_empty() {
-            lines.push("Recommendations:".into());
-            for recommendation in recommendations {
-                let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
-                lines.push(format!("  - {reason}"));
-                if let Some(command) = value_str(recommendation, "command") {
-                    lines.push(format!("    Command: {command}"));
-                }
-                if let Some(command) = value_str(recommendation, "alternative_command") {
-                    lines.push(format!("    Alternative: {command}"));
-                }
+    if let Some(recommendations) = value["recommendations"].as_array()
+        && !recommendations.is_empty()
+    {
+        lines.push("Recommendations:".into());
+        for recommendation in recommendations {
+            let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
+            lines.push(format!("  - {reason}"));
+            if let Some(command) = value_str(recommendation, "command") {
+                lines.push(format!("    Command: {command}"));
+            }
+            if let Some(command) = value_str(recommendation, "alternative_command") {
+                lines.push(format!("    Alternative: {command}"));
             }
         }
     }

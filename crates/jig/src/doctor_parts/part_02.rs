@@ -13,31 +13,31 @@ fn mark_doctor_signal_retirement_failure(ctx: &RepoContext, checks: &mut DoctorC
             "; SQLx capability verification is incomplete because the process-wide doctor signal session could not retire safely",
         );
     }
-    if let Some(node_runtime) = checks.node_runtime.as_mut() {
-        if node_runtime.ok {
-            node_runtime.ok = false;
-            node_runtime.status = "unverified".to_string();
-            node_runtime.detail.push_str(
+    if let Some(node_runtime) = checks.node_runtime.as_mut()
+        && node_runtime.ok
+    {
+        node_runtime.ok = false;
+        node_runtime.status = "unverified".to_string();
+        node_runtime.detail.push_str(
                 "; Node runtime verification is incomplete because the process-wide doctor signal session could not retire safely",
             );
-            node_runtime.fix =
-                Some("Run `scripts/jig doctor` again before starting frontend work.".into());
-        }
+        node_runtime.fix =
+            Some("Run `scripts/jig doctor` again before starting frontend work.".into());
     }
     for (runtime, label) in [
         (checks.rust_runtime.as_mut(), "Rust runtime"),
         (checks.sqlx_cli.as_mut(), "SQLx CLI"),
     ] {
-        if let Some(runtime) = runtime {
-            if runtime.ok {
-                runtime.ok = false;
-                runtime.status = "unverified".to_string();
-                runtime.detail.push_str(&format!(
+        if let Some(runtime) = runtime
+            && runtime.ok
+        {
+            runtime.ok = false;
+            runtime.status = "unverified".to_string();
+            runtime.detail.push_str(&format!(
                     "; {label} verification is incomplete because the process-wide doctor signal session could not retire safely"
                 ));
-                runtime.fix =
-                    Some("Run `scripts/jig doctor` again before starting database work.".into());
-            }
+            runtime.fix =
+                Some("Run `scripts/jig doctor` again before starting database work.".into());
         }
     }
     if !ctx.codex_marketplaces().is_empty() {
@@ -433,13 +433,14 @@ fn required_tools_check_with_environment_and_process_control(
                 "detail": detail,
             }));
         }
-        if command_key == "sqlx_check_command" && !sqlx_resolution_recorded {
-            if let SqlxDriverResolution::Indeterminate(reason) = sqlx_driver {
-                let detail = format!(
-                    "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
-                );
-                indeterminate.push(detail);
-            }
+        if command_key == "sqlx_check_command"
+            && !sqlx_resolution_recorded
+            && let SqlxDriverResolution::Indeterminate(reason) = sqlx_driver
+        {
+            let detail = format!(
+                "{command_key}: could not determine the required SQLx driver ({reason}); run `scripts/jig check sqlx`"
+            );
+            indeterminate.push(detail);
         }
         let any_missing = probed_programs
             .iter()

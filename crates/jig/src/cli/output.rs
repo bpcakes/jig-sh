@@ -254,33 +254,33 @@ fn append_policy_check_details(lines: &mut Vec<String>, value: &serde_json::Valu
     if let Some(agents) = value["agents"].as_array() {
         lines.push(format!("  Agents: {}", agents.len()));
     }
-    if let Some(missing) = value["missing_agents"].as_array() {
-        if !missing.is_empty() {
-            lines.push(format!("  Missing agents: {}", missing.len()));
+    if let Some(missing) = value["missing_agents"].as_array()
+        && !missing.is_empty()
+    {
+        lines.push(format!("  Missing agents: {}", missing.len()));
+    }
+    if let Some(missing) = value["missing_sections"].as_array()
+        && !missing.is_empty()
+    {
+        lines.push(format!("  Missing sections: {}", missing.len()));
+    }
+    if let Some(violations) = value["violations"].as_array()
+        && !violations.is_empty()
+    {
+        lines.push(format!("  Violations: {}", violations.len()));
+        for violation in violations.iter().take(5) {
+            let preview = if let Some(text) = violation.as_str() {
+                text.to_string()
+            } else {
+                concise_preview(&violation.to_string(), 120)
+            };
+            lines.push(format!("  - {preview}"));
         }
     }
-    if let Some(missing) = value["missing_sections"].as_array() {
-        if !missing.is_empty() {
-            lines.push(format!("  Missing sections: {}", missing.len()));
-        }
-    }
-    if let Some(violations) = value["violations"].as_array() {
-        if !violations.is_empty() {
-            lines.push(format!("  Violations: {}", violations.len()));
-            for violation in violations.iter().take(5) {
-                let preview = if let Some(text) = violation.as_str() {
-                    text.to_string()
-                } else {
-                    concise_preview(&violation.to_string(), 120)
-                };
-                lines.push(format!("  - {preview}"));
-            }
-        }
-    }
-    if let Some(errors) = value["errors"].as_array() {
-        if !errors.is_empty() {
-            lines.push(format!("  Errors: {}", errors.len()));
-        }
+    if let Some(errors) = value["errors"].as_array()
+        && !errors.is_empty()
+    {
+        lines.push(format!("  Errors: {}", errors.len()));
     }
     if let Some(count) = value_u64(value, "non_test_count") {
         lines.push(format!("  Non-test unchecked queries: {count}"));

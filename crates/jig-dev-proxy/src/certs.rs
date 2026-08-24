@@ -427,10 +427,10 @@ fn certificate_hosts_interruptible(
         );
     }
     hosts.extend(settings.additional_dns_names.clone());
-    if settings.lan {
-        if let Some(ip) = bindable_lan_ip() {
-            hosts.push(ip.to_string());
-        }
+    if settings.lan
+        && let Some(ip) = bindable_lan_ip()
+    {
+        hosts.push(ip.to_string());
     }
     hosts.extend(hostnames.iter().cloned());
     // Keep certificate generation on the cert-lock -> route-lock ordering.
@@ -782,14 +782,14 @@ fn ca_ip_name_constraints(settings: &ProxySettings) -> Vec<(IpAddr, u8)> {
         };
         Some((ip, prefix))
     }));
-    if settings.lan {
-        if let Some(ip) = bindable_lan_ip() {
-            let prefix = match ip {
-                IpAddr::V4(_) => 32,
-                IpAddr::V6(_) => 128,
-            };
-            ip_constraints.push((ip, prefix));
-        }
+    if settings.lan
+        && let Some(ip) = bindable_lan_ip()
+    {
+        let prefix = match ip {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+        ip_constraints.push((ip, prefix));
     }
     ip_constraints.sort();
     ip_constraints.dedup();
@@ -842,13 +842,12 @@ fn remove_stale_cert_temps(store: &StateStore) -> Result<()> {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(is_cert_temp_name)
+            && let Err(error) = fs::remove_file(&path)
         {
-            if let Err(error) = fs::remove_file(&path) {
-                eprintln!(
-                    "jig proxy could not remove stale certificate temp file {}: {error}",
-                    path.display()
-                );
-            }
+            eprintln!(
+                "jig proxy could not remove stale certificate temp file {}: {error}",
+                path.display()
+            );
         }
     }
     Ok(())

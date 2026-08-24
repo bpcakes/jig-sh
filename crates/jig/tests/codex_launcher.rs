@@ -58,12 +58,13 @@ printf '<%s>\n' "$@"
         ),
     );
 
-    let output = Command::new(launcher)
-        .args(["codex", "launch", "codex"])
-        .env("JIG_TEST_FAKE_BIN", fake_bin)
-        .current_dir(&caller)
-        .output()
-        .unwrap();
+    let output = output_retrying_text_file_busy(
+        Command::new(launcher)
+            .args(["codex", "launch", "codex"])
+            .env("JIG_TEST_FAKE_BIN", fake_bin)
+            .current_dir(&caller),
+    )
+    .unwrap();
 
     assert!(
         output.status.success(),
@@ -81,12 +82,13 @@ printf '<%s>\n' "$@"
         ["<codex>", "<launch>", "<codex>"]
     );
 
-    let output = Command::new(repo.join("scripts/jig"))
-        .args(["--json", "codex", "launch", "./", "--dry-run"])
-        .env("JIG_TEST_FAKE_BIN", temp.path().join("jig-stub.sh"))
-        .current_dir(&caller)
-        .output()
-        .unwrap();
+    let output = output_retrying_text_file_busy(
+        Command::new(repo.join("scripts/jig"))
+            .args(["--json", "codex", "launch", "./", "--dry-run"])
+            .env("JIG_TEST_FAKE_BIN", temp.path().join("jig-stub.sh"))
+            .current_dir(&caller),
+    )
+    .unwrap();
 
     assert!(
         output.status.success(),
@@ -604,6 +606,20 @@ fn write_executable(path: impl AsRef<Path>, contents: &str) -> std::path::PathBu
     fs::write(path, contents).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     path.to_path_buf()
+}
+
+fn output_retrying_text_file_busy(command: &mut Command) -> std::io::Result<std::process::Output> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match command.output() {
+            Err(error)
+                if error.raw_os_error() == Some(libc::ETXTBSY) && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => return result,
+        }
+    }
 }
 
 fn pseudo_terminal() -> std::io::Result<(File, File, File)> {

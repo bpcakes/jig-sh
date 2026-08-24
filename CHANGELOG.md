@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Model SQL migration layout as `flat_migrations` or `versioned_artifacts`, preserving flat compatibility while suppressing migration-add contracts and runtime mutation for versioned schema trees.
 - Harden the Rust/React OpenAPI split with an optional, independently deployable admin HTTP crate and binary, transactional all-contract generation, public-artifact boundary scans, and request-ID-bearing JSON API errors.
 - Generate split Utoipa public/admin OpenAPI contracts and separately owned Hey API TypeScript clients in the Rust/React scaffold.
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.

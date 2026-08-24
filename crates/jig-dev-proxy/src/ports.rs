@@ -180,8 +180,6 @@ const fn ip_is_link_local(ip: IpAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
-    use std::net::ToSocketAddrs as _;
     use std::thread;
     use std::time::Duration;
 

@@ -168,18 +168,18 @@ pub(super) fn apply_staged_render(
                     continue;
                 } else {
                     report.files_modified.push(relative_text.clone());
-                    if let Some(spec) = managed_paths::managed_block_spec(relative) {
-                        if managed_block_inserted(&rendered_path, Some(&destination_path), spec)? {
-                            report.managed_blocks_inserted.push(relative_text.clone());
-                        }
+                    if let Some(spec) = managed_paths::managed_block_spec(relative)
+                        && managed_block_inserted(&rendered_path, Some(&destination_path), spec)?
+                    {
+                        report.managed_blocks_inserted.push(relative_text.clone());
                     }
                 }
             } else {
                 report.files_created.push(relative_text.clone());
-                if let Some(spec) = managed_paths::managed_block_spec(relative) {
-                    if managed_block_inserted(&rendered_path, None, spec)? {
-                        report.managed_blocks_rendered.push(relative_text.clone());
-                    }
+                if let Some(spec) = managed_paths::managed_block_spec(relative)
+                    && managed_block_inserted(&rendered_path, None, spec)?
+                {
+                    report.managed_blocks_rendered.push(relative_text.clone());
                 }
             }
             if !options.dry_run {

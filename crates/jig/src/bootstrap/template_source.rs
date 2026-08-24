@@ -336,8 +336,15 @@ fn clone_template_source(template: &str) -> Result<TempDir> {
     scrub_remote_template_git_environment(&mut command);
     disable_git_worktree_integrations(&mut command);
     command.env("GIT_TEMPLATE_DIR", &empty_git_template);
+    command.args(["--no-replace-objects", "clone", "--quiet"]);
+    if Path::new(template).exists() {
+        // A path-based clone defaults to copying or hard-linking the source
+        // object directory, which can race with source maintenance. Use the
+        // normal Git transport so a committed template is read as a snapshot.
+        command.arg("--no-local");
+    }
     let output = command
-        .args(["--no-replace-objects", "clone", "--quiet", template])
+        .arg(template)
         .arg(destination.as_os_str())
         .output()
         .with_context(|| format!("Failed to start {git_program}"))?;

@@ -327,7 +327,7 @@ fn base32(bytes: &[u8], padded: bool) -> String {
         output.push(ALPHABET[index] as char);
     }
     if padded {
-        while output.len() % 8 != 0 {
+        while !output.len().is_multiple_of(8) {
             output.push('=');
         }
     }
