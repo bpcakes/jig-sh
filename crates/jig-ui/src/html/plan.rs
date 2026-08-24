@@ -17,10 +17,10 @@ pub(crate) fn render_plan_page(snapshot: &PlanSnapshot, namespace: &str) -> Stri
     if let Some(r) = &p.resolution {
         let _ = writeln!(body, "<div class=\"hint\">Resolution: {}</div>", escape(r));
     }
-    if let Some(text) = &snapshot.body {
-        if !text.trim().is_empty() {
-            let _ = writeln!(body, "<h2>Plan body</h2><pre>{}</pre>", escape(text));
-        }
+    if let Some(text) = &snapshot.body
+        && !text.trim().is_empty()
+    {
+        let _ = writeln!(body, "<h2>Plan body</h2><pre>{}</pre>", escape(text));
     }
     if let Some(e) = &snapshot.body_error {
         let _ = writeln!(

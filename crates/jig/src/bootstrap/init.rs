@@ -128,6 +128,9 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
                 .as_ref()
                 .map(scaffold::InitScaffoldPlan::output_paths)
                 .unwrap_or_default(),
+            scaffolded_frontend_contracts: scaffold_plan
+                .as_ref()
+                .is_some_and(scaffold::InitScaffoldPlan::scaffolds_frontend_contracts),
             init_transaction: Some(&mut transaction),
             progress,
         })?;

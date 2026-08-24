@@ -36,5 +36,6 @@ pub(crate) struct StateExportReceiptsRequest {
 #[derive(Debug)]
 pub(crate) struct StateArchiveRequest {
     pub(crate) before: String,
+    pub(crate) include_runs: bool,
     pub(crate) dry_run: bool,
 }

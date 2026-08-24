@@ -1,23 +1,23 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use jig_contract::{
     ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
     ManifestTool, ProfileId, ProfileSpec, TargetId, kind, tool,
 };
 use sha2::{Digest, Sha256};
 
-use crate::context::{RepoContext, WorkEvidenceSelector};
-
-mod affected;
-mod inspect;
-mod planner;
+use crate::context::{
+    CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS, RepoContext, WorkEvidenceSelector,
+};
 
 pub(crate) use inspect::{
     CatalogInspection, InspectRequest, inspect_repository, inspect_repository_data,
 };
 pub(crate) use planner::{
-    PlanRunRequest, plan_action_run, plan_run, target_input_digest, validate_run_plan,
+    PlanRunRequest, plan_action_run, plan_run, target_input_digest,
+    validate_current_repository_authority, validate_run_plan, validate_run_plan_source,
 };
 
 const NATIVE_REPOSITORY_CONTRACT_VERSION: u32 = 6;
@@ -94,12 +94,12 @@ pub(crate) fn resolve_evidence_targets(
     catalog: &RepositoryCatalog,
     selector: &WorkEvidenceSelector,
 ) -> Result<BTreeSet<TargetId>> {
-    match selector {
+    let targets = match selector {
         WorkEvidenceSelector::Target(target) => {
             if catalog.action(target).is_none() {
                 bail!("work evidence gate references unknown target '{target}'");
             }
-            Ok(BTreeSet::from([target.clone()]))
+            BTreeSet::from([target.clone()])
         }
         WorkEvidenceSelector::Profile(profile) => {
             let profile = catalog.profile(profile).ok_or_else(|| {
@@ -111,9 +111,11 @@ pub(crate) fn resolve_evidence_targets(
                     profile.id
                 );
             }
-            Ok(profile.targets.iter().cloned().collect())
+            profile.targets.iter().cloned().collect()
         }
-    }
+    };
+    planner::validate_check_actions(catalog, targets.iter())?;
+    Ok(targets)
 }
 
 /// The one version-neutral repository view consumed by planning and inspection.
@@ -125,6 +127,7 @@ pub(crate) struct RepositoryCatalog {
     actions: BTreeMap<TargetId, ActionSpec>,
     profiles: BTreeMap<ProfileId, ProfileSpec>,
     default_check_profile: Option<ProfileId>,
+    affected_ignore: Vec<String>,
     aliases: BTreeMap<String, TargetId>,
     target_aliases: BTreeMap<TargetId, Vec<String>>,
 }
@@ -132,13 +135,15 @@ pub(crate) struct RepositoryCatalog {
 impl RepositoryCatalog {
     pub(crate) fn from_context(ctx: &RepoContext) -> Result<Self> {
         if ctx.contract_version() >= NATIVE_REPOSITORY_CONTRACT_VERSION {
-            Self::from_native(
+            validate_action_working_directories(ctx.root(), ctx.action_specs())?;
+            Self::from_native_with_ignore(
                 ctx.contract_version(),
                 ctx.contract_digest(),
                 ctx.component_specs(),
                 ctx.action_specs(),
                 ctx.profile_specs(),
                 ctx.default_check_profile(),
+                ctx.affected_ignore(),
             )
         } else {
             Self::from_legacy(
@@ -150,13 +155,14 @@ impl RepositoryCatalog {
         }
     }
 
-    fn from_native(
+    fn from_native_with_ignore(
         contract_version: u32,
         config_digest: &str,
         component_specs: &[ComponentSpec],
         action_specs: &[ActionSpec],
         profile_specs: &[ProfileSpec],
         default_check_profile: Option<&ProfileId>,
+        affected_ignore: &[String],
     ) -> Result<Self> {
         if contract_version < NATIVE_REPOSITORY_CONTRACT_VERSION {
             bail!(
@@ -195,6 +201,26 @@ impl RepositoryCatalog {
                     action.target.component
                 );
             }
+            if action
+                .timeout_seconds
+                .is_some_and(|seconds| CommandTimeout::from_seconds(seconds).is_none())
+            {
+                bail!(
+                    "target '{}' timeout_seconds must be between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}",
+                    action.target
+                );
+            }
+            if action.timeout_seconds.is_some()
+                && matches!(
+                    &action.runner,
+                    ActionRunner::Native { operation } if operation != tool::SCHEMA_CHECK
+                )
+            {
+                bail!(
+                    "target '{}' sets timeout_seconds for an in-process native runner that cannot be preempted safely; omit the override or use a supervised command/schema runner",
+                    action.target
+                );
+            }
             if actions
                 .insert(action.target.clone(), action.clone())
                 .is_some()
@@ -209,7 +235,7 @@ impl RepositoryCatalog {
             )?;
         }
         validate_action_dependencies(&actions)?;
-        affected::validate_native_path_policy(&components, &actions)?;
+        affected::validate_native_path_policy(&components, &actions, affected_ignore)?;
 
         let profiles = collect_profiles(profile_specs, &actions)?;
         let default_check_profile = default_check_profile.cloned();
@@ -222,9 +248,30 @@ impl RepositoryCatalog {
             actions,
             profiles,
             default_check_profile,
+            affected_ignore: affected_ignore.to_vec(),
             aliases,
             target_aliases,
         })
+    }
+
+    #[cfg(test)]
+    fn from_native(
+        contract_version: u32,
+        config_digest: &str,
+        component_specs: &[ComponentSpec],
+        action_specs: &[ActionSpec],
+        profile_specs: &[ProfileSpec],
+        default_check_profile: Option<&ProfileId>,
+    ) -> Result<Self> {
+        Self::from_native_with_ignore(
+            contract_version,
+            config_digest,
+            component_specs,
+            action_specs,
+            profile_specs,
+            default_check_profile,
+            &[],
+        )
     }
 
     fn from_legacy(
@@ -260,6 +307,10 @@ impl RepositoryCatalog {
             let target = TargetId::new(repo_id.clone(), action_id);
             let mut action = legacy_action(manifest_tool, target.clone())?;
             action.legacy_aliases.push(manifest_tool.name.clone());
+            // Pre-v6 contracts may persist tool names that now parse as
+            // canonical selectors. Preserve that public compatibility shape:
+            // the planner resolves a real selector first and falls back to the
+            // legacy alias only when it names no native target.
             aliases.insert(manifest_tool.name.clone(), target.clone());
             target_aliases.insert(target.clone(), vec![manifest_tool.name.clone()]);
             actions.insert(target, action);
@@ -285,6 +336,7 @@ impl RepositoryCatalog {
             actions,
             profiles,
             default_check_profile,
+            affected_ignore: Vec::new(),
             aliases,
             target_aliases,
         })
@@ -326,6 +378,10 @@ impl RepositoryCatalog {
         self.default_check_profile.as_ref()
     }
 
+    pub(crate) fn affected_ignore(&self) -> &[String] {
+        &self.affected_ignore
+    }
+
     pub(crate) fn target_for_alias(&self, alias: &str) -> Option<&TargetId> {
         self.aliases.get(alias)
     }
@@ -333,6 +389,28 @@ impl RepositoryCatalog {
     pub(crate) fn aliases_for_target(&self, target: &TargetId) -> &[String] {
         self.target_aliases.get(target).map_or(&[], Vec::as_slice)
     }
+}
+
+fn validate_action_working_directories(root: &Path, actions: &[ActionSpec]) -> Result<()> {
+    for action in actions {
+        if let ActionRunner::Command {
+            working_directory: Some(working_directory),
+            ..
+        } = &action.runner
+        {
+            crate::repository_path::resolve_repository_working_directory(
+                root,
+                Some(working_directory),
+            )
+            .with_context(|| {
+                format!(
+                    "target '{}' has invalid working_directory {:?}",
+                    action.target, working_directory
+                )
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_component_dependencies(
@@ -360,7 +438,7 @@ fn validate_component_dependencies(
             }
         }
     }
-    Ok(())
+    validate_acyclic_dependencies("component", components, |component| &component.depends_on)
 }
 
 fn validate_action_dependencies(actions: &BTreeMap<TargetId, ActionSpec>) -> Result<()> {
@@ -384,6 +462,68 @@ fn validate_action_dependencies(actions: &BTreeMap<TargetId, ActionSpec>) -> Res
                     dependency
                 );
             }
+        }
+    }
+    validate_acyclic_dependencies("action", actions, |action| &action.depends_on)
+}
+
+fn validate_acyclic_dependencies<K, V>(
+    kind: &str,
+    records: &BTreeMap<K, V>,
+    dependencies: impl Fn(&V) -> &[K],
+) -> Result<()>
+where
+    K: Clone + Ord + ToString,
+{
+    let mut remaining = records.keys().cloned().collect::<BTreeSet<_>>();
+    let mut completed = BTreeSet::new();
+    while !remaining.is_empty() {
+        let ready = remaining
+            .iter()
+            .filter(|id| {
+                dependencies(
+                    records
+                        .get(*id)
+                        .expect("dependency validation records must remain stable"),
+                )
+                .iter()
+                .all(|dependency| completed.contains(dependency))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            let mut current = remaining
+                .iter()
+                .next()
+                .expect("non-empty dependency graph must have a first record")
+                .clone();
+            let mut path = Vec::new();
+            let mut positions = BTreeMap::new();
+            loop {
+                if let Some(start) = positions.get(&current).copied() {
+                    let mut cycle = path[start..]
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    cycle.push(current.to_string());
+                    bail!("{kind} dependency cycle: {}", cycle.join(" -> "));
+                }
+                positions.insert(current.clone(), path.len());
+                path.push(current.clone());
+                current = dependencies(
+                    records
+                        .get(&current)
+                        .expect("dependency validation records must remain stable"),
+                )
+                .iter()
+                .find(|dependency| remaining.contains(*dependency))
+                .expect("unresolved dependency records must point within the remaining graph")
+                .clone();
+            }
+        }
+        for id in ready {
+            remaining.remove(&id);
+            completed.insert(id);
         }
     }
     Ok(())
@@ -425,7 +565,9 @@ fn validate_default_profile(
     profiles: &BTreeMap<ProfileId, ProfileSpec>,
 ) -> Result<()> {
     let Some(default_profile) = default_profile else {
-        bail!("contract version 6 requires default_check_profile");
+        bail!(
+            "native repository contract version {NATIVE_REPOSITORY_CONTRACT_VERSION} or later requires default_check_profile"
+        );
     };
     if !profiles.contains_key(default_profile) {
         bail!("default_check_profile '{default_profile}' does not name a profile");
@@ -509,7 +651,16 @@ fn legacy_default_targets(
             if action.intent != ActionIntent::Check
                 || !action.effects.contains(&ActionEffect::ReadOnly)
             {
-                bail!("configured legacy check tool '{alias}' is not a read-only check");
+                // Legacy work gates historically included `jig.schema_dump`
+                // under kind = "check". Keep that one known compatibility
+                // action addressable, but never silently discard a different
+                // configured target whose effects cannot run in verification.
+                if alias == tool::SCHEMA_DUMP {
+                    continue;
+                }
+                bail!(
+                    "configured legacy check tool '{alias}' is not a read-only check and cannot be included in the default verification profile"
+                );
             }
             targets.insert(target.clone());
         }
@@ -616,188 +767,8 @@ fn full_digest(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use jig_contract::{
-        ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
-        ManifestTool, ProfileId, ProfileSpec, TargetId, kind,
-    };
-    use std::collections::BTreeSet;
-    use tempfile::tempdir;
+mod tests;
 
-    use crate::{context::RepoContext, test_env::TestRepoBuilder};
-
-    use super::{RepositoryCatalog, unique_legacy_action_id};
-
-    fn command_tool(name: &str, command: &str) -> ManifestTool {
-        ManifestTool::new(name, kind::COMMAND, format!("Run {name}.")).with_command(command)
-    }
-
-    #[test]
-    fn legacy_tools_are_repo_targets_with_bidirectional_aliases() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path())
-            .contract_version(5)
-            .config(
-                r#"
-[commands]
-go_test_command = "go test ./..."
-
-[work]
-checks = ["jig.test"]
-"#,
-            )
-            .tool(serde_json::to_value(command_tool("jig.test", "go_test_command")).unwrap())
-            .write();
-        let ctx = RepoContext::load_from_root(temp.path().to_path_buf()).unwrap();
-
-        let catalog = RepositoryCatalog::from_context(&ctx).unwrap();
-        let target: TargetId = "repo:test".parse().unwrap();
-        assert_eq!(catalog.contract_version(), 5);
-        assert_eq!(catalog.components().count(), 1);
-        assert_eq!(catalog.target_for_alias("jig.test"), Some(&target));
-        assert_eq!(catalog.aliases_for_target(&target), ["jig.test"]);
-        assert_eq!(catalog.default_check_profile().unwrap().as_str(), "verify");
-        assert_eq!(
-            catalog
-                .profile(catalog.default_check_profile().unwrap())
-                .unwrap()
-                .targets,
-            [target]
-        );
-        assert!(catalog.config_digest().starts_with("sha256:"));
-    }
-
-    #[test]
-    fn legacy_alias_collisions_get_order_independent_target_ids() {
-        let tools = [
-            command_tool("jig.foo_bar", "foo_command"),
-            command_tool("jig.foo-bar", "bar_command"),
-        ];
-        let reversed = [tools[1].clone(), tools[0].clone()];
-
-        let first = RepositoryCatalog::from_legacy(5, "digest", &tools, &[]).unwrap();
-        let second = RepositoryCatalog::from_legacy(5, "digest", &reversed, &[]).unwrap();
-        assert_eq!(
-            first.target_for_alias("jig.foo_bar"),
-            second.target_for_alias("jig.foo_bar")
-        );
-        assert_ne!(
-            first.target_for_alias("jig.foo_bar"),
-            first.target_for_alias("jig.foo-bar")
-        );
-    }
-
-    #[test]
-    fn legacy_action_id_fallback_never_returns_an_occupied_digest_candidate() {
-        let base = ActionId::parse("foo-bar").unwrap();
-        let mut occupied = BTreeSet::from([base]);
-        let first_fallback = unique_legacy_action_id("jig.foo-bar", &occupied).unwrap();
-        occupied.insert(first_fallback.clone());
-
-        let second_fallback = unique_legacy_action_id("jig.foo-bar", &occupied).unwrap();
-
-        assert_ne!(first_fallback, second_fallback);
-        assert!(!occupied.contains(&second_fallback));
-    }
-
-    #[test]
-    fn native_catalog_keeps_same_action_distinct_per_component() {
-        let api = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let web = ComponentSpec::new(ComponentId::parse("web").unwrap(), "web");
-        let api_target: TargetId = "api:test".parse().unwrap();
-        let web_target: TargetId = "web:test".parse().unwrap();
-        let mut api_test = ActionSpec::new(
-            api_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("go_test_command"),
-        );
-        api_test.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        api_test.legacy_aliases.push("jig.test".into());
-        let mut web_test = ActionSpec::new(
-            web_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("typescript_test_command"),
-        );
-        web_test.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(
-            profile_id.clone(),
-            vec![api_target.clone(), web_target.clone()],
-        );
-
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "sha256:config",
-            &[api, web],
-            &[api_test, web_test],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-
-        assert!(catalog.action(&api_target).is_some());
-        assert!(catalog.action(&web_target).is_some());
-        assert_eq!(catalog.actions().count(), 2);
-        assert_eq!(catalog.target_for_alias("jig.test"), Some(&api_target));
-    }
-
-    #[test]
-    fn native_catalog_rejects_aliases_that_are_canonical_selectors() {
-        for alias in ["test", "web:test", "*:test", "web:*"] {
-            let component = ComponentSpec::new(ComponentId::parse("web").unwrap(), "web");
-            let target: TargetId = "web:lint".parse().unwrap();
-            let mut action = ActionSpec::new(
-                target.clone(),
-                ActionIntent::Check,
-                ActionRunner::command("typescript_lint_command"),
-            );
-            action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-            action.legacy_aliases.push(alias.into());
-            let profile_id = ProfileId::parse("verify").unwrap();
-            let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
-
-            let error = RepositoryCatalog::from_native(
-                6,
-                "sha256:config",
-                &[component],
-                &[action],
-                &[profile],
-                Some(&profile_id),
-            )
-            .unwrap_err()
-            .to_string();
-
-            assert!(
-                error.contains("reserved for canonical repository selectors"),
-                "alias {alias:?} was accepted: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn native_catalog_rejects_cross_record_drift() {
-        let repo = ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".");
-        let missing_target: TargetId = "missing:test".parse().unwrap();
-        let action = ActionSpec::new(
-            missing_target,
-            ActionIntent::Check,
-            ActionRunner::native("contract"),
-        );
-        let profile = ProfileSpec::new(
-            ProfileId::parse("verify").unwrap(),
-            vec!["missing:test".parse().unwrap()],
-        );
-
-        let error = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[repo],
-            &[action],
-            &[profile],
-            Some(&ProfileId::parse("verify").unwrap()),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("unknown component 'missing'"));
-    }
-}
+mod affected;
+mod inspect;
+mod planner;

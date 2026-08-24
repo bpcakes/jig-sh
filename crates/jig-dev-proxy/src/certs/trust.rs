@@ -792,10 +792,8 @@ pub(super) fn trust_list_jig_ca_uris(output: &[u8]) -> Vec<String> {
     for line in String::from_utf8_lossy(output).lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("pkcs11:") {
-            if current_label_matches {
-                if let Some(uri) = current_uri.take() {
-                    uris.push(uri);
-                }
+            if current_label_matches && let Some(uri) = current_uri.take() {
+                uris.push(uri);
             }
             current_uri = Some(trimmed.to_string());
             current_label_matches = false;
@@ -810,10 +808,8 @@ pub(super) fn trust_list_jig_ca_uris(output: &[u8]) -> Vec<String> {
             current_label_matches = true;
         }
     }
-    if current_label_matches {
-        if let Some(uri) = current_uri {
-            uris.push(uri);
-        }
+    if current_label_matches && let Some(uri) = current_uri {
+        uris.push(uri);
     }
     uris
 }

@@ -1,5 +1,9 @@
+[% if backend_language == "rust" %]
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+[% else %]
+import { spawn } from "node:child_process";
+[% endif %]
 import {
   lstat,
   mkdir,
@@ -15,7 +19,9 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "@hey-api/openapi-ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+[% if backend_language == "rust" %]
 const execFileAsync = promisify(execFile);
+[% endif %]
 process.chdir(repoRoot);
 
 const sharedPlugins = [
@@ -33,7 +39,7 @@ const contracts = [
     document: "openapi/public.json",
     generated: "packages/public-api-client/src/generated",
   },
-[% if admin_api_enabled %]
+[% if admin_api_enabled and backend_language == "rust" %]
   {
     name: "admin",
     cargoPackage: "<<[ package_name ]>>-admin-api",
@@ -63,7 +69,13 @@ if (mode === "generate" || mode === "check") {
   await assertPublicBoundary([], false);
   await withStagedClients();
 } else if (mode === "public-check") {
-  await assertPublicBoundary(process.argv.slice(3), true);
+  const publicCheckArgs = process.argv.slice(3);
+  const skipFrontendArtifacts = publicCheckArgs[0] === "--skip-frontend-artifacts";
+  await assertPublicBoundary(
+    skipFrontendArtifacts ? publicCheckArgs.slice(1) : publicCheckArgs,
+    true,
+    !skipFrontendArtifacts,
+  );
 } else if (mode === "artifact-check") {
   await assertPublicArtifacts(process.argv.slice(3), false);
 } else {
@@ -210,7 +222,11 @@ function recoveryError(publishError, restoreErrors) {
   return error;
 }
 
-async function assertPublicBoundary(explicitArtifacts, checkBackendDependencies) {
+async function assertPublicBoundary(
+  explicitArtifacts,
+  checkBackendDependencies,
+  includeFrontendArtifacts = true,
+) {
   const manifests = [
 [% if backend_language == "go" %]
     "go.mod",
@@ -240,12 +256,16 @@ async function assertPublicBoundary(explicitArtifacts, checkBackendDependencies)
   }
 [% endif %]
 
-  await assertPublicArtifacts(explicitArtifacts, true);
+  await assertPublicArtifacts(explicitArtifacts, true, includeFrontendArtifacts);
 }
 
-async function assertPublicArtifacts(explicitArtifacts, includeConventionalArtifacts) {
+async function assertPublicArtifacts(
+  explicitArtifacts,
+  includeConventionalArtifacts,
+  includeFrontendArtifacts = true,
+) {
   const conventionalArtifacts = includeConventionalArtifacts ? [
-    ...publicFrontendDirs.map((directory) => join(directory, "dist")),
+    ...(includeFrontendArtifacts ? publicFrontendDirs.map((directory) => join(directory, "dist")) : []),
 [% if backend_language == "rust" %]
     "target/debug/<<[ package_name ]>>-api",
     "target/release/<<[ package_name ]>>-api",

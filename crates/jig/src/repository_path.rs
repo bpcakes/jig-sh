@@ -70,6 +70,39 @@ pub(crate) fn normalize_portable_repository_directory(value: &str, label: &str) 
     Ok(normalized)
 }
 
+pub(crate) fn resolve_repository_working_directory(
+    root: &Path,
+    configured: Option<&str>,
+) -> Result<PathBuf> {
+    let canonical_root = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve repository root {}", root.display()))?;
+    let Some(configured) = configured else {
+        return Ok(canonical_root);
+    };
+    if configured == "." {
+        return Ok(canonical_root);
+    }
+    let configured_path = normalize_repo_relative_path(Path::new(configured), "working_directory")
+        .context("working_directory must be a non-empty relative repository path")?;
+    let candidate = root
+        .join(&configured_path)
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "failed to resolve configured path {}",
+                root.join(&configured_path).display()
+            )
+        })?;
+    if !candidate.starts_with(&canonical_root) {
+        bail!("working_directory resolves outside the repository");
+    }
+    if !candidate.is_dir() {
+        bail!("working_directory is not a directory");
+    }
+    Ok(candidate)
+}
+
 /// Validates a repository-relative directory immediately before a caller may
 /// create entries below it. Existing components must be real directories so a
 /// configured path cannot redirect writes through a symlink.

@@ -6,6 +6,12 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "go.work"
+      - "go.work.sum"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/go.work"
+      - "**/go.work.sum"
       - "openapi/**"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
@@ -23,6 +29,12 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "go.work"
+      - "go.work.sum"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/go.work"
+      - "**/go.work.sum"
       - "openapi/**"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
@@ -56,9 +68,11 @@ jobs:
           rustflags: ""
       - uses: actions/setup-go@v6
         with:
-          go-version-file: <<[ go_toolchain_authority_path ]>>
+          go-version-file: <<[ go_toolchain_authority_path | tojson ]>>
           cache: true
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
       - run: scripts/jig check fmt
       - run: scripts/jig check lint
       - run: scripts/jig check test-locked
@@ -71,8 +85,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version-file: <<[ go_toolchain_authority_path ]>>
+          go-version-file: <<[ go_toolchain_authority_path | tojson ]>>
           cache: true
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
       - run: bash scripts/test-postgres.sh
 [% endif %]

@@ -26,6 +26,7 @@ use crate::execution::{
 };
 use crate::runtime::{
     loop_status_snapshot_with_cancellation, open_plan_gate_snapshots_with_cancellation,
+    refreshed_repository_context,
 };
 use crate::state::{now_ms, state_summary_with_cancellation};
 
@@ -61,6 +62,10 @@ pub(crate) fn snapshot_with_cancellation_and_observer(
     cancelled: &dyn Fn() -> bool,
     observer: &mut dyn ExecutionObserver,
 ) -> Result<Value> {
+    ensure_collection_active(cancelled)?;
+    let current = refreshed_repository_context(ctx)?;
+    ensure_collection_active(cancelled)?;
+    let ctx = &current;
     let runs = run_providers_concurrently(ctx, cancelled, observer)?;
 
     // Providers are contractually read-only. Observe repository and Jig state

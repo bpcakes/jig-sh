@@ -181,10 +181,10 @@ pub(super) fn format_vault_generic_summary(value: &serde_json::Value) -> String 
         "vault audit verify" => {
             let events = value_u64(value, "event_count").unwrap_or(0);
             lines.push(format!("  Events: {events}"));
-            if let Some(torn) = value_u64(value, "torn_tail_bytes") {
-                if torn > 0 {
-                    lines.push(format!("  Torn tail bytes: {torn}"));
-                }
+            if let Some(torn) = value_u64(value, "torn_tail_bytes")
+                && torn > 0
+            {
+                lines.push(format!("  Torn tail bytes: {torn}"));
             }
         }
         _ => {}

@@ -198,6 +198,56 @@ targets = [
     write_open_plan(root);
 }
 
+pub(super) fn add_v6_effectful_evidence_actions(root: &Path) {
+    let config_path = root.join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "[[repository.profiles]]",
+        r#"[[repository.actions]]
+target = { component = "api", action = "generate" }
+intent = "generate"
+effects = ["worktree", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+
+[[repository.actions]]
+target = { component = "api", action = "verify-generated" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+inputs = ["api/**"]
+depends_on = [{ component = "api", action = "generate" }]
+
+[[repository.profiles]]"#,
+    );
+    fs::write(config_path, config).unwrap();
+
+    let manifest_path = root.join(".agent/jig-contract.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"].as_array_mut().unwrap().extend([
+        json!({
+            "target": {"component": "api", "action": "generate"},
+            "intent": "generate",
+            "effects": ["worktree", "process"],
+            "runner": {"kind": "command", "command": "api_test_command"},
+            "inputs": ["api/**"]
+        }),
+        json!({
+            "target": {"component": "api", "action": "verify-generated"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": "api_test_command"},
+            "inputs": ["api/**"],
+            "depends_on": [{"component": "api", "action": "generate"}]
+        }),
+    ]);
+    fs::write(
+        manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 pub(super) fn write_failing_check_fixture_repo(root: &Path) {
     TestRepoBuilder::new(root)
         .config(

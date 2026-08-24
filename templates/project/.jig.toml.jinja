@@ -82,7 +82,7 @@ go_lint_command = "<<[ go_lint_command | replace("\\", "\\\\") | replace("\"", "
 go_test_command = "<<[ go_test_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 go_test_locked_command = "<<[ go_test_locked_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% if go_database == "postgres" %]
-sqlc_check_command = "go tool sqlc vet && go tool sqlc diff"
+sqlc_check_command = "<<[ sqlc_check_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 [% endif %]
 [% if frontend_harness_enabled %]

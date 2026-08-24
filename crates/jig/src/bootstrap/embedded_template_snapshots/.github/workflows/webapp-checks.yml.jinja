@@ -21,6 +21,7 @@ on:
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
+      - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
       - "package.json"
       - "**/package.json"
@@ -82,6 +83,7 @@ on:
 [% endfor %]
       - "scripts/check-webapps.sh"
       - "scripts/check-webapp-scripts.mjs"
+      - "scripts/contracts.mjs"
       - "scripts/enforce-coverage.cjs"
       - "package.json"
       - "**/package.json"
@@ -264,11 +266,10 @@ jobs:
         run: scripts/check-webapps.sh run-script "$APP_DIR" typecheck
       - name: Run build
         run: scripts/check-webapps.sh run-script "$APP_DIR" build:bundle
+[% if frontend_contracts_enabled %]
       - name: Check generated API clients and public boundary
-        run: |
-          if [ -f scripts/contracts.mjs ]; then
-            node scripts/contracts.mjs client-check
-          fi
+        run: node scripts/contracts.mjs client-check
+[% endif %]
       - name: Run tests with coverage
         run: scripts/check-webapps.sh run-script "$APP_DIR" test:coverage
       - name: Enforce coverage threshold

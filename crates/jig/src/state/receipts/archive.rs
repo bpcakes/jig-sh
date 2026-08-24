@@ -68,7 +68,7 @@ pub(crate) fn receipts_archive(ctx: &RepoContext, request: StateArchiveRequest) 
                 receipts_path.display()
             );
         }
-        let protected = protection_index.protected_receipt_ids();
+        let protected = protection_index.protected_receipt_ids()?;
         let mut receipt_count_before = 0usize;
         let mut receipts_archived = 0usize;
         let mut protected_retained = 0usize;
@@ -571,9 +571,7 @@ impl ReceiptProtectionIndex {
             let status = target_receipt_status(receipt, run_id, target);
             for ((evidence_plan_id, _), receipts) in &mut self.target_evidence {
                 if evidence_plan_id == plan_id {
-                    receipts
-                        .observe(status.clone())
-                        .expect("archive evidence indexes have no incomplete-group bound");
+                    receipts.observe(&status);
                 }
             }
         }
@@ -586,26 +584,25 @@ impl ReceiptProtectionIndex {
                 },
             );
         }
-        if receipt.tool_name == tool::WORK_REVIEW {
-            if let Some(gate_id) = receipt
+        if receipt.tool_name == tool::WORK_REVIEW
+            && let Some(gate_id) = receipt
                 .args
                 .get("gate_id")
                 .and_then(Value::as_str)
                 .filter(|gate_id| review_gate_ids.contains(*gate_id))
-            {
-                self.latest_review_by_plan_gate.insert(
-                    (plan_id.clone(), gate_id.to_string()),
-                    LatestReceipt {
-                        id: receipt.id.clone(),
-                        worker_receipt_id: receipt
-                            .evidence
-                            .as_ref()
-                            .and_then(|evidence| evidence.get("worker_receipt_id"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                    },
-                );
-            }
+        {
+            self.latest_review_by_plan_gate.insert(
+                (plan_id.clone(), gate_id.to_string()),
+                LatestReceipt {
+                    id: receipt.id.clone(),
+                    worker_receipt_id: receipt
+                        .evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.get("worker_receipt_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                },
+            );
         }
         if receipt.tool_name == tool::WORK_CHECK && receipt.exit_status == 0 {
             let receipt_ids = receipt_arg_strings(receipt, "receipt_ids")
@@ -646,7 +643,7 @@ impl ReceiptProtectionIndex {
         }
     }
 
-    pub(super) fn protected_receipt_ids(&self) -> BTreeSet<String> {
+    pub(super) fn protected_receipt_ids(&self) -> Result<BTreeSet<String>> {
         let mut protected = BTreeSet::new();
         for check in self.checks.values() {
             let Some(direct_receipt_id) = &check.direct_receipt_id else {
@@ -668,7 +665,12 @@ impl ReceiptProtectionIndex {
                 protected.insert(worker_receipt_id.clone());
             }
         }
-        for receipts in self.target_evidence.values() {
+        for ((plan_id, gate_id), receipts) in &self.target_evidence {
+            if let Some(error) = receipts.error() {
+                bail!(
+                    "cannot safely archive target evidence for plan '{plan_id}' gate '{gate_id}': {error}"
+                );
+            }
             if let Some(group) = receipts.selected() {
                 protected.extend(
                     group
@@ -678,11 +680,11 @@ impl ReceiptProtectionIndex {
                 );
             }
         }
-        protected
+        Ok(protected)
     }
 }
 
-fn parse_archive_before_ms(value: &str) -> Result<u64> {
+pub(in crate::state) fn parse_archive_before_ms(value: &str) -> Result<u64> {
     let value = value.trim();
     if value.is_empty() {
         bail!("--before must not be empty");

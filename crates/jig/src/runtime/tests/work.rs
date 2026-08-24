@@ -2,8 +2,6 @@ use super::*;
 use crate::tool_defs::WORKER_RUN_TOOL;
 use std::path::Path;
 
-mod evidence;
-
 fn write_v6_schema_check_fixture(root: &Path, effects: &[&str]) {
     write_v6_evidence_fixture_repo(root, "");
     fs::create_dir_all(root.join("docs/schema")).unwrap();
@@ -956,6 +954,64 @@ fn timed_out_work_check_records_child_and_batch_failure_receipts() {
 }
 
 #[test]
+fn overflowed_legacy_work_check_retains_bounded_output_in_its_receipt() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+[commands]
+overflow_check_command = "printf 'stderr-prefix' >&2; printf 'stdout-prefix-and-more'"
+
+[execution]
+command_output_limit_bytes = 16
+
+[[work.gates]]
+id = "overflow"
+kind = "check"
+tool = "jig.overflow_check"
+"#,
+        )
+        .required_commands(["overflow_check_command"])
+        .tool(json!({
+            "name": "jig.overflow_check",
+            "kind": "command",
+            "description": "Run configured overflow check.",
+            "command": "overflow_check_command"
+        }))
+        .write();
+    write_open_plan(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("capture limit"), "{error}");
+    let receipts = read_receipts(temp.path());
+    let child = receipts
+        .iter()
+        .find(|receipt| receipt["tool_name"] == "jig.overflow_check")
+        .expect("overflowed configured check should record a child receipt");
+    assert!(
+        child["stdout_preview"]
+            .as_str()
+            .is_some_and(|stdout| stdout.starts_with("stdout-prefix"))
+    );
+    assert!(
+        child["stderr_preview"].as_str().is_some_and(
+            |stderr| stderr.contains("stderr-prefix") && stderr.contains("capture limit")
+        )
+    );
+    assert_eq!(child["evidence"]["status"], "error");
+}
+
+#[test]
 fn work_check_marks_batch_fingerprint_unknown_when_checks_mutate_worktree() {
     let temp = tempdir().unwrap();
     write_mutating_check_fixture_repo(temp.path());
@@ -1108,6 +1164,38 @@ fn work_gates_reports_missing_and_passing_required_gates() {
     assert_eq!(passed["plan_state"], "open");
     assert_eq!(passed["gates"][0]["status"], "passed");
     assert!(passed["gates"][0]["receipt_id"].as_str().is_some());
+}
+
+#[test]
+fn work_gates_report_a_renamed_check_tool_as_unsupported() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "tool = \"jig.custom_check\"",
+        "tool = \"jig.renamed_check\"",
+    );
+    fs::write(config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let gates = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            plan_id: Some("plan_1".into()),
+        })),
+    )
+    .unwrap();
+
+    assert_eq!(gates["overall"], "blocked");
+    assert_eq!(gates["gates"][0]["kind"], "check");
+    assert_eq!(gates["gates"][0]["status"], "unsupported");
+    assert!(
+        gates["gates"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("jig.renamed_check")
+    );
 }
 
 #[test]
@@ -1414,6 +1502,110 @@ fn work_finish_allows_passing_required_gates() {
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["plan"]["plan_id"], plan_id);
+}
+
+#[test]
+fn work_finish_rejects_gate_authority_that_changed_after_evaluation() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan_id = open_test_plan(&ctx);
+
+    dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: plan_id.clone(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap();
+
+    let gates = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            plan_id: Some(plan_id.clone()),
+        })),
+    )
+    .unwrap();
+    assert_eq!(gates["overall"], "passed", "{gates:#}");
+
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        config_path,
+        config.replace("id = \"custom\"", "id = \"replacement\""),
+    )
+    .unwrap();
+
+    let error = super::super::work::finish_after_required_gates_passed(
+        &ctx,
+        crate::command::WorkFinishRequest {
+            plan_id: plan_id.clone(),
+            resolution: Some("done".into()),
+            outcome: Some("success".into()),
+        },
+        gates["current_worktree_fingerprint"]
+            .as_str()
+            .map(str::to_owned),
+        &|| false,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Work gate configuration changed while evaluating required work gates"),
+        "{error}"
+    );
+    crate::state::ensure_plan_is_open(&ctx, &plan_id).unwrap();
+}
+
+#[test]
+fn work_finish_rejects_source_that_changed_after_gate_evaluation() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan_id = open_test_plan(&ctx);
+
+    dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: plan_id.clone(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap();
+    let gates = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
+            plan_id: Some(plan_id.clone()),
+        })),
+    )
+    .unwrap();
+    assert_eq!(gates["overall"], "passed", "{gates:#}");
+    fs::write(temp.path().join("changed-after-gates.txt"), "changed\n").unwrap();
+
+    let error = super::super::work::finish_after_required_gates_passed(
+        &ctx,
+        crate::command::WorkFinishRequest {
+            plan_id: plan_id.clone(),
+            resolution: Some("done".into()),
+            outcome: Some("success".into()),
+        },
+        gates["current_worktree_fingerprint"]
+            .as_str()
+            .map(str::to_owned),
+        &|| false,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("Worktree changed while evaluating required work gates"),
+        "{error}"
+    );
+    crate::state::ensure_plan_is_open(&ctx, &plan_id).unwrap();
 }
 
 #[test]
@@ -2249,209 +2441,5 @@ exit 42
     );
 }
 
-#[test]
-fn work_gates_use_direct_receipt_when_prior_batch_ended_in_same_millisecond() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let fingerprint = crate::state::current_worktree_fingerprint(&ctx)
-        .fingerprint
-        .expect("git fixture should produce fingerprint");
-
-    record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: tool::WORK_CHECK,
-            args: json!({ "plan_id": "plan_1", "tools": ["jig.custom_check"] }),
-            plan_id: "plan_1",
-            started_at_ms: 100,
-            ended_at_ms: 200,
-            worktree_fingerprint: Some("stale-fingerprint".into()),
-        },
-    );
-    let direct_receipt_id = record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: "jig.custom_check",
-            args: json!({}),
-            plan_id: "plan_1",
-            started_at_ms: 200,
-            ended_at_ms: 200,
-            worktree_fingerprint: Some(fingerprint),
-        },
-    );
-
-    let gates = dispatch(
-        &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-            plan_id: Some("plan_1".into()),
-        })),
-    )
-    .unwrap();
-
-    assert_eq!(gates["overall"], "passed");
-    assert_eq!(gates["gates"][0]["status"], "passed");
-    assert_eq!(gates["gates"][0]["freshness"], "fresh");
-    assert_eq!(gates["gates"][0]["freshness_receipt_id"], direct_receipt_id);
-}
-
-#[test]
-fn work_gates_use_legacy_batch_receipt_without_receipt_ids() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let fingerprint = crate::state::current_worktree_fingerprint(&ctx)
-        .fingerprint
-        .expect("git fixture should produce fingerprint");
-
-    record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: "jig.custom_check",
-            args: json!({}),
-            plan_id: "plan_1",
-            started_at_ms: 100,
-            ended_at_ms: 110,
-            worktree_fingerprint: None,
-        },
-    );
-    let legacy_batch_receipt_id = record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: tool::WORK_CHECK,
-            args: json!({ "plan_id": "plan_1", "tools": ["jig.custom_check"] }),
-            plan_id: "plan_1",
-            started_at_ms: 100,
-            ended_at_ms: 120,
-            worktree_fingerprint: Some(fingerprint),
-        },
-    );
-
-    let gates = dispatch(
-        &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-            plan_id: Some("plan_1".into()),
-        })),
-    )
-    .unwrap();
-
-    assert_eq!(gates["overall"], "passed");
-    assert_eq!(gates["gates"][0]["status"], "passed");
-    assert_eq!(gates["gates"][0]["freshness"], "fresh");
-    assert_eq!(
-        gates["gates"][0]["freshness_receipt_id"],
-        legacy_batch_receipt_id
-    );
-}
-
-#[test]
-fn work_gates_use_exact_batch_receipt_id_when_batches_interleave() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    init_git_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let fingerprint = crate::state::current_worktree_fingerprint(&ctx)
-        .fingerprint
-        .expect("git fixture should produce fingerprint");
-
-    let tool_receipt_id = record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: "jig.custom_check",
-            args: json!({}),
-            plan_id: "plan_1",
-            started_at_ms: 100,
-            ended_at_ms: 110,
-            worktree_fingerprint: None,
-        },
-    );
-    let batch_receipt_id = record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: tool::WORK_CHECK,
-            args: json!({
-                "plan_id": "plan_1",
-                "tools": ["jig.custom_check"],
-                "receipt_ids": [tool_receipt_id],
-            }),
-            plan_id: "plan_1",
-            started_at_ms: 100,
-            ended_at_ms: 120,
-            worktree_fingerprint: Some(fingerprint),
-        },
-    );
-    record_test_receipt(
-        &ctx,
-        TestReceipt {
-            tool_name: tool::WORK_CHECK,
-            args: json!({
-                "plan_id": "plan_1",
-                "tools": ["jig.custom_check"],
-                "receipt_ids": ["receipt_other_tool"],
-            }),
-            plan_id: "plan_1",
-            started_at_ms: 90,
-            ended_at_ms: 130,
-            worktree_fingerprint: Some("stale-fingerprint".into()),
-        },
-    );
-
-    let gates = dispatch(
-        &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-            plan_id: Some("plan_1".into()),
-        })),
-    )
-    .unwrap();
-
-    assert_eq!(gates["overall"], "passed");
-    assert_eq!(gates["gates"][0]["status"], "passed");
-    assert_eq!(gates["gates"][0]["freshness"], "fresh");
-    assert_eq!(gates["gates"][0]["freshness_receipt_id"], batch_receipt_id);
-}
-
-#[test]
-fn work_gates_keep_failed_checks_failed_when_freshness_is_unknown() {
-    let temp = tempdir().unwrap();
-    write_failing_check_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = dispatch(
-        &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
-            plan_id: "plan_1".into(),
-            tools: Vec::new(),
-        })),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("jig.custom_check failed with status 7"));
-
-    let gates = dispatch(
-        &ctx,
-        CommandKind::Work(crate::cli::WorkCommand::Gates(crate::cli::WorkGatesOpts {
-            plan_id: Some("plan_1".into()),
-        })),
-    )
-    .unwrap();
-
-    assert_eq!(gates["overall"], "blocked");
-    assert_eq!(gates["gates"][0]["status"], "failed");
-    assert_eq!(gates["gates"][0]["freshness"], "unknown");
-    assert_eq!(gates["failed_required"][0], "custom");
-}
-
-#[test]
-fn old_flat_memory_tool_names_are_not_supported() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = call_tool(&ctx, "jig.session_start", json!({}))
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("Unsupported tool: jig.session_start"));
-}
+mod evidence;
+mod gate_receipt_ordering;

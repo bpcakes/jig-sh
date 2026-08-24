@@ -50,6 +50,9 @@ pub enum SelectionReason {
     DirectInput {
         path: String,
     },
+    UnclaimedInput {
+        path: String,
+    },
     ComponentDependency {
         component: crate::ComponentId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,6 +86,12 @@ pub struct PlannedTarget {
     pub result_parser: ResultParser,
     pub input_digest: String,
     pub reasons: Vec<SelectionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_reason_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub selection_reasons_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_reasons_digest: Option<String>,
 }
 
 impl PlannedTarget {
@@ -105,6 +114,9 @@ impl PlannedTarget {
             result_parser: ResultParser::default(),
             input_digest: input_digest.into(),
             reasons: Vec::new(),
+            selection_reason_count: None,
+            selection_reasons_truncated: false,
+            selection_reasons_digest: None,
         }
     }
 }
@@ -129,7 +141,7 @@ pub struct RunPlan {
 }
 
 impl RunPlan {
-    pub const SCHEMA_VERSION: u32 = 1;
+    pub const SCHEMA_VERSION: u32 = 2;
 
     #[must_use]
     pub fn new(
@@ -319,6 +331,10 @@ fn is_default_result_parser(value: &ResultParser) -> bool {
     *value == ResultParser::default()
 }
 
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -347,7 +363,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(plan).unwrap(),
             serde_json::json!({
-                "schema_version": 1,
+                "schema_version": 2,
                 "id": "run-plan_sha256",
                 "config_digest": "sha256:config",
                 "source": {"commit": "abc123", "worktree_fingerprint": "worktree-1"},

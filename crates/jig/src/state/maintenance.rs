@@ -32,6 +32,9 @@ const SESSIONS_BACKUP_FILE: &str = "sessions.jsonl.gz";
 const RECEIPTS_STREAM: &str = "receipts";
 const RECEIPTS_SOURCE_PATH: &str = ".agent/state/receipts.jsonl";
 const RECEIPTS_BACKUP_FILE: &str = "receipts.jsonl.gz";
+const RUNS_STREAM: &str = "runs";
+const RUNS_SOURCE_PATH: &str = ".agent/state/runs.jsonl";
+const RUNS_BACKUP_FILE: &str = "runs.jsonl.gz";
 const BACKUP_MANIFEST_FILE: &str = "manifest.json";
 
 #[derive(Clone, Copy)]
@@ -54,6 +57,13 @@ const RECEIPT_BACKUP_STREAM: BackupStream = BackupStream {
     state_file: "receipts.jsonl",
     source_path: RECEIPTS_SOURCE_PATH,
     compressed_file: RECEIPTS_BACKUP_FILE,
+};
+
+const RUN_BACKUP_STREAM: BackupStream = BackupStream {
+    name: RUNS_STREAM,
+    state_file: "runs.jsonl",
+    source_path: RUNS_SOURCE_PATH,
+    compressed_file: RUNS_BACKUP_FILE,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -198,7 +208,7 @@ pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) ->
         .context("Failed to sync restored state")?;
 
     let mut recovery_hint = None;
-    let result = with_jsonl_write_lock(&state_path, |_guard| {
+    let result = with_jsonl_write_lock(&state_path, |guard| {
         let before = sha256_file_or_empty(&state_path)?;
         if before.uncompressed_bytes == report.uncompressed_bytes
             && before.uncompressed_sha256 == report.uncompressed_sha256
@@ -217,6 +227,9 @@ pub(crate) fn restore_backup(ctx: &RepoContext, request: StateRestoreRequest) ->
                 "recovery_backup_path": null,
                 "writer_coordination_note": MAINTENANCE_WRITER_COORDINATION_NOTE,
             }));
+        }
+        if stream.name == RUNS_STREAM {
+            super::runs::ensure_run_stream_replaceable(ctx, &state_path, guard)?;
         }
         let recovery_dir = if state_path.exists() {
             Some(
@@ -295,6 +308,15 @@ pub(super) fn create_receipts_backup(
     )
 }
 
+pub(super) fn create_runs_backup(
+    ctx: &RepoContext,
+    source: &Path,
+    directory_prefix: &str,
+    expected: Option<(u64, &str)>,
+) -> Result<(PathBuf, GzipWriteReport)> {
+    create_state_backup(ctx, source, directory_prefix, RUN_BACKUP_STREAM, expected)
+}
+
 fn create_state_backup(
     ctx: &RepoContext,
     source: &Path,
@@ -319,16 +341,15 @@ fn create_state_backup(
             backup_dir.display()
         )
     })?;
-    if let Some((expected_bytes, expected_sha256)) = expected {
-        if backup.uncompressed_bytes != expected_bytes
-            || backup.uncompressed_sha256 != expected_sha256
-        {
-            bail!(
-                "{} state changed while its recovery backup was being written; backup retained at {}",
-                stream.name,
-                backup_dir.display()
-            );
-        }
+    if let Some((expected_bytes, expected_sha256)) = expected
+        && (backup.uncompressed_bytes != expected_bytes
+            || backup.uncompressed_sha256 != expected_sha256)
+    {
+        bail!(
+            "{} state changed while its recovery backup was being written; backup retained at {}",
+            stream.name,
+            backup_dir.display()
+        );
     }
     let manifest = StateBackupManifest {
         version: BACKUP_MANIFEST_VERSION,
@@ -428,6 +449,7 @@ fn validate_manifest(manifest: &StateBackupManifest) -> Result<BackupStream> {
     let stream = match (manifest.stream.as_str(), manifest.source_path.as_str()) {
         (SESSIONS_STREAM, SESSIONS_SOURCE_PATH) => SESSION_BACKUP_STREAM,
         (RECEIPTS_STREAM, RECEIPTS_SOURCE_PATH) => RECEIPT_BACKUP_STREAM,
+        (RUNS_STREAM, RUNS_SOURCE_PATH) => RUN_BACKUP_STREAM,
         _ => {
             bail!(
                 "Backup is for unsupported stream {} at {}",
@@ -456,6 +478,7 @@ fn validate_restored_stream(stream: BackupStream, path: &Path) -> Result<()> {
     match stream.name {
         SESSIONS_STREAM => analyze_session_compaction(path).map(|_| ()),
         RECEIPTS_STREAM => validate_receipt_stream(path),
+        RUNS_STREAM => super::runs::validate_run_stream(path),
         _ => unreachable!("validated backup streams are exhaustive"),
     }
 }

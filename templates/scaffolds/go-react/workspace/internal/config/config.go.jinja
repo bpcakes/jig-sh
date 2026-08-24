@@ -2,14 +2,15 @@ package config
 
 import (
 [% if db_enabled %]	"errors"
-[% endif %]
-	"net"
+[% endif %]	"net"
 	"os"
 )
 
 type Config struct {
-	Address     string
+[% if db_enabled %]	Address     string
 	DatabaseURL string
+[% else %]	Address string
+[% endif %]
 }
 
 func Load() (Config, error) {
@@ -19,11 +20,12 @@ func Load() (Config, error) {
 	if databaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
-[% else %]	databaseURL := os.Getenv("DATABASE_URL")
 [% endif %]
 	return Config{
-		Address:     net.JoinHostPort(host, port),
+[% if db_enabled %]		Address:     net.JoinHostPort(host, port),
 		DatabaseURL: databaseURL,
+[% else %]		Address: net.JoinHostPort(host, port),
+[% endif %]
 	}, nil
 }
 

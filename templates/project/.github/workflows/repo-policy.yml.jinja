@@ -7,6 +7,12 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "go.work"
+      - "go.work.sum"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/go.work"
+      - "**/go.work.sum"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -33,6 +39,12 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
+      - "go.work"
+      - "go.work.sum"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/go.work"
+      - "**/go.work.sum"
 [% if go_database == "postgres" %]
       - "sqlc.yaml"
       - "internal/database/queries/**"
@@ -82,9 +94,11 @@ jobs:
       - name: Install Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version-file: <<[ go_toolchain_authority_path ]>>
+          go-version-file: <<[ go_toolchain_authority_path | tojson ]>>
           cache: true
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.sum
+            go.mod
       - name: Validate contract
         run: scripts/jig check contract
       - name: Check formatting

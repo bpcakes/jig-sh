@@ -227,6 +227,22 @@ impl MemoryTool {
         }
     }
 
+    pub(crate) const fn uses_repository_authority(self) -> bool {
+        matches!(
+            self,
+            Self::AgentDoctor
+                | Self::Goal
+                | Self::Start
+                | Self::Check
+                | Self::Gates
+                | Self::Evidence
+                | Self::Review
+                | Self::Refine
+                | Self::Status
+                | Self::Finish
+        )
+    }
+
     const fn name(self) -> &'static str {
         match self {
             Self::AgentDoctor => tool::AGENT_DOCTOR,

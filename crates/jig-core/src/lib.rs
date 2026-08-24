@@ -22,7 +22,7 @@ const ADAPTER_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Native(tool::CONTRACT_CHECK),
-        &[".jig.toml", ".agent/jig-contract.json", "scripts/jig"],
+        &[".jig.toml", "scripts/jig"],
         Some(tool::CONTRACT_CHECK),
     ),
     AdapterActionDescriptor::new(

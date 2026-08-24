@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::time::Duration;
@@ -124,19 +124,14 @@ fn dispatch_state(
         StateCommand::ExportReceipts(request) => {
             crate::state::receipts_export(ctx, &request.before, &request.output)
         }
-        StateCommand::Archive(request) => crate::state::receipts_archive(
-            ctx,
-            crate::state::StateArchiveRequest {
-                before: request.before,
-                dry_run: request.dry_run,
-            },
-        ),
+        StateCommand::Archive(request) => crate::state::state_archive(ctx, request),
     }
 }
 
 /// Read-only gate status for `jig ui`; reuses the `work gates` evaluation.
 pub(crate) fn work_gates_snapshot(ctx: &RepoContext, plan_id: Option<String>) -> Result<Value> {
-    work::gates_snapshot(ctx, plan_id)
+    let current = refreshed_repository_context(ctx)?;
+    work::gates_snapshot(&current, plan_id)
 }
 
 pub(crate) fn open_plan_gate_snapshots_with_cancellation(
@@ -144,7 +139,26 @@ pub(crate) fn open_plan_gate_snapshots_with_cancellation(
     plan_ids: &[String],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<std::collections::BTreeMap<String, Value>> {
-    work::open_plan_gate_snapshots_with_cancellation(ctx, plan_ids, cancelled)
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
+    if plan_ids.is_empty() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let current = refreshed_repository_context(ctx)?;
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
+    work::open_plan_gate_snapshots_with_cancellation(&current, plan_ids, cancelled)
+}
+
+pub(crate) fn refreshed_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
+    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+        .context("Failed to refresh repository authority")?;
+    if current.contract_version() != ctx.contract_version() {
+        bail!(
+            "repository contract changed from version {} to {}; restart the process",
+            ctx.contract_version(),
+            current.contract_version()
+        );
+    }
+    Ok(current)
 }
 
 /// Read-only loop workflow status for `jig ui`; reuses `loop status`.
@@ -345,8 +359,10 @@ fn dispatch_named_check(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if ctx.contract_version() >= 6 {
-        dispatch_repository_check(
+        let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+        dispatch_repository_check_with_catalog(
             ctx,
+            &catalog,
             crate::command::RepositoryCheckRequest {
                 selectors: vec![selector.into()],
                 profile: None,
@@ -374,9 +390,19 @@ fn dispatch_repository_check(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let catalog = crate::repository::RepositoryCatalog::from_context(ctx)?;
+    dispatch_repository_check_with_catalog(ctx, &catalog, request, observer)
+}
+
+fn dispatch_repository_check_with_catalog(
+    ctx: &RepoContext,
+    catalog: &crate::repository::RepositoryCatalog,
+    request: crate::command::RepositoryCheckRequest,
+    observer: &mut dyn ExecutionControl,
+) -> Result<Value> {
+    preserve_named_check_availability_diagnostic(ctx, catalog, &request.selectors)?;
     let plan = crate::repository::plan_run(
         ctx,
-        &catalog,
+        catalog,
         crate::repository::PlanRunRequest {
             selectors: request.selectors,
             profile: request.profile,
@@ -394,12 +420,48 @@ fn dispatch_repository_check(
 
     execute_repository_check_plan(
         ctx,
-        &catalog,
+        catalog,
         plan,
         request.tool,
         request.fail_fast,
         observer,
     )
+}
+
+fn preserve_named_check_availability_diagnostic(
+    ctx: &RepoContext,
+    catalog: &crate::repository::RepositoryCatalog,
+    selectors: &[String],
+) -> Result<()> {
+    let [selector] = selectors else {
+        return Ok(());
+    };
+    if catalog
+        .actions()
+        .any(|action| action.target.action.as_str() == selector)
+    {
+        return Ok(());
+    }
+    let legacy_tool = match selector.as_str() {
+        "fmt" => tool::FMT_CHECK,
+        "lint" => tool::LINT,
+        "clippy" => tool::CLIPPY,
+        "test" => tool::TEST,
+        "test-locked" => tool::TEST_LOCKED,
+        "typescript-lint" => tool::TYPESCRIPT_LINT,
+        "typescript-typecheck" => tool::TYPESCRIPT_TYPECHECK,
+        "typescript-build" => tool::TYPESCRIPT_BUILD,
+        "typescript-coverage" => tool::TYPESCRIPT_COVERAGE,
+        "sqlx" => tool::SQLX_CHECK,
+        "sqlc" => tool::SQLC_CHECK,
+        "schema" => tool::SCHEMA_CHECK,
+        "contract" => tool::CONTRACT_CHECK,
+        _ => return Ok(()),
+    };
+    if let Some(message) = jig_features::unavailable_tool_message(ctx, legacy_tool) {
+        bail!(message);
+    }
+    Ok(())
 }
 
 fn execute_repository_check_plan(
@@ -411,7 +473,7 @@ fn execute_repository_check_plan(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let (work_plan_id, record_receipts) = tool.into_parts();
-    let execution = run_execution::execute_check_run(
+    let execution = run_execution::execute_freshly_planned_check_run(
         ctx,
         catalog,
         plan.clone(),
@@ -420,7 +482,7 @@ fn execute_repository_check_plan(
             record_receipts,
             fail_fast,
         },
-        &|| observer.cancelled(),
+        observer,
     )?;
     let ok = execution.run.result.conclusion == Some(jig_contract::RunConclusion::Success);
 
@@ -432,6 +494,7 @@ fn execute_repository_check_plan(
         "run": execution.run.result,
         "results": execution.results,
         "failed_targets": execution.failed_targets,
+        "source_observations": execution.source_observations,
     }))
 }
 
@@ -447,6 +510,7 @@ pub(crate) fn call_tool_with_observer(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let args_obj = args.as_object().cloned().unwrap_or_default();
+    let memory_tool = MemoryTool::from_name(name);
 
     if observer.cancelled() {
         bail!("Execution was cancelled");
@@ -455,34 +519,45 @@ pub(crate) fn call_tool_with_observer(
         if let Some(tool) = tool_defs::RepositoryTool::from_name(name) {
             return mcp_repository::call(ctx, tool, args);
         }
-    } else {
-        match ctx.tool_spec(name) {
+    } else if memory_tool.is_none() {
+        let current = refreshed_repository_context(ctx)?;
+        match current.tool_spec(name) {
             Some(tool) if tool_defs::is_execution_tool(tool) => {
                 return tool_execution::call_manifest_tool_with_observer(
-                    ctx, tool, &args_obj, observer,
+                    &current, tool, &args_obj, observer,
                 );
             }
             _ => {}
         }
     }
 
+    let current_ctx = memory_tool
+        .filter(|tool| tool.uses_repository_authority())
+        .map(|_| refreshed_repository_context(ctx))
+        .transpose()?;
+    let memory_ctx = current_ctx.as_ref().unwrap_or(ctx);
+
     // MCP dispatch is intentionally allowlisted here. CLI-only dev/proxy
     // commands can start processes, install services, or mutate trust stores
     // and must not become agent-callable by adding names to tool_defs.
-    match MemoryTool::from_name(name) {
-        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(ctx)),
-        Some(MemoryTool::Goal) => work::goal_from_args(ctx, args),
-        Some(MemoryTool::Start) => work::start_from_args(ctx, args),
+    match memory_tool {
+        Some(MemoryTool::AgentDoctor) => Ok(agent::doctor(memory_ctx)),
+        Some(MemoryTool::Goal) => work::goal_from_args(memory_ctx, args),
+        Some(MemoryTool::Start) => work::start_from_args(memory_ctx, args),
         Some(MemoryTool::Append) => work::append_from_args(ctx, args),
-        Some(MemoryTool::Check) => work::check_from_args_with_observer(ctx, args, observer),
-        Some(MemoryTool::Gates) => work::gates_from_args(ctx, args),
-        Some(MemoryTool::Evidence) => work::evidence_from_args(ctx, args),
-        Some(MemoryTool::Review) => work::review_from_args_with_observer(ctx, args, observer),
-        Some(MemoryTool::Refine) => work::refine_from_args_with_observer(ctx, args, observer),
+        Some(MemoryTool::Check) => work::check_from_args_with_observer(memory_ctx, args, observer),
+        Some(MemoryTool::Gates) => work::gates_from_args(memory_ctx, args),
+        Some(MemoryTool::Evidence) => work::evidence_from_args(memory_ctx, args),
+        Some(MemoryTool::Review) => {
+            work::review_from_args_with_observer(memory_ctx, args, observer)
+        }
+        Some(MemoryTool::Refine) => {
+            work::refine_from_args_with_observer(memory_ctx, args, observer)
+        }
         Some(MemoryTool::Decide) => work::decide_from_args(ctx, args),
         Some(MemoryTool::Receipts) => work::receipts_from_args(ctx, args),
-        Some(MemoryTool::Status) => crate::state::state_summary(ctx),
-        Some(MemoryTool::Finish) => work::finish_from_args(ctx, args),
+        Some(MemoryTool::Status) => crate::state::state_summary(memory_ctx),
+        Some(MemoryTool::Finish) => work::finish_from_args(memory_ctx, args),
         None => bail!("Unsupported tool: {name}"),
     }
 }

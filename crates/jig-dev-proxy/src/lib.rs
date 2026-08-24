@@ -385,10 +385,10 @@ fn proxy_stop_with_service_probe_and_terminator(
         ProbedServiceStatus::from_result(service_probe(&request.settings, store.root()));
     let service_degrades_stop_ok = service_status.degrades_stop_ok();
     let mut stopped = false;
-    if !service_degrades_stop_ok {
-        if let Some(stop_pid) = proxy_stop_target_pid(pid, pid_may_be_alive, pid_matches_proxy) {
-            stopped = terminate_proxy(stop_pid);
-        }
+    if !service_degrades_stop_ok
+        && let Some(stop_pid) = proxy_stop_target_pid(pid, pid_may_be_alive, pid_matches_proxy)
+    {
+        stopped = terminate_proxy(stop_pid);
     }
     let authenticated_proxy_still_running = handshake_ok && !stopped;
     let should_clear_runtime_files = !service_degrades_stop_ok

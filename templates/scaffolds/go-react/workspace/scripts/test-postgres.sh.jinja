@@ -58,7 +58,7 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-published_address="$(docker port "$container_name" 5432/tcp)"
+published_address="$(docker port "$container_name" 5432/tcp | head -n 1)"
 host_port="${published_address##*:}"
 case "$host_port" in
   ''|*[!0-9]*)

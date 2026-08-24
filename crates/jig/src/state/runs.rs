@@ -1,8 +1,9 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use fs4::fs_std::FileExt;
 use jig_contract::{
     Finding, FindingSeverity, RunConclusion, RunPlan, RunResult, RunStatus, TargetId,
@@ -10,16 +11,21 @@ use jig_contract::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 #[cfg(test)]
 use std::cell::Cell;
+use ulid::Ulid;
 
 use crate::context::RepoContext;
 
 use super::jsonl::{
-    RawJsonlRecord, append_jsonl, jsonl_end_offset, scan_jsonl_raw, scan_jsonl_raw_from,
+    JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, append_jsonl, append_jsonl_with_end_offset,
+    rewrite_jsonl_raw_locked, scan_jsonl_raw, scan_jsonl_raw_from, scan_jsonl_raw_locked,
+    with_jsonl_write_lock,
 };
 use super::records::RunEventRecord;
 use super::support::{ensure_state_layout, new_id, now_ms};
+use super::{MAINTENANCE_WRITER_COORDINATION_NOTE, compression::write_gzip_atomic};
 
 const RUNS_FILE: &str = "runs.jsonl";
 const RUN_LEASE_DIR: &str = ".agent/.cache/run-leases";
@@ -64,13 +70,6 @@ struct RunEventIdentity {
     event: String,
 }
 
-pub(crate) fn run_event_cursor(ctx: &RepoContext) -> Result<RunEventCursor> {
-    ensure_state_layout(ctx)?;
-    Ok(RunEventCursor(jsonl_end_offset(
-        &ctx.state_file(RUNS_FILE),
-    )?))
-}
-
 pub(crate) fn run_cancel_requested_since(
     ctx: &RepoContext,
     run_id: &str,
@@ -95,11 +94,21 @@ pub(crate) fn start_run(
     plan: RunPlan,
     work_plan_id: Option<String>,
 ) -> Result<(DurableRun, RunLease)> {
+    let (run, lease, _) = start_run_with_event_cursor(ctx, plan, work_plan_id)?;
+    Ok((run, lease))
+}
+
+pub(crate) fn start_run_with_event_cursor(
+    ctx: &RepoContext,
+    plan: RunPlan,
+    work_plan_id: Option<String>,
+) -> Result<(DurableRun, RunLease, RunEventCursor)> {
+    validate_run_plan_structure(&plan)?;
     ensure_state_layout(ctx)?;
     let run_id = new_id("run");
     let lease = acquire_run_lease(ctx, &run_id)?;
     let timestamp_ms = now_ms();
-    append_event(
+    let event_cursor = append_event_with_cursor(
         ctx,
         RunEventRecord {
             id: new_id("run_event"),
@@ -133,7 +142,64 @@ pub(crate) fn start_run(
         work_plan_id,
         cancel_requested: false,
     };
-    Ok((run, lease))
+    Ok((run, lease, event_cursor))
+}
+
+fn validate_run_plan_structure(plan: &RunPlan) -> Result<()> {
+    let planned_targets = plan
+        .targets
+        .iter()
+        .map(|target| target.target.clone())
+        .collect::<BTreeSet<_>>();
+    if planned_targets.len() != plan.targets.len() {
+        bail!("run plan contains duplicate targets");
+    }
+
+    let mut target_layers = BTreeMap::<TargetId, usize>::new();
+    for (layer_index, layer) in plan.execution_layers.iter().enumerate() {
+        if layer.is_empty() {
+            bail!("run plan execution layer {layer_index} is empty");
+        }
+        for target in layer {
+            if !planned_targets.contains(target) {
+                bail!("run plan execution layers reference unknown target '{target}'");
+            }
+            if target_layers.insert(target.clone(), layer_index).is_some() {
+                bail!("run plan execution layers contain duplicate target '{target}'");
+            }
+        }
+    }
+
+    let missing = planned_targets
+        .iter()
+        .filter(|target| !target_layers.contains_key(*target))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "run plan execution layers omit planned target(s): {}",
+            missing.join(", ")
+        );
+    }
+
+    for target in &plan.targets {
+        let target_layer = target_layers[&target.target];
+        for dependency in &target.depends_on {
+            let dependency_layer = target_layers.get(dependency).ok_or_else(|| {
+                anyhow!(
+                    "run plan target '{}' depends on missing target '{dependency}'",
+                    target.target
+                )
+            })?;
+            if *dependency_layer >= target_layer {
+                bail!(
+                    "run plan target '{}' must execute after dependency '{dependency}'",
+                    target.target
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
@@ -172,11 +238,11 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
 }
 
 fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
+    let path = run_lease_path(ctx, run_id)?;
     ensure_state_layout(ctx)?;
     let lease_dir = ctx.root().join(RUN_LEASE_DIR);
     fs::create_dir_all(&lease_dir)
         .with_context(|| format!("Failed to create {}", lease_dir.display()))?;
-    let path = lease_dir.join(format!("{run_id}.lock"));
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -185,6 +251,61 @@ fn open_run_lease(ctx: &RepoContext, run_id: &str) -> Result<File> {
         .open(&path)
         .with_context(|| format!("Failed to open run lease {}", path.display()))?;
     Ok(file)
+}
+
+fn run_lease_path(ctx: &RepoContext, run_id: &str) -> Result<std::path::PathBuf> {
+    validate_run_id_for_lease(run_id)?;
+    Ok(ctx
+        .root()
+        .join(RUN_LEASE_DIR)
+        .join(format!("{run_id}.lock")))
+}
+
+fn validate_run_id_for_lease(run_id: &str) -> Result<()> {
+    if run_id.is_empty()
+        || run_id.len() > 128
+        || !run_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        bail!("run id cannot be used as a safe worker lease filename");
+    }
+    Ok(())
+}
+
+fn run_lease_is_idle(ctx: &RepoContext, run_id: &str) -> Result<bool> {
+    let path = run_lease_path(ctx, run_id)?;
+    let file = match OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to inspect run lease {}", path.display()));
+        }
+    };
+    match file.try_lock_exclusive() {
+        Ok(true) => {
+            FileExt::unlock(&file)
+                .with_context(|| format!("Failed to release run lease {}", path.display()))?;
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to inspect run lease {}", path.display()))
+        }
+    }
+}
+
+fn remove_run_lease(ctx: &RepoContext, run_id: &str) -> Result<bool> {
+    let path = run_lease_path(ctx, run_id)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to remove run lease {}", path.display()))
+        }
+    }
 }
 
 pub(crate) fn mark_run_running(ctx: &RepoContext, run_id: &str) -> Result<()> {
@@ -230,6 +351,12 @@ pub(crate) fn block_nonterminal_run(ctx: &RepoContext, run_id: &str, message: &s
         return Ok(());
     }
 
+    let mut conclusions = run
+        .result
+        .targets
+        .iter()
+        .filter_map(|target| target.conclusion)
+        .collect::<Vec<_>>();
     for mut target in run
         .result
         .targets
@@ -243,8 +370,24 @@ pub(crate) fn block_nonterminal_run(ctx: &RepoContext, run_id: &str, message: &s
         finding.source = Some("jig".into());
         target.findings.push(finding);
         record_target_result(ctx, run_id, target)?;
+        conclusions.push(RunConclusion::Blocked);
     }
-    complete_run(ctx, run_id, RunConclusion::Blocked)
+    let conclusion = conclusions
+        .into_iter()
+        .max_by_key(|conclusion| run_conclusion_priority(*conclusion))
+        .unwrap_or(RunConclusion::Blocked);
+    complete_run(ctx, run_id, conclusion)
+}
+
+const fn run_conclusion_priority(conclusion: RunConclusion) -> u8 {
+    match conclusion {
+        RunConclusion::Failure => 5,
+        RunConclusion::TimedOut => 4,
+        RunConclusion::Blocked => 3,
+        RunConclusion::Cancelled => 2,
+        RunConclusion::Skipped => 1,
+        RunConclusion::Success => 0,
+    }
 }
 
 pub(crate) fn request_run_cancel(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
@@ -297,13 +440,19 @@ fn read_run_events_reverse(path: &Path, run_id: &str) -> Result<Vec<RunEventReco
 
 fn read_run_events_forward(path: &Path, run_id: &str) -> Result<Vec<RunEventRecord>> {
     let mut events = Vec::new();
-    scan_jsonl_raw(path, &|| false, |raw| {
+    let report = scan_jsonl_raw(path, &|| false, |raw| {
         let identity = parse_run_event_identity(raw, path)?;
         if identity.run_id == run_id {
             events.push(parse_run_event(raw, path)?);
         }
         Ok(())
     })?;
+    if report.unterminated_final_record {
+        bail!(
+            "Refusing to inspect {} because its final JSONL record is not newline-terminated",
+            path.display()
+        );
+    }
     Ok(events)
 }
 
@@ -312,13 +461,22 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
     let mut cursor = file
         .seek(SeekFrom::End(0))
         .with_context(|| format!("Failed to seek {}", path.display()))?;
+    if cursor > 0 {
+        file.seek(SeekFrom::End(-1))
+            .with_context(|| format!("Failed to inspect the tail of {}", path.display()))?;
+        let mut final_byte = [0u8; 1];
+        file.read_exact(&mut final_byte)
+            .with_context(|| format!("Failed to read the tail of {}", path.display()))?;
+        if final_byte[0] != b'\n' {
+            bail!(
+                "Refusing to inspect {} because its final JSONL record is not newline-terminated",
+                path.display()
+            );
+        }
+    }
     let mut carry = Vec::new();
     let mut events = Vec::new();
     let mut found_queued = false;
-    let canonical_run_id_marker = format!(
-        "\"run_id\":{}",
-        serde_json::to_string(run_id).expect("serializing a run id cannot fail")
-    );
     while cursor > 0 {
         let read_len = usize::try_from(cursor.min(REVERSE_RUN_READ_CHUNK as u64))
             .unwrap_or(REVERSE_RUN_READ_CHUNK);
@@ -341,17 +499,13 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
             if record.iter().all(u8::is_ascii_whitespace) {
                 continue;
             }
-            // Jig appends compact serde_json records. Once the newest queued
-            // event has been found, scan the older byte stream for this run's
-            // canonical identity before paying to deserialize unrelated
-            // records. Continuing to the beginning detects duplicated queued
-            // events introduced by union merges without abandoning the cheap
-            // exact-lookup path.
-            if found_queued
-                && !record
-                    .windows(canonical_run_id_marker.len())
-                    .any(|window| window == canonical_run_id_marker.as_bytes())
-            {
+            // Continue to byte zero after finding queued: fold_events can
+            // reject an older duplicate only when this scan retains it. The
+            // cheap identity prefilter avoids deserializing unrelated older
+            // records. Decode the candidate JSON string, and fall back to the
+            // authoritative parser when an escape could rewrite a key, so
+            // valid JSON rewrites cannot hide duplicated events.
+            if found_queued && !record_may_have_run_id(record, run_id) {
                 continue;
             }
             let raw = RawJsonlRecord {
@@ -370,6 +524,41 @@ fn scan_run_events_reverse(file: &File, path: &Path, run_id: &str) -> Result<Vec
     }
     events.reverse();
     Ok(events)
+}
+
+fn record_may_have_run_id(record: &[u8], run_id: &str) -> bool {
+    const KEY: &[u8] = b"\"run_id\"";
+    let mut search_from = 0;
+    while search_from + KEY.len() <= record.len() {
+        let Some(relative) = record[search_from..]
+            .windows(KEY.len())
+            .position(|window| window == KEY)
+        else {
+            return record.contains(&b'\\');
+        };
+        let mut cursor = search_from + relative + KEY.len();
+        while record.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if record.get(cursor) != Some(&b':') {
+            search_from = search_from + relative + 1;
+            continue;
+        }
+        cursor += 1;
+        while record.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        let mut deserializer = serde_json::Deserializer::from_slice(&record[cursor..]);
+        if String::deserialize(&mut deserializer).is_ok_and(|candidate| candidate == run_id) {
+            return true;
+        }
+        search_from = search_from + relative + 1;
+    }
+    // Jig serializes field names literally. A backslash is therefore unusual
+    // in a record that lacks a literal `run_id`, but it can encode that key;
+    // conservatively parse the record instead of letting the fast prefilter
+    // weaken lifecycle validation.
+    record.contains(&b'\\')
 }
 
 fn parse_run_event_identity(
@@ -416,6 +605,10 @@ fn append_simple_event(
 
 fn append_event(ctx: &RepoContext, event: RunEventRecord) -> Result<()> {
     append_jsonl(&ctx.state_file(RUNS_FILE), &event)
+}
+
+fn append_event_with_cursor(ctx: &RepoContext, event: RunEventRecord) -> Result<RunEventCursor> {
+    append_jsonl_with_end_offset(&ctx.state_file(RUNS_FILE), &event).map(RunEventCursor)
 }
 
 fn parse_run_event(raw: RawJsonlRecord<'_>, path: &std::path::Path) -> Result<RunEventRecord> {
@@ -568,258 +761,9 @@ fn target_result_mut<'a>(
         .ok_or_else(|| anyhow::anyhow!("run '{run_id}' references unplanned target '{target}'"))
 }
 
+mod archive;
+pub(crate) use archive::runs_archive;
+pub(super) use archive::{ensure_run_stream_replaceable, validate_run_stream};
+
 #[cfg(test)]
-mod tests {
-    use jig_contract::{
-        ActionIntent, ActionRunner, PlannedTarget, RunConclusion, RunPlan, RunStatus,
-        SourceIdentity,
-    };
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::test_env::TestRepoBuilder;
-
-    fn context() -> (tempfile::TempDir, RepoContext) {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path())
-            .required_commands(["rust_test_command"])
-            .write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        (temp, ctx)
-    }
-
-    fn plan() -> RunPlan {
-        let target: TargetId = "repo:test".parse().unwrap();
-        RunPlan::new(
-            "run-plan_1",
-            "sha256:config",
-            SourceIdentity::new(Some("abc".into()), "sha256:worktree"),
-            vec![PlannedTarget::new(
-                target.clone(),
-                ActionIntent::Check,
-                ActionRunner::command("test"),
-                "sha256:input",
-            )],
-            vec![vec![target]],
-        )
-    }
-
-    #[test]
-    fn lifecycle_round_trips_from_append_only_events() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), Some("plan_work".into())).unwrap();
-        let run_id = started.result.run_id;
-        let target: TargetId = "repo:test".parse().unwrap();
-
-        mark_run_running(&ctx, &run_id).unwrap();
-        mark_target_started(&ctx, &run_id, target.clone()).unwrap();
-        let mut result = TargetRunResult::queued(target, "sha256:config", "sha256:input");
-        result.status = RunStatus::Completed;
-        result.conclusion = Some(RunConclusion::Success);
-        result.started_at_ms = Some(2);
-        result.ended_at_ms = Some(3);
-        result.exit_code = Some(0);
-        record_target_result(&ctx, &run_id, result).unwrap();
-        complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-
-        let reloaded = run_by_id(&ctx, &run_id).unwrap();
-        assert_eq!(reloaded.work_plan_id.as_deref(), Some("plan_work"));
-        assert_eq!(reloaded.result.status, RunStatus::Completed);
-        assert_eq!(reloaded.result.conclusion, Some(RunConclusion::Success));
-        assert_eq!(
-            reloaded.result.targets[0].conclusion,
-            Some(RunConclusion::Success)
-        );
-    }
-
-    #[test]
-    fn run_lookup_only_deserializes_full_events_for_the_requested_run() {
-        let (_temp, ctx) = context();
-        let (_first, _first_lease) = start_run(&ctx, plan(), None).unwrap();
-        let (second, _second_lease) = start_run(&ctx, plan(), None).unwrap();
-        FULL_RUN_EVENT_PARSE_COUNT.with(|counter| counter.set(0));
-        RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| counter.set(0));
-
-        let loaded = run_by_id(&ctx, &second.result.run_id).unwrap();
-
-        assert_eq!(loaded.result.run_id, second.result.run_id);
-        FULL_RUN_EVENT_PARSE_COUNT.with(|counter| assert_eq!(counter.get(), 1));
-        RUN_EVENT_IDENTITY_PARSE_COUNT.with(|counter| assert_eq!(counter.get(), 1));
-    }
-
-    #[test]
-    fn reverse_run_lookup_handles_records_larger_than_the_read_chunk() {
-        let (_temp, ctx) = context();
-        let mut large_plan = plan();
-        large_plan.selectors = vec!["x".repeat(REVERSE_RUN_READ_CHUNK * 2)];
-        let (started, _lease) = start_run(&ctx, large_plan, None).unwrap();
-
-        let loaded = run_by_id(&ctx, &started.result.run_id).unwrap();
-
-        assert_eq!(loaded.result.run_id, started.result.run_id);
-        assert_eq!(loaded.plan.selectors[0].len(), REVERSE_RUN_READ_CHUNK * 2);
-    }
-
-    #[test]
-    fn reverse_run_lookup_rejects_an_earlier_duplicate_queued_event() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
-        append_event(
-            &ctx,
-            RunEventRecord {
-                id: "run_event_duplicate_queued".into(),
-                run_id: started.result.run_id.clone(),
-                event: EVENT_QUEUED.into(),
-                timestamp_ms: now_ms(),
-                work_plan_id: None,
-                plan: Some(plan()),
-                target: None,
-                result: None,
-                conclusion: None,
-            },
-        )
-        .unwrap();
-
-        let error = run_by_id(&ctx, &started.result.run_id).unwrap_err();
-
-        assert!(error.to_string().contains("more than one queued event"));
-    }
-
-    #[test]
-    fn cancellation_requests_are_idempotent() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
-        let run_id = started.result.run_id;
-
-        let first = request_run_cancel(&ctx, &run_id).unwrap();
-        let second = request_run_cancel(&ctx, &run_id).unwrap();
-
-        assert!(first.cancel_requested);
-        assert!(second.cancel_requested);
-        let events = std::fs::read_to_string(ctx.state_file(RUNS_FILE)).unwrap();
-        assert_eq!(events.matches(EVENT_CANCEL_REQUESTED).count(), 1);
-    }
-
-    #[test]
-    fn queued_runs_keep_a_stable_lease_inode_after_reconciliation() {
-        let (_temp, ctx) = context();
-        let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-        let run_id = started.result.run_id;
-        let lease_path = ctx
-            .root()
-            .join(RUN_LEASE_DIR)
-            .join(format!("{run_id}.lock"));
-
-        assert!(lease_path.exists());
-        let inspected = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
-        assert_eq!(inspected.result.status, RunStatus::Queued);
-
-        drop(lease);
-        assert!(lease_path.exists());
-        let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
-        assert_eq!(recovered.result.status, RunStatus::Completed);
-        assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
-        assert!(lease_path.exists());
-    }
-
-    #[test]
-    fn concurrent_reconciliation_appends_one_terminal_event() {
-        use std::sync::{Arc, Barrier};
-
-        let (_temp, ctx) = context();
-        let (started, lease) = start_run(&ctx, plan(), None).unwrap();
-        let run_id = started.result.run_id;
-        drop(lease);
-
-        let worker_count = 8;
-        let barrier = Arc::new(Barrier::new(worker_count));
-        let handles = (0..worker_count)
-            .map(|_| {
-                let ctx = ctx.clone();
-                let run_id = run_id.clone();
-                let barrier = Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    reconcile_run_for_inspection(&ctx, &run_id).unwrap()
-                })
-            })
-            .collect::<Vec<_>>();
-
-        for handle in handles {
-            let run = handle.join().unwrap();
-            assert!(matches!(
-                run.result.status,
-                RunStatus::Queued | RunStatus::Completed
-            ));
-        }
-        let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();
-        assert_eq!(recovered.result.status, RunStatus::Completed);
-        assert_eq!(recovered.result.conclusion, Some(RunConclusion::Blocked));
-        let terminal_events = fs::read_to_string(ctx.state_file(RUNS_FILE))
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<RunEventRecord>(line).unwrap())
-            .filter(|event| event.run_id == run_id && event.event == EVENT_COMPLETED)
-            .count();
-        assert_eq!(terminal_events, 1);
-    }
-
-    #[test]
-    fn cancellation_observed_after_completion_does_not_corrupt_the_run() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
-        let run_id = started.result.run_id;
-        let target: TargetId = "repo:test".parse().unwrap();
-        let mut result = TargetRunResult::queued(target, "sha256:config", "sha256:input");
-        result.status = RunStatus::Completed;
-        result.conclusion = Some(RunConclusion::Success);
-        record_target_result(&ctx, &run_id, result).unwrap();
-        complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
-
-        append_simple_event(&ctx, &run_id, EVENT_CANCEL_REQUESTED, None, None).unwrap();
-        let reloaded = run_by_id(&ctx, &run_id).unwrap();
-
-        assert_eq!(reloaded.result.status, RunStatus::Completed);
-        assert_eq!(reloaded.result.conclusion, Some(RunConclusion::Success));
-        assert!(!reloaded.cancel_requested);
-    }
-
-    #[test]
-    fn unknown_future_events_are_ignored() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
-        append_event(
-            &ctx,
-            RunEventRecord {
-                id: "run_event_future".into(),
-                run_id: started.result.run_id.clone(),
-                event: "future_annotation".into(),
-                timestamp_ms: now_ms(),
-                work_plan_id: None,
-                plan: None,
-                target: None,
-                result: None,
-                conclusion: None,
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            run_by_id(&ctx, &started.result.run_id)
-                .unwrap()
-                .result
-                .status,
-            RunStatus::Queued
-        );
-    }
-
-    #[test]
-    fn corrupt_known_lifecycle_is_rejected() {
-        let (_temp, ctx) = context();
-        let (started, _lease) = start_run(&ctx, plan(), None).unwrap();
-        complete_run(&ctx, &started.result.run_id, RunConclusion::Success).unwrap();
-
-        let error = run_by_id(&ctx, &started.result.run_id).unwrap_err();
-        assert!(error.to_string().contains("before every target"));
-    }
-}
+mod tests;

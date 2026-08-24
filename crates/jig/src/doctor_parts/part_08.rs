@@ -530,10 +530,11 @@ fn push_command_substitution_tail(
         if let Some(quote_ch) = quote {
             if ch == quote_ch {
                 quote = None;
-            } else if ch == '\\' && quote_ch != '\'' {
-                if let Some(escaped) = chars.next() {
-                    rendered.push(escaped);
-                }
+            } else if ch == '\\'
+                && quote_ch != '\''
+                && let Some(escaped) = chars.next()
+            {
+                rendered.push(escaped);
             }
             continue;
         }
@@ -641,10 +642,11 @@ fn push_inline_redirection_target(
             if let Some(quote_ch) = substitution_quote {
                 if ch == quote_ch {
                     substitution_quote = None;
-                } else if ch == '\\' && quote_ch != '\'' {
-                    if let Some(escaped) = chars.next() {
-                        redirection.push(escaped);
-                    }
+                } else if ch == '\\'
+                    && quote_ch != '\''
+                    && let Some(escaped) = chars.next()
+                {
+                    redirection.push(escaped);
                 }
                 continue;
             }

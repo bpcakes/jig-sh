@@ -40,7 +40,8 @@ macro_rules! identifier {
             /// # Errors
             ///
             /// Returns an error when the value is empty, longer than 64 bytes,
-            /// or is not lowercase ASCII with only interior `-` and `_` separators.
+            /// or is not lowercase ASCII with `-` and `_` allowed only away
+            /// from the beginning and end.
             pub fn parse(value: impl Into<String>) -> Result<Self, IdentifierError> {
                 let value = value.into();
                 validate_identifier($kind, &value)?;

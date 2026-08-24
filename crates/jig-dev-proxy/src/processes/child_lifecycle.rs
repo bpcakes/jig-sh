@@ -457,12 +457,12 @@ fn force_kill_pinned_child(child: &mut Child, pid: u32, deadline: Instant) -> Re
     let child_result = child
         .kill()
         .with_context(|| format!("failed final Child::kill for process {pid}"));
-    if let Err(signal_error) = signal_result {
-        if let Err(child_error) = child_result {
-            return Err(
-                signal_error.context(format!("fallback child kill also failed: {child_error:#}"))
-            );
-        }
+    if let Err(signal_error) = signal_result
+        && let Err(child_error) = child_result
+    {
+        return Err(
+            signal_error.context(format!("fallback child kill also failed: {child_error:#}"))
+        );
     }
     wait_for_killed_child_exit_and_confirm(child, pid, deadline)
 }

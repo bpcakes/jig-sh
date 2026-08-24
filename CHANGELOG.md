@@ -3,12 +3,19 @@
 ## Unreleased
 
 ### Added
+- Add the contract-v6 agent-native repository model with checked-in components, actions, profiles, affected-selection policy, immutable content-addressed run plans, durable target runs, and target/profile evidence gates.
+- Add `jig check` selectors with `--profile`, `--affected`, `--explain`, and `--fail-fast`, plus repository-aware `jig info` subjects and `jig migration add`.
+- Add the `go-react` scaffold preset, `jig-go` repository adapter, Go test workflow, Huma/Chi API skeleton, optional PostgreSQL/sqlc/Goose integration, and generated React client-contract checks.
 - Harden the Rust/React OpenAPI split with an optional, independently deployable admin HTTP crate and binary, transactional all-contract generation, public-artifact boundary scans, and request-ID-bearing JSON API errors.
 - Generate split Utoipa public/admin OpenAPI contracts and separately owned Hey API TypeScript clients in the Rust/React scaffold.
 - Generate a root Rust/React quickstart, a disposable Docker-backed PostgreSQL integration-test command, and an application-owned admin authorizer whose default deployment policy denies every matched route.
 
 ### Changed
 - Breaking: Limit the Jig CLI, generated harness, development proxy, Vault, and owned-process supervision to Linux and macOS hosts; native Windows host support is removed in this release.
+- Breaking: Contract-v6 MCP clients use the stable `jig.inspect`, `jig.plan_run`, `jig.execute_run`, and `jig.cancel_run` surface instead of directly invoking per-manifest execution tools; submitted plans are re-derived from current checked-in authority before execution.
+- Keep read-only work-gate, evidence, and status inspection available when a configured tool, repository target, profile, or catalog no longer resolves; report the affected required gate in-band as `unsupported` with a reason while contract validation, execution, and work finish continue to fail closed.
+- Make configured checks non-interactive and uniformly supervised for timeout, cancellation, process-tree cleanup, and bounded stdout/stderr capture.
+- Let `jig work check` finish configured evidence targets after a legacy check fails so one invocation records complete gate evidence, while preserving a failing batch result and collecting each configured tool error in structured output.
 - Raise the Jig workspace minimum supported Rust version to 1.88 and lift dependency pins that only preserved Rust 1.85 compatibility.
 - Update the generated frontend stack to current compatible exact releases, including Node 24.19.0 LTS with Node 24 types, Astro 7.2.2, Vite 8.2.1, React 19.2.8, npm 12.0.2, pnpm 11.22.0, Yarn 4.18.0, and shadcn 4.18.0; keep TypeScript on its supported peer-major line.
 - Require Rust 1.94 in every generated Rust/React workspace, update database variants to SQLx 0.9, and make Doctor reject an older Rust runtime or a SQLx CLI from a different minor line.
@@ -18,6 +25,15 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
+- Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.
+- Make run cancellation cursors atomic with queued-event persistence, preserve prior target failures during abandoned-run recovery, reject unsafe run identifiers and live-journal restores, and retain bounded stdout/stderr evidence for configured-command and schema-generator overflow failures.
+- Preserve non-UTF-8 untracked paths in schema snapshots, reject truncated Git authority output, and keep receipt-overflow uncertainty anchored to the exact boundary record.
+- Preserve both bounded output streams in overflow diagnostics, route native pre-start stops through the shared target finalizer, track Go workspace/module inputs in every generated policy workflow, avoid duplicate frontend artifact scans, and omit database configuration from database-free Go scaffolds.
+- Preserve project-owned legacy Go/PostgreSQL `sqlc_check_command` overrides across init and update, validate frontend contract-check app arguments and action working directories before execution, bound archive evidence indexing and fail closed when exact protection cannot be computed, keep superseded duplicate receipt groups closed, terminalize accepted foreground runs after infrastructure errors, and reconcile lease-abandoned runs before applying run-history archival.
+- Keep source-epoch trust anchored when a declared worktree-mutating target never executes, and pass schema output directories to Git as literal pathspecs.
+- Restore live target phases, stdout/stderr, and heartbeats for foreground contract-v6 checks; preserve feature-specific unavailable-check diagnostics when repository flags are present; and expose the bounded count and elapsed time of per-target source observations.
+- Keep affected frontend public-boundary checks sensitive to their ignored-by-default documentation artifact roots, and reject cyclic component or action dependency graphs when the repository catalog loads.
 - Let explicit dev stop and replacement recover definitively dead orphaned session records and exact-owned stale routes without signaling persisted PIDs; persist preflight-cleanup and pre-spawn obligations, distinguish uncertain process observations, preserve ambiguous records by default, add a targeted `dev stop --forget-ambiguous-orphans` repair that never signals stored PIDs or overrides a live or uncertain registered identity, and report successful recoveries with retained app diagnostics and typed forgotten ambiguities separately from blocking warnings.
 - Name `scripts/check-webapps.sh bootstrap` in missing-dependency failures, preserve lockfiles across repeat bootstrap, tolerate Astro's top-level runtime cache without reinstalling, approve only the reviewed esbuild install script under npm, and emit Vite configs compatible with its native loader.
 - Keep Codex projection age, reset countdowns, staleness, and recommendations live after inspection; keep stale state visible at common terminal widths, avoid claiming a usage sample for incomplete inspections, preserve unexpected window durations in projections, mark sampled remaining quota stale with its projection, show sub-minute resets as `<1m`, expire projections at their first contributing reset, exclude generic fallback buckets from recommendation, derive lone-window roles from duration, and normalize rounded time-unit boundaries.

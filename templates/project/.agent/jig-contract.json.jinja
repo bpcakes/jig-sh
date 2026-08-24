@@ -4,6 +4,7 @@
 [% if _jig.contract_version >= 6 %]
   "required_commands": <<[ repository.required_commands | tojson(indent=2) ]>>,
   "tools": <<[ repository.tools | tojson(indent=2) ]>>,
+  "affected_ignore": <<[ repository.affected_ignore | tojson(indent=2) ]>>,
   "components": <<[ repository.components | tojson(indent=2) ]>>,
   "actions": <<[ repository.actions | tojson(indent=2) ]>>,
   "profiles": <<[ repository.profiles | tojson(indent=2) ]>>,

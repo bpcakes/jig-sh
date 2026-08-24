@@ -46,10 +46,10 @@ fn write_process_test_marker(path: &Path, contents: &str) {
 fn wait_for_process_test_marker(path: &Path, child: &mut Child, label: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if let Ok(contents) = fs::read_to_string(path) {
-            if !contents.trim().is_empty() {
-                return contents;
-            }
+        if let Ok(contents) = fs::read_to_string(path)
+            && !contents.trim().is_empty()
+        {
+            return contents;
         }
         if let Some(status) = child.try_wait().unwrap() {
             panic!("{label} exited before publishing its marker: {status}");
@@ -187,11 +187,11 @@ fn terminate_child_kills_process_group_grandchild() {
     let mut grandchild_pid = None;
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if let Ok(text) = fs::read_to_string(&grandchild_pid_path) {
-            if let Ok(pid) = text.trim().parse::<u32>() {
-                grandchild_pid = Some(pid);
-                break;
-            }
+        if let Ok(text) = fs::read_to_string(&grandchild_pid_path)
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            grandchild_pid = Some(pid);
+            break;
         }
         thread::sleep(Duration::from_millis(20));
     }

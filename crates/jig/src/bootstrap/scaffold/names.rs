@@ -198,10 +198,11 @@ pub(super) fn rust_react_repo_dns_label(package_name: &str) -> String {
         return package_name.to_string();
     }
 
-    debug_assert!(package_name.is_ascii());
-    package_name[..DNS_LABEL_LIMIT]
-        .trim_end_matches('-')
-        .to_string()
+    let mut end = DNS_LABEL_LIMIT;
+    while !package_name.is_char_boundary(end) {
+        end -= 1;
+    }
+    package_name[..end].trim_end_matches('-').to_string()
 }
 
 fn stable_hash(value: &[u8]) -> u64 {
@@ -460,6 +461,13 @@ mod tests {
             rust_react_repo_dns_label(&format!("{}-", "a".repeat(63))),
             "a".repeat(63)
         );
+    }
+
+    #[test]
+    fn rust_react_repo_dns_label_does_not_slice_through_utf8() {
+        let label = rust_react_repo_dns_label(&"é".repeat(40));
+
+        assert_eq!(label, "é".repeat(31));
     }
 
     #[cfg(feature = "dev-proxy")]

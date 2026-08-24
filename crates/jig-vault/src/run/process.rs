@@ -61,10 +61,8 @@ impl BrokeredProcess {
         }
         let (deadline, first_attempt) =
             fixed_process_cleanup_deadline(&mut self.cleanup_deadline, timeout)?;
-        if first_attempt {
-            if let Err(error) = terminate_brokered_process_tree(self, deadline) {
-                self.tree_cleanup_error = Some(format!("{error:#}"));
-            }
+        if first_attempt && let Err(error) = terminate_brokered_process_tree(self, deadline) {
+            self.tree_cleanup_error = Some(format!("{error:#}"));
         }
         // The owned tree signal has already been attempted while Unix still
         // has a pinned wait status. It is now safe to consume that status;

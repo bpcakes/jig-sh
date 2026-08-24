@@ -1,18 +1,113 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use globset::{GlobBuilder, GlobMatcher};
 use jig_contract::{ActionSpec, ComponentId, ComponentSpec, SelectionReason, TargetId};
+use sha2::{Digest, Sha256};
 
 use super::RepositoryCatalog;
 
-pub(super) type TargetSelection = BTreeMap<TargetId, BTreeSet<SelectionReason>>;
+pub(super) const MAX_SELECTION_REASONS: usize = 100;
+const SELECTION_REASON_ITEM_DIGEST_DOMAIN: &[u8] = b"jig-selection-reason-item-v2\0";
 
-/// Checked-in files that define the repository catalog itself. A change to
-/// either file can alter every component, action, profile, dependency, or
-/// runner, so affected selection must treat them as implicit inputs of every
-/// candidate target.
-const REPOSITORY_AUTHORITY_INPUTS: &[&str] = &[".jig.toml", ".agent/jig-contract.json"];
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(super) struct TargetSelectionReasons {
+    pub(super) explicit: BTreeSet<SelectionReason>,
+    pub(super) batches: Vec<Arc<SelectionReasonBatch>>,
+}
+
+impl TargetSelectionReasons {
+    pub(super) fn insert(&mut self, reason: SelectionReason) -> bool {
+        self.explicit.insert(reason)
+    }
+
+    fn attach(&mut self, batch: &Arc<SelectionReasonBatch>) {
+        self.batches.push(Arc::clone(batch));
+    }
+
+    #[cfg(test)]
+    fn contains(&self, reason: &SelectionReason) -> bool {
+        self.explicit.contains(reason)
+            || self
+                .batches
+                .iter()
+                .any(|batch| batch.preview.contains(reason))
+    }
+
+    #[cfg(test)]
+    fn preview(&self) -> BTreeSet<SelectionReason> {
+        self.explicit
+            .iter()
+            .cloned()
+            .chain(
+                self.batches
+                    .iter()
+                    .flat_map(|batch| batch.preview.iter().cloned()),
+            )
+            .collect()
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct SelectionReasonBatch {
+    pub(super) preview: Vec<SelectionReason>,
+    pub(super) count: usize,
+    pub(super) sum_digest: [u8; 32],
+}
+
+impl SelectionReasonBatch {
+    fn from_reasons(reasons: impl IntoIterator<Item = SelectionReason>) -> Result<Arc<Self>> {
+        let mut preview = Vec::new();
+        let mut count = 0usize;
+        let mut sum_digest = [0u8; 32];
+        for reason in reasons {
+            add_selection_reason_digest(&mut sum_digest, selection_reason_item_digest(&reason)?);
+            count = count.saturating_add(1);
+            if preview.len() < MAX_SELECTION_REASONS {
+                preview.push(reason);
+            }
+        }
+        Ok(Arc::new(Self {
+            preview,
+            count,
+            sum_digest,
+        }))
+    }
+}
+
+/// Adds a reason digest modulo 2^256. This keeps independently built batches
+/// composable and traversal-order independent while preserving duplicate
+/// multiplicity, unlike XOR aggregation.
+pub(super) fn add_selection_reason_digest(aggregate: &mut [u8; 32], digest: [u8; 32]) {
+    let mut carry = false;
+    for (aggregate_byte, digest_byte) in aggregate.iter_mut().zip(digest).rev() {
+        let (value, first_carry) = aggregate_byte.overflowing_add(digest_byte);
+        let (value, second_carry) = value.overflowing_add(u8::from(carry));
+        *aggregate_byte = value;
+        carry = first_carry || second_carry;
+    }
+}
+
+pub(super) fn selection_reason_item_digest(reason: &SelectionReason) -> Result<[u8; 32]> {
+    let encoded = serde_json::to_vec(reason)
+        .context("Failed to canonicalize an affected-selection reason")?;
+    let mut hasher = Sha256::new();
+    hasher.update(SELECTION_REASON_ITEM_DIGEST_DOMAIN);
+    hasher.update((encoded.len() as u64).to_be_bytes());
+    hasher.update(encoded);
+    Ok(hasher.finalize().into())
+}
+
+pub(super) type TargetSelection = BTreeMap<TargetId, TargetSelectionReasons>;
+
+/// Checked-in source outside `.agent/**` that defines the repository catalog.
+/// The generated manifest is tracked separately by the canonical contract
+/// digest and is intentionally outside the affected-source projection.
+const REPOSITORY_AUTHORITY_INPUTS: &[&str] = &[".jig.toml"];
+// The launcher does not define catalog records, but ignoring it would let an
+// affected check skip validation after its execution-routing policy changed.
+const AFFECTED_IGNORE_PROTECTED_INPUTS: &[&str] = &[".jig.toml", "scripts/jig"];
 
 /// Validates the path policy needed by affected selection when a native
 /// repository catalog is constructed. Legacy projections do not declare this
@@ -20,6 +115,7 @@ const REPOSITORY_AUTHORITY_INPUTS: &[&str] = &[".jig.toml", ".agent/jig-contract
 pub(super) fn validate_native_path_policy(
     components: &BTreeMap<ComponentId, ComponentSpec>,
     actions: &BTreeMap<TargetId, ActionSpec>,
+    affected_ignore: &[String],
 ) -> Result<()> {
     for component in components.values() {
         validate_component_root(component)?;
@@ -27,6 +123,17 @@ pub(super) fn validate_native_path_policy(
     for action in actions.values() {
         for input in &action.inputs {
             compile_input(&action.target, input)?;
+        }
+    }
+    for pattern in affected_ignore {
+        let matcher = compile_path_pattern("affected_ignore", pattern)?;
+        if AFFECTED_IGNORE_PROTECTED_INPUTS
+            .iter()
+            .any(|path| matcher.is_match(path))
+        {
+            bail!(
+                "affected_ignore pattern {pattern:?} must not match repository execution authority"
+            );
         }
     }
     Ok(())
@@ -39,43 +146,80 @@ pub(super) fn select_affected_targets(
     catalog: &RepositoryCatalog,
     candidates: TargetSelection,
     changed_paths: &[String],
+    observed_input_paths: &[String],
 ) -> Result<TargetSelection> {
-    let paths = normalized_changed_paths(changed_paths)?;
+    let mut paths = normalized_changed_paths(changed_paths)?;
+    let matchers = component_input_matchers(catalog)?;
+    // Ignored dotenv files have no committed baseline, so their presence is
+    // not a Git change. Keep a presence-only observation only when checked-in
+    // action policy explicitly declares it as an input; never let it become an
+    // unclaimed change or a component-root fallback.
+    paths.extend(
+        normalized_changed_paths(observed_input_paths)?
+            .into_iter()
+            .filter(|path| {
+                matchers
+                    .values()
+                    .any(|inputs| inputs.iter().any(|input| input.is_match(path)))
+            }),
+    );
+    let ignored_matchers = catalog
+        .affected_ignore()
+        .iter()
+        .map(|pattern| compile_path_pattern("affected_ignore", pattern))
+        .collect::<Result<Vec<_>>>()?;
+    paths.retain(|path| {
+        REPOSITORY_AUTHORITY_INPUTS.contains(&path.as_str())
+            || matchers
+                .values()
+                .any(|inputs| inputs.iter().any(|input| input.is_match(path)))
+            || !ignored_matchers
+                .iter()
+                .any(|matcher| matcher.is_match(path))
+    });
     let authority_paths = paths
         .iter()
         .filter(|path| REPOSITORY_AUTHORITY_INPUTS.contains(&path.as_str()))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let matchers = component_input_matchers(catalog)?;
-    let direct = directly_affected_components(catalog, &matchers, &paths);
-    let propagated = propagated_components(catalog, &direct);
+    let (mut direct, mut unclaimed_paths) =
+        directly_affected_components(catalog, &matchers, &paths);
+    for path in &authority_paths {
+        unclaimed_paths.remove(path);
+        for direct_paths in direct.values_mut() {
+            direct_paths.remove(path);
+        }
+    }
+    direct.retain(|_, direct_paths| !direct_paths.is_empty());
+    let unclaimed_batch = (!unclaimed_paths.is_empty())
+        .then(|| {
+            SelectionReasonBatch::from_reasons(
+                unclaimed_paths
+                    .into_iter()
+                    .map(|path| SelectionReason::UnclaimedInput { path }),
+            )
+        })
+        .transpose()?;
+    let batches = affected_reason_batches(catalog, direct)?;
 
     let mut selected = TargetSelection::new();
     for (target, mut reasons) in candidates {
-        let mut affected = !authority_paths.is_empty();
-        reasons.extend(
-            authority_paths
-                .iter()
-                .cloned()
-                .map(|path| SelectionReason::DirectInput { path }),
-        );
-        if let Some(paths) = direct.get(&target.component) {
-            affected = true;
-            reasons.extend(
-                paths
-                    .iter()
-                    .cloned()
-                    .map(|path| SelectionReason::DirectInput { path }),
-            );
+        let mut affected = !authority_paths.is_empty() || unclaimed_batch.is_some();
+        for path in &authority_paths {
+            reasons.insert(SelectionReason::DirectInput { path: path.clone() });
         }
-        if let Some(origins) = propagated.get(&target.component) {
+        if let Some(batch) = &unclaimed_batch {
+            reasons.attach(batch);
+        }
+        if let Some(batch) = batches.direct.get(&target.component) {
             affected = true;
-            reasons.extend(origins.iter().cloned().map(|(component, path)| {
-                SelectionReason::ComponentDependency {
-                    component,
-                    path: Some(path),
-                }
-            }));
+            reasons.attach(batch);
+        }
+        if let Some(batches) = batches.propagated.get(&target.component) {
+            affected = true;
+            for batch in batches {
+                reasons.attach(batch);
+            }
         }
         if affected {
             selected.insert(target, reasons);
@@ -89,7 +233,7 @@ fn validate_component_root(component: &ComponentSpec) -> Result<()> {
     if root == "." {
         return Ok(());
     }
-    validate_repository_relative_text("component root", root)?;
+    validate_authored_repository_relative_text("component root", root)?;
     if root.contains(['*', '?', '[', ']', '{', '}']) {
         bail!(
             "component '{}' has invalid root {:?}: component roots must be literal repository-relative directories",
@@ -101,20 +245,29 @@ fn validate_component_root(component: &ComponentSpec) -> Result<()> {
 }
 
 fn compile_input(target: &TargetId, input: &str) -> Result<GlobMatcher> {
-    if let Err(error) = validate_repository_relative_text("action input", input) {
-        bail!("target '{target}' has invalid input pattern {input:?}: {error}");
-    }
-    let mut builder = GlobBuilder::new(input);
-    builder.literal_separator(true).backslash_escape(false);
-    match builder.build() {
-        Ok(glob) => Ok(glob.compile_matcher()),
+    match compile_path_pattern("action input", input) {
+        Ok(matcher) => Ok(matcher),
         Err(error) => {
             bail!("target '{target}' has invalid input pattern {input:?}: {error}")
         }
     }
 }
 
-fn validate_repository_relative_text(kind: &str, value: &str) -> Result<()> {
+fn compile_path_pattern(kind: &str, input: &str) -> Result<GlobMatcher> {
+    if let Err(error) = validate_authored_repository_relative_text(kind, input) {
+        bail!("invalid {kind} pattern {input:?}: {error}");
+    }
+    let mut builder = GlobBuilder::new(input);
+    builder.literal_separator(true).backslash_escape(false);
+    match builder.build() {
+        Ok(glob) => Ok(glob.compile_matcher()),
+        Err(error) => {
+            bail!("invalid {kind} pattern {input:?}: {error}")
+        }
+    }
+}
+
+fn validate_authored_repository_relative_text(kind: &str, value: &str) -> Result<()> {
     if value.is_empty() {
         bail!("{kind} must not be empty");
     }
@@ -144,11 +297,32 @@ fn validate_repository_relative_text(kind: &str, value: &str) -> Result<()> {
 fn normalized_changed_paths(changed_paths: &[String]) -> Result<BTreeSet<String>> {
     let mut normalized = BTreeSet::new();
     for path in changed_paths {
-        validate_repository_relative_text("changed path", path)
+        validate_git_changed_path(path)
             .with_context(|| format!("Git reported invalid changed path {path:?}"))?;
         normalized.insert(path.clone());
     }
     Ok(normalized)
+}
+
+fn validate_git_changed_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        bail!("changed path must not be empty");
+    }
+    if path.starts_with('/') {
+        bail!("changed path must remain repository-relative");
+    }
+    if path.contains('\0') {
+        bail!("changed path must not contain a NUL byte");
+    }
+    for segment in path.split('/') {
+        if segment.is_empty() {
+            bail!("changed path must not contain an empty path segment");
+        }
+        if matches!(segment, "." | "..") {
+            bail!("changed path must not contain '.' or '..' path segments");
+        }
+    }
+    Ok(())
 }
 
 fn component_input_matchers(
@@ -173,8 +347,9 @@ fn directly_affected_components(
     catalog: &RepositoryCatalog,
     matchers: &BTreeMap<ComponentId, Vec<GlobMatcher>>,
     paths: &BTreeSet<String>,
-) -> BTreeMap<ComponentId, BTreeSet<String>> {
+) -> (BTreeMap<ComponentId, BTreeSet<String>>, BTreeSet<String>) {
     let mut direct = BTreeMap::<ComponentId, BTreeSet<String>>::new();
+    let mut unclaimed = BTreeSet::new();
     for path in paths {
         let matched_components = matchers
             .iter()
@@ -186,11 +361,14 @@ fn directly_affected_components(
         } else {
             matched_components
         };
+        if matched_components.is_empty() {
+            unclaimed.insert(path.clone());
+        }
         for component in matched_components {
             direct.entry(component).or_default().insert(path.clone());
         }
     }
-    direct
+    (direct, unclaimed)
 }
 
 fn most_specific_component_roots(
@@ -238,12 +416,15 @@ fn root_depth(root: &str) -> usize {
     }
 }
 
-type PropagationOrigin = (ComponentId, String);
+struct AffectedReasonBatches {
+    direct: BTreeMap<ComponentId, Arc<SelectionReasonBatch>>,
+    propagated: BTreeMap<ComponentId, Vec<Arc<SelectionReasonBatch>>>,
+}
 
-fn propagated_components(
+fn affected_reason_batches(
     catalog: &RepositoryCatalog,
-    direct: &BTreeMap<ComponentId, BTreeSet<String>>,
-) -> BTreeMap<ComponentId, BTreeSet<PropagationOrigin>> {
+    direct: BTreeMap<ComponentId, BTreeSet<String>>,
+) -> Result<AffectedReasonBatches> {
     let mut dependents = BTreeMap::<ComponentId, BTreeSet<ComponentId>>::new();
     for component in catalog.components() {
         for dependency in &component.depends_on {
@@ -254,335 +435,49 @@ fn propagated_components(
         }
     }
 
-    let mut propagated = BTreeMap::<ComponentId, BTreeSet<PropagationOrigin>>::new();
+    let mut direct_batches = BTreeMap::new();
+    let mut propagated_batches = BTreeMap::<ComponentId, Vec<Arc<SelectionReasonBatch>>>::new();
     for (origin, paths) in direct {
-        for path in paths {
-            let mut seen = BTreeSet::from([origin.clone()]);
-            let mut pending = vec![origin.clone()];
-            while let Some(component_id) = pending.pop() {
-                let component = catalog
-                    .component(&component_id)
-                    .expect("affected components must exist in the catalog");
-                if !component.propagate_affected_to_dependents {
-                    continue;
-                }
-                for dependent in dependents.get(&component_id).into_iter().flatten() {
-                    if dependent != origin {
-                        propagated
-                            .entry(dependent.clone())
-                            .or_default()
-                            .insert((origin.clone(), path.clone()));
-                    }
-                    if seen.insert(dependent.clone()) {
-                        pending.push(dependent.clone());
-                    }
+        direct_batches.insert(
+            origin.clone(),
+            SelectionReasonBatch::from_reasons(
+                paths
+                    .iter()
+                    .cloned()
+                    .map(|path| SelectionReason::DirectInput { path }),
+            )?,
+        );
+        let dependency_batch = SelectionReasonBatch::from_reasons(paths.into_iter().map(|path| {
+            SelectionReason::ComponentDependency {
+                component: origin.clone(),
+                path: Some(path),
+            }
+        }))?;
+        let mut seen = BTreeSet::from([origin.clone()]);
+        let mut pending = vec![origin.clone()];
+        while let Some(component_id) = pending.pop() {
+            let component = catalog
+                .component(&component_id)
+                .expect("affected components must exist in the catalog");
+            if !component.propagate_affected_to_dependents {
+                continue;
+            }
+            for dependent in dependents.get(&component_id).into_iter().flatten() {
+                if seen.insert(dependent.clone()) {
+                    propagated_batches
+                        .entry(dependent.clone())
+                        .or_default()
+                        .push(Arc::clone(&dependency_batch));
+                    pending.push(dependent.clone());
                 }
             }
         }
     }
-    propagated
+    Ok(AffectedReasonBatches {
+        direct: direct_batches,
+        propagated: propagated_batches,
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use jig_contract::{
-        ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId, ComponentSpec,
-        ProfileId, ProfileSpec, SelectionReason, TargetId,
-    };
-
-    use super::{TargetSelection, select_affected_targets};
-    use crate::repository::RepositoryCatalog;
-
-    fn affected_fixture() -> RepositoryCatalog {
-        let mut shared =
-            ComponentSpec::new(ComponentId::parse("shared").unwrap(), "packages/shared");
-        shared.propagate_affected_to_dependents = true;
-        let mut api = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        api.depends_on.push(shared.id.clone());
-        let mut web = ComponentSpec::new(ComponentId::parse("web").unwrap(), "web");
-        web.depends_on.push(shared.id.clone());
-
-        let shared_target: TargetId = "shared:test".parse().unwrap();
-        let api_target: TargetId = "api:test".parse().unwrap();
-        let web_target: TargetId = "web:test".parse().unwrap();
-        let mut shared_action = check_action(shared_target.clone(), "shared_test_command");
-        shared_action.inputs.push("packages/shared/**".into());
-        let mut api_action = check_action(api_target.clone(), "api_test_command");
-        api_action.inputs = vec!["api/**/*.go".into(), "go.work".into()];
-        let mut web_action = check_action(web_target.clone(), "web_test_command");
-        web_action.inputs.push("web/**/*.ts".into());
-
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(
-            profile_id.clone(),
-            vec![shared_target, api_target, web_target],
-        );
-        RepositoryCatalog::from_native(
-            6,
-            "sha256:config",
-            &[shared, api, web],
-            &[shared_action, api_action, web_action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap()
-    }
-
-    fn generated_root_fixture() -> RepositoryCatalog {
-        let repo = ComponentSpec::new(ComponentId::parse("repo").unwrap(), ".");
-        let mut api = ComponentSpec::new(ComponentId::parse("api").unwrap(), ".");
-        api.propagate_affected_to_dependents = true;
-        let mut web = ComponentSpec::new(ComponentId::parse("web").unwrap(), "apps/web");
-        web.depends_on.push(api.id.clone());
-
-        let repo_target: TargetId = "repo:contract".parse().unwrap();
-        let api_target: TargetId = "api:test".parse().unwrap();
-        let web_target: TargetId = "web:test".parse().unwrap();
-        let mut repo_action = check_action(repo_target.clone(), "contract_command");
-        repo_action.inputs.push(".jig.toml".into());
-        let mut api_action = check_action(api_target.clone(), "api_test_command");
-        api_action.inputs = vec![
-            "crates/**/*.rs".into(),
-            "**/Cargo.toml".into(),
-            "**/go.mod".into(),
-        ];
-        let mut web_action = check_action(web_target.clone(), "web_test_command");
-        web_action.inputs.push("apps/web/**/*.ts".into());
-
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(
-            profile_id.clone(),
-            vec![repo_target, api_target, web_target],
-        );
-        RepositoryCatalog::from_native(
-            6,
-            "sha256:config",
-            &[repo, api, web],
-            &[repo_action, api_action, web_action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap()
-    }
-
-    fn check_action(target: TargetId, command: &str) -> ActionSpec {
-        let mut action =
-            ActionSpec::new(target, ActionIntent::Check, ActionRunner::command(command));
-        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        action
-    }
-
-    fn candidates(catalog: &RepositoryCatalog) -> TargetSelection {
-        let profile = ProfileId::parse("verify").unwrap();
-        catalog
-            .actions()
-            .map(|action| {
-                (
-                    action.target.clone(),
-                    BTreeSet::from([SelectionReason::Profile {
-                        profile: profile.clone(),
-                    }]),
-                )
-            })
-            .collect::<BTreeMap<_, _>>()
-    }
-
-    fn selected(catalog: &RepositoryCatalog, changed_paths: &[&str]) -> TargetSelection {
-        select_affected_targets(
-            catalog,
-            candidates(catalog),
-            &changed_paths
-                .iter()
-                .map(|path| (*path).into())
-                .collect::<Vec<_>>(),
-        )
-        .unwrap()
-    }
-
-    fn target_names(selection: &TargetSelection) -> Vec<String> {
-        selection.keys().map(ToString::to_string).collect()
-    }
-
-    #[test]
-    fn affected_direct_api_and_web_inputs_remain_component_scoped() {
-        let catalog = affected_fixture();
-
-        assert_eq!(
-            target_names(&selected(&catalog, &["api/main.go"])),
-            ["api:test"]
-        );
-        assert_eq!(
-            target_names(&selected(&catalog, &["web/src/main.ts"])),
-            ["web:test"]
-        );
-    }
-
-    #[test]
-    fn affected_shared_input_propagates_only_by_component_policy() {
-        let catalog = affected_fixture();
-        let selection = selected(&catalog, &["packages/shared/value.txt"]);
-
-        assert_eq!(
-            target_names(&selection),
-            ["api:test", "shared:test", "web:test"]
-        );
-        assert!(selection[&"shared:test".parse().unwrap()].contains(
-            &SelectionReason::DirectInput {
-                path: "packages/shared/value.txt".into(),
-            }
-        ));
-        for target in ["api:test", "web:test"] {
-            assert!(selection[&target.parse().unwrap()].contains(
-                &SelectionReason::ComponentDependency {
-                    component: ComponentId::parse("shared").unwrap(),
-                    path: Some("packages/shared/value.txt".into()),
-                }
-            ));
-        }
-    }
-
-    #[test]
-    fn affected_repository_global_input_is_explicit() {
-        let catalog = affected_fixture();
-        let selection = selected(&catalog, &["go.work"]);
-
-        assert_eq!(target_names(&selection), ["api:test"]);
-        assert!(
-            selection[&"api:test".parse().unwrap()].contains(&SelectionReason::DirectInput {
-                path: "go.work".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn affected_root_fallback_uses_the_most_specific_component() {
-        let catalog = affected_fixture();
-
-        assert_eq!(
-            target_names(&selected(&catalog, &["api/generated.data"])),
-            ["api:test"]
-        );
-    }
-
-    #[test]
-    fn affected_unrelated_paths_produce_an_empty_selection() {
-        let catalog = affected_fixture();
-
-        assert!(selected(&catalog, &["notes/todo.txt"]).is_empty());
-    }
-
-    #[test]
-    fn affected_unmatched_path_does_not_select_explicit_root_components() {
-        let catalog = generated_root_fixture();
-
-        assert!(selected(&catalog, &["docs/guide.md"]).is_empty());
-        assert_eq!(
-            target_names(&selected(&catalog, &["crates/api/src/lib.rs"])),
-            ["api:test", "web:test"]
-        );
-    }
-
-    #[test]
-    fn affected_nested_build_manifests_select_the_root_backend_and_dependents() {
-        let catalog = generated_root_fixture();
-
-        for path in ["crates/worker/Cargo.toml", "services/worker/go.mod"] {
-            assert_eq!(
-                target_names(&selected(&catalog, &[path])),
-                ["api:test", "web:test"]
-            );
-        }
-    }
-
-    #[test]
-    fn affected_repository_authority_inputs_select_every_candidate() {
-        let catalog = generated_root_fixture();
-
-        for path in [".jig.toml", ".agent/jig-contract.json"] {
-            let selection = selected(&catalog, &[path]);
-
-            assert_eq!(
-                target_names(&selection),
-                ["api:test", "repo:contract", "web:test"]
-            );
-            for reasons in selection.values() {
-                assert!(reasons.contains(&SelectionReason::DirectInput { path: path.into() }));
-            }
-        }
-    }
-
-    #[test]
-    fn affected_reasons_and_targets_are_stable_and_sorted() {
-        let catalog = affected_fixture();
-        let first = selected(
-            &catalog,
-            &["packages/shared/z.txt", "packages/shared/a.txt"],
-        );
-        let second = selected(
-            &catalog,
-            &[
-                "packages/shared/a.txt",
-                "packages/shared/z.txt",
-                "packages/shared/a.txt",
-            ],
-        );
-
-        assert_eq!(first, second);
-        let reasons = &first[&"api:test".parse().unwrap()];
-        assert_eq!(
-            reasons.iter().cloned().collect::<Vec<_>>(),
-            [
-                SelectionReason::Profile {
-                    profile: ProfileId::parse("verify").unwrap(),
-                },
-                SelectionReason::ComponentDependency {
-                    component: ComponentId::parse("shared").unwrap(),
-                    path: Some("packages/shared/a.txt".into()),
-                },
-                SelectionReason::ComponentDependency {
-                    component: ComponentId::parse("shared").unwrap(),
-                    path: Some("packages/shared/z.txt".into()),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn affected_path_policy_rejects_escaping_roots_and_inputs() {
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "/api");
-        let target: TargetId = "api:test".parse().unwrap();
-        let action = check_action(target.clone(), "api_test_command");
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
-        let error = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("repository-relative"));
-
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let target: TargetId = "api:test".parse().unwrap();
-        let mut action = check_action(target.clone(), "api_test_command");
-        action.inputs.push("../secrets/**".into());
-        let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
-        let error = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("must not contain '.' or '..'"));
-    }
-}
+mod tests;

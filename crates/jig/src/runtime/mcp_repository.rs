@@ -19,7 +19,7 @@ use crate::tool_defs::{
 };
 
 use super::run_execution::{
-    ExecuteCheckRunRequest, block_started_check_run, execute_started_check_run, start_check_run,
+    ExecuteCheckRunRequest, execute_started_check_run, start_check_run_with_event_cursor,
 };
 
 const REPOSITORY_MCP_SCHEMA_VERSION: u32 = 1;
@@ -168,14 +168,14 @@ fn catalog_inspection(
     ctx: &RepoContext,
     request: InspectRequest,
 ) -> Result<RepositoryInspectResult> {
-    let current = current_repository_context(ctx)?;
+    let current = super::refreshed_repository_context(ctx)?;
     Ok(RepositoryInspectResult::Catalog(
         crate::repository::inspect_repository_data(&current, request)?,
     ))
 }
 
 fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
-    let current = current_repository_context(ctx)?;
+    let current = super::refreshed_repository_context(ctx)?;
     let catalog = RepositoryCatalog::from_context(&current)?;
     let arguments = args
         .arguments
@@ -205,7 +205,7 @@ fn plan(ctx: &RepoContext, args: PlanRunArgs) -> Result<Value> {
 }
 
 fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
-    let current = current_repository_context(ctx)?;
+    let current = super::refreshed_repository_context(ctx)?;
     let catalog = RepositoryCatalog::from_context(&current)?;
     validate_effect_approval(&args.plan.effects, &args.approved_effects)?;
     if let Some(plan_id) = args.work_plan_id.as_deref() {
@@ -230,21 +230,18 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
             // durable run creation both succeed, so validating once here keeps
             // the same safety ordering without an extra full fingerprint scan
             // on the request thread.
-            let event_cursor = match crate::state::run_event_cursor(&worker_ctx) {
-                Ok(cursor) => cursor,
+            let (run, _lease, event_cursor) = match start_check_run_with_event_cursor(
+                &worker_ctx,
+                &worker_catalog,
+                worker_plan,
+                work_plan_id,
+            ) {
+                Ok(started) => started,
                 Err(error) => {
                     let _ = started_tx.send(Err(error));
                     return;
                 }
             };
-            let (run, _lease) =
-                match start_check_run(&worker_ctx, &worker_catalog, worker_plan, work_plan_id) {
-                    Ok(started) => started,
-                    Err(error) => {
-                        let _ = started_tx.send(Err(error));
-                        return;
-                    }
-                };
             let cancellation = RunCancellationProbe::new(
                 worker_ctx.clone(),
                 run.result.run_id.clone(),
@@ -255,14 +252,12 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
             if started_tx.send(Ok(run.clone())).is_err() {
                 cancellation.signal();
             }
-            let run_id = run.result.run_id.clone();
-            if let Err(error) =
-                execute_started_check_run(&worker_ctx, &worker_catalog, run, request, &|| {
-                    cancellation.is_cancelled()
-                })
-            {
-                let _ = block_started_check_run(&worker_ctx, &run_id, &error);
-            }
+            // Execution owns terminalization. If that durable write itself
+            // fails, releasing this worker's lease lets inspection reconcile
+            // the abandoned run without a second competing terminalization.
+            let _ = execute_started_check_run(&worker_ctx, &worker_catalog, run, request, &|| {
+                cancellation.is_cancelled()
+            });
         })
         .context("Failed to start the repository run worker")?;
 
@@ -277,19 +272,6 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
         status: run.result.status,
         run: run.result,
     })
-}
-
-fn current_repository_context(ctx: &RepoContext) -> Result<RepoContext> {
-    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
-        .context("Failed to refresh repository authority for MCP request")?;
-    if current.contract_version() != ctx.contract_version() {
-        bail!(
-            "repository contract changed from version {} to {}; restart the MCP server",
-            ctx.contract_version(),
-            current.contract_version()
-        );
-    }
-    Ok(current)
 }
 
 fn validate_effect_approval(planned: &[ActionEffect], approved: &[ActionEffect]) -> Result<()> {
@@ -315,6 +297,10 @@ fn cancel(ctx: &RepoContext, args: CancelRunArgs) -> Result<Value> {
     if args.run_id.trim().is_empty() {
         bail!("jig.cancel_run requires a nonblank run_id");
     }
+    // Cancellation deliberately uses the request's already-authorized root
+    // context. It must remain available when a running target leaves current
+    // repository configuration temporarily invalid; run IDs, journals, leases,
+    // and live-worker keys are all rooted independently of mutable authority.
     let reconciled = crate::state::reconcile_run_for_inspection(ctx, &args.run_id)?;
     let run = if reconciled.result.status == RunStatus::Completed {
         reconciled
@@ -413,9 +399,20 @@ mod tests {
         let temp = tempdir().unwrap();
         TestRepoBuilder::new(temp.path()).write();
         let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let cursor = crate::state::run_event_cursor(&ctx).unwrap();
+        let (run, _lease, cursor) = crate::state::start_run_with_event_cursor(
+            &ctx,
+            jig_contract::RunPlan::new(
+                "run-plan_fixture",
+                "sha256:config",
+                jig_contract::SourceIdentity::new(None, "sha256:worktree"),
+                Vec::new(),
+                Vec::new(),
+            ),
+            None,
+        )
+        .unwrap();
         fs::write(ctx.state_file("runs.jsonl"), "not-json\n").unwrap();
-        let probe = RunCancellationProbe::new(ctx, "run_fixture".into(), cursor);
+        let probe = RunCancellationProbe::new(ctx, run.result.run_id, cursor);
 
         let first = probe.is_cancelled().unwrap_err().to_string();
         let second = probe.is_cancelled().unwrap_err().to_string();

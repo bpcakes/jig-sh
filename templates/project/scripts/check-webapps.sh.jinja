@@ -1973,16 +1973,20 @@ run_package_script() {
 [% endif %]
 }
 
-configured_frontend_app() {
+frontend_app_role() {
   case "$1" in
 [% for app in frontend_apps %]
-    "<<[ app.dir ]>>") return 0 ;;
+    "<<[ app.dir ]>>") printf '%s\n' "<<[ app.role ]>>" ;;
 [% endfor %]
     *)
       echo "Web app '$1' is not configured in [[frontend_apps]]." >&2
       return 2
       ;;
   esac
+}
+
+configured_frontend_app() {
+  frontend_app_role "$1" >/dev/null
 }
 
 run_public_package_script() {
@@ -2012,6 +2016,9 @@ run_check() {
   local app_dir="$1"
   local coverage_threshold="$2"
   local script_name="$3"
+  local app_role
+
+  app_role="$(frontend_app_role "$app_dir")" || return
 
   "$node_bin" scripts/check-webapp-scripts.mjs "$app_dir" "$script_name"
   install_dependencies "$app_dir"
@@ -2021,9 +2028,27 @@ run_check() {
     COVERAGE_DIR="$app_dir/coverage" COVERAGE_THRESHOLD="$coverage_threshold" \
       "$node_bin" scripts/enforce-coverage.cjs
   fi
-  if [ "$script_name" = "build:bundle" ] && [ -f scripts/contracts.mjs ]; then
+[% if frontend_contracts_enabled %]
+  if [ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]; then
+    run_contract_script artifact-check "$app_dir/dist"
+  fi
+[% else %]
+  if [ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ] && [ -f scripts/contracts.mjs ]; then
     "$node_bin" scripts/contracts.mjs artifact-check "$app_dir/dist"
   fi
+[% endif %]
+}
+
+require_contract_script() {
+  if [ ! -f scripts/contracts.mjs ]; then
+    printf '%s\n' 'Required frontend contract runner scripts/contracts.mjs is missing; restore the scaffolded file or update the authored repository targets.' >&2
+    return 1
+  fi
+}
+
+run_contract_script() {
+  require_contract_script || return
+  "$node_bin" scripts/contracts.mjs "$@"
 }
 
 case "$mode" in
@@ -2078,13 +2103,13 @@ case "$mode" in
       usage
       exit 2
     fi
+    configured_frontend_app "$2" || exit $?
+    require_contract_script
     install_dependencies "$2"
-    if [ -f scripts/contracts.mjs ]; then
-      if [ "$mode" = "contracts-drift-check" ]; then
-        "$node_bin" scripts/contracts.mjs drift-check
-      else
-        "$node_bin" scripts/contracts.mjs boundary-check
-      fi
+    if [ "$mode" = "contracts-drift-check" ]; then
+      run_contract_script drift-check
+    else
+      run_contract_script boundary-check
     fi
     ;;
   node-version-file)
@@ -2130,9 +2155,13 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "typecheck"
 [% endfor %]
+[% if frontend_contracts_enabled %]
+    run_contract_script check
+[% else %]
     if [ -f scripts/contracts.mjs ]; then
       "$node_bin" scripts/contracts.mjs check
     fi
+[% endif %]
 [% else %]
     echo "No web apps configured."
 [% endif %]
@@ -2142,9 +2171,13 @@ case "$mode" in
 [% for app in frontend_apps %]
     run_check "<<[ app.dir ]>>" "<<[ app.coverage_threshold ]>>" "build:bundle"
 [% endfor %]
+[% if frontend_contracts_enabled %]
+    run_contract_script public-check --skip-frontend-artifacts
+[% else %]
     if [ -f scripts/contracts.mjs ]; then
-      "$node_bin" scripts/contracts.mjs public-check
+      "$node_bin" scripts/contracts.mjs public-check --skip-frontend-artifacts
     fi
+[% endif %]
 [% else %]
     echo "No web apps configured."
 [% endif %]

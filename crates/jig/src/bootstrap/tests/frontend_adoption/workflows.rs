@@ -301,7 +301,7 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
                 dir: "null".into(),
                 coverage_threshold: 80,
                 kind: "vite".into(),
-                role: "spa".into(),
+                role: "admin".into(),
             }],
             ..AnswerOpts::default()
         },
@@ -329,6 +329,10 @@ fn generated_project_workflows_serialize_dynamic_yaml_scalars_and_shell_branch_v
     let app = &webapp["jobs"]["checks"]["strategy"]["matrix"]["app"][0];
     assert_eq!(app["name"], "null");
     assert_eq!(app["dir"], "null");
+
+    let checker = fs::read_to_string(repo.join("scripts/check-webapps.sh")).unwrap();
+    assert!(checker.contains(r#""null") printf '%s\n' "admin" ;;"#));
+    assert!(checker.contains(r#"[ "$script_name" = "build:bundle" ] && [ "$app_role" = "spa" ]"#));
 
     let policy = fs::read_to_string(repo.join(".github/workflows/repo-policy.yml")).unwrap();
     assert!(policy.contains("JIG_DEFAULT_BRANCH:"));

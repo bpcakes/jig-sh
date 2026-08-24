@@ -380,10 +380,11 @@ fn detail_lines(app: &App, now: u64, best: Option<usize>) -> Vec<Line<'static>> 
         key_value("Path", row.display_path()),
         key_value("Current", if row.is_current() { "yes" } else { "no" }),
     ];
-    if app.selected.is_some() && app.selected == best {
-        if let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation() {
-            lines.push(key_value("Recommendation", recommendation.label));
-        }
+    if app.selected.is_some()
+        && app.selected == best
+        && let Some(recommendation) = row.usage_snapshot_assessment_at(now).recommendation()
+    {
+        lines.push(key_value("Recommendation", recommendation.label));
     }
     match row.inspection() {
         Inspection::Loading => {

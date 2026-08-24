@@ -18,9 +18,33 @@ const BACKEND_COMPONENT: &str = "api";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
+// Explicit component and action inputs are matched before this list. These
+// defaults therefore suppress only repository guidance, documentation, and
+// hosted-CI metadata that no local action declares as an input. Files such as
+// `.gitignore`, `Makefile`, and `justfile` deliberately remain fail-closed.
+const DEFAULT_AFFECTED_IGNORE: &[&str] = &[
+    ".env",
+    ".env.*",
+    "**/.env",
+    "**/.env.*",
+    "README.md",
+    "**/README.md",
+    "AGENTS.md",
+    "**/AGENTS.md",
+    "agent-map.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "docs/**",
+    "LICENSE",
+    "LICENSE.*",
+    ".github/**",
+];
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct RepositoryRenderModel {
+    pub(super) affected_ignore: Vec<String>,
     pub(super) components: Vec<ComponentSpec>,
     pub(super) actions: Vec<ActionSpec>,
     pub(super) profiles: Vec<ProfileSpec>,
@@ -34,6 +58,7 @@ pub(super) struct RepositoryRenderModel {
 #[derive(Serialize)]
 struct AuthoredRepository<'a> {
     default_check_profile: &'a ProfileId,
+    affected_ignore: &'a [String],
     components: &'a [ComponentSpec],
     actions: &'a [ActionSpec],
     profiles: &'a [ProfileSpec],
@@ -42,6 +67,8 @@ struct AuthoredRepository<'a> {
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct AuthoredRepositoryModel {
     pub(super) default_check_profile: ProfileId,
+    #[serde(default)]
+    pub(super) affected_ignore: Vec<String>,
     #[serde(default)]
     pub(super) components: Vec<ComponentSpec>,
     #[serde(default)]
@@ -117,6 +144,7 @@ impl RepositoryRenderModel {
         }
 
         Ok(Self {
+            affected_ignore: authored.affected_ignore.clone(),
             components: authored.components.clone(),
             actions: authored.actions.clone(),
             profiles: authored.profiles.clone(),
@@ -131,6 +159,7 @@ impl RepositoryRenderModel {
         toml::to_string(&AuthoredRepositoryDocument {
             repository: AuthoredRepository {
                 default_check_profile: &self.default_check_profile,
+                affected_ignore: &self.affected_ignore,
                 components: &self.components,
                 actions: &self.actions,
                 profiles: &self.profiles,
@@ -144,6 +173,29 @@ impl RepositoryRenderModel {
             commands: &self.commands,
         })
         .context("Failed to serialize repository commands")
+    }
+
+    pub(super) fn frontend_contracts_enabled(&self) -> bool {
+        [
+            (FRONTEND_CONTRACT_DRIFT_ACTION, "contracts-drift-check"),
+            (FRONTEND_PUBLIC_BOUNDARY_ACTION, "contracts-boundary-check"),
+        ]
+        .into_iter()
+        .all(|(action, mode)| {
+            self.actions.iter().any(|candidate| {
+                if candidate.target.component.as_str() != REPO_COMPONENT
+                    || candidate.target.action.as_str() != action
+                {
+                    return false;
+                }
+                let ActionRunner::Command { command, .. } = &candidate.runner else {
+                    return false;
+                };
+                self.commands
+                    .get(command.as_str())
+                    .is_some_and(|value| value.contains(mode))
+            })
+        })
     }
 }
 
@@ -234,13 +286,15 @@ impl<'a> ModelBuilder<'a> {
             return Ok(());
         }
 
-        let first_app = self
-            .answers
-            .frontend_apps()
-            .first()
-            .expect("the frontend harness is enabled only with configured apps")
-            .clone();
-        self.add_frontend_contract_actions(&first_app)?;
+        if self.answers.scaffolded_frontend_contracts() {
+            let first_app = self
+                .answers
+                .frontend_apps()
+                .first()
+                .expect("the frontend harness is enabled only with configured apps")
+                .clone();
+            self.add_frontend_contract_actions(&first_app)?;
+        }
         for app in self.answers.frontend_apps() {
             let component = frontend_component(app)?;
             let component_name = component.id.to_string();
@@ -252,6 +306,15 @@ impl<'a> ModelBuilder<'a> {
     }
 
     fn add_frontend_contract_actions(&mut self, dependency_anchor: &FrontendApp) -> Result<()> {
+        let public_boundary_description = if self.answers.backend_language().is_go() {
+            // The go-react preset intentionally has no privileged backend/API
+            // surface yet. Do not claim that its artifact-only boundary check
+            // proves a backend dependency property that the preset does not
+            // model.
+            "Check public frontend manifests and artifacts for privileged markers."
+        } else {
+            "Check the repository-wide public/private dependency boundary."
+        };
         for (action_id, description, mode) in [
             (
                 FRONTEND_CONTRACT_DRIFT_ACTION,
@@ -260,7 +323,7 @@ impl<'a> ModelBuilder<'a> {
             ),
             (
                 FRONTEND_PUBLIC_BOUNDARY_ACTION,
-                "Check the repository-wide public/private dependency boundary.",
+                public_boundary_description,
                 "contracts-boundary-check",
             ),
         ] {
@@ -277,7 +340,7 @@ impl<'a> ModelBuilder<'a> {
             );
             action.description = Some(description.into());
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-            action.inputs = frontend_contract_inputs();
+            action.inputs = frontend_contract_inputs(action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION);
             action.provenance = provenance(&[
                 ("target", FieldProvenance::Inferred),
                 ("intent", FieldProvenance::Inherited),
@@ -396,12 +459,13 @@ impl<'a> ModelBuilder<'a> {
             action.description = Some(descriptor.description.into());
             action.effects = descriptor.effects.to_vec();
             action.inputs = frontend_inputs(&app.dir, descriptor.inputs);
-            action.depends_on = match descriptor.id {
-                "typecheck" => vec![
+            action.depends_on = match (self.answers.scaffolded_frontend_contracts(), descriptor.id)
+            {
+                (true, "typecheck") => vec![
                     target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION)?,
                     target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?,
                 ],
-                "build" => {
+                (true, "build") => {
                     vec![target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION)?]
                 }
                 _ => Vec::new(),
@@ -489,6 +553,9 @@ impl<'a> ModelBuilder<'a> {
     }
 
     fn insert_command(&mut self, key: &str, value: &str) -> Result<()> {
+        if value.trim().is_empty() {
+            bail!("generated command key '{key}' has an empty value");
+        }
         if let Some(existing) = self.commands.insert(key.into(), value.into())
             && existing != value
         {
@@ -543,6 +610,10 @@ impl<'a> ModelBuilder<'a> {
             ("targets", FieldProvenance::Inherited),
         ]);
         Ok(RepositoryRenderModel {
+            affected_ignore: DEFAULT_AFFECTED_IGNORE
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             components: self.components.into_values().collect(),
             actions: self.actions.into_values().collect(),
             profiles: vec![profile],
@@ -602,11 +673,24 @@ fn frontend_component(app: &FrontendApp) -> Result<ComponentSpec> {
 
 pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
     let normalized = name.to_ascii_lowercase();
+    if matches!(normalized.as_str(), REPO_COMPONENT | BACKEND_COMPONENT) {
+        bail!(
+            "Frontend app name '{name}' resolves to reserved repository component id '{normalized}'; choose a different frontend name"
+        );
+    }
     let value = if normalized.len() <= 64 {
         normalized
     } else {
         let digest = format!("{:x}", Sha256::digest(normalized.as_bytes()));
-        format!("{}-{}", &normalized[..51], &digest[..12])
+        let mut end = 51;
+        while !normalized.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}-{}",
+            normalized[..end].trim_end_matches('-'),
+            &digest[..12]
+        )
     };
     component_id(&value)
         .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
@@ -633,7 +717,7 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
     resolved
 }
 
-fn frontend_contract_inputs() -> Vec<String> {
+fn frontend_contract_inputs(include_public_artifacts: bool) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
         .iter()
         .copied()
@@ -647,6 +731,9 @@ fn frontend_contract_inputs() -> Vec<String> {
         ])
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    if include_public_artifacts {
+        inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
+    }
     inputs.sort();
     inputs.dedup();
     inputs
@@ -671,411 +758,4 @@ fn target_id(component: &str, action: &str) -> Result<TargetId> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn answers(contents: &str) -> RenderAnswers {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{contents}"
-            ),
-        )
-        .unwrap();
-        RenderAnswers::from_answers_file(&path).unwrap()
-    }
-
-    #[test]
-    fn go_and_multiple_frontends_have_distinct_component_targets() {
-        let answers = answers(
-            r#"
-backend_language = "go"
-go_database = "postgres"
-
-[[frontend_apps]]
-name = "web"
-dir = "frontend/web"
-coverage_threshold = 80
-kind = "vite"
-role = "spa"
-
-[[frontend_apps]]
-name = "admin"
-dir = "frontend/admin"
-coverage_threshold = 85
-kind = "vite"
-role = "admin"
-"#,
-        );
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-        assert!(
-            model
-                .components
-                .iter()
-                .any(|component| component.id.as_str() == "api"
-                    && component.adapters == ["go", "go-postgres"])
-        );
-        for target in ["api:test", "web:test", "admin:test"] {
-            assert!(
-                model
-                    .actions
-                    .iter()
-                    .any(|action| action.target.to_string() == target),
-                "missing {target}"
-            );
-        }
-        let migration = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == "api:migration-add")
-            .unwrap();
-        assert_eq!(
-            migration.inputs,
-            ["internal/database/migrations/**".to_owned()]
-        );
-        assert!(model.required_commands.contains(&"web_test_command".into()));
-        assert!(
-            model
-                .required_commands
-                .contains(&"admin_test_command".into())
-        );
-        assert!(
-            model
-                .profiles
-                .first()
-                .unwrap()
-                .targets
-                .iter()
-                .any(|target| target.to_string() == "web:test")
-        );
-
-        let drift_target = target_id(REPO_COMPONENT, FRONTEND_CONTRACT_DRIFT_ACTION).unwrap();
-        let boundary_target = target_id(REPO_COMPONENT, FRONTEND_PUBLIC_BOUNDARY_ACTION).unwrap();
-        assert_eq!(
-            model
-                .actions
-                .iter()
-                .filter(|action| action.target == drift_target)
-                .count(),
-            1
-        );
-        assert_eq!(
-            model
-                .actions
-                .iter()
-                .filter(|action| action.target == boundary_target)
-                .count(),
-            1
-        );
-        for component in ["web", "admin"] {
-            let typecheck = model
-                .actions
-                .iter()
-                .find(|action| action.target.to_string() == format!("{component}:typecheck"))
-                .unwrap();
-            assert!(typecheck.depends_on.contains(&drift_target));
-            assert!(typecheck.depends_on.contains(&boundary_target));
-
-            let build = model
-                .actions
-                .iter()
-                .find(|action| action.target.to_string() == format!("{component}:build"))
-                .unwrap();
-            assert_eq!(build.depends_on, std::slice::from_ref(&boundary_target));
-        }
-    }
-
-    #[test]
-    fn rust_repository_uses_adapter_actions_without_backend_identity_fields() {
-        let model = RepositoryRenderModel::from_answers(&answers("")).unwrap();
-        let authored = model.authored_toml().unwrap();
-        let commands = model.commands_toml().unwrap();
-
-        assert!(authored.contains("adapters = [\"rust\"]"));
-        assert!(!authored.contains("backend_language"));
-        assert!(commands.contains("api_test_command"));
-        assert!(!commands.contains("rust_test_command"));
-    }
-
-    #[test]
-    fn schema_freshness_is_part_of_the_default_profile_when_enabled() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            r#"repo_name = "ExampleProject"
-sqlx_enabled = true
-schema_dump_enabled = true
-migration_dir = "migrations"
-schema_dump_command = "scripts/dump-schema.sh"
-"#,
-        )
-        .unwrap();
-        let answers = RenderAnswers::from_answers_file(&path).unwrap();
-
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-        let profile = model.profiles.first().unwrap();
-        assert!(
-            profile
-                .targets
-                .iter()
-                .any(|target| target.to_string() == "api:schema")
-        );
-        let schema = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == "api:schema")
-            .unwrap();
-        assert!(
-            schema
-                .effects
-                .contains(&jig_contract::ActionEffect::ReadOnly)
-        );
-        assert!(
-            !schema
-                .effects
-                .contains(&jig_contract::ActionEffect::Worktree)
-        );
-    }
-
-    #[test]
-    fn frontend_actions_depend_on_their_shared_runner() {
-        let inputs = frontend_inputs("apps/web", &["src/**"]);
-
-        assert!(inputs.contains(&"apps/web/src/**".to_owned()));
-        assert!(inputs.contains(&"scripts/check-webapps.sh".to_owned()));
-        assert!(inputs.contains(&"scripts/contracts.mjs".to_owned()));
-        assert!(inputs.contains(&"scripts/enforce-coverage.cjs".to_owned()));
-        assert!(inputs.contains(&"scripts/web-node.cjs".to_owned()));
-        assert!(inputs.contains(&"openapi/**".to_owned()));
-        assert!(inputs.contains(&"packages/*-api-client/**".to_owned()));
-        assert!(inputs.contains(&"pnpm-workspace.yaml".to_owned()));
-    }
-
-    #[test]
-    fn generated_migration_action_uses_the_effective_configured_directory() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            r#"repo_name = "ExampleProject"
-sqlx_enabled = true
-migration_dir = "database/changes"
-"#,
-        )
-        .unwrap();
-        let answers = RenderAnswers::from_answers_file(&path).unwrap();
-
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-        let migration = model
-            .actions
-            .iter()
-            .find(|action| action.target.to_string() == "api:migration-add")
-            .unwrap();
-
-        assert_eq!(migration.inputs, ["database/changes/**".to_owned()]);
-    }
-
-    #[test]
-    fn generated_migration_action_rejects_the_repository_root_as_its_directory() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            r#"repo_name = "ExampleProject"
-sqlx_enabled = true
-migration_dir = "."
-"#,
-        )
-        .unwrap();
-
-        let error = RenderAnswers::from_answers_file(&path)
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("below the repository root"), "{error}");
-    }
-
-    #[test]
-    fn adapter_identity_survives_loading_v6_authored_answers() {
-        let answers = answers(
-            r#"
-[repository]
-default_check_profile = "verify"
-
-[[repository.components]]
-id = "api"
-root = "."
-adapters = ["go", "go-postgres"]
-"#,
-        );
-
-        assert!(answers.backend_language().is_go());
-        assert!(answers.go_database().is_postgres());
-        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-        assert!(
-            model
-                .actions
-                .iter()
-                .any(|action| action.target.to_string() == "api:sqlc")
-        );
-    }
-
-    #[test]
-    fn component_command_overrides_survive_v6_answer_reload() {
-        let initial = answers("rust_test_command = \"cargo nextest run\"\n");
-        let model = RepositoryRenderModel::from_answers(&initial).unwrap();
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-                model.authored_toml().unwrap(),
-                model.commands_toml().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-
-        assert_eq!(
-            reloaded.repository_command("rust_test_command"),
-            Some("cargo nextest run")
-        );
-    }
-
-    #[test]
-    fn go_and_typescript_command_overrides_survive_v6_answer_reload() {
-        let initial = answers(
-            r#"
-backend_language = "go"
-go_database = "postgres"
-go_test_command = "go test -race ./..."
-typescript_lint_command = "scripts/lint-all.sh"
-
-[[frontend_apps]]
-name = "web"
-dir = "frontend/web"
-coverage_threshold = 80
-kind = "vite"
-role = "spa"
-"#,
-        );
-        let model = RepositoryRenderModel::from_answers(&initial).unwrap();
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-                model.authored_toml().unwrap(),
-                model.commands_toml().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
-
-        assert_eq!(
-            reloaded.repository_command("go_test_command"),
-            Some("go test -race ./...")
-        );
-        assert_eq!(
-            reloaded.repository_command("typescript_lint_command"),
-            Some("scripts/lint-all.sh")
-        );
-        let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
-        assert_eq!(
-            serde_json::to_value(rerendered).unwrap(),
-            serde_json::to_value(model).unwrap()
-        );
-    }
-
-    #[test]
-    fn authored_multi_backend_model_survives_v6_recopy_resolution() {
-        let api = ComponentSpec {
-            adapters: vec!["go".into()],
-            ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
-        };
-        let worker = ComponentSpec {
-            adapters: vec!["rust".into()],
-            ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
-        };
-        let mut api_test = ActionSpec::new(
-            target_id("api", "test").unwrap(),
-            ActionIntent::Check,
-            ActionRunner::command("api_test_command"),
-        );
-        api_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-        let mut worker_test = ActionSpec::new(
-            target_id("worker", "test").unwrap(),
-            ActionIntent::Check,
-            ActionRunner::command("worker_test_command"),
-        );
-        worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
-        let profile = ProfileSpec::new(
-            ProfileId::parse("ci").unwrap(),
-            vec![api_test.target.clone(), worker_test.target.clone()],
-        );
-        let authored = RepositoryRenderModel {
-            components: vec![api, worker],
-            actions: vec![api_test, worker_test],
-            profiles: vec![profile],
-            default_check_profile: ProfileId::parse("ci").unwrap(),
-            required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
-            tools: Vec::new(),
-            commands: BTreeMap::from([
-                ("api_test_command".into(), "go test ./...".into()),
-                (
-                    "worker_test_command".into(),
-                    "cargo test -p example-worker".into(),
-                ),
-            ]),
-        };
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("answers.toml");
-        fs::write(
-            &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
-                authored.authored_toml().unwrap(),
-                authored.commands_toml().unwrap()
-            ),
-        )
-        .unwrap();
-
-        let answers = RenderAnswers::from_answers_file(&path).unwrap();
-        let rerendered = RepositoryRenderModel::from_answers(&answers).unwrap();
-
-        assert_eq!(
-            rerendered
-                .components
-                .iter()
-                .map(|component| component.id.as_str())
-                .collect::<Vec<_>>(),
-            ["api", "worker"]
-        );
-        assert_eq!(
-            rerendered
-                .actions
-                .iter()
-                .map(|action| action.target.to_string())
-                .collect::<Vec<_>>(),
-            ["api:test", "worker:test"]
-        );
-        assert_eq!(
-            rerendered.commands["worker_test_command"],
-            "cargo test -p example-worker"
-        );
-        assert_eq!(rerendered.default_check_profile.as_str(), "ci");
-    }
-}
+mod tests;

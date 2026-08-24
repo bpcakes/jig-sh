@@ -270,6 +270,10 @@ impl InitScaffoldPlan {
         self.backend.database() != ScaffoldDb::None
     }
 
+    pub(super) fn scaffolds_frontend_contracts(&self) -> bool {
+        !self.frontends.is_empty()
+    }
+
     #[cfg(test)]
     pub(super) fn write(&self, destination: &Path, force: bool) -> Result<Value> {
         let files = self.render_files()?;

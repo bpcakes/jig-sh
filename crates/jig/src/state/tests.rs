@@ -146,6 +146,44 @@ fn receipt_window_reads_a_bounded_tail_independent_of_old_history() {
 }
 
 #[test]
+fn receipt_window_rejects_an_unterminated_final_record() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    record_receipt(
+        &ctx,
+        ReceiptInput {
+            tool_name: "jig.test",
+            args: json!({}),
+            invoked_command_key: Some("test".into()),
+            plan_id: None,
+            started_at_ms: 1,
+            ended_at_ms: 2,
+            exit_status: 0,
+            stdout: "",
+            stderr: "",
+            evidence: None,
+            session_override: None,
+            collect_git_metadata: false,
+            collect_worktree_fingerprint: false,
+            worktree_fingerprint_override: None,
+        },
+    )
+    .unwrap();
+    let path = ctx.state_file("receipts.jsonl");
+    let mut bytes = fs::read(&path).unwrap();
+    assert_eq!(bytes.pop(), Some(b'\n'));
+    fs::write(&path, bytes).unwrap();
+
+    let error = read_receipt_window_with_bytes(&path, 1).unwrap_err();
+
+    assert!(
+        error.to_string().contains("not newline-terminated"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn receipt_plan_query_uses_stable_snapshot_when_advisory_locks_are_unsupported() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());
@@ -1544,74 +1582,4 @@ fn read_gzip_receipts(path: &Path) -> Vec<ReceiptRecord> {
         .collect()
 }
 
-#[test]
-fn receipts_archive_rejects_malformed_before_cutoff() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = receipts_archive(
-        &ctx,
-        StateArchiveRequest {
-            before: "2026-02-31".into(),
-            dry_run: true,
-        },
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("Invalid --before date"));
-}
-
-#[test]
-fn receipt_archive_and_export_reject_an_unterminated_final_record_before_publication() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    ensure_state_layout(&ctx).unwrap();
-    let mut receipt = receipt_record("receipt_torn", tool::CLIPPY, 0, DiffStat::default());
-    receipt.ended_at_ms = 10;
-    let source = serde_json::to_vec(&receipt).unwrap();
-    fs::write(ctx.state_file("receipts.jsonl"), &source).unwrap();
-
-    let archive_error = receipts_archive(
-        &ctx,
-        StateArchiveRequest {
-            before: "1000".into(),
-            dry_run: false,
-        },
-    )
-    .unwrap_err()
-    .to_string();
-    let export_path = temp.path().join("export.jsonl.gz");
-    let export_error = receipts_export(&ctx, "1000", &export_path)
-        .unwrap_err()
-        .to_string();
-
-    assert!(archive_error.contains("not newline-terminated"));
-    assert!(export_error.contains("not newline-terminated"));
-    assert_eq!(fs::read(ctx.state_file("receipts.jsonl")).unwrap(), source);
-    assert!(!export_path.exists());
-    assert!(!temp.path().join(".agent/.cache/state-backups").exists());
-    assert!(!temp.path().join(".agent/.cache/state-archives").exists());
-}
-
-#[test]
-fn state_tool_receipts_skip_git_metadata_collection() {
-    let temp = tempdir().unwrap();
-    write_fixture_repo(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    session_start(&ctx).unwrap();
-
-    let receipts = read_jsonl::<ReceiptRecord>(&ctx.state_file("receipts.jsonl")).unwrap();
-    let receipt = receipts
-        .iter()
-        .find(|receipt| receipt.tool_name == tool::SESSION_START)
-        .unwrap();
-    assert_eq!(receipt.args["operation"], "session_start");
-    assert!(receipt.changed_paths.is_empty());
-    assert_eq!(receipt.diff_stat.files, 0);
-    assert!(receipt.git_status_error.is_none());
-    assert!(receipt.git_diff_stat_error.is_none());
-}
+mod archive_validation;

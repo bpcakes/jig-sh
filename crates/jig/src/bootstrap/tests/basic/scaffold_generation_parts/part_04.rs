@@ -177,7 +177,13 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .iter()
         .find(|file| file.relative == "cmd/api/main.go")
         .unwrap();
+    let config = rendered
+        .iter()
+        .find(|file| file.relative == "internal/config/config.go")
+        .unwrap();
     assert!(api_main.contents.contains("godotenv.Load()"));
+    assert!(config.contents.contains("DatabaseURL"));
+    assert!(config.contents.contains("DATABASE_URL"));
     assert!(api_main.contents.contains("net.Listen(\"tcp\", cfg.Address)"));
     assert!(
         api_main
@@ -241,6 +247,8 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .unwrap();
     assert!(contracts.contents.contains(r#"run("go", ["run", "./cmd/openapi""#));
     assert!(!contracts.contents.contains(r#"run("cargo""#));
+    assert!(!contracts.contents.contains("execFile"));
+    assert!(!contracts.contents.contains("promisify"));
     assert!(contracts.contents.contains("async function withStagedClients()"));
     let httpapi_test = rendered
         .iter()
@@ -254,6 +262,57 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
             .contains(r#"filepath.Join("..", "..", "openapi", "public.json")"#)
     );
     assert!(!httpapi_test.contents.contains("runtime.Caller"));
+}
+
+#[test]
+fn go_react_without_database_keeps_runtime_dependencies_and_omits_database_boundaries() {
+    let planning_root = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            frontends: Vec::new(),
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            go_module: Some("example.com/ExampleProject".into()),
+            ..AnswerOpts::default()
+        },
+        planning_root.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let rendered = plan.render_files().unwrap();
+    let paths = rendered
+        .iter()
+        .map(|file| file.relative.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let go_mod = rendered
+        .iter()
+        .find(|file| file.relative == "go.mod")
+        .unwrap();
+    let api_main = rendered
+        .iter()
+        .find(|file| file.relative == "cmd/api/main.go")
+        .unwrap();
+    let config = rendered
+        .iter()
+        .find(|file| file.relative == "internal/config/config.go")
+        .unwrap();
+
+    assert!(go_mod.contents.contains("github.com/joho/godotenv v1.5.1"));
+    assert!(!go_mod.contents.contains("github.com/jackc/pgx"));
+    assert!(!go_mod.contents.contains("github.com/pressly/goose"));
+    assert!(!go_mod.contents.contains("github.com/sqlc-dev/sqlc"));
+    assert!(!go_mod.contents.contains("tool ("));
+    assert!(api_main.contents.contains("godotenv.Load()"));
+    assert!(!config.contents.contains("DatabaseURL"));
+    assert!(!config.contents.contains("DATABASE_URL"));
+    assert!(!paths.contains("cmd/api/database_command.go"));
+    assert!(!paths.contains("internal/database/database.go"));
+    assert!(!paths.contains("sqlc.yaml"));
 }
 
 #[test]
@@ -306,6 +365,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         );
     }
     assert!(workflow.contains("node scripts/contracts.mjs client-check"));
+    assert!(!workflow.contains("if [ -f scripts/contracts.mjs ]"));
     let build_step = workflow.find("Run build").unwrap();
     let client_check_step = workflow
         .find("Check generated API clients and public boundary")
@@ -324,14 +384,30 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             "{workflow_name} must install Rust before invoking scripts/jig"
         );
         assert!(
-            workflow.contains("go-version-file: go.mod"),
+            workflow.contains(r#"go-version-file: "go.mod""#),
             "{workflow_name} must use the generated Go module as its toolchain authority"
         );
         assert!(
             !workflow.contains(".go-version"),
             "{workflow_name} must not refer to the retired Go version file"
         );
-        assert!(workflow.contains("cache-dependency-path: go.mod"));
+        assert!(workflow.contains("cache-dependency-path: |\n            go.sum\n            go.mod"));
+        for path in [
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "go.work.sum",
+            "**/go.mod",
+            "**/go.sum",
+            "**/go.work",
+            "**/go.work.sum",
+        ] {
+            assert_eq!(
+                workflow.matches(&format!(r#"- "{path}""#)).count(),
+                2,
+                "{workflow_name} must track adapter input {path} on pull requests and pushes"
+            );
+        }
         assert_eq!(
             workflow
                 .matches(r#"- "internal/database/queries/**""#)
@@ -349,6 +425,22 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
+    for path in [
+        "go.mod",
+        "go.sum",
+        "go.work",
+        "go.work.sum",
+        "**/go.mod",
+        "**/go.sum",
+        "**/go.work",
+        "**/go.work.sum",
+    ] {
+        assert_eq!(
+            go_tests.matches(&format!(r#"- "{path}""#)).count(),
+            2,
+            "Go CI must track adapter input {path} on pull requests and pushes"
+        );
+    }
     assert_eq!(
         go_tests
             .matches(r#"- "scripts/test-postgres.sh""#)
@@ -374,8 +466,15 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert!(!config.contains("backend_language ="));
     assert!(!config.contains("go_database ="));
     assert!(config.contains("[repository]"));
+    assert!(config.contains(
+        r#"affected_ignore = [".env", ".env.*", "**/.env", "**/.env.*", "README.md", "**/README.md", "AGENTS.md", "**/AGENTS.md", "agent-map.md", "CHANGELOG.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "docs/**", "LICENSE", "LICENSE.*", ".github/**"]"#
+    ));
     assert!(config.contains("api_test_command = \"go test ./...\""));
     assert!(config.contains("web_test_command = \"scripts/check-webapps.sh check-one"));
+    assert!(config.contains("action = \"frontend-contract-drift\""));
+    assert!(config.contains("action = \"frontend-public-boundary\""));
+    assert!(config.contains("contracts-drift-check"));
+    assert!(config.contains("contracts-boundary-check"));
     let config_value = toml::from_str::<toml::Value>(&config).unwrap();
     assert_eq!(
         config_value["work"]["gates"][0]["profile"].as_str(),
@@ -385,6 +484,28 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert!(contract.contains(r#""name": "jig.migration_add""#));
     let contract_value = serde_json::from_str::<serde_json::Value>(&contract).unwrap();
     assert_eq!(contract_value["default_check_profile"], "verify");
+    assert_eq!(
+        contract_value["affected_ignore"],
+        serde_json::json!([
+            ".env",
+            ".env.*",
+            "**/.env",
+            "**/.env.*",
+            "README.md",
+            "**/README.md",
+            "AGENTS.md",
+            "**/AGENTS.md",
+            "agent-map.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "CODE_OF_CONDUCT.md",
+            "SECURITY.md",
+            "docs/**",
+            "LICENSE",
+            "LICENSE.*",
+            ".github/**"
+        ])
+    );
     for component in ["api", "web"] {
         assert!(contract_value["components"].as_array().unwrap().iter().any(
             |candidate| candidate["id"] == component
@@ -392,6 +513,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         assert!(contract_value["actions"].as_array().unwrap().iter().any(
             |action| action["target"]["component"] == component
                 && action["target"]["action"] == "test"
+        ));
+    }
+    for action in ["frontend-contract-drift", "frontend-public-boundary"] {
+        assert!(contract_value["actions"].as_array().unwrap().iter().any(
+            |candidate| candidate["target"]["component"] == "repo"
+                && candidate["target"]["action"] == action
         ));
     }
     let root_guide = fs::read_to_string(destination.join("AGENTS.md")).unwrap();

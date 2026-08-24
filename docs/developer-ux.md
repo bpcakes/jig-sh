@@ -166,7 +166,15 @@ scripts/jig check --profile verify --explain
 
 On contract-v6 repositories, `--affected BASE` narrows those normal candidates
 using committed changes from the Git merge base through `HEAD` plus staged,
-unstaged, and untracked paths. The plan explains each direct path and configured
+unstaged, untracked, and ignored `.env`/`.env.*` paths beneath directories that
+are not themselves ignored. Wholly ignored directories are pruned so generated
+dependency and build trees do not become source inputs; unignore a containing
+path when a repository intentionally stores an input there. Because observed
+ignored dotenv files have no committed baseline, generated repositories exclude
+their mere presence through reviewed `repository.affected_ignore` policy while
+retaining their contents in evidence fingerprints. An explicit action input
+overrides the affected-ignore policy when a check must be selected for that
+dotenv. The plan explains each direct path and configured
 component-dependent propagation; runtime-owned `.agent/state/` and
 `.agent/.cache/` data are ignored while checked-in contract inputs remain
 eligible. A valid empty
@@ -182,8 +190,9 @@ a different target, and separate partial runs cannot be combined into profile
 evidence. Legacy tool gates remain available for older contracts and explicit
 `work check --tool ...` compatibility.
 
-`--explain` is read-only: it prints the immutable plan, target reasons,
-dependency layers, effects, configuration digest, source identity, and input
+`--explain` is read-only: it prints the immutable plan, bounded target-reason
+previews (with total-count metadata when truncated), dependency layers, effects,
+configuration digest, source identity, and input
 digests, and executes no command or receipt write. Selectors are normalized and
 targets are sorted before the plan id is derived, so equivalent requests
 against the same repository state have the same plan id. The existing named

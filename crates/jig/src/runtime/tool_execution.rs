@@ -11,13 +11,13 @@ use crate::context::RepoContext;
 use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, ExecutionPhase, PhasePosition,
-    run_authoritative_execution_command,
+    SupervisedExecutionError, run_supervised_execution_command,
 };
 use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
-pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
+pub(super) fn execute_manifest_tool_request_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -28,7 +28,7 @@ pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     execute_manifest_tool_with_observer(ctx, tool_name, args, plan_id, record_receipt, observer)
 }
 
-pub(in crate::runtime) fn call_manifest_tool_with_observer(
+pub(super) fn call_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool: &ManifestTool,
     args_obj: &JsonObject,
@@ -42,7 +42,7 @@ pub(in crate::runtime) fn call_manifest_tool_with_observer(
     execute_manifest_tool_with_observer(ctx, &tool.name, args, plan_id, true, observer)
 }
 
-pub(in crate::runtime) fn execute_manifest_tool_with_observer(
+pub(super) fn execute_manifest_tool_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -63,7 +63,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_observer(
 }
 
 #[cfg(test)]
-pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerprint(
+pub(super) fn execute_manifest_tool_result_without_worktree_fingerprint(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -81,7 +81,7 @@ pub(in crate::runtime) fn execute_manifest_tool_result_without_worktree_fingerpr
     .into_value()
 }
 
-pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
+pub(super) fn execute_manifest_tool_with_options_for_work_check(
     ctx: &RepoContext,
     tool_name: &str,
     args: Value,
@@ -100,7 +100,7 @@ pub(in crate::runtime) fn execute_manifest_tool_with_options_for_work_check(
     )
 }
 
-pub(in crate::runtime) enum ManifestToolExecutionOutcome {
+pub(super) enum ManifestToolExecutionOutcome {
     Completed(Value),
     Cancelled(Value),
 }
@@ -124,9 +124,7 @@ impl ManifestToolExecutionOutcome {
     }
 }
 
-pub(in crate::runtime) fn manifest_tool_result_failure(
-    response: &Value,
-) -> Result<Option<(i32, String)>> {
+pub(super) fn manifest_tool_result_failure(response: &Value) -> Result<Option<(i32, String)>> {
     let tool_name = response
         .get("tool")
         .and_then(Value::as_str)
@@ -155,7 +153,7 @@ pub(in crate::runtime) fn manifest_tool_result_failure(
     )
 }
 
-pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: &str) -> String {
+pub(super) fn undeclared_tool_message(ctx: &RepoContext, tool_name: &str) -> String {
     if let Some(message) = jig_features::unavailable_tool_message(ctx, tool_name) {
         message
     } else {
@@ -245,16 +243,17 @@ fn execute_manifest_tool_with_options(
     }
 }
 
-pub(in crate::runtime) fn run_native_tool_with_control(
+pub(super) fn run_native_tool_with_control(
     ctx: &RepoContext,
     tool_name: &str,
     args_value: &Value,
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
-    if cancelled() {
-        return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
-    }
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or(jig_owned_process::OwnedProcessTreeError::TimedOut)?;
+    check_native_control(deadline, cancelled)?;
     let output = match jig_features::native_tool_kind(tool_name)
         .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
     {
@@ -271,7 +270,20 @@ pub(in crate::runtime) fn run_native_tool_with_control(
         }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
     }?;
+    // Once an in-process tool returns, its effects may already be durable.
+    // Completion is therefore authoritative; a late timeout observation must
+    // not report that a completed mutation did not happen.
     Ok(bound_native_output(output))
+}
+
+fn check_native_control(deadline: std::time::Instant, cancelled: &dyn Fn() -> bool) -> Result<()> {
+    if cancelled() {
+        return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
+    }
+    Ok(())
 }
 
 enum NativeToolRun {
@@ -566,321 +578,8 @@ fn receipt_id_for_failure_mode(
     }
 }
 
-struct CommandToolInvocation<'a> {
-    tool_name: &'a str,
-    command_key: &'a str,
-    command_text: &'a str,
-}
-
-enum ConfiguredCommandOutcome {
-    Completed(std::process::Output),
-    CancelledBeforeStart,
-    Cancelled,
-}
-
-fn execute_command_tool(
-    ctx: &RepoContext,
-    invocation: CommandToolInvocation<'_>,
-    args: Value,
-    plan_id: Option<String>,
-    options: ManifestToolExecutionOptions,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ManifestToolExecutionOutcome> {
-    let started = now_ms();
-    let run_result = run_configured_command(
-        ctx,
-        invocation.tool_name,
-        invocation.command_text,
-        &args,
-        position,
-        observer,
-    );
-    let ended = now_ms();
-    let output = match run_result {
-        Ok(ConfiguredCommandOutcome::Completed(output)) => output,
-        Ok(ConfiguredCommandOutcome::CancelledBeforeStart) => {
-            let message = format!(
-                "Configured command for {} was cancelled before it started",
-                invocation.tool_name
-            );
-            let response = tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id: None,
-            })?;
-            return Ok(ManifestToolExecutionOutcome::Cancelled(response));
-        }
-        Ok(ConfiguredCommandOutcome::Cancelled) => {
-            let message = format!(
-                "Configured command for {} was cancelled",
-                invocation.tool_name
-            );
-            let evidence = serde_json::json!({
-                "kind": "supervised_command",
-                "schema_version": 1,
-                "status": "cancelled",
-                "error": message,
-            });
-            let receipt_result = maybe_record_receipt(
-                ctx,
-                options.record_receipt,
-                ReceiptInput {
-                    tool_name: invocation.tool_name,
-                    args: args.clone(),
-                    invoked_command_key: Some(invocation.command_key.to_string()),
-                    plan_id,
-                    started_at_ms: started,
-                    ended_at_ms: ended,
-                    exit_status: 1,
-                    stdout: "",
-                    stderr: &message,
-                    evidence: Some(evidence),
-                    session_override: None,
-                    collect_git_metadata: options.collect_git_metadata,
-                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                    worktree_fingerprint_override: None,
-                },
-                &|| observer.cancelled(),
-            );
-            let receipt_id = match receipt_result {
-                Ok(receipt_id) => receipt_id,
-                Err(receipt_error) => {
-                    bail!("{message}\nreceipt recording also failed:\n{receipt_error:#}")
-                }
-            };
-            let response = tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id,
-            })?;
-            return Ok(ManifestToolExecutionOutcome::Cancelled(response));
-        }
-        Err(error) => {
-            let message = format!("{error:#}");
-            let evidence = serde_json::json!({
-                "kind": "supervised_command",
-                "schema_version": 1,
-                "status": "error",
-                "error": message,
-            });
-            let receipt_result = maybe_record_receipt(
-                ctx,
-                options.record_receipt,
-                ReceiptInput {
-                    tool_name: invocation.tool_name,
-                    args: args.clone(),
-                    invoked_command_key: Some(invocation.command_key.to_string()),
-                    plan_id,
-                    started_at_ms: started,
-                    ended_at_ms: ended,
-                    exit_status: 1,
-                    stdout: "",
-                    stderr: &message,
-                    evidence: Some(evidence),
-                    session_override: None,
-                    collect_git_metadata: options.collect_git_metadata,
-                    collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-                    worktree_fingerprint_override: None,
-                },
-                &|| observer.cancelled(),
-            );
-            let receipt_id = receipt_id_for_failure_mode(
-                options.failure_mode,
-                Some(message.clone()),
-                receipt_result,
-            )?;
-            return tool_response_value(ToolExecutionResponse {
-                ok: true,
-                tool: invocation.tool_name,
-                command_key: Some(invocation.command_key),
-                args,
-                result: ToolProcessResult {
-                    exit_status: 1,
-                    stdout: String::new(),
-                    stderr: message,
-                },
-                receipt_id,
-            })
-            .map(ManifestToolExecutionOutcome::Completed);
-        }
-    };
-    let exit_status = output.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
-    let receipt_result = maybe_record_receipt(
-        ctx,
-        options.record_receipt,
-        ReceiptInput {
-            tool_name: invocation.tool_name,
-            args: args.clone(),
-            invoked_command_key: Some(invocation.command_key.to_string()),
-            plan_id,
-            started_at_ms: started,
-            ended_at_ms: ended,
-            exit_status,
-            stdout: &stdout,
-            stderr: &stderr,
-            evidence: None,
-            session_override: None,
-            collect_git_metadata: options.collect_git_metadata,
-            collect_worktree_fingerprint: options.collect_worktree_fingerprint,
-            worktree_fingerprint_override: None,
-        },
-        &|| observer.cancelled(),
-    );
-
-    let tool_failure = tool_failure_message(
-        invocation.tool_name,
-        Some(invocation.command_key),
-        exit_status,
-        &stdout,
-        &stderr,
-    );
-    let receipt_id =
-        receipt_id_for_failure_mode(options.failure_mode, tool_failure, receipt_result)?;
-
-    tool_response_value(ToolExecutionResponse {
-        ok: true,
-        tool: invocation.tool_name,
-        command_key: Some(invocation.command_key),
-        args,
-        result: ToolProcessResult {
-            exit_status,
-            stdout,
-            stderr,
-        },
-        receipt_id,
-    })
-    .map(ManifestToolExecutionOutcome::Completed)
-}
-
-fn maybe_record_receipt(
-    ctx: &RepoContext,
-    should_record_receipt: bool,
-    input: ReceiptInput<'_>,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Option<String>> {
-    if should_record_receipt {
-        record_receipt_with_cancellation(ctx, input, cancelled).map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
-fn tool_failure_message(
-    tool_name: &str,
-    command_key: Option<&str>,
-    exit_status: i32,
-    stdout: &str,
-    stderr: &str,
-) -> Option<String> {
-    if exit_status == 0 {
-        return None;
-    }
-    Some(match command_key {
-        Some(command_key) => format!(
-            "{tool_name} failed with status {exit_status}\ncommand key: {command_key}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-        None => format!(
-            "{tool_name} failed with status {exit_status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-    })
-}
-
-fn run_configured_command(
-    ctx: &RepoContext,
-    tool_name: &str,
-    command_text: &str,
-    args: &Value,
-    position: PhasePosition,
-    observer: &mut dyn ExecutionControl,
-) -> Result<ConfiguredCommandOutcome> {
-    let mut command = Command::new("bash");
-    command
-        .current_dir(ctx.root())
-        .arg("-c")
-        .arg(command_text)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if tool_name == tool::MIGRATION_ADD {
-        let name = args
-            .get(args::NAME)
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("{} requires a name argument", tool::MIGRATION_ADD))?;
-        command.env("NAME", name);
-    }
-
-    let phase = ExecutionPhase::start(observer, tool_name, position);
-    let label = format!("Configured command for {tool_name}");
-    let result = match run_authoritative_execution_command(
-        &mut command,
-        ctx.command_timeout(),
-        ctx.command_output_limit(),
-        &label,
-        observer,
-    ) {
-        Ok(output) => Ok(ConfiguredCommandOutcome::Completed(std::process::Output {
-            status: output.status,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })),
-        Err(ExecutionCommandError::CancelledBeforeStart) => {
-            Ok(ConfiguredCommandOutcome::CancelledBeforeStart)
-        }
-        Err(ExecutionCommandError::Cancelled) => Ok(ConfiguredCommandOutcome::Cancelled),
-        Err(ExecutionCommandError::Failed(error)) => Err(error),
-    };
-    phase.finish(
-        observer,
-        result.as_ref().is_ok_and(|outcome| {
-            matches!(
-                outcome,
-                ConfiguredCommandOutcome::Completed(output) if output.status.success()
-            )
-        }),
-    );
-    result
-}
-
-#[derive(Serialize)]
-struct ToolExecutionResponse<'a> {
-    ok: bool,
-    tool: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    command_key: Option<&'a str>,
-    args: Value,
-    result: ToolProcessResult,
-    receipt_id: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ToolProcessResult {
-    exit_status: i32,
-    stdout: String,
-    stderr: String,
-}
-
-fn tool_response_value(response: ToolExecutionResponse<'_>) -> Result<Value> {
-    serde_json::to_value(response).context("Failed to serialize tool execution response")
-}
+mod command_tool;
+use command_tool::*;
 
 #[cfg(test)]
 mod tests {
@@ -903,6 +602,27 @@ mod tests {
         assert!(output.stdout.starts_with(&"x".repeat(limit)));
         assert!(output.stdout.ends_with("[output truncated by Jig]\n"));
         assert!(output.stderr.ends_with("[output truncated by Jig]\n"));
+    }
+
+    #[test]
+    fn native_runner_rejects_an_elapsed_timeout_before_start() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let error = run_native_tool_with_control(
+            &ctx,
+            tool::CONTRACT_CHECK,
+            &serde_json::json!({}),
+            Duration::ZERO,
+            &|| false,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<jig_owned_process::OwnedProcessTreeError>(),
+            Some(jig_owned_process::OwnedProcessTreeError::TimedOut)
+        ));
     }
 
     #[test]

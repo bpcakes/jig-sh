@@ -113,10 +113,12 @@ The template source metadata is a trust boundary. In generated or adopted repos,
 
 Normal writes append to these streams. Explicit maintenance uses streaming,
 validated whole-file rewrites: session compaction creates an exact recovery
-backup under ignored `.agent/.cache/state-backups/`, and receipt archiving writes
-compressed cold data under ignored `.agent/.cache/state-archives/`. Explicit
-receipt exports go only to the caller-selected path. None of these operations
-rewrite Git history.
+backup under ignored `.agent/.cache/state-backups/`, and state archiving writes
+old receipt records plus, when explicitly requested, completed run-event groups
+as separate compressed cold streams under ignored
+`.agent/.cache/state-archives/`. Explicit receipt exports
+go only to the caller-selected path. None of these operations rewrite Git
+history.
 
 The current session pointer is cache state, not part of the durable JSONL record model.
 

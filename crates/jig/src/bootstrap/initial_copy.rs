@@ -41,6 +41,7 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) allow_answers_overwrite: bool,
     pub(super) allow_contract_overwrite: bool,
     pub(super) reserved_output_paths: Vec<PathBuf>,
+    pub(super) scaffolded_frontend_contracts: bool,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
     pub(super) progress: CliProgress,
 }
@@ -90,7 +91,10 @@ pub(super) fn render_and_copy_bootstrap_template(
                 request.use_defaults,
             ),
         })?;
-    let (answers, mut notes) = answer_resolution.into_parts();
+    let (mut answers, mut notes) = answer_resolution.into_parts();
+    if request.scaffolded_frontend_contracts {
+        answers.enable_scaffolded_frontend_contracts();
+    }
     let full_to_minimal_transition = request.prior_harness_footprint
         == Some(HarnessFootprint::Full)
         && answers.is_minimal_footprint();

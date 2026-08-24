@@ -221,16 +221,16 @@ fn scan_sqlx_calls(path: &str, text: &str) -> Vec<SqlxCall> {
             while let Some(pos) = code[start..].find(name) {
                 let absolute = start + pos;
                 let after = &code[absolute + name.len()..];
-                if is_keyword_boundary(code[..absolute].chars().next_back()) {
-                    if let Some(checked) = sqlx_call_checked(after) {
-                        calls.push(SqlxCall {
-                            path: path.into(),
-                            line: index + 1,
-                            function: name.into(),
-                            checked,
-                            is_test: line_is_test,
-                        });
-                    }
+                if is_keyword_boundary(code[..absolute].chars().next_back())
+                    && let Some(checked) = sqlx_call_checked(after)
+                {
+                    calls.push(SqlxCall {
+                        path: path.into(),
+                        line: index + 1,
+                        function: name.into(),
+                        checked,
+                        is_test: line_is_test,
+                    });
                 }
                 start = absolute + name.len();
             }

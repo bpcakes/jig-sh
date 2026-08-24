@@ -110,6 +110,7 @@ struct WorkspaceSummary {
     contract_version: u32,
     config_digest: String,
     default_check_profile: Option<ProfileId>,
+    affected_ignore: Vec<String>,
 }
 
 #[derive(Clone, Debug, JsonSchema, Serialize)]
@@ -262,6 +263,7 @@ fn workspace_value(
         contract_version: catalog.contract_version(),
         config_digest: catalog.config_digest().to_owned(),
         default_check_profile: catalog.default_check_profile().cloned(),
+        affected_ignore: catalog.affected_ignore().to_vec(),
     }
 }
 

@@ -103,7 +103,8 @@ language.
 
 ## Graph rules
 
-The component dependency graph and target execution graph are separate.
+The component dependency graph and target execution graph are separate acyclic
+graphs; catalog loading rejects cycles in either graph.
 Component dependencies identify architectural relationships and help map
 changed files to affected components. Action dependencies determine ordering
 and concurrency for one run. A component dependency never implies that two
@@ -114,24 +115,47 @@ Affected selection begins with changed paths, matches action inputs and
 component roots, includes declared repository-global inputs, and then follows
 only the explicitly configured dependent propagation policy. Every selected
 target records a stable reason such as `direct_input`, `component_dependency`,
-`action_dependency`, `profile`, or `explicit`.
+`unclaimed_input`, `action_dependency`, `profile`, or `explicit`.
 
 `--affected BASE` is a modifier over the ordinary candidate set: Jig first
 resolves the explicit selectors or profile (using the default profile when
-neither was supplied), then keeps candidates on affected components. It is
-valid for that filter to produce an empty no-op plan. Only after filtering does
+neither was supplied), then keeps candidates on affected components. Selection
+is deliberately component-granular: action inputs contribute to their
+component's combined path authority, and a path matching any of those inputs
+retains every candidate target on that component. Per-action inputs explain and
+scope component ownership; they do not independently prune sibling actions. It is
+valid for that filter to produce an empty no-op plan when there are no changes
+or when every claimed change belongs outside the candidate set. Only after filtering does
 Jig add declared action dependencies, so component dependency policy never
 silently becomes execution ordering.
 
 The changed-path set is the sorted union of committed changes from the merge
-base of `BASE` and `HEAD` plus staged, unstaged, and untracked worktree paths.
-Append-only `.agent/` state is excluded. Action input globs use validated,
+base of `BASE` and `HEAD` plus staged, unstaged, untracked, and ignored
+`.env`/`.env.*` worktree paths whose containing directory is not itself ignored.
+An ignored dotenv has no committed baseline, so its presence is conservatively
+reported on every affected plan. Jig prunes wholly ignored directories so build
+products and dependency caches cannot enter source identity or turn every
+target precondition into a recursive generated-tree scan. A repository that
+intentionally keeps a dotenv under an otherwise ignored directory must unignore
+the containing path. Generated repositories counter the remaining unavoidable
+uncertainty with reviewed default ignore patterns while retaining observed
+dotenv contents in the source fingerprint; removing those defaults or declaring
+a dotenv as an explicit action input intentionally makes its presence keep the
+owning component's candidates. Append-only `.agent/`
+state is excluded. Action input globs use validated,
 repository-relative forward-slash syntax. An input outside its component root
 is an explicit repository-global input. If no action input matches a changed
 path, Jig falls back to the most-specific containing component root. A root
 component (`root = "."`) with declared inputs is intentionally input-authoritative
-and does not receive this fallback; an unrelated path can therefore produce an
-honest empty plan instead of selecting every root component. Dependent
+and does not receive this fallback. If no input or eligible component root
+claims a changed path, Jig fails closed by retaining every candidate with an
+`unclaimed_input` reason instead of silently treating the run as successful.
+Repositories can classify genuinely non-impacting paths with the reviewed
+`repository.affected_ignore` glob list. Ignore patterns are contract authority,
+cannot match `.jig.toml` or `scripts/jig`, and are applied before the fail-closed
+component-root ownership rule. An explicit action input takes precedence over
+an ignore so reviewed dependency authority cannot be shadowed.
+Dependent
 propagation follows reverse `depends_on` edges only while each source component
 opts into `propagate_affected_to_dependents`, and explanations retain the
 originating component and path.
@@ -156,6 +180,16 @@ not require an agent to supply arbitrary shell text. A delegated runner may
 later pass an already resolved selection to an existing monorepo engine. When a
 repository already owns a correct graph or cache, Jig delegates instead of
 building a second one.
+
+Execution verifies the complete repository source before and after each
+started target so a read-only target cannot silently mutate inputs used by a
+later target. An adjacent read-only target reuses the preceding postcondition;
+worktree-mutating targets and unobserved gaps take a fresh precondition. The
+execution phase therefore performs at most two source observations per started
+target and reports their actual `count` and `elapsed_ms` as
+`source_observations` in structured check output. This cost is intentionally
+linear in executed targets because coalescing postconditions would lose exact
+effect attribution and could let a later target run against mutated source.
 
 ## Human command-line experience
 
@@ -342,6 +376,12 @@ a Go API and TypeScript web component can do all of the following:
 The full workspace format, strict Clippy, tests, generated fixture checks,
 contract check, and structured-work gates must pass through the freshly built
 development binary.
+
+Durable run lookup scans the complete active `runs.jsonl` stream for the
+requested identity so it can reject duplicate or out-of-order lifecycle roots;
+the cheap identity prefilter reduces decoding, not I/O. Operators should use
+run archival to bound that active journal rather than weakening validation with
+an early-stop index.
 
 ## Design influences
 

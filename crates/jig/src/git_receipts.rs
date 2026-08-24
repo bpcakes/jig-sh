@@ -27,11 +27,10 @@ const MAX_TOTAL_INLINE_UNTRACKED_BYTES: u64 = 32 * 1024 * 1024;
 const FINGERPRINT_HASH_WRITE_CHUNK: usize = 64 * 1024;
 const MAX_RECEIPT_CHANGED_PATHS: usize = 100;
 const CHANGED_PATHS_DIGEST_DOMAIN: &[u8] = b"jig-changed-paths-v1\0";
-const AFFECTED_SOURCE_PATHSPECS: &[&str] = &[
-    ".",
-    ":(exclude).agent/state/**",
-    ":(exclude).agent/.cache/**",
-];
+/// Git pathspec authority shared by source fingerprints and affected planning.
+/// `.agent/**` is runtime and harness metadata; the canonical contract model is
+/// represented separately by `RepoContext::contract_digest`.
+const SOURCE_IDENTITY_PATHSPECS: &[&str] = &[".", ":(exclude).agent/**"];
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub(crate) struct DiffStat {
@@ -180,7 +179,7 @@ fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBu
         "--untracked-files=all",
         "--",
     ];
-    args.extend_from_slice(AFFECTED_SOURCE_PATHSPECS);
+    args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
     let output = git_output(root, &args, "git status --porcelain -z")?;
     parse_porcelain_status_z(&output.stdout).map(|entries| {
         entries
@@ -196,17 +195,46 @@ fn repo_affected_worktree_changed_path_buffers(root: &Path) -> Result<Vec<PathBu
     })
 }
 
+fn affected_ignored_dotenv_paths(root: &Path, submodule_depth: usize) -> Result<Vec<PathBuf>> {
+    if submodule_depth > crate::source_projection::MAX_SUBMODULE_DEPTH {
+        bail!("affected dotenv inputs exceed the supported submodule nesting depth");
+    }
+    let collection = GitReceiptCollection::Blocking;
+    let mut paths = ignored_dotenv_paths(root, collection)?;
+    for submodule in initialized_submodule_paths(root, collection)? {
+        for nested in affected_ignored_dotenv_paths(&root.join(&submodule), submodule_depth + 1)? {
+            paths.push(submodule.join(nested));
+        }
+    }
+    Ok(paths)
+}
+
+/// Returns presence-only observations for ignored dotenv files. Git has no
+/// committed value to diff for these paths, so they are not changed paths.
+/// The affected planner uses them only when an action explicitly declares the
+/// path as an input; they never become unclaimed changes or component-root
+/// fallbacks.
+pub(crate) fn repo_observed_ignored_dotenv_paths(root: &Path) -> Result<Vec<String>> {
+    let mut paths = affected_ignored_dotenv_paths(root, 0)?
+        .into_iter()
+        .map(strict_git_path)
+        .collect::<Result<Vec<_>>>()?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 /// Returns the deterministic union of paths changed from the merge base of an
 /// explicit Git revision to `HEAD` and paths currently changed in the
 /// worktree. Runtime-owned agent state and cache data are excluded because
-/// planning and execution mutate them; committed contract and plan inputs stay
-/// visible to affected selection.
+/// planning and execution mutate them. Contract authority is tracked by the
+/// separately canonicalized repository configuration digest.
 pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<String>> {
     let base_commit = resolve_commit(root, base, "affected Git base")?;
     let head_commit = resolve_commit(root, "HEAD", "Git HEAD for affected selection")?;
     let range = format!("{base_commit}...{head_commit}");
     let mut args = vec!["diff", "--name-only", "-z", "--no-renames", &range, "--"];
-    args.extend_from_slice(AFFECTED_SOURCE_PATHSPECS);
+    args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
     let committed = git_output(root, &args, "git diff for affected selection")?;
 
     let mut paths = parse_name_only_z(&committed.stdout)?;
@@ -221,18 +249,19 @@ pub(crate) fn repo_changed_paths_since(root: &Path, base: &str) -> Result<Vec<St
 }
 
 fn resolve_commit(root: &Path, revision: &str, label: &str) -> Result<String> {
-    let revision = format!("{revision}^{{commit}}");
+    let peeled = revision.strip_suffix("^{commit}").unwrap_or(revision);
+    let resolved_revision = format!("{peeled}^{{commit}}");
     let output = git_output(
         root,
-        &["rev-parse", "--verify", "--end-of-options", &revision],
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &resolved_revision,
+        ],
         label,
     )
-    .with_context(|| {
-        format!(
-            "Invalid {label} {:?}",
-            revision.trim_end_matches("^{commit}")
-        )
-    })?;
+    .with_context(|| format!("Invalid {label} {revision:?}"))?;
     let object_id = String::from_utf8(output.stdout)
         .with_context(|| format!("{label} resolved to a non-UTF-8 object id"))?;
     let object_id = object_id.trim();
@@ -424,42 +453,33 @@ fn repo_worktree_fingerprint_inner(
     collection.ensure_active()?;
     let committed_source = committed_source_tree_identity(root, collection)?;
     collection.ensure_active()?;
-    let status = collection.git_output(
+    let mut status_args = vec![
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--",
+    ];
+    status_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
+    let status = collection.git_output(root, &status_args, "git status --porcelain")?;
+    collection.ensure_active()?;
+    let mut unstaged_args = vec!["diff", "--binary", "--"];
+    unstaged_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
+    let unstaged = collection.git_output(root, &unstaged_args, "git diff --binary")?;
+    collection.ensure_active()?;
+    let mut staged_args = vec!["diff", "--cached", "--binary", "--"];
+    staged_args.extend_from_slice(SOURCE_IDENTITY_PATHSPECS);
+    let staged = collection.git_output(root, &staged_args, "git diff --cached --binary")?;
+    collection.ensure_active()?;
+    let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
+    let untracked = untracked_file_contents(
         root,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git status --porcelain",
+        &status.stdout,
+        &mut remaining_inline_bytes,
+        collection,
     )?;
     collection.ensure_active()?;
-    let unstaged = collection.git_output(
-        root,
-        &["diff", "--binary", "--", ".", ":(exclude).agent/**"],
-        "git diff --binary",
-    )?;
-    collection.ensure_active()?;
-    let staged = collection.git_output(
-        root,
-        &[
-            "diff",
-            "--cached",
-            "--binary",
-            "--",
-            ".",
-            ":(exclude).agent/**",
-        ],
-        "git diff --cached --binary",
-    )?;
-    collection.ensure_active()?;
-    let untracked = untracked_file_contents(root, &status.stdout, collection)?;
-    collection.ensure_active()?;
-    let ignored_dotenv = ignored_dotenv_contents(root, collection)?;
+    let ignored_dotenv = ignored_dotenv_contents(root, &mut remaining_inline_bytes, collection)?;
     collection.ensure_active()?;
     let submodules = initialized_submodule_fingerprints(root, collection, submodule_depth)?;
 
@@ -564,6 +584,7 @@ fn committed_source_tree_without_agent_state(
 fn untracked_file_contents(
     root: &Path,
     status_stdout: &[u8],
+    remaining_inline_bytes: &mut u64,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<u8>> {
     let paths = parse_porcelain_status_z(status_stdout)?
@@ -571,30 +592,52 @@ fn untracked_file_contents(
         .filter(|entry| entry.status == "??")
         .map(|entry| entry.path)
         .collect::<Vec<_>>();
-    path_fingerprint_contents(root, paths, collection)
+    path_fingerprint_contents(root, paths, remaining_inline_bytes, collection)
 }
 
-fn ignored_dotenv_contents(root: &Path, collection: GitReceiptCollection<'_>) -> Result<Vec<u8>> {
+fn ignored_dotenv_contents(
+    root: &Path,
+    remaining_inline_bytes: &mut u64,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Vec<u8>> {
+    path_fingerprint_contents(
+        root,
+        ignored_dotenv_paths(root, collection)?,
+        remaining_inline_bytes,
+        collection,
+    )
+}
+
+fn ignored_dotenv_paths(root: &Path, collection: GitReceiptCollection<'_>) -> Result<Vec<PathBuf>> {
     let mut args = vec![
         "ls-files",
         "--others",
         "--ignored",
         "--exclude-standard",
+        "--directory",
         "-z",
         "--",
     ];
     args.extend_from_slice(crate::source_projection::IGNORED_DOTENV_PATHSPECS);
     let output = collection.git_output(root, &args, "git ls-files for ignored dotenv files")?;
-    path_fingerprint_contents(root, parse_name_only_z(&output.stdout)?, collection)
+    // `--directory` lets Git prune a wholly ignored tree instead of walking
+    // build products and dependency caches looking for dotenv-shaped files.
+    // Directory records end in `/`; only actual files are source inputs.
+    parse_name_only_z(&output.stdout).map(|paths| {
+        paths
+            .into_iter()
+            .filter(|path| !path.as_os_str().as_encoded_bytes().ends_with(b"/"))
+            .collect()
+    })
 }
 
 fn path_fingerprint_contents(
     root: &Path,
     paths: Vec<PathBuf>,
+    remaining_inline_bytes: &mut u64,
     collection: GitReceiptCollection<'_>,
 ) -> Result<Vec<u8>> {
     let mut contents = Vec::new();
-    let mut remaining_inline_bytes = MAX_TOTAL_INLINE_UNTRACKED_BYTES;
     for path in paths {
         collection.ensure_active()?;
         let full_path = root.join(&path);
@@ -612,7 +655,7 @@ fn path_fingerprint_contents(
             root,
             &full_path,
             &metadata,
-            &mut remaining_inline_bytes,
+            remaining_inline_bytes,
             collection,
         )?;
         contents.push(0);
@@ -626,6 +669,28 @@ fn initialized_submodule_fingerprints(
     collection: GitReceiptCollection<'_>,
     submodule_depth: usize,
 ) -> Result<Vec<u8>> {
+    let paths = initialized_submodule_paths(root, collection)?;
+
+    let mut fingerprints = Vec::new();
+    for relative in paths {
+        collection.ensure_active()?;
+        let fingerprint = repo_worktree_fingerprint_inner(
+            &root.join(&relative),
+            collection,
+            submodule_depth + 1,
+        )?;
+        fingerprints.extend_from_slice(relative.as_os_str().as_encoded_bytes());
+        fingerprints.push(0);
+        fingerprints.extend_from_slice(fingerprint.worktree_fingerprint.as_bytes());
+        fingerprints.push(0);
+    }
+    Ok(fingerprints)
+}
+
+fn initialized_submodule_paths(
+    root: &Path,
+    collection: GitReceiptCollection<'_>,
+) -> Result<Vec<PathBuf>> {
     if !root.join(".gitmodules").is_file() {
         return Ok(Vec::new());
     }
@@ -654,21 +719,7 @@ fn initialized_submodule_fingerprints(
         }
     };
     paths.sort();
-
-    let mut fingerprints = Vec::new();
-    for relative in paths {
-        collection.ensure_active()?;
-        let fingerprint = repo_worktree_fingerprint_inner(
-            &root.join(&relative),
-            collection,
-            submodule_depth + 1,
-        )?;
-        fingerprints.extend_from_slice(relative.as_os_str().as_encoded_bytes());
-        fingerprints.push(0);
-        fingerprints.extend_from_slice(fingerprint.worktree_fingerprint.as_bytes());
-        fingerprints.push(0);
-    }
-    Ok(fingerprints)
+    Ok(paths)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -844,991 +895,8 @@ fn system_time_key(time: Option<SystemTime>) -> u128 {
         .unwrap_or_default()
 }
 
-fn git_output(root: &Path, args: &[&str], label: &str) -> Result<Output> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
-    configure_read_only_git_environment(&mut command);
-
-    run_checked_output_with_context(
-        &mut command,
-        || format!("Failed to run {label} in {}", root.display()),
-        |output| {
-            format!(
-                "{label} failed with {}.\nstdout:\n{}\nstderr:\n{}",
-                format_exit_status(&output.status),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        },
-    )
-}
-
-fn git_output_unchecked(root: &Path, args: &[&str], label: &str) -> Result<Output> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
-    configure_read_only_git_environment(&mut command);
-    command
-        .output()
-        .with_context(|| format!("Failed to run {label} in {}", root.display()))
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_output_unchecked_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    run_git_command_with_cancellation(root, &mut command, label, cancelled)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_output_unchecked_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let output = git_output_unchecked(root, args, label)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(output)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_output_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output = run_git_command_with_cancellation(root, &mut command, label, cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "{label} failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })?;
-    Ok(output)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_output_with_cancellation(
-    root: &Path,
-    args: &[&str],
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let output = git_output(root, args, label)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(output)
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn run_git_command_with_cancellation(
-    root: &Path,
-    command: &mut Command,
-    label: &str,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<Output> {
-    configure_read_only_git_environment(command);
-    let output = match run_owned_process_tree_with_output_limits(
-        command,
-        Duration::MAX,
-        ProcessOutputLimits {
-            stdout: usize::MAX,
-            stderr: usize::MAX,
-        },
-        cancelled,
-    ) {
-        Ok(output) => output,
-        Err(error) if error.is_cancellation() => {
-            return Err(GitReceiptCollectionCancelled.into());
-        }
-        Err(error) => {
-            return Err(anyhow::Error::new(error)
-                .context(format!("Failed to run {label} in {}", root.display())));
-        }
-    };
-    let stdout = output
-        .stdout
-        .context("supervised Git command did not capture stdout")?;
-    let stderr = output
-        .stderr
-        .context("supervised Git command did not capture stderr")?;
-    if !stdout.complete || !stderr.complete {
-        bail!(
-            "Failed to capture complete output from {label} in {}",
-            root.display()
-        );
-    }
-    if stdout.truncated || stderr.truncated {
-        bail!(
-            "Unexpected bounded output from {label} in {}",
-            root.display()
-        );
-    }
-    Ok(Output {
-        status: output.status,
-        stdout: stdout.bytes,
-        stderr: stderr.bytes,
-    })
-}
-
-fn git_hash_object(root: &Path, input: &[u8]) -> Result<String> {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_read_only_git_environment(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
-
-    child
-        .stdin
-        .as_mut()
-        .context("git hash-object stdin was not available")?
-        .write_all(input)
-        .context("Failed to write worktree fingerprint input to git hash-object")?;
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git hash-object")?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_hash_object_with_cancellation(
-    root: &Path,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    let mut input_file =
-        NamedTempFile::new().context("Failed to stage worktree fingerprint hash input")?;
-    write_fingerprint_hash_input(&mut input_file, input, cancelled)?;
-    let stdin = input_file
-        .reopen()
-        .context("Failed to reopen worktree fingerprint hash input")?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::from(stdin))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output =
-        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn write_fingerprint_hash_input(
-    writer: &mut impl Write,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<()> {
-    let collection = GitReceiptCollection::Cancellable(cancelled);
-    for chunk in input.chunks(FINGERPRINT_HASH_WRITE_CHUNK) {
-        collection.ensure_active()?;
-        writer
-            .write_all(chunk)
-            .context("Failed to write worktree fingerprint hash input")?;
-    }
-    collection.ensure_active()?;
-    writer
-        .flush()
-        .context("Failed to flush worktree fingerprint hash input")?;
-    collection.ensure_active()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_hash_object_with_cancellation(
-    root: &Path,
-    input: &[u8],
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let hash = git_hash_object(root, input)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(hash)
-}
-
-fn git_hash_file(root: &Path, full_path: &Path) -> Result<String> {
-    let mut file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_read_only_git_environment(&mut command);
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("Failed to start git hash-object in {}", root.display()))?;
-
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .context("git hash-object stdin was not available")?;
-        copy(&mut file, &mut stdin)
-            .with_context(|| format!("Failed to hash untracked file {}", full_path.display()))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for git hash-object")?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn git_hash_file_with_cancellation(
-    root: &Path,
-    full_path: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    let file = fs::File::open(full_path)
-        .with_context(|| format!("Failed to open untracked file {}", full_path.display()))?;
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .args(["hash-object", "--stdin"])
-        .stdin(Stdio::from(file))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let output =
-        run_git_command_with_cancellation(root, &mut command, "git hash-object", cancelled)?;
-    require_success(&output, |output| {
-        format!(
-            "git hash-object failed with {}.\nstdout:\n{}\nstderr:\n{}",
-            format_exit_status(&output.status),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        )
-    })?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn git_hash_file_with_cancellation(
-    root: &Path,
-    full_path: &Path,
-    cancelled: &dyn Fn() -> bool,
-) -> Result<String> {
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    let hash = git_hash_file(root, full_path)?;
-    GitReceiptCollection::Cancellable(cancelled).ensure_active()?;
-    Ok(hash)
-}
-
-fn configure_read_only_git_environment(command: &mut Command) {
-    scrub_known_repository_git_environment(command);
-    // Receipt and gate fingerprint probes are observational. In particular,
-    // `git status` must not refresh stat data by taking an optional index lock.
-    command.env("GIT_OPTIONAL_LOCKS", "0");
-}
-
-pub(crate) fn parse_diff_stat_output(stdout: &str) -> Result<DiffStat> {
-    let mut diff_stat = DiffStat::default();
-    for (index, line) in stdout.lines().enumerate() {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 3 {
-            bail!("Unexpected git diff --numstat line {}: {}", index + 1, line);
-        }
-        diff_stat.files += 1;
-        diff_stat.insertions += parse_numstat_count(fields[0], index + 1, "insertions")?;
-        diff_stat.deletions += parse_numstat_count(fields[1], index + 1, "deletions")?;
-    }
-    Ok(diff_stat)
-}
-
-fn parse_numstat_count(field: &str, line_number: usize, kind: &str) -> Result<u64> {
-    if field == "-" {
-        return Ok(0);
-    }
-    field.parse::<u64>().with_context(|| {
-        format!("Invalid git diff --numstat {kind} count on line {line_number}: {field}")
-    })
-}
+mod git_command;
+use git_command::*;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::cell::Cell;
-    use std::ffi::OsStr;
-    use std::time::{Duration, UNIX_EPOCH};
-    use tempfile::tempdir;
-
-    #[test]
-    fn read_only_git_commands_disable_optional_locks() {
-        let mut command = Command::new("git");
-        command.env("GIT_OPTIONAL_LOCKS", "1");
-
-        configure_read_only_git_environment(&mut command);
-
-        assert_eq!(
-            command
-                .get_envs()
-                .find(|(name, _)| *name == OsStr::new("GIT_OPTIONAL_LOCKS"))
-                .and_then(|(_, value)| value),
-            Some(OsStr::new("0"))
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn cancellation_before_fingerprint_git_spawn_remains_typed() {
-        let temp = tempdir().unwrap();
-        let calls = Cell::new(0);
-        let error = repo_worktree_fingerprint_with_cancellation(temp.path(), &|| {
-            let current = calls.get();
-            calls.set(current + 1);
-            current == 1
-        })
-        .unwrap_err();
-
-        assert!(is_git_receipt_collection_cancellation(&error), "{error:#}");
-        assert_eq!(calls.get(), 2);
-    }
-
-    #[test]
-    fn source_authority_ignores_ambient_repository_redirects() {
-        let _env = crate::test_env::lock_env();
-        let repository = tempdir().unwrap();
-        let redirected = tempdir().unwrap();
-        for (root, contents) in [
-            (repository.path(), "repository"),
-            (redirected.path(), "redirected"),
-        ] {
-            run_git(root, &["init"]);
-            run_git(root, &["config", "user.email", "fixture@example.com"]);
-            run_git(root, &["config", "user.name", "Fixture"]);
-            std::fs::write(root.join("tracked.txt"), contents).unwrap();
-            run_git(root, &["add", "tracked.txt"]);
-            run_git(root, &["commit", "-m", "fixture"]);
-        }
-        let expected_head = git_text(repository.path(), &["rev-parse", "HEAD"]);
-        let expected_fingerprint = repo_worktree_fingerprint(repository.path()).unwrap();
-        let _git_dir = crate::test_env::EnvVarGuard::set("GIT_DIR", redirected.path().join(".git"));
-        let _work_tree = crate::test_env::EnvVarGuard::set("GIT_WORK_TREE", redirected.path());
-        let _index = crate::test_env::EnvVarGuard::set(
-            "GIT_INDEX_FILE",
-            redirected.path().join(".git/index"),
-        );
-
-        assert_eq!(
-            repository_source_snapshot(repository.path())
-                .unwrap()
-                .head_commit,
-            Some(expected_head)
-        );
-        assert_eq!(
-            repo_worktree_fingerprint(repository.path()).unwrap(),
-            expected_fingerprint
-        );
-    }
-
-    #[test]
-    fn fingerprint_hash_staging_checks_cancellation_between_chunks() {
-        let input = vec![b'x'; FINGERPRINT_HASH_WRITE_CHUNK * 3];
-        let checks = Cell::new(0);
-        let mut staged = Vec::new();
-
-        let error = write_fingerprint_hash_input(&mut staged, &input, &|| {
-            let current = checks.get();
-            checks.set(current + 1);
-            current >= 1
-        })
-        .unwrap_err();
-
-        assert!(is_git_receipt_collection_cancellation(&error));
-        assert_eq!(staged.len(), FINGERPRINT_HASH_WRITE_CHUNK);
-    }
-
-    #[test]
-    fn parse_diff_stat_output_counts_binary_files_without_swallowing_other_errors() {
-        let diff_stat =
-            parse_diff_stat_output("12\t3\tsrc/main.rs\n-\t-\tassets/logo.png\n").unwrap();
-        assert_eq!(diff_stat.files, 2);
-        assert_eq!(diff_stat.insertions, 12);
-        assert_eq!(diff_stat.deletions, 3);
-    }
-
-    #[test]
-    fn parse_diff_stat_output_rejects_invalid_counts() {
-        let error = parse_diff_stat_output("oops\t3\tsrc/main.rs\n")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("Invalid git diff --numstat insertions count"));
-    }
-
-    #[test]
-    fn collect_git_receipt_metadata_records_git_failures() {
-        let temp = tempdir().unwrap();
-        let metadata = collect_git_receipt_metadata(temp.path());
-
-        assert!(metadata.changed_paths.is_empty());
-        assert_eq!(metadata.changed_path_count, None);
-        assert!(!metadata.changed_paths_truncated);
-        assert_eq!(metadata.changed_paths_digest, None);
-        assert_eq!(metadata.diff_stat.files, 0);
-        assert!(metadata.git_status_error.is_some());
-        assert!(metadata.git_diff_stat_error.is_some());
-        assert!(metadata.worktree_fingerprint.is_none());
-        assert!(metadata.worktree_fingerprint_error.is_some());
-    }
-
-    #[test]
-    fn cancelled_receipt_metadata_starts_no_git_subcollection() {
-        let temp = tempdir().unwrap();
-        let checks = Cell::new(0);
-
-        let metadata = collect_git_receipt_metadata_with_cancellation(temp.path(), &|| {
-            checks.set(checks.get() + 1);
-            true
-        });
-
-        assert!(metadata.changed_paths.is_empty());
-        assert_eq!(metadata.changed_path_count, None);
-        assert_eq!(metadata.diff_stat.files, 0);
-        assert!(
-            metadata
-                .git_status_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert!(
-            metadata
-                .git_diff_stat_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert!(metadata.worktree_fingerprint.is_none());
-        assert!(
-            metadata
-                .worktree_fingerprint_error
-                .as_deref()
-                .is_some_and(|error| error.contains("collection was cancelled"))
-        );
-        assert_eq!(checks.get(), 3);
-    }
-
-    #[test]
-    fn changed_paths_preserve_spaces_and_rename_paths() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("old name.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "old name.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        run_git(temp.path(), &["mv", "old name.txt", "new name.txt"]);
-        std::fs::write(temp.path().join("loose note.txt"), "untracked").unwrap();
-
-        let paths = repo_changed_paths(temp.path()).unwrap();
-
-        assert!(paths.contains(&"new name.txt".to_string()));
-        assert!(paths.contains(&"old name.txt".to_string()));
-        assert!(paths.contains(&"loose note.txt".to_string()));
-    }
-
-    #[test]
-    fn affected_changed_paths_include_commits_and_the_current_worktree() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join("api")).unwrap();
-        std::fs::create_dir_all(temp.path().join("web")).unwrap();
-        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
-        std::fs::write(temp.path().join("api/base.go"), "package api\n").unwrap();
-        std::fs::write(temp.path().join("web/base.ts"), "export {};\n").unwrap();
-        std::fs::write(temp.path().join(".agent/state/runs.jsonl"), "base\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "base fixture"]);
-        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
-
-        std::fs::write(temp.path().join("api/committed.go"), "package api\n").unwrap();
-        run_git(temp.path(), &["add", "api/committed.go"]);
-        run_git(temp.path(), &["commit", "-m", "committed change"]);
-        std::fs::write(temp.path().join("web/base.ts"), "export const value = 1;\n").unwrap();
-        std::fs::write(temp.path().join("api/untracked.go"), "package api\n").unwrap();
-        std::fs::write(
-            temp.path().join(".agent/state/runs.jsonl"),
-            "base\nruntime\n",
-        )
-        .unwrap();
-
-        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
-
-        assert_eq!(
-            paths,
-            ["api/committed.go", "api/untracked.go", "web/base.ts"]
-        );
-    }
-
-    #[test]
-    fn affected_changed_paths_include_a_staged_contract_manifest_but_not_runtime_state() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
-        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
-        std::fs::write(temp.path().join(".agent/state/runs.jsonl"), "base\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "base fixture"]);
-        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
-
-        std::fs::write(
-            temp.path().join(".agent/jig-contract.json"),
-            "{\"version\":6}\n",
-        )
-        .unwrap();
-        run_git(temp.path(), &["add", ".agent/jig-contract.json"]);
-        std::fs::write(
-            temp.path().join(".agent/state/runs.jsonl"),
-            "base\nruntime\n",
-        )
-        .unwrap();
-
-        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
-
-        assert_eq!(paths, [".agent/jig-contract.json"]);
-    }
-
-    #[test]
-    fn affected_changed_paths_include_a_committed_contract_manifest() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
-        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "base fixture"]);
-        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
-        std::fs::write(
-            temp.path().join(".agent/jig-contract.json"),
-            "{\"version\":6}\n",
-        )
-        .unwrap();
-        run_git(temp.path(), &["add", ".agent/jig-contract.json"]);
-        run_git(temp.path(), &["commit", "-m", "contract change"]);
-
-        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
-
-        assert_eq!(paths, [".agent/jig-contract.json"]);
-    }
-
-    #[test]
-    fn affected_changed_paths_include_an_untracked_contract_manifest() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("README.md"), "fixture\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "base fixture"]);
-        let base = git_text(temp.path(), &["rev-parse", "HEAD"]);
-        std::fs::create_dir_all(temp.path().join(".agent")).unwrap();
-        std::fs::write(temp.path().join(".agent/jig-contract.json"), "{}\n").unwrap();
-
-        let paths = repo_changed_paths_since(temp.path(), &base).unwrap();
-
-        assert_eq!(paths, [".agent/jig-contract.json"]);
-    }
-
-    #[test]
-    fn affected_changed_paths_reject_invalid_bases_without_option_injection() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("base.txt"), "base\n").unwrap();
-        run_git(temp.path(), &["add", "base.txt"]);
-        run_git(temp.path(), &["commit", "-m", "base fixture"]);
-
-        let error = repo_changed_paths_since(temp.path(), "--help")
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("Invalid affected Git base"));
-        assert!(error.contains("--help"));
-    }
-
-    #[test]
-    fn receipt_metadata_excludes_agent_state_from_paths_and_diff_stat() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
-        std::fs::write(temp.path().join("src.rs"), "one\n").unwrap();
-        std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "old\n").unwrap();
-        run_git(temp.path(), &["add", "."]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        std::fs::write(temp.path().join("src.rs"), "one\ntwo\n").unwrap();
-        std::fs::write(
-            temp.path().join(".agent/state/receipts.jsonl"),
-            "old\nnew\n",
-        )
-        .unwrap();
-        std::fs::write(temp.path().join("note.txt"), "untracked\n").unwrap();
-        std::fs::write(
-            temp.path().join(".agent/state/untracked.jsonl"),
-            "ignored by receipt metadata\n",
-        )
-        .unwrap();
-
-        let metadata = collect_git_receipt_metadata_without_worktree_fingerprint(temp.path());
-
-        assert_eq!(metadata.changed_paths, ["note.txt", "src.rs"]);
-        assert_eq!(metadata.changed_path_count, Some(2));
-        assert!(!metadata.changed_paths_truncated);
-        assert!(metadata.changed_paths_digest.is_some());
-        assert_eq!(metadata.diff_stat.files, 1);
-        assert_eq!(metadata.diff_stat.insertions, 1);
-        assert_eq!(metadata.diff_stat.deletions, 0);
-    }
-
-    #[test]
-    fn changed_path_preview_is_bounded_sorted_and_digest_covers_the_full_set() {
-        let paths = (0..105)
-            .rev()
-            .map(|index| format!("src/path-{index:03}.rs"))
-            .chain(["src/path-042.rs".to_string()])
-            .collect::<Vec<_>>();
-        let bounded = bounded_changed_paths(paths.clone());
-        let reordered = bounded_changed_paths(paths.into_iter().rev().collect());
-
-        assert_eq!(bounded.preview.len(), MAX_RECEIPT_CHANGED_PATHS);
-        assert_eq!(bounded.total, 105);
-        assert!(bounded.truncated);
-        assert_eq!(bounded.preview[0], "src/path-000.rs");
-        assert_eq!(bounded.preview[99], "src/path-099.rs");
-        assert!(bounded.digest.starts_with("sha256:"));
-        assert_eq!(bounded.digest, reordered.digest);
-        assert_eq!(bounded.preview, reordered.preview);
-
-        let preview_only_digest = changed_paths_digest(&bounded.preview);
-        assert_ne!(bounded.digest, preview_only_digest);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn porcelain_z_parser_preserves_non_utf8_path_bytes() {
-        let entries = parse_porcelain_status_z(b"?? bad\xFFname\0").unwrap();
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].path.as_os_str().as_encoded_bytes(),
-            b"bad\xFFname"
-        );
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_untracked_file_content_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        std::fs::write(temp.path().join("new.txt"), "one").unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-        std::fs::write(temp.path().join("new.txt"), "two").unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_ignored_dotenv_content_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join(".gitignore"), ".env\n").unwrap();
-        run_git(temp.path(), &["add", ".gitignore"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        std::fs::write(temp.path().join(".env"), "EXAMPLE_VALUE=one\n").unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        std::fs::write(temp.path().join(".env"), "EXAMPLE_VALUE=two\n").unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_observes_successive_dirty_submodule_edits() {
-        let _env = crate::test_env::lock_env();
-        let submodule = tempdir().unwrap();
-        run_git(submodule.path(), &["init"]);
-        run_git(
-            submodule.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(submodule.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(submodule.path().join("source.txt"), "committed\n").unwrap();
-        run_git(submodule.path(), &["add", "source.txt"]);
-        run_git(submodule.path(), &["commit", "-m", "submodule fixture"]);
-
-        let repository = tempdir().unwrap();
-        run_git(repository.path(), &["init"]);
-        run_git(
-            repository.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(repository.path(), &["config", "user.name", "Fixture"]);
-        run_git(
-            repository.path(),
-            &[
-                "-c",
-                "protocol.file.allow=always",
-                "submodule",
-                "add",
-                submodule.path().to_str().unwrap(),
-                "vendor/example",
-            ],
-        );
-        run_git(repository.path(), &["commit", "-am", "parent fixture"]);
-
-        let submodule_source = repository.path().join("vendor/example/source.txt");
-        std::fs::write(&submodule_source, "first dirty value\n").unwrap();
-        let first = repo_worktree_fingerprint(repository.path()).unwrap();
-        std::fs::write(&submodule_source, "second dirty value\n").unwrap();
-        let second = repo_worktree_fingerprint(repository.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_the_clean_head_commit_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "one\n").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "first fixture"]);
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        std::fs::write(temp.path().join("tracked.txt"), "two\n").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "second fixture"]);
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_ignores_clean_commits_that_only_change_agent_state() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::create_dir_all(temp.path().join(".agent/state")).unwrap();
-        std::fs::write(temp.path().join("tracked.txt"), "source\n").unwrap();
-        std::fs::write(temp.path().join(".agent/state/receipts.jsonl"), "first\n").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt", ".agent"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        std::fs::write(
-            temp.path().join(".agent/state/receipts.jsonl"),
-            "first\nsecond\n",
-        )
-        .unwrap();
-        run_git(temp.path(), &["add", ".agent/state/receipts.jsonl"]);
-        run_git(temp.path(), &["commit", "-m", "record agent evidence"]);
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn worktree_fingerprint_changes_when_large_untracked_file_content_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        let large_path = temp.path().join("large.bin");
-        let fixed_mtime = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        std::fs::write(
-            &large_path,
-            vec![b'a'; MAX_INLINE_UNTRACKED_BYTES as usize + 1],
-        )
-        .unwrap();
-        std::fs::File::open(&large_path)
-            .unwrap()
-            .set_modified(fixed_mtime)
-            .unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        std::fs::write(
-            &large_path,
-            vec![b'b'; MAX_INLINE_UNTRACKED_BYTES as usize + 1],
-        )
-        .unwrap();
-        std::fs::File::open(&large_path)
-            .unwrap()
-            .set_modified(fixed_mtime)
-            .unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn worktree_fingerprint_changes_when_untracked_symlink_target_changes() {
-        let _env = crate::test_env::lock_env();
-        let temp = tempdir().unwrap();
-        run_git(temp.path(), &["init"]);
-        run_git(
-            temp.path(),
-            &["config", "user.email", "fixture@example.com"],
-        );
-        run_git(temp.path(), &["config", "user.name", "Fixture"]);
-        std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
-        run_git(temp.path(), &["add", "tracked.txt"]);
-        run_git(temp.path(), &["commit", "-m", "initial fixture"]);
-        let first_target = temp.path().join("outside-one");
-        let second_target = temp.path().join("outside-two");
-        let link = temp.path().join("link");
-        std::os::unix::fs::symlink(&first_target, &link).unwrap();
-        let first = repo_worktree_fingerprint(temp.path()).unwrap();
-        std::fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(&second_target, &link).unwrap();
-        let second = repo_worktree_fingerprint(temp.path()).unwrap();
-
-        assert_ne!(first, second);
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {} failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-
-    fn git_text(root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .current_dir(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).unwrap().trim().to_owned()
-    }
-}
+mod tests;

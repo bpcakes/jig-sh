@@ -107,10 +107,10 @@ fn work_check_summary_output_note(
     check: &serde_json::Value,
     exit_status: Option<i64>,
 ) -> Option<String> {
-    if exit_status == Some(0) {
-        if let Some(output) = work_check_summary_harness_skip_output(check) {
-            return Some(concise_preview(output, 120));
-        }
+    if exit_status == Some(0)
+        && let Some(output) = work_check_summary_harness_skip_output(check)
+    {
+        return Some(concise_preview(output, 120));
     }
 
     let result = &check["result"];
@@ -219,21 +219,22 @@ pub(super) fn format_work_gates_summary(value: &serde_json::Value) -> String {
             .map(|freshness| format!(", freshness {freshness}"))
             .unwrap_or_default();
         let mut line = format!("  - {id}: {status}{freshness}, {required_label}{tool}");
-        if !matches!(status, "passed" | "missing") {
-            if let Some(reason) = value_str(gate, "freshness_reason") {
-                let _ = write!(line, "; {reason}");
-            }
+        if !matches!(status, "passed" | "missing")
+            && let Some(reason) =
+                value_str(gate, "reason").or_else(|| value_str(gate, "freshness_reason"))
+        {
+            let _ = write!(line, "; {reason}");
         }
         lines.push(line);
-        if status != "missing" {
-            if let Some(diff) = value_str(gate, "diff_summary").filter(|diff| !diff.is_empty()) {
-                lines.push(format!("    receipt diff: {diff}"));
-            }
+        if status != "missing"
+            && let Some(diff) = value_str(gate, "diff_summary").filter(|diff| !diff.is_empty())
+        {
+            lines.push(format!("    receipt diff: {diff}"));
         }
-        if status == "invalid_output" {
-            if let Some(parse_error) = value_str(gate, "parse_error") {
-                lines.push(format!("    parse error: {parse_error}"));
-            }
+        if status == "invalid_output"
+            && let Some(parse_error) = value_str(gate, "parse_error")
+        {
+            lines.push(format!("    parse error: {parse_error}"));
         }
         let changed_paths = value_string_list(gate, "changed_paths");
         if status != "missing" && !changed_paths.is_empty() {
@@ -331,8 +332,9 @@ pub(super) fn format_work_evidence_summary(value: &serde_json::Value) -> String 
         for gate in unresolved {
             let id = value_str(gate, "id").unwrap_or("<unknown>");
             let status = value_str(gate, "status").unwrap_or("unknown");
-            let reason =
-                value_str(gate, "freshness_reason").unwrap_or("no receipt evidence for this gate");
+            let reason = value_str(gate, "reason")
+                .or_else(|| value_str(gate, "freshness_reason"))
+                .unwrap_or("no receipt evidence for this gate");
             lines.push(format!("  - {id}: {status}; {reason}"));
         }
     }

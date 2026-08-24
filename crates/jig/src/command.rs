@@ -211,6 +211,7 @@ mod tests {
             })),
             RuntimeCommand::State(StateCommand::Archive(StateArchiveRequest {
                 before: "2026-01-01".into(),
+                include_runs: true,
                 dry_run: true,
             })),
         ];

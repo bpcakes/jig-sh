@@ -14,7 +14,7 @@ use crate::state::{
 };
 use crate::tool_defs::tool;
 
-use super::super::run_execution::{ExecuteCheckRunRequest, execute_check_run};
+use super::super::run_execution::{ExecuteCheckRunRequest, execute_freshly_planned_check_run};
 use super::super::tool_execution::{ManifestToolExecutionOutcome, manifest_tool_result_failure};
 use super::tools::{selected_tools, validate_check_tool};
 
@@ -85,8 +85,18 @@ fn check_configured(
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     let tools = ctx.work_check_tools();
-    let catalog = RepositoryCatalog::from_context(ctx)?;
-    let targets = configured_evidence_targets(ctx, &catalog)?;
+    let has_evidence_gates = ctx
+        .work_gates()
+        .iter()
+        .any(|gate| matches!(gate, WorkGate::Evidence(_)));
+    let catalog = has_evidence_gates
+        .then(|| RepositoryCatalog::from_context(ctx))
+        .transpose()?;
+    let targets = catalog
+        .as_ref()
+        .map(|catalog| configured_evidence_targets(ctx, catalog))
+        .transpose()?
+        .unwrap_or_default();
     if tools.is_empty() && targets.is_empty() {
         bail!(
             "No work check gates configured. Add check or evidence work.gates to .jig.toml, or pass --tool."
@@ -99,6 +109,7 @@ fn check_configured(
                 "ok": true,
                 "plan_id": plan_id,
                 "checks": [],
+                "errors": [],
                 "receipt_id": null,
             }),
             failures: Vec::new(),
@@ -117,33 +128,31 @@ fn check_configured(
         mut result,
         failures: legacy_failures,
     } = check_batch;
+    let catalog = catalog
+        .as_ref()
+        .expect("nonempty evidence targets require a repository catalog");
     let plan = plan_run(
         ctx,
-        &catalog,
+        catalog,
         PlanRunRequest {
             selectors: targets.iter().map(ToString::to_string).collect(),
             profile: None,
             affected_base: None,
         },
     )?;
-    let execution = execute_check_run(
+    let execution = execute_freshly_planned_check_run(
         ctx,
-        &catalog,
+        catalog,
         plan.clone(),
         ExecuteCheckRunRequest {
             work_plan_id: Some(plan_id.to_owned()),
             record_receipts: true,
             fail_fast: false,
         },
-        &|| observer.cancelled(),
+        observer,
     )?;
     let evidence_ok = execution.run.result.conclusion == Some(RunConclusion::Success);
-    let failed_target_labels = execution
-        .failed_targets
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+    let evidence_failure = evidence_failure_message(&execution.run.result);
     let object = result
         .as_object_mut()
         .ok_or_else(|| anyhow!("work check result was not a JSON object"))?;
@@ -153,20 +162,53 @@ fn check_configured(
     object.insert("run".into(), json!(execution.run.result));
     object.insert("results".into(), json!(execution.results));
     object.insert("failed_targets".into(), json!(execution.failed_targets));
+    object.insert(
+        "source_observations".into(),
+        json!(execution.source_observations),
+    );
 
     if matches!(failure_mode, CheckFailureMode::ReportError) {
         let legacy_failure = failure_message(&legacy_failures);
         match (legacy_failure, evidence_ok) {
-            (Some(failure), false) => bail!(
-                "{}\nWork evidence targets also failed: [{failed_target_labels}]",
-                failure
-            ),
+            (Some(failure), false) => bail!("{failure}\n{evidence_failure}"),
             (Some(failure), true) => bail!("{failure}"),
-            (None, false) => bail!("Work evidence targets failed: [{failed_target_labels}]"),
+            (None, false) => bail!("{evidence_failure}"),
             (None, true) => {}
         }
     }
     Ok(result)
+}
+
+fn evidence_failure_message(result: &jig_contract::RunResult) -> String {
+    let conclusion = result
+        .conclusion
+        .map(run_conclusion_name)
+        .unwrap_or("unknown");
+    let targets = result
+        .targets
+        .iter()
+        .filter(|target| target.conclusion != Some(RunConclusion::Success))
+        .map(|target| {
+            let conclusion = target
+                .conclusion
+                .map(run_conclusion_name)
+                .unwrap_or("unknown");
+            format!("{} ({conclusion})", target.target)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Work evidence run concluded {conclusion}; unsuccessful targets: [{targets}]")
+}
+
+const fn run_conclusion_name(conclusion: RunConclusion) -> &'static str {
+    match conclusion {
+        RunConclusion::Success => "success",
+        RunConclusion::Failure => "failure",
+        RunConclusion::Cancelled => "cancelled",
+        RunConclusion::TimedOut => "timed_out",
+        RunConclusion::Blocked => "blocked",
+        RunConclusion::Skipped => "skipped",
+    }
 }
 
 fn configured_evidence_targets(
@@ -437,5 +479,24 @@ tool = "jig.second_check"
         assert_eq!(result["errors"].as_array().unwrap().len(), 2);
         assert!(temp.path().join("first-ran.txt").exists());
         assert!(temp.path().join("second-ran.txt").exists());
+    }
+
+    #[test]
+    fn cancelled_evidence_message_names_the_run_and_target_conclusions() {
+        let mut target = jig_contract::TargetRunResult::queued(
+            "api:test".parse().unwrap(),
+            "sha256:config",
+            "sha256:input",
+        );
+        target.status = jig_contract::RunStatus::Completed;
+        target.conclusion = Some(RunConclusion::Cancelled);
+        let mut run = jig_contract::RunResult::queued("run_1", "plan_1", 1, vec![target]);
+        run.status = jig_contract::RunStatus::Completed;
+        run.conclusion = Some(RunConclusion::Cancelled);
+
+        assert_eq!(
+            evidence_failure_message(&run),
+            "Work evidence run concluded cancelled; unsuccessful targets: [api:test (cancelled)]"
+        );
     }
 }

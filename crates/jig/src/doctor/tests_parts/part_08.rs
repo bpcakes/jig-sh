@@ -347,7 +347,10 @@ fn go_runtime_check_uses_the_go_module_authority() {
         assert_eq!(check.ok, compatible, "{check:?}");
         assert_eq!(check.data["required"], "1.27.3");
         assert_eq!(check.data["actual"], actual);
-        assert_eq!(check.data["authority"], root.join("go.mod").display().to_string());
+        assert_eq!(
+            check.data["authority"],
+            root.join("go.mod").display().to_string()
+        );
         assert_eq!(
             check.status,
             if compatible {
@@ -361,9 +364,7 @@ fn go_runtime_check_uses_the_go_module_authority() {
         } else {
             assert_eq!(
                 check.fix.as_deref(),
-                Some(
-                    "Install or activate Go 1.27.3 or newer, then run `scripts/jig doctor`."
-                )
+                Some("Install or activate Go 1.27.3 or newer, then run `scripts/jig doctor`.")
             );
         }
     }
@@ -484,16 +485,16 @@ fn go_module_authority_prefers_a_newer_toolchain_and_accepts_default() {
 #[test]
 fn go_module_authority_rejects_ambiguous_and_malformed_directives() {
     for (contents, expected) in [
-        ("module example.com/ExampleProject\n", "must declare one numeric go version"),
+        (
+            "module example.com/ExampleProject\n",
+            "must declare one numeric go version",
+        ),
         ("go 1.27\ngo 1.28\n", "go version more than once"),
         (
             "go 1.27\ntoolchain go1.28\ntoolchain go1.29\n",
             "toolchain more than once",
         ),
-        (
-            "go 1.28\ntoolchain go1.27\n",
-            "below required go version",
-        ),
+        ("go 1.28\ntoolchain go1.27\n", "below required go version"),
         ("go stable\n", "exact numeric version"),
         ("go 1.27 extra\n", "invalid go directive"),
     ] {

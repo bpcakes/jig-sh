@@ -69,18 +69,18 @@ pub(super) fn format_state_diagnose_summary(value: &serde_json::Value) -> String
         lines.push("  Session recursion: not analyzed (rerun with --deep)".into());
         lines.push("  Receipt payloads: not analyzed (rerun with --deep)".into());
     }
-    if let Some(recommendations) = value["recommendations"].as_array() {
-        if !recommendations.is_empty() {
-            lines.push("Recommendations:".into());
-            for recommendation in recommendations {
-                let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
-                lines.push(format!("  - {reason}"));
-                if let Some(command) = value_str(recommendation, "command") {
-                    lines.push(format!("    Command: {command}"));
-                }
-                if let Some(command) = value_str(recommendation, "alternative_command") {
-                    lines.push(format!("    Alternative: {command}"));
-                }
+    if let Some(recommendations) = value["recommendations"].as_array()
+        && !recommendations.is_empty()
+    {
+        lines.push("Recommendations:".into());
+        for recommendation in recommendations {
+            let reason = value_str(recommendation, "reason").unwrap_or("Review state health.");
+            lines.push(format!("  - {reason}"));
+            if let Some(command) = value_str(recommendation, "command") {
+                lines.push(format!("    Command: {command}"));
+            }
+            if let Some(command) = value_str(recommendation, "alternative_command") {
+                lines.push(format!("    Alternative: {command}"));
             }
         }
     }
@@ -213,10 +213,14 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
     let dry_run = value_bool(value, "dry_run").unwrap_or(false);
     let archived = value_u64(value, "receipts_archived").unwrap_or(0);
     let retained = value_u64(value, "receipts_retained").unwrap_or(0);
+    let runs_included = value_bool(value, "runs_included").unwrap_or(false);
+    let runs_archived = value_u64(value, "runs_archived").unwrap_or(0);
+    let runs_retained = value_u64(value, "runs_retained").unwrap_or(0);
     let before = value_str(value, "before").unwrap_or("<unknown>");
-    let status = match (dry_run, archived > 0) {
+    let changes_available = archived > 0 || (runs_included && runs_archived > 0);
+    let status = match (dry_run, changes_available) {
         (true, true) => "dry run (changes available)",
-        (true, false) => "dry run (no eligible receipts)",
+        (true, false) => "dry run (no eligible state)",
         (false, true) => "archived",
         (false, false) => "no-op",
     };
@@ -227,15 +231,22 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
         format!("  Receipts retained: {retained}"),
         format!(
             "  Active state changed: {}",
-            if !dry_run && archived > 0 {
+            if !dry_run && changes_available {
                 "yes"
             } else {
                 "no"
             }
         ),
     ];
+    if runs_included {
+        lines.push(format!("  Runs archived: {runs_archived}"));
+        lines.push(format!("  Runs retained: {runs_retained}"));
+    }
     if let Some(protected) = value_u64(value, "protected_receipts_retained") {
         lines.push(format!("  Protected receipts retained: {protected}"));
+    }
+    if runs_included && let Some(protected) = value_u64(value, "protected_runs_retained") {
+        lines.push(format!("  Protected runs retained: {protected}"));
     }
     match value_str(value, "archive_path") {
         Some(path) => lines.push(format!("  Local archive: {path}")),
@@ -250,6 +261,21 @@ pub(super) fn format_state_archive_summary(value: &serde_json::Value) -> String 
         None => lines.push(
             "  Exact pre-archive recovery backup: not written; active state was unchanged".into(),
         ),
+    }
+    if runs_included {
+        match value_str(value, "runs_archive_path") {
+            Some(path) => lines.push(format!("  Run archive: {path}")),
+            None if dry_run => lines.push("  Run archive: not written during dry run".into()),
+            None => lines.push("  Run archive: not written; no runs were eligible".into()),
+        }
+        match value_str(value, "runs_recovery_backup_path") {
+            Some(path) => lines.push(format!("  Exact runs recovery backup: {path}")),
+            None if dry_run => {
+                lines.push("  Exact runs recovery backup: not written during dry run".into());
+            }
+            None => lines
+                .push("  Exact runs recovery backup: not written; run state was unchanged".into()),
+        }
     }
     if let Some(bytes) = value_u64(value, "uncompressed_bytes") {
         lines.push(format!("  Uncompressed bytes: {bytes}"));

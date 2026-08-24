@@ -77,7 +77,7 @@ migration_dir = "internal/database/migrations"
 }
 
 fn write_schema_policy_repo(root: &Path, schema_dump_command: &str) {
-    write_schema_policy_repo_with_timeout(root, schema_dump_command, None);
+    write_schema_policy_repo_with_execution(root, schema_dump_command, None, None);
 }
 
 fn write_schema_policy_repo_with_timeout(
@@ -85,15 +85,31 @@ fn write_schema_policy_repo_with_timeout(
     schema_dump_command: &str,
     command_timeout_seconds: Option<u64>,
 ) {
+    write_schema_policy_repo_with_execution(
+        root,
+        schema_dump_command,
+        command_timeout_seconds,
+        None,
+    );
+}
+
+fn write_schema_policy_repo_with_execution(
+    root: &Path,
+    schema_dump_command: &str,
+    command_timeout_seconds: Option<u64>,
+    command_output_limit_bytes: Option<u64>,
+) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
-    let execution_config = command_timeout_seconds.map_or_else(String::new, |seconds| {
-        format!(
-            r#"
-[execution]
-command_timeout_seconds = {seconds}
-"#
-        )
-    });
+    let mut execution_config = String::new();
+    if command_timeout_seconds.is_some() || command_output_limit_bytes.is_some() {
+        execution_config.push_str("\n[execution]\n");
+    }
+    if let Some(seconds) = command_timeout_seconds {
+        execution_config.push_str(&format!("command_timeout_seconds = {seconds}\n"));
+    }
+    if let Some(bytes) = command_output_limit_bytes {
+        execution_config.push_str(&format!("command_output_limit_bytes = {bytes}\n"));
+    }
     TestRepoBuilder::new(root)
         .config(format!(
             r#"
@@ -510,6 +526,32 @@ rust_test_command = "true"
 }
 
 #[test]
+fn contract_check_rejects_evidence_gates_before_contract_six() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .contract_version(5)
+        .config(
+            r#"
+harness_footprint = "minimal"
+
+[[work.gates]]
+id = "native-evidence"
+kind = "evidence"
+target = "api:test"
+"#,
+        )
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = contract_check(&ctx);
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains(
+        "Work gate 'native-evidence': evidence gates require jig contract version 6 or later."
+    ));
+}
+
+#[test]
 fn migration_immutability_parses_nul_name_status_entries() {
     let bytes = b"A\0migrations/002_added.up.sql\0M\0migrations/001_changed.up.sql\0R100\0migrations/001_old.up.sql\0migrations/001_new.up.sql\0D\0migrations/001_deleted.down.sql\0T\0migrations/001_type.sql\0";
 
@@ -700,398 +742,4 @@ fn migration_add_creates_a_goose_migration_for_go_postgres() {
     );
 }
 
-#[test]
-fn migration_add_rejects_when_sqlx_is_disabled() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    init_git(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = migration_add(&ctx, "create users").unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("configured SQLx or Go/PostgreSQL migration backend")
-    );
-}
-
-#[test]
-fn migration_add_rejects_names_without_slug_content() {
-    let temp = tempdir().unwrap();
-    write_sqlx_policy_repo(temp.path());
-    init_git(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = migration_add(&ctx, "!!!").unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("must contain at least one alphanumeric")
-    );
-}
-
-#[test]
-fn schema_check_reports_stale_schema_dump() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p docs/schema && printf 'changed\\n' > docs/schema/tables.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("Schema dump is stale"));
-    assert!(output.stderr.contains("docs/schema"));
-    assert_eq!(
-        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
-        "stable\n",
-        "a read-only schema check must restore generator output"
-    );
-    assert!(
-        Command::new("git")
-            .current_dir(temp.path())
-            .args(["status", "--porcelain", "--", "docs/schema"])
-            .output()
-            .unwrap()
-            .stdout
-            .is_empty()
-    );
-}
-
-#[test]
-fn schema_check_preserves_preexisting_schema_edits_without_running_the_generator() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "printf 'generator-ran\\n' > generator-marker && printf 'changed\\n' > docs/schema/tables.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    fs::write(temp.path().join("docs/schema/tables.sql"), "local edit\n").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 1);
-    assert!(output.stderr.contains("already has uncommitted changes"));
-    assert_eq!(
-        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
-        "local edit\n"
-    );
-    assert!(!temp.path().join("generator-marker").exists());
-}
-
-#[test]
-fn schema_check_discards_new_files_staged_by_the_generator() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "mkdir -p docs/schema && printf 'new\\n' > docs/schema/new.sql && git add docs/schema/new.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 1);
-    assert!(!temp.path().join("docs/schema/new.sql").exists());
-    assert!(
-        Command::new("git")
-            .current_dir(temp.path())
-            .args(["status", "--porcelain", "--", "docs/schema"])
-            .output()
-            .unwrap()
-            .stdout
-            .is_empty()
-    );
-}
-
-#[test]
-fn schema_check_isolates_unrelated_generator_writes_and_reads_untracked_inputs() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "printf 'mutated\\n' > unrelated.txt && cat schema-input > docs/schema/tables.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    fs::write(temp.path().join("schema-input"), "stable\n").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 0, "{}", output.stderr);
-    assert!(!temp.path().join("unrelated.txt").exists());
-    assert_eq!(
-        fs::read_to_string(temp.path().join("schema-input")).unwrap(),
-        "stable\n"
-    );
-}
-
-#[test]
-fn schema_check_reads_ignored_dotenv_inputs_in_the_snapshot() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(temp.path(), "cat .env > docs/schema/tables.sql");
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    fs::write(temp.path().join(".gitignore"), ".env\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    fs::write(temp.path().join(".env"), "stable\n").unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 0, "{}", output.stderr);
-    assert_eq!(
-        fs::read_to_string(temp.path().join(".env")).unwrap(),
-        "stable\n"
-    );
-}
-
-#[test]
-fn schema_check_reads_initialized_submodule_worktrees_in_the_snapshot() {
-    let dependency = tempdir().unwrap();
-    fs::write(dependency.path().join("schema-input"), "stable\n").unwrap();
-    init_git(dependency.path());
-    git(dependency.path(), &["add", "."]);
-    git(dependency.path(), &["commit", "-m", "baseline", "-q"]);
-
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(
-        temp.path(),
-        "cat vendor/example/schema-input > docs/schema/tables.sql",
-    );
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(
-        temp.path(),
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            dependency.path().to_str().unwrap(),
-            "vendor/example",
-        ],
-    );
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 0, "{}", output.stderr);
-}
-
-#[cfg(unix)]
-#[test]
-fn schema_check_preserves_untracked_symlinks_without_following_them() {
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(temp.path(), "printf 'stable\\n' > docs/schema/tables.sql");
-    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
-    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    std::os::unix::fs::symlink("missing-target", temp.path().join("unrelated-link")).unwrap();
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let output = schema_check(&ctx).unwrap();
-
-    assert_eq!(output.exit_status, 0, "{}", output.stderr);
-    assert!(
-        fs::symlink_metadata(temp.path().join("unrelated-link"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-}
-
-#[test]
-fn controlled_native_output_is_bounded() {
-    let mut command = Command::new("bash");
-    command.args(["-c", "yes x | head -c 2000000"]);
-
-    let output = controlled_output(
-        &mut command,
-        Instant::now() + Duration::from_secs(10),
-        &|| false,
-    )
-    .unwrap();
-
-    assert!(output.status.success());
-    assert!(output.stdout.contains("[output truncated by Jig]"));
-    assert!(output.stdout.len() < 2_000_000);
-}
-
-#[test]
-fn schema_check_supervises_timeout_and_descendant_cleanup() {
-    let temp = tempdir().unwrap();
-    let marker = temp.path().join("schema-descendant-survived");
-    write_schema_policy_repo_with_timeout(
-        temp.path(),
-        &format!("(sleep 2; printf survived > '{}') & wait", marker.display()),
-        Some(1),
-    );
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = schema_check(&ctx).unwrap_err().to_string();
-
-    assert!(error.contains("timed out after 1 seconds"), "{error}");
-    std::thread::sleep(std::time::Duration::from_millis(1_250));
-    assert!(
-        !marker.exists(),
-        "schema timeout left a configured-command descendant running"
-    );
-}
-
-#[test]
-fn schema_check_preserves_pre_start_cancellation() {
-    struct Cancelled;
-
-    impl crate::execution::ExecutionObserver for Cancelled {}
-
-    impl crate::execution::ExecutionCancellation for Cancelled {
-        fn cancelled(&self) -> bool {
-            true
-        }
-    }
-
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(temp.path(), "exit 99");
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = schema_check_with_observer(&ctx, &mut Cancelled).unwrap_err();
-
-    assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_tracked_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn example() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: None,
-            all: true,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_staged_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/staged.rs"),
-        "fn staged() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: true,
-            changed_against: None,
-            all: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/staged.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_changed_against_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(temp.path().join("crates/app/src/lib.rs"), "fn small() {}\n").unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let base = super::git_text(temp.path(), &["rev-parse", "HEAD"]).unwrap();
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn changed() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "large", "-q"]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: Some(base.trim().to_string()),
-            all: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
-}
+mod migration_schema;

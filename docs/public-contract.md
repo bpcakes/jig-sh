@@ -110,7 +110,7 @@ For `kind: "command"` tools, `command` is the `.jig.toml` `[commands]` key the r
 
 Command-backed contract versions intentionally have no `optional_commands` field. A command-backed tool is valid only when its command key is listed in `required_commands`; optional capability is represented by omitting the tool entirely when the rendered repo profile does not support it.
 
-Consumers should ignore unknown top-level manifest fields and unknown fields inside tool entries.
+Consumers should ignore unknown top-level manifest fields and unknown fields inside tool entries. Jig includes unknown top-level fields in the canonical execution-authority digest even when the current runtime assigns them no behavior, so forward-compatible authority cannot change without invalidating existing plans and evidence.
 
 ## Stable Tools
 
@@ -168,7 +168,11 @@ tool is projected as an action on a synthetic component whose structured id is
 `repo`; the original tool name remains a compatibility alias. Known action ids
 match the CLI vocabulary, for example `jig.test` becomes `repo:test` and
 `jig.fmt_check` becomes `repo:fmt`. Alias collisions from custom legacy names
-receive deterministic digest suffixes.
+receive deterministic digest suffixes. The projected default verification
+profile includes only read-only check actions. Historical effectful tools that
+were configured as `kind: check` gates, notably `jig.schema_dump`, remain
+addressable actions and retain direct legacy work-gate behavior but are omitted
+from bare repository checks.
 
 Contract 6 reads the resolved records directly. A component declares its root,
 adapters, dependency/affected policy, guidance, and field provenance. An action
@@ -190,8 +194,8 @@ Target identity is always an object with separate `component` and `action`
 fields in JSON. Human output renders its canonical `component:action` text.
 
 `jig check --explain` returns `command: "check plan"`, `executed: false`, and a
-`plan` object without running a command or writing a receipt. A plan includes
-its derived `id`, schema version, configuration digest, source identity,
+`plan` object without running a command or writing a receipt. A plan uses run
+plan schema version 2 and includes its derived `id`, configuration digest, source identity,
 normalized selectors or profile, sorted targets, selection reasons, declared
 effects, input digests, and dependency execution layers. Bare `jig check` uses
 the default verification profile. An action selector such as `test` matches
@@ -201,26 +205,57 @@ Profiles and explicit selectors are mutually exclusive. Contract-6 legacy
 aliases must not parse as canonical action, target, or wildcard selectors;
 canonical selector meaning therefore cannot be shadowed by an alias.
 
+The configuration digest canonicalizes repository execution authority: the
+parsed generated contract model, effective command bindings, backend migration
+settings, and configured execution limits. Comments, formatting, and unrelated
+runtime settings such as local development ports do not change that digest.
+The separate source identity remains a conservative snapshot of all
+non-`.agent/` repository source, so editing `.jig.toml` still requires planning
+again even when the resolved execution authority is unchanged.
+
 On contract 6, `--affected BASE` narrows that ordinary selector/profile
 candidate set. Jig safely resolves the explicit Git revision, compares the
 merge base with `HEAD`, unions staged, unstaged, and untracked paths, excludes
-runtime-owned `.agent/state/` and `.agent/.cache/` data, and sorts the result.
-Checked-in source such as `.agent/jig-contract.json` remains eligible.
+all `.agent/` harness/runtime metadata, and sorts the result. Ignored `.env` and
+`.env.*` files beneath directories that are not themselves ignored participate
+in source identity because they can change command behavior; Git provides no
+baseline for their contents, so their presence is conservatively treated as a
+local affected path. Wholly ignored directories are pruned as generated trees;
+repositories must unignore a containing path when it holds an intentional
+dotenv input. The generated
+contract remains part of the separately canonicalized configuration digest.
 Repository-relative action input globs identify
 directly affected components, including explicit inputs outside a component
 root; when no input matches a path, the most-specific containing component root
 is used. A `.` component with explicit action inputs is not a catch-all owner
 for paths outside those inputs; a root component without inputs may still own
-the repository fallback. Reverse component dependencies propagate only under the checked-in
+the repository fallback. If no declared input or eligible component root claims
+a changed path, every candidate is retained with an `unclaimed_input` reason so
+affected execution fails closed. Contract-v6 repositories may remove reviewed,
+non-impacting paths first with `repository.affected_ignore`; patterns matching
+`.jig.toml` or `scripts/jig` are rejected, and explicit action inputs take
+precedence so an ignore cannot shadow a declared dependency. Generated policy
+classifies named repository guidance, documentation, license files, hosted-CI
+metadata, and dotenv presence as non-selecting unless an action declares them;
+arbitrary fixtures plus build and source-discovery authority remain
+fail-closed. Reverse component dependencies propagate only under the checked-in
 `propagate_affected_to_dependents` policy. Action dependencies expand afterward.
-Every retained target records its candidate and affected reasons, and an
-unrelated change produces a valid empty plan. Contracts 2 through 5 reject
+Every retained target records a deterministic preview of its candidate and
+affected reasons. The preview is capped at 100 reasons per target; when more
+exist, `selection_reason_count`, `selection_reasons_truncated`, and
+`selection_reasons_digest` describe the complete sorted set without allowing a
+large change list to amplify the durable queued-run record. Intent and
+dependency reasons take preview priority over path-expanded detail. A comparison
+with no relevant changes can still produce a valid empty plan. Contracts 2 through 5 reject
 affected planning because their projected catalogs have no inspectable input or
 propagation policy.
 
 Executing a planned selection on a legacy contract returns an aggregate check
 response with `command: "check"`, `executed: true`, the exact plan, per-target
-legacy tool responses, a terminal `run`, and structured `failed_targets`.
+legacy tool responses, a terminal `run`, structured `failed_targets`, and
+`source_observations` with the execution-phase fingerprint scan count and
+elapsed milliseconds. Foreground execution streams target phase, output, and
+heartbeat events while retaining the same bounded output in its result.
 Before execution the runtime deterministically resolves the reviewed request
 again and rejects a stale or modified plan without creating state. Existing
 named v2–v5 check commands without planning flags retain their prior single-tool
@@ -238,9 +273,11 @@ lifecycle transitions fail closed.
 
 Run ids are durable inspection handles, so Jig does not silently expire their
 events. Exact run lookup scans the journal backward to the requested run's
-queued event and materializes only matching lifecycle records. Operators may
-remove `runs.jsonl` intentionally, but doing so explicitly forfeits inspection
-of the removed run history; receipt archiving does not alter run events.
+queued event and materializes only matching lifecycle records. Explicit
+`state archive --before ... --include-runs` maintenance moves completed old
+runs out of the active journal while retaining completed
+runs linked to an open work plan. Run archival is opt-in so the established
+receipt-only archive command does not unexpectedly remove inspection handles.
 
 ## MCP Repository Operations
 
@@ -305,7 +342,7 @@ The active-session pointer is cache state, currently resolved through git as `ji
 
 `scripts/jig work append` requires exactly one nonblank progress source through `--body` or `--body-file`. `scripts/jig state summary` focuses its human output on persisted record and event counts, while `scripts/jig work status` presents the same runtime-owned state as an operational work overview. `scripts/jig state diagnose` is read-only; `--deep` adds recursive-session and receipt-payload analysis. Diagnostics also report disk usage for local maintenance artifacts under `.agent/.cache/state-backups/` and `.agent/.cache/state-archives/`. `scripts/jig state compact sessions --dry-run` validates and projects a legacy-session rewrite without changing state. Apply mode preserves root summaries and ordered direct references, removes recursively embedded summaries, validates the result, and first writes an exact gzip backup and checksum manifest under ignored `.agent/.cache/state-backups/`. `scripts/jig state restore --backup <directory-or-manifest>` verifies that artifact before restoring the exact pre-compaction stream.
 
-`scripts/jig state archive --before <YYYY-MM-DD|unix-ms>` writes eligible old receipts as gzip JSONL under ignored `.agent/.cache/state-archives/` and then rewrites `receipts.jsonl`, preserving evidence needed by currently open plans. Before replacing active state it also creates a complete, manifested receipt backup under `.agent/.cache/state-backups/`; `state restore --backup ...` recovers the exact pre-archive byte stream and physical order. Use `--dry-run` to inspect counts before mutation. `scripts/jig state export receipts --before <cutoff> --output <file.jsonl.gz>` writes the selected raw records without changing active state and refuses to replace an existing destination. Legacy `.agent/state/archive/` files remain untouched and appear in diagnostics.
+`scripts/jig state archive --before <YYYY-MM-DD|unix-ms>` writes eligible old receipts as gzip JSONL under ignored `.agent/.cache/state-archives/` and rewrites `receipts.jsonl`. With explicit `--include-runs`, it also writes completed run-event groups to a separate artifact and rewrites `runs.jsonl`. Receipt evidence and run history linked to currently open plans remain active. Apply mode first reconciles an abandoned nonterminal run to `blocked` when its stable worker lease proves that no worker remains; ordinary foreground execution errors also terminalize their accepted run before returning. Run archival then refuses while any known run is nonterminal so rewriting cannot invalidate a live reader's durable byte cursor. A read-only preview never performs reconciliation and therefore reports abandoned runs until inspection or apply mode repairs them. Applying both streams prevalidates both and archives the harder run journal first; if the subsequent receipt operation fails, the error identifies the completed run artifact and exact recovery backup. Before each replacement Jig creates a complete manifested stream backup under `.agent/.cache/state-backups/`; `state restore --backup ...` recovers that exact stream's pre-archive bytes and physical order. A changing run-journal restore refuses while any current run is nonterminal or any current run worker still holds its lease; an identical checksum no-op remains safe. Use `--dry-run` to validate the selected streams and inspect counts without mutation. `scripts/jig state export receipts --before <cutoff> --output <file.jsonl.gz>` writes selected receipt records without changing active state and refuses to replace an existing destination. Legacy `.agent/state/archive/` files remain untouched and appear in diagnostics.
 
 Compaction and archiving change only the current working-tree streams. They never rewrite Git history or remove blobs reachable from existing commits. Artifacts under `.agent/.cache/` are ignored local recovery aids, not durable off-machine backups; command output identifies the paths and checksums that should be copied elsewhere when long-term recovery is required.
 
@@ -324,7 +361,7 @@ Structured work commands use the `jig.work_*` CLI and MCP namespace, but state-o
 
 `work.gates` in `.jig.toml` declares required evidence before structured work can finish. A `kind: evidence` gate names exactly one structured target or profile and currently requires `conclusion: success`. A target gate matches only that exact target. A profile gate requires every current profile target from one run; receipts from separate runs are not combined. `scripts/jig work check --plan-id ...` resolves all evidence gates to exact targets, executes their union in one run, and links every target receipt to the work plan. Contract-v6 templates use a default-profile evidence gate. Legacy `kind: check` gates still reference no-argument execution tools from `.agent/jig-contract.json` and retain their existing receipt and batch semantics; explicit `work check --tool ...` selects that legacy path only. `kind: codex_review` gates reference Codex skills and are run by `scripts/jig work review --plan-id ...`, which records structured `jig.work_review` receipts with normalized findings, prompt/schema hashes, skill metadata, and worktree fingerprints. `scripts/jig work refine --plan-id ...` reads failed review findings, runs a Codex fixer loop, reruns review gates, then reruns all configured check and evidence gates.
 
-`scripts/jig work gates --plan-id ...` reports gate status from the latest compatible evidence for each gate on any existing plan, including a closed plan. `scripts/jig work evidence` presents the same gate evidence as a human inspection report with target/profile identity, run and receipt ids, input match status, changed paths, and stale reasons. Latest evidence entries expose `tool`, `target`, or `profile` for execution evidence and `skill` for review evidence. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; callers must read `overall`, `gates_ok`, and each gate `status` to detect blocked work. Receipt `changed_paths` are bounded repo-relative previews collected from `git status --porcelain=v1 -z`; they include untracked filenames but exclude `.agent/**`. These commands print human-readable output by default; pass global `--json` for structured automation output.
+`scripts/jig work gates --plan-id ...` reports gate status from the latest compatible evidence for each gate on any existing plan, including a closed plan. `scripts/jig work evidence` presents the same gate evidence as a human inspection report with target/profile identity, run and receipt ids, input match status, changed paths, and stale reasons. Latest evidence entries expose `tool`, `target`, or `profile` for execution evidence and `skill` for review evidence. For an evidence gate, the gate-level `target` is the canonical `component:action` selector string, while each member of its `targets` array carries the structured `{component, action}` receipt identity; profile gates use the same structured member rows and expose their selector in `profile`. A check, target, or profile reference that no longer resolves is an in-band `unsupported` gate with a reason, so read-only gate and open-plan status remain available; contract validation and execution still reject it. For `work gates` and `work evidence`, top-level `ok: true` means the inspection command completed; callers must read `overall`, `gates_ok`, and each gate `status` to detect blocked work. Receipt `changed_paths` are bounded repo-relative previews collected from `git status --porcelain=v1 -z`; they include untracked filenames but exclude `.agent/**`. These commands print human-readable output by default; pass global `--json` for structured automation output.
 
 `scripts/jig work finish --plan-id ...` fails when any required gate is missing, failed, stale, unknown, or unsupported. Older `work.checks` entries are still accepted for compatibility and backfill missing required check gates during migration. If the same tool is declared in `work.gates`, that explicit gate entry is authoritative.
 

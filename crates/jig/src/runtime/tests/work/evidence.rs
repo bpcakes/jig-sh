@@ -33,6 +33,27 @@ fn repository_command_actions_capture_bounded_process_output() {
     );
 }
 
+#[test]
+fn repository_command_failures_mark_the_compatibility_response_not_ok() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace("printf 'api tests passed\\n'", "exit 7"),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = run_repository_target(&ctx, "api:test");
+
+    assert_eq!(output["ok"], false, "{output:#}");
+    assert_eq!(output["results"][0]["response"]["ok"], false);
+    assert_eq!(output["run"]["conclusion"], "failure");
+}
+
 fn work_gates(ctx: &RepoContext) -> Value {
     dispatch(
         ctx,
@@ -126,6 +147,26 @@ profile = "verify"
             .iter()
             .all(|target| target["run_id"].as_str() == Some(run_id))
     );
+
+    let evidence = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Evidence(
+            crate::cli::WorkEvidenceOpts {
+                plan_id: Some("plan_1".into()),
+            },
+        )),
+    )
+    .unwrap();
+    let latest = evidence["latest_passing_gates"][0].as_object().unwrap();
+    for field in [
+        "changed_paths",
+        "changed_path_count",
+        "changed_paths_truncated",
+        "changed_paths_digest",
+        "diff_summary",
+    ] {
+        assert!(latest.contains_key(field), "missing {field}: {evidence:#}");
+    }
 }
 
 #[test]
@@ -213,6 +254,182 @@ profile = "does-not-exist"
             .stderr
             .contains("Work gate 'unknown-profile': work evidence gate references unknown profile 'does-not-exist'")
     );
+}
+
+#[test]
+fn status_reports_a_renamed_evidence_profile_without_becoming_unavailable() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "renamed-profile"
+kind = "evidence"
+profile = "does-not-exist"
+"#,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let gates = work_gates(&ctx);
+
+    assert_eq!(gates["overall"], "blocked");
+    assert_eq!(gates["gates"][0]["kind"], "evidence");
+    assert_eq!(gates["gates"][0]["status"], "unsupported");
+    assert!(
+        gates["gates"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unknown profile 'does-not-exist'")
+    );
+    assert!(
+        gates["unsupported_required"][0]
+            .as_str()
+            .unwrap()
+            .contains("unknown profile 'does-not-exist'")
+    );
+
+    let snapshots = super::super::super::open_plan_gate_snapshots_with_cancellation(
+        &ctx,
+        &["plan_1".into()],
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(snapshots["plan_1"]["gates"][0]["status"], "unsupported");
+}
+
+#[test]
+fn work_check_rejects_a_renamed_evidence_profile_before_execution() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "renamed-profile"
+kind = "evidence"
+profile = "does-not-exist"
+"#,
+    );
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: "plan_1".into(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("unknown profile 'does-not-exist'"),
+        "{error}"
+    );
+    assert!(!ctx.state_file("runs.jsonl").exists());
+    assert!(!ctx.state_file("receipts.jsonl").exists());
+}
+
+#[test]
+fn status_reports_an_invalid_repository_catalog_as_unsupported_evidence() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "api-tests"
+kind = "evidence"
+target = "api:test"
+"#,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replacen(
+        "runner = { kind = \"command\", command = \"api_test_command\" }",
+        "runner = { kind = \"command\", command = \"api_test_command\" }\ntimeout_seconds = 0",
+        1,
+    );
+    fs::write(&config_path, config).unwrap();
+    let manifest_path = temp.path().join(".agent/jig-contract.json");
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    manifest["actions"][0]["timeout_seconds"] = json!(0);
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let gates = work_gates(&ctx);
+
+    assert_eq!(gates["overall"], "blocked");
+    assert_eq!(gates["gates"][0]["status"], "unsupported");
+    assert!(
+        gates["gates"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("timeout_seconds must be between 1 and 86400"),
+        "{gates:#}"
+    );
+    assert_eq!(gates["unsupported_required"].as_array().unwrap().len(), 1);
+
+    let snapshots = super::super::super::open_plan_gate_snapshots_with_cancellation(
+        &ctx,
+        &["plan_1".into()],
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(snapshots["plan_1"]["gates"][0]["status"], "unsupported");
+}
+
+#[test]
+fn contract_check_rejects_effectful_evidence_gate_targets() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "effectful"
+kind = "evidence"
+target = "api:generate"
+"#,
+    );
+    add_v6_effectful_evidence_actions(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::policy::contract_check(&ctx);
+
+    assert_eq!(output.exit_status, 1);
+    assert!(
+        output
+            .stderr
+            .contains("Work gate 'effectful': target 'api:generate' is not a read-only check")
+    );
+}
+
+#[test]
+fn contract_check_rejects_effectful_dependencies_of_evidence_targets() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(
+        temp.path(),
+        r#"
+[[work.gates]]
+id = "effectful-dependency"
+kind = "evidence"
+target = "api:verify-generated"
+"#,
+    );
+    add_v6_effectful_evidence_actions(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::policy::contract_check(&ctx);
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains(
+        "Work gate 'effectful-dependency': target 'api:generate' is not a read-only check"
+    ));
 }
 
 #[test]

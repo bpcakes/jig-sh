@@ -232,7 +232,7 @@ fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
     if let Some(targets) = plan["targets"].as_array() {
         for target in targets {
             let address = structured_target_text(&target["target"]);
-            let reasons = target["reasons"]
+            let mut reasons = target["reasons"]
                 .as_array()
                 .map(|reasons| {
                     reasons
@@ -242,6 +242,16 @@ fn append_planned_targets(lines: &mut Vec<String>, plan: &serde_json::Value) {
                         .join(", ")
                 })
                 .unwrap_or_default();
+            if target["selection_reasons_truncated"] == true {
+                let total = target["selection_reason_count"].as_u64().unwrap_or(0);
+                let shown = target["reasons"].as_array().map_or(0, Vec::len);
+                let truncation = format!("showing {shown} of {total}");
+                if reasons.is_empty() {
+                    reasons = truncation;
+                } else {
+                    reasons.push_str(&format!(" ({truncation})"));
+                }
+            }
             lines.push(format!("  - {address}: {reasons}"));
         }
     }
@@ -396,33 +406,33 @@ fn append_policy_check_details(lines: &mut Vec<String>, value: &serde_json::Valu
     if let Some(agents) = value["agents"].as_array() {
         lines.push(format!("  Agents: {}", agents.len()));
     }
-    if let Some(missing) = value["missing_agents"].as_array() {
-        if !missing.is_empty() {
-            lines.push(format!("  Missing agents: {}", missing.len()));
+    if let Some(missing) = value["missing_agents"].as_array()
+        && !missing.is_empty()
+    {
+        lines.push(format!("  Missing agents: {}", missing.len()));
+    }
+    if let Some(missing) = value["missing_sections"].as_array()
+        && !missing.is_empty()
+    {
+        lines.push(format!("  Missing sections: {}", missing.len()));
+    }
+    if let Some(violations) = value["violations"].as_array()
+        && !violations.is_empty()
+    {
+        lines.push(format!("  Violations: {}", violations.len()));
+        for violation in violations.iter().take(5) {
+            let preview = if let Some(text) = violation.as_str() {
+                text.to_string()
+            } else {
+                concise_preview(&violation.to_string(), 120)
+            };
+            lines.push(format!("  - {preview}"));
         }
     }
-    if let Some(missing) = value["missing_sections"].as_array() {
-        if !missing.is_empty() {
-            lines.push(format!("  Missing sections: {}", missing.len()));
-        }
-    }
-    if let Some(violations) = value["violations"].as_array() {
-        if !violations.is_empty() {
-            lines.push(format!("  Violations: {}", violations.len()));
-            for violation in violations.iter().take(5) {
-                let preview = if let Some(text) = violation.as_str() {
-                    text.to_string()
-                } else {
-                    concise_preview(&violation.to_string(), 120)
-                };
-                lines.push(format!("  - {preview}"));
-            }
-        }
-    }
-    if let Some(errors) = value["errors"].as_array() {
-        if !errors.is_empty() {
-            lines.push(format!("  Errors: {}", errors.len()));
-        }
+    if let Some(errors) = value["errors"].as_array()
+        && !errors.is_empty()
+    {
+        lines.push(format!("  Errors: {}", errors.len()));
     }
     if let Some(count) = value_u64(value, "non_test_count") {
         lines.push(format!("  Non-test unchecked queries: {count}"));

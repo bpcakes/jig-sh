@@ -31,6 +31,7 @@ pub(super) struct EvidenceGateEvaluation {
     run_id: Option<String>,
     outcome: GateOutcome,
     freshness: GateFreshness,
+    index_error: Option<String>,
     targets: Vec<TargetEvidenceEvaluation>,
 }
 
@@ -70,7 +71,13 @@ impl EvidenceGateEvaluation {
         collection: GateCollection<'_>,
     ) -> Result<Self> {
         let required_targets = resolve_evidence_targets(catalog, &gate.selector)?;
-        let group = receipt_index.target_receipts(&gate.id);
+        let index_error = receipt_index
+            .target_receipt_error(&gate.id)
+            .map(str::to_owned);
+        let group = index_error
+            .is_none()
+            .then(|| receipt_index.target_receipts(&gate.id))
+            .flatten();
         let expected_config_digest = catalog.config_digest().to_owned();
         let expected_input_digests = required_targets
             .iter()
@@ -89,11 +96,16 @@ impl EvidenceGateEvaluation {
             let receipt = group.and_then(|group| group.receipts.get(&target));
             let expected_input_digest =
                 expected_input_digests.get(&target).cloned().unwrap_or(None);
-            let (freshness, freshness_reason) = target_evidence_freshness(
-                receipt,
-                &expected_config_digest,
-                expected_input_digest.as_deref(),
-                current_fingerprint,
+            let (freshness, freshness_reason) = index_error.as_ref().map_or_else(
+                || {
+                    target_evidence_freshness(
+                        receipt,
+                        &expected_config_digest,
+                        expected_input_digest.as_deref(),
+                        current_fingerprint,
+                    )
+                },
+                |error| (GateFreshness::Unknown, error.clone()),
             );
             let evaluated_receipt = EvaluatedReceipt::with_freshness(
                 receipt,
@@ -102,10 +114,11 @@ impl EvidenceGateEvaluation {
                 freshness,
                 freshness_reason,
             );
-            let outcome = match receipt {
-                Some(receipt) if receipt.exit_status != 0 => GateOutcome::Failed,
-                Some(_) => freshness.as_gate_outcome(),
-                None => GateOutcome::Missing,
+            let outcome = match (index_error.as_ref(), receipt) {
+                (Some(_), _) => GateOutcome::Unknown,
+                (None, Some(receipt)) if receipt.exit_status != 0 => GateOutcome::Failed,
+                (None, Some(_)) => freshness.as_gate_outcome(),
+                (None, None) => GateOutcome::Missing,
             };
             targets.push(TargetEvidenceEvaluation {
                 target,
@@ -129,6 +142,7 @@ impl EvidenceGateEvaluation {
             run_id: group.map(|group| group.run_id.clone()),
             outcome,
             freshness,
+            index_error,
             targets,
         })
     }
@@ -167,7 +181,7 @@ impl EvidenceGateEvaluation {
 
     pub(super) fn to_value(&self) -> Value {
         let (target, profile) = self.selector_values();
-        json!({
+        let mut value = json!({
             "id": self.id,
             "kind": "evidence",
             "required": self.required,
@@ -179,11 +193,16 @@ impl EvidenceGateEvaluation {
             "freshness": self.freshness.as_str(),
             "freshness_reason": evidence_freshness_reason(self.freshness),
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
-        })
+        });
+        if let Some(error) = &self.index_error {
+            value["index_error"] = Value::String(error.clone());
+        }
+        value
     }
 
     pub(super) fn to_latest_evidence(&self) -> Option<Value> {
-        if self.targets.is_empty()
+        if self.index_error.is_some()
+            || self.targets.is_empty()
             || self
                 .targets
                 .iter()
@@ -197,6 +216,7 @@ impl EvidenceGateEvaluation {
             .iter()
             .filter_map(|target| target.receipt.receipt_id.as_deref())
             .collect::<Vec<_>>();
+        let receipt = self.receipt()?;
         Some(json!({
             "tool": null,
             "skill": null,
@@ -205,13 +225,18 @@ impl EvidenceGateEvaluation {
             "gate_id": self.id,
             "status": self.outcome.as_str(),
             "run_id": self.run_id,
-            "receipt_id": self.receipt().and_then(|receipt| receipt.receipt_id.as_deref()),
+            "receipt_id": receipt.receipt_id,
             "receipt_ids": receipt_ids,
             "freshness_receipt_id": null,
             "matches_current_worktree": self.freshness == GateFreshness::Fresh,
             "freshness": self.freshness.as_str(),
             "freshness_reason": evidence_freshness_reason(self.freshness),
-            "ended_at_ms": self.receipt().and_then(|receipt| receipt.ended_at_ms).unwrap_or(0),
+            "changed_paths": receipt.changed_paths,
+            "changed_path_count": receipt.changed_path_count,
+            "changed_paths_truncated": receipt.changed_paths_truncated,
+            "changed_paths_digest": receipt.changed_paths_digest,
+            "diff_summary": receipt.diff_summary,
+            "ended_at_ms": receipt.ended_at_ms.unwrap_or(0),
             "targets": self.targets.iter().map(TargetEvidenceEvaluation::to_value).collect::<Vec<_>>(),
         }))
     }

@@ -37,8 +37,11 @@ if [[ -z "$launcher_contract_version" || "$launcher_contract_version" != "$manif
   exit 1
 fi
 rust_current_contract="$(sed -n 's/^pub(crate) const CURRENT_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context.rs")"
-if [[ -z "$rust_current_contract" || "$rust_current_contract" != "$manifest_contract_version" ]]; then
-  echo "Rust current contract ${rust_current_contract:-<unreadable>} does not match .agent/jig-contract.json contract $manifest_contract_version." >&2
+rust_min_contract="$(sed -n 's/^pub(crate) const MIN_SUPPORTED_CONTRACT_VERSION: u32 = \([0-9][0-9]*\);$/\1/p' "$ROOT_DIR/crates/jig/src/context/runtime.rs")"
+if [[ -z "$rust_min_contract" || -z "$rust_current_contract" \
+  || "$manifest_contract_version" -lt "$rust_min_contract" \
+  || "$manifest_contract_version" -gt "$rust_current_contract" ]]; then
+  echo "Rust supported contract range ${rust_min_contract:-<unreadable>}-${rust_current_contract:-<unreadable>} does not include .agent/jig-contract.json contract $manifest_contract_version." >&2
   exit 1
 fi
 

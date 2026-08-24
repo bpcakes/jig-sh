@@ -198,6 +198,8 @@ fn contract_six_rejects_authored_and_resolved_repository_drift() {
         .to_string();
 
     assert!(error.contains("repository components differ"));
+    assert!(error.contains("component 'api' (index 0)"), "{error}");
+    assert!(error.contains("jig update --recopy"), "{error}");
 }
 
 #[test]

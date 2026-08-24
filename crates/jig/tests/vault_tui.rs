@@ -10,7 +10,7 @@ use std::{
     fs::File,
     io::Write,
     os::fd::{AsRawFd, FromRawFd},
-    os::unix::process::ExitStatusExt,
+    os::unix::process::{CommandExt, ExitStatusExt},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -56,19 +56,18 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = ChildGuard::new(
-        Command::new(env!("CARGO_BIN_EXE_jig"))
-            .args(["vault", "tui", "--home"])
-            .arg(&home)
-            .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
-            .env("JIG_VAULT_NEW_PASSPHRASE", "must-be-cleared-before-worker")
-            .env("TERM", "xterm-256color")
-            .stdin(Stdio::from(stdin))
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .unwrap(),
-    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
+        .args(["vault", "tui", "--home"])
+        .arg(&home)
+        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .env("JIG_VAULT_NEW_PASSPHRASE", "must-be-cleared-before-worker")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -271,18 +270,17 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
     let original = terminal_attributes(&slave);
-    let mut child = ChildGuard::new(
-        Command::new(env!("CARGO_BIN_EXE_jig"))
-            .args(["vault", "tui", "--home"])
-            .arg(&home)
-            .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
-            .env("TERM", "xterm-256color")
-            .stdin(Stdio::from(stdin))
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .unwrap(),
-    );
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
+    command
+        .args(["vault", "tui", "--home"])
+        .arg(&home)
+        .env("JIG_VAULT_PASSPHRASE", PASSPHRASE)
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    make_stdin_controlling_terminal(&mut command);
+    let mut child = ChildGuard::new(command.spawn().unwrap());
     set_nonblocking(&master);
 
     let mut output = Vec::new();
@@ -360,6 +358,7 @@ fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {
     }
     // SAFETY: `master` is a newly owned descriptor.
     let master = unsafe { File::from_raw_fd(master) };
+    set_close_on_exec(&master)?;
     // SAFETY: the descriptor is a live PTY master owned by `master`.
     if unsafe { libc::grantpt(master.as_raw_fd()) } != 0
         || unsafe { libc::unlockpt(master.as_raw_fd()) } != 0
@@ -378,8 +377,38 @@ fn pseudo_terminal(columns: u16, rows: u16) -> std::io::Result<(File, File)> {
     }
     // SAFETY: `slave` is a newly owned descriptor.
     let slave = unsafe { File::from_raw_fd(slave) };
+    set_close_on_exec(&slave)?;
     resize_terminal(&slave, columns, rows);
     Ok((master, slave))
+}
+
+fn make_stdin_controlling_terminal(command: &mut Command) {
+    // SAFETY: the child closure runs after stdio remapping and invokes only
+    // async-signal-safe session and terminal ioctls before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+fn set_close_on_exec(file: &File) -> std::io::Result<()> {
+    // SAFETY: fcntl reads descriptor flags for this live file.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the descriptor remains live and F_SETFD preserves its existing flags.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn required_pseudo_terminal(label: &str) -> Option<(File, File)> {

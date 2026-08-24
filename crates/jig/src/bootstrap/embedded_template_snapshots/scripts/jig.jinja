@@ -139,11 +139,18 @@ jig_capability_only_requested() {
         ;;
       check)
         case "$arg" in
-          -*)
-            return 1
+          -h | --help | -V | --version)
+            return 0
+            ;;
+          --plan-id)
+            capability_command=check-plan-id
+            ;;
+          --plan-id=*)
+            ;;
+          --no-receipt)
             ;;
           contract)
-            return 0
+            capability_command=check-contract
             ;;
           # jig-strict-check-subcommands-begin
           fmt | lint | clippy | test | test-locked | typescript-lint | typescript-typecheck | typescript-build | typescript-coverage | sqlx | sqlc | schema | agent-map | agent-guides | rust-file-loc | no-mod-rs | migration-immutability | sqlx-unchecked-non-test)
@@ -151,16 +158,43 @@ jig_capability_only_requested() {
             return 1
             ;;
           *)
-            return 0
+            # Bare check, selectors, and unknown check-shaped input must be
+            # pinned to this repository. Clap can still diagnose a typo after
+            # the launcher validates the repository boundary.
+            return 1
             ;;
         esac
         ;;
+      check-plan-id)
+        capability_command=check
+        ;;
+      check-contract)
+        case "$arg" in
+          -h | --help | -V | --version)
+            return 0
+            ;;
+          --plan-id)
+            capability_command=check-contract-plan-id
+            ;;
+          --plan-id=*)
+            ;;
+          --no-receipt)
+            ;;
+          *)
+            return 1
+            ;;
+        esac
+        ;;
+      check-contract-plan-id)
+        capability_command=check-contract
+        ;;
     esac
   done
-  # A global-only invocation behaves like bare help, while a syntactically
-  # incomplete bare `check` reaches Clap's specific subcommand diagnostic even
-  # when the repository contract is broken.
-  [ -z "$capability_command" ] || [ "$capability_command" = check ]
+  # A global-only invocation behaves like bare help. Bare `check` is a valid
+  # repository operation and therefore stays repository-scoped.
+  [ -z "$capability_command" ] \
+    || [ "$capability_command" = check-contract ] \
+    || [ "$capability_command" = check-contract-plan-id ]
 }
 
 resolve_cached_binary() {

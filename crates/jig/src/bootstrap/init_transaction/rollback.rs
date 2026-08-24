@@ -263,14 +263,14 @@ impl InitMutationTransaction {
                 failures.push(format!("{}: {error:#}", relative.display()));
                 continue;
             }
-            if let Some((quarantine, snapshot)) = current_quarantine {
-                if let Err(error) = self.dispose_snapshot_leaf(&relative, &quarantine, &snapshot) {
-                    failures.push(format!(
+            if let Some((quarantine, snapshot)) = current_quarantine
+                && let Err(error) = self.dispose_snapshot_leaf(&relative, &quarantine, &snapshot)
+            {
+                failures.push(format!(
                         "{}: restored the preimage but failed to remove quarantined Jig output {}: {error:#}",
                         relative.display(),
                         quarantine.display()
                     ));
-                }
             }
         }
 

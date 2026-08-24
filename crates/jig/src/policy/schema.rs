@@ -7,13 +7,20 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 
-use crate::context::RepoContext;
+use crate::context::{CommandOutputLimit, RepoContext};
+use crate::execution::{
+    ExecutionCancellation, ExecutionObserver, SupervisedExecutionError,
+    run_supervised_execution_command,
+};
 use crate::repository_path::normalize_repo_relative_path;
 use crate::source_projection::{
     IGNORED_DOTENV_PATHSPECS, MAX_SUBMODULE_DEPTH, initialized_submodule_paths,
 };
 
-use super::{NativeToolOutput, controlled_git_text, controlled_output};
+use super::{
+    NativeToolOutput, controlled_git_bytes, controlled_git_output, controlled_git_text,
+    controlled_output,
+};
 
 pub(super) fn check_with_control(
     ctx: &RepoContext,
@@ -51,6 +58,7 @@ pub(super) fn check_with_control(
         sandbox.root(),
         command_text,
         schema_docs_dir,
+        ctx.command_output_limit(),
         deadline,
         cancelled,
     )
@@ -94,6 +102,68 @@ fn clone_worktree_snapshot(
         bail!("schema-check submodules exceed the supported nesting depth");
     }
 
+    let head = repository_head(repository_root, deadline, cancelled)?;
+    let unborn = head.is_none();
+    if let Some(head) = head.as_deref() {
+        clone_committed_snapshot(repository_root, sandbox_root, head, deadline, cancelled)?;
+        overlay_worktree_files(repository_root, sandbox_root, false, deadline, cancelled)?;
+    } else {
+        initialize_unborn_snapshot(sandbox_root, deadline, cancelled)?;
+        overlay_worktree_files(repository_root, sandbox_root, true, deadline, cancelled)?;
+    }
+
+    for relative in initialized_submodules(repository_root, deadline, cancelled)? {
+        clone_worktree_snapshot(
+            &repository_root.join(&relative),
+            &sandbox_root.join(&relative),
+            deadline,
+            cancelled,
+            submodule_depth + 1,
+        )?;
+    }
+    if unborn {
+        commit_unborn_snapshot(sandbox_root, deadline, cancelled)?;
+    }
+    Ok(())
+}
+
+fn repository_head(
+    repository_root: &Path,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<String>> {
+    let output = controlled_git_output(
+        repository_root,
+        &["rev-parse", "--verify", "--quiet", "HEAD"],
+        deadline,
+        cancelled,
+    )?;
+    if output.status.success() {
+        let stdout = std::str::from_utf8(&output.stdout)
+            .context("Git returned a non-UTF-8 schema-check repository HEAD")?;
+        return Ok(Some(stdout.trim().to_owned()));
+    }
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    bail!(
+        "failed to inspect schema-check repository HEAD with status {}\nstderr:\n{}",
+        output.status.code().unwrap_or(1),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn clone_committed_snapshot(
+    repository_root: &Path,
+    sandbox_root: &Path,
+    head: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    // `stash create` writes an unreferenced snapshot commit into the live
+    // object database without changing refs, the index, or the worktree. It
+    // intentionally excludes untracked files; `overlay_worktree_files` below
+    // is therefore part of the snapshot contract, not an optional supplement.
     let snapshot = controlled_git_text(
         repository_root,
         &["stash", "create", "jig schema freshness snapshot"],
@@ -101,15 +171,16 @@ fn clone_worktree_snapshot(
         cancelled,
     )?;
     let snapshot = if snapshot.trim().is_empty() {
-        controlled_git_text(repository_root, &["rev-parse", "HEAD"], deadline, cancelled)?
+        head
     } else {
-        snapshot
+        snapshot.trim()
     };
 
     remove_snapshot_path(sandbox_root)?;
     let mut clone = Command::new("git");
     clone.args(["clone", "--quiet", "--no-checkout", "--shared", "--"]);
     clone.arg(repository_root).arg(sandbox_root);
+    crate::bootstrap::scrub_known_repository_git_environment(&mut clone);
     let output = controlled_output(&mut clone, deadline, cancelled)
         .context("Failed to clone schema-check sandbox")?;
     if !output.status.success() {
@@ -124,7 +195,8 @@ fn clone_worktree_snapshot(
     let mut checkout = Command::new("git");
     checkout
         .current_dir(sandbox_root)
-        .args(["checkout", "--quiet", "--detach", snapshot.trim()]);
+        .args(["checkout", "--quiet", "--detach", snapshot]);
+    crate::bootstrap::scrub_known_repository_git_environment(&mut checkout);
     let output = controlled_output(&mut checkout, deadline, cancelled)
         .context("Failed to check out schema-check snapshot")?;
     if !output.status.success() {
@@ -136,56 +208,120 @@ fn clone_worktree_snapshot(
         );
     }
 
-    overlay_worktree_files(repository_root, sandbox_root, deadline, cancelled)?;
-    for relative in initialized_submodules(repository_root, deadline, cancelled)? {
-        clone_worktree_snapshot(
-            &repository_root.join(&relative),
-            &sandbox_root.join(&relative),
-            deadline,
-            cancelled,
-            submodule_depth + 1,
-        )?;
-    }
+    Ok(())
+}
+
+fn initialize_unborn_snapshot(
+    sandbox_root: &Path,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    remove_snapshot_path(sandbox_root)?;
+    fs::create_dir_all(sandbox_root).with_context(|| {
+        format!(
+            "Failed to create unborn schema-check snapshot {}",
+            sandbox_root.display()
+        )
+    })?;
+    run_schema_git(
+        sandbox_root,
+        &["init", "--quiet"],
+        deadline,
+        cancelled,
+        "initialize unborn schema-check snapshot",
+    )
+}
+
+fn commit_unborn_snapshot(
+    sandbox_root: &Path,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    run_schema_git(
+        sandbox_root,
+        &["add", "--all"],
+        deadline,
+        cancelled,
+        "stage unborn schema-check snapshot",
+    )?;
+    run_schema_git(
+        sandbox_root,
+        &[
+            "-c",
+            "user.name=Jig Schema Snapshot",
+            "-c",
+            "user.email=jig-schema-snapshot@example.invalid",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Jig schema snapshot baseline",
+        ],
+        deadline,
+        cancelled,
+        "commit unborn schema-check snapshot",
+    )
+}
+
+fn run_schema_git(
+    root: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+    context: &str,
+) -> Result<()> {
+    controlled_git_text(root, args, deadline, cancelled)
+        .with_context(|| format!("Failed to {context}"))?;
     Ok(())
 }
 
 fn overlay_worktree_files(
     repository_root: &Path,
     sandbox_root: &Path,
+    include_cached: bool,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
-    let untracked = controlled_git_text(
-        repository_root,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-        deadline,
-        cancelled,
-    )?;
+    let mut file_args = vec!["ls-files"];
+    if include_cached {
+        file_args.push("--cached");
+    }
+    file_args.extend(["--others", "--exclude-standard", "-z"]);
+    let worktree_files = controlled_git_bytes(repository_root, &file_args, deadline, cancelled)?;
     let mut ignored_dotenv_args = vec![
         "ls-files",
         "--others",
         "--ignored",
         "--exclude-standard",
+        "--directory",
         "-z",
         "--",
     ];
     ignored_dotenv_args.extend_from_slice(IGNORED_DOTENV_PATHSPECS);
     let ignored_dotenv =
-        controlled_git_text(repository_root, &ignored_dotenv_args, deadline, cancelled)?;
+        controlled_git_bytes(repository_root, &ignored_dotenv_args, deadline, cancelled)?;
 
-    let mut paths = untracked
-        .split('\0')
-        .chain(ignored_dotenv.split('\0'))
-        .filter(|path| !path.is_empty())
+    let mut paths = worktree_files
+        .split(|byte| *byte == 0)
+        .chain(ignored_dotenv.split(|byte| *byte == 0))
+        .filter(|path| !path.is_empty() && path.last() != Some(&b'/'))
         .collect::<Vec<_>>();
     paths.sort_unstable();
     paths.dedup();
 
     for relative in paths {
-        let relative = normalize_repo_relative_path(Path::new(relative), "untracked path")?;
+        let relative = git_path_from_bytes(relative)?;
+        let relative = normalize_repo_relative_path(&relative, "untracked path")?;
         let source = repository_root.join(&relative);
-        let metadata = fs::symlink_metadata(&source)
-            .with_context(|| format!("Failed to inspect untracked file {}", source.display()))?;
+        let metadata = match fs::symlink_metadata(&source) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to inspect snapshot file {}", source.display())
+                });
+            }
+        };
         let destination = sandbox_root.join(&relative);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
@@ -194,7 +330,7 @@ fn overlay_worktree_files(
         if metadata.file_type().is_file() {
             fs::copy(&source, &destination).with_context(|| {
                 format!(
-                    "Failed to copy untracked file {} into the schema-check sandbox",
+                    "Failed to copy snapshot file {} into the schema-check sandbox",
                     relative.display()
                 )
             })?;
@@ -205,6 +341,20 @@ fn overlay_worktree_files(
     Ok(())
 }
 
+#[cfg(unix)]
+fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    Ok(PathBuf::from(OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+fn git_path_from_bytes(bytes: &[u8]) -> Result<PathBuf> {
+    let path = std::str::from_utf8(bytes).context("Git returned a non-UTF-8 worktree path")?;
+    Ok(PathBuf::from(path))
+}
+
 fn initialized_submodules(
     repository_root: &Path,
     deadline: Instant,
@@ -213,17 +363,20 @@ fn initialized_submodules(
     if !repository_root.join(".gitmodules").is_file() {
         return Ok(Vec::new());
     }
-    let mut command = Command::new("git");
-    command.current_dir(repository_root).args([
-        "config",
-        "-z",
-        "--file",
-        ".gitmodules",
-        "--get-regexp",
-        "^submodule\\..*\\.path$",
-    ]);
-    let output = controlled_output(&mut command, deadline, cancelled)
-        .context("Failed to inspect schema-check submodules")?;
+    let output = controlled_git_output(
+        repository_root,
+        &[
+            "config",
+            "-z",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            "^submodule\\..*\\.path$",
+        ],
+        deadline,
+        cancelled,
+    )
+    .context("Failed to inspect schema-check submodules")?;
     if !output.status.success() {
         if output.status.code() == Some(1) {
             return Ok(Vec::new());
@@ -231,11 +384,11 @@ fn initialized_submodules(
         bail!(
             "failed to inspect schema-check submodules with status {}\nstderr:\n{}",
             output.status.code().unwrap_or(1),
-            output.stderr
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 
-    initialized_submodule_paths(repository_root, output.stdout.as_bytes())
+    initialized_submodule_paths(repository_root, &output.stdout)
 }
 
 fn remove_snapshot_path(path: &Path) -> Result<()> {
@@ -267,10 +420,20 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
     })
 }
 
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
+    bail!(
+        "Schema-check snapshots cannot copy untracked symlink {} to {} on this platform",
+        source.display(),
+        destination.display()
+    )
+}
+
 fn run_schema_drift_check(
     sandbox_root: &Path,
     command_text: &str,
     schema_docs_dir: &str,
+    output_limit: CommandOutputLimit,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
@@ -279,21 +442,65 @@ fn run_schema_drift_check(
         .env("JIG_REPO_ROOT", sandbox_root)
         .arg("-c")
         .arg(command_text);
-    let output = controlled_output(&mut dump, deadline, cancelled)
-        .context("Failed to run schema_dump_command")?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
+    }
+    let mut control = SchemaCommandControl(cancelled);
+    let output = match run_supervised_execution_command(
+        &mut dump,
+        remaining,
+        output_limit,
+        "schema_dump_command",
+        &mut control,
+    ) {
+        Ok(output) => output,
+        Err(SupervisedExecutionError::CancelledBeforeStart) => {
+            return Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart.into());
+        }
+        Err(SupervisedExecutionError::Cancelled) => {
+            return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
+        }
+        Err(SupervisedExecutionError::TimedOut) => {
+            return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
+        }
+        Err(SupervisedExecutionError::OutputLimitExceeded {
+            stream,
+            stdout,
+            stderr,
+        }) => {
+            let mut stderr = String::from_utf8_lossy(&stderr).into_owned();
+            if !stderr.is_empty() && !stderr.ends_with('\n') {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!(
+                "schema_dump_command exceeded the {} byte {stream} capture limit",
+                output_limit.bytes()
+            ));
+            return Ok(NativeToolOutput {
+                exit_status: 1,
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                stderr,
+            });
+        }
+        Err(SupervisedExecutionError::Failed { error, .. }) => {
+            return Err(error).context("Failed to run schema_dump_command");
+        }
+    };
     if !output.status.success() {
         bail!(
             "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
             output.status.code().unwrap_or(1),
-            output.stdout,
-            output.stderr
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
     let status = schema_path_status(sandbox_root, schema_docs_dir, deadline, cancelled)?;
     if !status.trim().is_empty() {
+        let schema_pathspec = literal_git_pathspec(schema_docs_dir);
         let diff = controlled_git_text(
             sandbox_root,
-            &["--no-pager", "diff", "HEAD", "--", schema_docs_dir],
+            &["--no-pager", "diff", "HEAD", "--", schema_pathspec.as_str()],
             deadline,
             cancelled,
         )?;
@@ -312,12 +519,23 @@ fn run_schema_drift_check(
     })
 }
 
+struct SchemaCommandControl<'a>(&'a dyn Fn() -> bool);
+
+impl ExecutionObserver for SchemaCommandControl<'_> {}
+
+impl ExecutionCancellation for SchemaCommandControl<'_> {
+    fn cancelled(&self) -> bool {
+        (self.0)()
+    }
+}
+
 fn schema_path_status(
     root: &Path,
     schema_docs_dir: &str,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
+    let schema_pathspec = literal_git_pathspec(schema_docs_dir);
     controlled_git_text(
         root,
         &[
@@ -325,9 +543,42 @@ fn schema_path_status(
             "--porcelain=v1",
             "--untracked-files=all",
             "--",
-            schema_docs_dir,
+            schema_pathspec.as_str(),
         ],
         deadline,
         cancelled,
     )
+}
+
+fn literal_git_pathspec(path: &str) -> String {
+    format!(":(literal){path}")
+}
+
+#[cfg(test)]
+mod pathspec_tests {
+    use super::*;
+
+    #[test]
+    fn schema_status_treats_pathspec_magic_as_a_literal_directory_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let schema_dir = ":(exclude)docs/schema";
+        fs::create_dir_all(temp.path().join(schema_dir)).unwrap();
+        fs::write(temp.path().join(schema_dir).join("schema.json"), "{}\n").unwrap();
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let status = schema_path_status(
+            temp.path(),
+            schema_dir,
+            Instant::now() + Duration::from_secs(5),
+            &|| false,
+        )
+        .unwrap();
+
+        assert!(status.contains("schema.json"), "{status}");
+    }
 }

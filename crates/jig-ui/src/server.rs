@@ -333,27 +333,28 @@ fn authorize_request(
         return Some(HttpResponse::text(403, "forbidden\n"));
     }
 
-    if method == "GET" && target.starts_with(&format!("{}?", security.namespace)) {
-        if let Some(candidate) = query_value(target, BOOTSTRAP_QUERY) {
-            let Ok(mut bootstrap) = security.bootstrap_capability.lock() else {
-                return Some(HttpResponse::text(500, "authorization state unavailable\n"));
-            };
-            let valid = bootstrap
-                .as_ref()
-                .is_some_and(|expected| capability_matches(candidate, expected));
-            if valid {
-                *bootstrap = None;
-                return Some(HttpResponse::redirect(&security.namespace).with_header(
-                    "Set-Cookie",
-                    format!(
-                        "{SESSION_COOKIE}={}; HttpOnly; SameSite=Strict; Path={}",
-                        encode_capability(&security.session_capability),
-                        security.namespace
-                    ),
-                ));
-            }
-            return Some(HttpResponse::text(403, "forbidden\n"));
+    if method == "GET"
+        && target.starts_with(&format!("{}?", security.namespace))
+        && let Some(candidate) = query_value(target, BOOTSTRAP_QUERY)
+    {
+        let Ok(mut bootstrap) = security.bootstrap_capability.lock() else {
+            return Some(HttpResponse::text(500, "authorization state unavailable\n"));
+        };
+        let valid = bootstrap
+            .as_ref()
+            .is_some_and(|expected| capability_matches(candidate, expected));
+        if valid {
+            *bootstrap = None;
+            return Some(HttpResponse::redirect(&security.namespace).with_header(
+                "Set-Cookie",
+                format!(
+                    "{SESSION_COOKIE}={}; HttpOnly; SameSite=Strict; Path={}",
+                    encode_capability(&security.session_capability),
+                    security.namespace
+                ),
+            ));
         }
+        return Some(HttpResponse::text(403, "forbidden\n"));
     }
     let authorized = header_values(headers, "cookie")
         .into_iter()

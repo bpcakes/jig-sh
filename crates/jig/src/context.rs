@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{
     ActionSpec, ComponentSpec, FeatureContext, ManifestTool, ProfileId, ProfileSpec,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::backend::{BackendLanguage, GoDatabase};
@@ -19,16 +19,9 @@ use crate::repository_path::{
 
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
 
-mod defaults;
-mod execution_config;
 pub(crate) use execution_config::{
     CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
 };
-mod loop_config;
-mod optional;
-mod runtime;
-mod status_config;
-mod work_config;
 
 pub(crate) use defaults::{
     DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_PLUGINS,
@@ -54,11 +47,6 @@ pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkEvidenceGate, WorkEvidenceSelector, WorkGate,
     WorkRefinementConfig, WorkReviewGate, parse_review_scope_arg, parse_work_gate,
 };
-
-pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 6;
-pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
-pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
-    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 #[derive(Clone, Debug, Deserialize)]
@@ -167,10 +155,47 @@ struct RepoConfig {
     agent_tooling: AgentToolingConfig,
 }
 
+type LegacyCommandAccessor = for<'a> fn(&'a RepoConfig) -> &'a str;
+
+/// One source of truth for compatibility command fields. Both runtime command
+/// resolution and the execution-authority digest consume this table so adding
+/// or renaming a legacy binding cannot silently update only one boundary.
+const LEGACY_COMMAND_BINDINGS: &[(&str, LegacyCommandAccessor)] = &[
+    ("bootstrap_command", |config| &config.bootstrap_command),
+    ("contract_check_command", |config| {
+        &config.contract_check_command
+    }),
+    ("migration_add_command", |config| {
+        &config.migration_add_command
+    }),
+    ("rust_clippy_command", |config| &config.rust_clippy_command),
+    ("rust_fmt_check_command", |config| {
+        &config.rust_fmt_check_command
+    }),
+    ("rust_test_command", |config| &config.rust_test_command),
+    ("rust_test_locked_command", |config| {
+        &config.rust_test_locked_command
+    }),
+    ("schema_check_command", |config| {
+        &config.schema_check_command
+    }),
+    ("schema_dump_command", |config| &config.schema_dump_command),
+    ("sqlx_check_command", |config| &config.sqlx_check_command),
+];
+
+fn legacy_command_for_key<'a>(config: &'a RepoConfig, key: &str) -> Option<&'a str> {
+    LEGACY_COMMAND_BINDINGS
+        .iter()
+        .find(|(candidate, _)| *candidate == key)
+        .map(|(_, accessor)| accessor(config))
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredRepositoryConfig {
     default_check_profile: ProfileId,
+    #[serde(default)]
+    affected_ignore: Vec<String>,
     components: Vec<ComponentSpec>,
     actions: Vec<ActionSpec>,
     profiles: Vec<ProfileSpec>,
@@ -340,6 +365,8 @@ struct ContractManifest {
     profiles: Vec<ProfileSpec>,
     #[serde(default)]
     default_check_profile: Option<ProfileId>,
+    #[serde(default)]
+    affected_ignore: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -359,11 +386,12 @@ impl RepoContext {
         let manifest_path = root.join(".agent/jig-contract.json");
         let manifest_text = fs::read_to_string(&manifest_path)
             .with_context(|| format!("Failed to read {}", manifest_path.display()))?;
-        let manifest: ContractManifest = serde_json::from_str(&manifest_text)
+        let manifest_authority: serde_json::Value = serde_json::from_str(&manifest_text)
             .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
-        let contract_digest =
-            contract_source_digest(loaded_config.source.as_bytes(), &manifest_text);
+        let manifest: ContractManifest = serde_json::from_value(manifest_authority.clone())
+            .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
         let config = loaded_config.config;
+        let contract_digest = contract_source_digest(&config, &manifest_authority)?;
 
         if !is_supported_contract_version(manifest.contract_version) {
             bail!(
@@ -461,6 +489,10 @@ impl RepoContext {
 
     pub(crate) fn default_check_profile(&self) -> Option<&ProfileId> {
         self.manifest.default_check_profile.as_ref()
+    }
+
+    pub(crate) fn affected_ignore(&self) -> &[String] {
+        &self.manifest.affected_ignore
     }
 
     pub(crate) fn contract_digest(&self) -> &str {
@@ -575,25 +607,11 @@ impl RepoContext {
             return non_empty_command(key, command);
         }
 
-        let command = match key {
-            "bootstrap_command" => &self.config.bootstrap_command,
-            // Preserved for older contracts that still required the command
-            // key before contract checking became native.
-            "contract_check_command" => &self.config.contract_check_command,
-            "migration_add_command" => &self.config.migration_add_command,
-            "rust_clippy_command" => &self.config.rust_clippy_command,
-            "rust_fmt_check_command" => &self.config.rust_fmt_check_command,
-            "rust_test_command" => &self.config.rust_test_command,
-            "rust_test_locked_command" => &self.config.rust_test_locked_command,
-            "schema_check_command" => &self.config.schema_check_command,
-            "schema_dump_command" => &self.config.schema_dump_command,
-            "sqlx_check_command" => &self.config.sqlx_check_command,
-            _ => {
-                if jig_features::is_supported_command_key(key) {
-                    bail!("Command key {key} is missing in [commands] in .jig.toml");
-                } else {
-                    bail!("Unsupported command key in jig contract: {key}");
-                }
+        let Some(command) = legacy_command_for_key(&self.config, key) else {
+            if jig_features::is_supported_command_key(key) {
+                bail!("Command key {key} is missing in [commands] in .jig.toml");
+            } else {
+                bail!("Unsupported command key in jig contract: {key}");
             }
         };
         non_empty_command(key, command)
@@ -673,7 +691,6 @@ impl RepoContext {
 
 struct LoadedConfig {
     config: RepoConfig,
-    source: String,
 }
 
 fn load_config_snapshot(config_path: &Path) -> Result<LoadedConfig> {
@@ -686,23 +703,105 @@ fn load_config_snapshot(config_path: &Path) -> Result<LoadedConfig> {
         )
     })?;
     validate_config(&config)?;
-    Ok(LoadedConfig {
-        config,
-        source: config_text,
-    })
+    Ok(LoadedConfig { config })
 }
 
 fn load_config(config_path: &Path) -> Result<RepoConfig> {
     Ok(load_config_snapshot(config_path)?.config)
 }
 
-fn contract_source_digest(config: &[u8], manifest_text: &str) -> String {
+#[derive(Serialize)]
+struct RepositoryExecutionAuthority<'a> {
+    schema_version: u32,
+    manifest: &'a serde_json::Value,
+    backend_language: BackendLanguage,
+    go_database: GoDatabase,
+    sqlx_enabled: bool,
+    rust_crate_roots: &'a [String],
+    migration_dir: &'a str,
+    rust_migration_dir: &'a str,
+    rust_sqlx_metadata_dir: &'a str,
+    schema_dump_enabled: bool,
+    commands: BTreeMap<String, &'a str>,
+    execution: &'a ExecutionConfig,
+}
+
+fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> Result<String> {
+    // This deliberately exhaustive pattern is a compile-time review gate for
+    // every new RepoConfig field: each addition must be classified here as
+    // execution authority or explicitly unrelated runtime/config metadata.
+    let RepoConfig {
+        src_path: _,
+        commit: _,
+        template_mode: _,
+        template_local_path: _,
+        repo_name: _,
+        default_branch: _,
+        ci_github_runner: _,
+        jig_version: _,
+        template_source_url: _,
+        harness_footprint: _,
+        backend_language,
+        go_database,
+        sqlx_enabled,
+        rust_crate_roots,
+        rust_migration_dir,
+        migration_dir,
+        rust_sqlx_metadata_dir,
+        schema_dump_enabled,
+        schema_dump_command: _,
+        schema_check_command: _,
+        sqlx_check_command: _,
+        migration_add_command: _,
+        bootstrap_command: _,
+        contract_check_command: _,
+        dev_command: _,
+        rust_fmt_check_command: _,
+        rust_clippy_command: _,
+        rust_test_command: _,
+        rust_test_locked_command: _,
+        commands,
+        web_package_manager: _,
+        frontend_apps: _,
+        repository: _,
+        vault: _,
+        dev: _,
+        work: _,
+        loop_config: _,
+        status: _,
+        execution,
+        agent_tooling: _,
+    } = config;
+    let mut effective_commands = commands
+        .iter()
+        .map(|(key, value)| (key.clone(), value.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for (key, accessor) in LEGACY_COMMAND_BINDINGS {
+        effective_commands
+            .entry((*key).into())
+            .or_insert_with(|| accessor(config));
+    }
+    let authority = RepositoryExecutionAuthority {
+        schema_version: 1,
+        manifest,
+        backend_language: *backend_language,
+        go_database: *go_database,
+        sqlx_enabled: *sqlx_enabled,
+        rust_crate_roots,
+        migration_dir,
+        rust_migration_dir,
+        rust_sqlx_metadata_dir,
+        schema_dump_enabled: *schema_dump_enabled,
+        commands: effective_commands,
+        execution,
+    };
+    let encoded = serde_json::to_vec(&authority)
+        .context("Failed to canonicalize repository execution authority")?;
     let mut hasher = Sha256::new();
-    hasher.update((config.len() as u64).to_be_bytes());
-    hasher.update(config);
-    hasher.update((manifest_text.len() as u64).to_be_bytes());
-    hasher.update(manifest_text.as_bytes());
-    format!("sha256:{:x}", hasher.finalize())
+    hasher.update(b"jig-repository-execution-authority-v1\0");
+    hasher.update((encoded.len() as u64).to_be_bytes());
+    hasher.update(encoded);
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
 impl FeatureContext for RepoContext {
@@ -743,341 +842,11 @@ impl FeatureContext for RepoContext {
     }
 }
 
-fn validate_repository_source(config: &RepoConfig, manifest: &ContractManifest) -> Result<()> {
-    if manifest.contract_version < 6 {
-        if config.repository.is_some() {
-            bail!("[repository] requires jig contract version 6 or later");
-        }
-        return Ok(());
-    }
-    let source = config.repository.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("jig contract version 6 requires [repository] in .jig.toml")
-    })?;
-    if source.components != manifest.components {
-        bail!("repository components differ between .jig.toml and .agent/jig-contract.json");
-    }
-    if source.actions != manifest.actions {
-        bail!("repository actions differ between .jig.toml and .agent/jig-contract.json");
-    }
-    if source.profiles != manifest.profiles {
-        bail!("repository profiles differ between .jig.toml and .agent/jig-contract.json");
-    }
-    if Some(&source.default_check_profile) != manifest.default_check_profile.as_ref() {
-        bail!(
-            "repository default_check_profile differs between .jig.toml and .agent/jig-contract.json"
-        );
-    }
-    Ok(())
-}
-
-fn non_empty_command<'a>(key: &str, command: &'a str) -> Result<&'a str> {
-    if command.trim().is_empty() {
-        bail!("Command key {key} is empty in .jig.toml");
-    }
-    Ok(command)
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-const fn default_proxy_http_port() -> u16 {
-    1355
-}
-
-// Serde requires this default function to return the field's `Option<u16>`
-// type; `Some` means HTTPS is configured by default rather than mandatory.
-#[allow(clippy::unnecessary_wraps)]
-const fn default_proxy_https_port() -> Option<u16> {
-    Some(1443)
-}
-
-fn default_dev_tld() -> String {
-    "localhost".into()
-}
-
-fn default_dev_app_kind() -> String {
-    "env-port".into()
-}
-
-fn default_web_package_manager() -> String {
-    "bun".into()
-}
-
-fn configured_frontend_app_metadata<'a>(
-    config: &'a RepoConfig,
-    app: &'a FrontendAppConfig,
-) -> ResolvedFrontendMetadata<'a> {
-    let matching_dev_kind = config
-        .dev
-        .apps
-        .iter()
-        .find(|dev_app| {
-            dev_app.name == app.name
-                && dev_app
-                    .dir
-                    .as_deref()
-                    .is_some_and(|dev_dir| config_app_dirs_match(dev_dir, &app.dir))
-        })
-        .map(|dev_app| dev_app.kind.as_str());
-    resolve_frontend_metadata(
-        &app.name,
-        app.kind.as_deref(),
-        app.role.as_deref(),
-        matching_dev_kind,
-    )
-}
-
-fn default_codex_marketplaces() -> Vec<CodexMarketplaceConfig> {
-    vec![CodexMarketplaceConfig {
-        id: DEFAULT_CODEX_MARKETPLACE_ID.into(),
-        source: DEFAULT_CODEX_MARKETPLACE_SOURCE.into(),
-        plugins: default_codex_marketplace_plugins(),
-    }]
-}
-
-pub(crate) fn default_codex_marketplace_plugins() -> Vec<String> {
-    DEFAULT_CODEX_MARKETPLACE_PLUGINS
-        .iter()
-        .map(|plugin| (*plugin).into())
-        .collect()
-}
-
-fn validate_config(config: &RepoConfig) -> Result<()> {
-    validate_backend_config(config)?;
-    validate_command_map(&config.commands)?;
-    validate_web_package_manager(&config.web_package_manager)?;
-    validate_frontend_app_roles(config)?;
-    validate_vault_config(config)?;
-    validate_dev_config(config)?;
-    status_config::validate_runtime_config(config)
-}
-
-fn validate_backend_config(config: &RepoConfig) -> Result<()> {
-    if !config.backend_language.is_go() && config.go_database.is_postgres() {
-        bail!(
-            "go_database = \"{}\" requires backend_language = \"go\" in .jig.toml",
-            config.go_database.as_str()
-        );
-    }
-    if config.backend_language.is_go() && config.sqlx_enabled {
-        bail!(
-            "backend_language = \"go\" cannot be combined with sqlx_enabled = true in .jig.toml; Go repositories use go_database and Goose/sqlc, while SQLx is owned by the Rust backend"
-        );
-    }
-    let migration_dir = (!config.migration_dir.trim().is_empty())
-        .then(|| normalize_portable_repository_directory(&config.migration_dir, "migration_dir"))
-        .transpose()?;
-    let rust_migration_dir = (!config.rust_migration_dir.trim().is_empty())
-        .then(|| {
-            normalize_portable_repository_directory(
-                &config.rust_migration_dir,
-                "legacy rust_migration_dir",
-            )
-        })
-        .transpose()?;
-    if config.sqlx_enabled
-        && let (Some(migration_dir), Some(rust_migration_dir)) =
-            (&migration_dir, &rust_migration_dir)
-        && migration_dir != rust_migration_dir
-    {
-        bail!(
-            "migration_dir = {:?} and legacy rust_migration_dir = {:?} must identify the same SQLx migration directory in .jig.toml; keep migration_dir as the canonical value and synchronize the compatibility key",
-            config.migration_dir,
-            config.rust_migration_dir
-        );
-    }
-    Ok(())
-}
-
-fn validate_frontend_app_roles(config: &RepoConfig) -> Result<()> {
-    for app in &config.frontend_apps {
-        normalize_portable_repo_path(
-            &app.dir,
-            &format!("dir for frontend app '{}' in [[frontend_apps]]", app.name),
-        )?;
-        if app
-            .kind
-            .as_deref()
-            .is_some_and(|kind| !is_supported_frontend_kind(kind))
-        {
-            bail!(
-                "Invalid frontend app kind '{}' for '{}'. Expected 'vite' or 'env-port'.",
-                app.kind.as_deref().unwrap_or_default(),
-                app.name
-            );
-        }
-        if app
-            .role
-            .as_deref()
-            .is_some_and(|role| !matches!(role, "spa" | "admin" | "astro"))
-        {
-            bail!(
-                "Invalid frontend app role '{}' for '{}'. Expected 'spa', 'admin', or 'astro'.",
-                app.role.as_deref().unwrap_or_default(),
-                app.name
-            );
-        }
-    }
-    Ok(())
-}
-
-fn validate_command_map(commands: &BTreeMap<String, String>) -> Result<()> {
-    for key in commands.keys() {
-        if !is_safe_command_key(key) {
-            bail!(
-                "Invalid [commands] key '{key}'. Use lowercase ASCII letters, numbers, and underscores, start with a letter, and end command keys with '_command'."
-            );
-        }
-    }
-    Ok(())
-}
-
-fn is_safe_command_key(value: &str) -> bool {
-    !value.is_empty()
-        && value.ends_with("_command")
-        && value
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_lowercase())
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
-}
-
-pub(crate) fn validate_web_package_manager(value: &str) -> Result<()> {
-    if SUPPORTED_WEB_PACKAGE_MANAGERS.contains(&value) {
-        return Ok(());
-    }
-
-    bail!(
-        "Unsupported web_package_manager '{value}'. Expected one of: {}.",
-        SUPPORTED_WEB_PACKAGE_MANAGERS.join(", ")
-    )
-}
-
-fn validate_vault_config(config: &RepoConfig) -> Result<()> {
-    match config.vault.scope {
-        VaultScopeConfig::Legacy => {
-            if config.vault.scope_id.is_some() {
-                bail!("[vault].scope_id requires scope = \"repo\"");
-            }
-        }
-        VaultScopeConfig::Repo => {
-            let Some(scope_id) = config.vault.scope_id.as_deref() else {
-                bail!("[vault].scope_id is required when scope = \"repo\"");
-            };
-            validate_vault_scope_id(scope_id)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_vault_scope_id(scope_id: &str) -> Result<()> {
-    if !crate::command::is_valid_vault_scope_id(scope_id) {
-        bail!(
-            "[vault].scope_id must be 1 to 128 bytes and may only contain letters, digits, '_', or '-'"
-        );
-    }
-    Ok(())
-}
-
-fn validate_dev_config(config: &RepoConfig) -> Result<()> {
-    let mut app_names = HashSet::new();
-    for app in &config.dev.apps {
-        if let Some(dir) = app.dir.as_deref() {
-            normalize_portable_repo_path(
-                dir,
-                &format!("dir for dev app '{}' in [[dev.apps]]", app.name),
-            )?;
-        }
-        if !is_supported_frontend_kind(&app.kind) {
-            bail!(
-                "Invalid dev app kind '{}' for '{}' in [[dev.apps]]. Expected 'vite' or 'env-port'.",
-                app.kind,
-                app.name
-            );
-        }
-        if !app_names.insert(app.name.as_str()) {
-            bail!("Duplicate dev app name '{}' in [[dev.apps]]", app.name);
-        }
-    }
-    if config.dev.apps.is_empty() {
-        validate_dev_app_env_prefixes(
-            config.frontend_apps.iter().map(|app| app.name.as_str()),
-            "[[frontend_apps]]",
-        )?;
-    } else {
-        validate_dev_app_env_prefixes(
-            config.dev.apps.iter().map(|app| app.name.as_str()),
-            "[[dev.apps]]",
-        )?;
-    }
-    if !config.frontend_apps.is_empty() && !config.dev.apps.is_empty() {
-        for frontend_app in &config.frontend_apps {
-            let Some(dev_app) = config
-                .dev
-                .apps
-                .iter()
-                .find(|app| app.name == frontend_app.name)
-            else {
-                bail!(
-                    "[dev.apps] entries take precedence when [[frontend_apps]] are also configured. Add a matching [[dev.apps]] entry for frontend app '{}' or remove it from [[frontend_apps]].",
-                    frontend_app.name
-                );
-            };
-            match dev_app.dir.as_deref() {
-                Some(dev_dir) if config_app_dirs_match(dev_dir, &frontend_app.dir) => {}
-                Some(dev_dir) => {
-                    bail!(
-                        "[dev.apps] entry '{}' uses dir '{}' but matching [[frontend_apps]] uses '{}'. Keep them aligned because [dev.apps] takes precedence for scripts/jig dev.",
-                        frontend_app.name,
-                        dev_dir,
-                        frontend_app.dir
-                    );
-                }
-                None => {
-                    bail!(
-                        "[dev.apps] entry '{}' matches [[frontend_apps]] and must set dir = '{}' because [dev.apps] takes precedence for scripts/jig dev.",
-                        frontend_app.name,
-                        frontend_app.dir
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn config_app_dirs_match(left: &str, right: &str) -> bool {
-    match (
-        normalize_portable_repo_path(left, "configured app dir"),
-        normalize_portable_repo_path(right, "configured app dir"),
-    ) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
-fn is_supported_frontend_kind(kind: &str) -> bool {
-    matches!(kind, "vite" | "env-port")
-}
-
-fn validate_dev_app_env_prefixes<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-    section: &str,
-) -> Result<()> {
-    let mut prefixes = BTreeMap::new();
-    for name in names {
-        let prefix = jig_core::dev_app_env_prefix(name);
-        if let Some(previous) = prefixes.insert(prefix.clone(), name) {
-            bail!(
-                "{section} entries '{previous}' and '{name}' share derived dev environment prefix {prefix}; rename one app so punctuation-normalized names are unique"
-            );
-        }
-    }
-    Ok(())
-}
+mod validation;
+use validation::*;
+pub(crate) use validation::{
+    config_app_dirs_match, default_codex_marketplace_plugins, validate_web_package_manager,
+};
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
 fn find_optional_repo_root() -> Result<Option<PathBuf>> {
@@ -1141,17 +910,17 @@ fn resolve_current_session_path(root: &Path) -> PathBuf {
     command.env("GIT_OPTIONAL_LOCKS", "0");
     let output = command.output();
 
-    if let Ok(output) = output {
-        if output.status.success() {
-            let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                let path = PathBuf::from(&resolved);
-                return if path.is_absolute() {
-                    path
-                } else {
-                    root.join(path)
-                };
-            }
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !resolved.is_empty() {
+            let path = PathBuf::from(&resolved);
+            return if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
         }
     }
 
@@ -1164,9 +933,9 @@ impl RepoContext {
         let config_path = root.join(".jig.toml");
         let loaded_config = load_config_snapshot(&config_path)?;
         let manifest_text = fs::read_to_string(root.join(".agent/jig-contract.json"))?;
-        let manifest: ContractManifest = serde_json::from_str(&manifest_text)?;
-        let contract_digest =
-            contract_source_digest(loaded_config.source.as_bytes(), &manifest_text);
+        let manifest_authority: serde_json::Value = serde_json::from_str(&manifest_text)?;
+        let manifest: ContractManifest = serde_json::from_value(manifest_authority.clone())?;
+        let contract_digest = contract_source_digest(&loaded_config.config, &manifest_authority)?;
         Ok(Self {
             root: root.to_path_buf(),
             current_session_path: root.join(".agent/.cache").join(CURRENT_SESSION_FILE),
@@ -1177,7 +946,21 @@ impl RepoContext {
     }
 }
 
+// Keep launcher protocol constants in this module shell: repository tooling
+// reads their declarations directly without compiling the Rust include tree.
+pub(crate) const CURRENT_CONTRACT_VERSION: u32 = 6;
+pub(crate) const LAST_VERSION_LOCKED_CONTRACT_VERSION: u32 = 3;
+pub(crate) const INSTALLER_CACHE_LAYOUT_MARKER: &str =
+    "git=.git/jig-tools;fallback=.agent/.cache/jig;runtime-suffix=-runtime";
+
 #[cfg(test)]
 mod contract_tests;
+mod defaults;
+mod execution_config;
+mod loop_config;
+mod optional;
+mod runtime;
+mod status_config;
 #[cfg(test)]
 mod tests;
+mod work_config;

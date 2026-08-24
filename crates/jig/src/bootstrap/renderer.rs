@@ -214,16 +214,15 @@ pub(super) fn validate_staged_runtime_contract(
                     .with_context(|| format!("Failed to read {}", installer_path.display()));
             }
         };
-        if let Some(installer) = installer {
-            if !crate::runtime_artifacts::inspect_installer(&installer)
+        if let Some(installer) = installer
+            && !crate::runtime_artifacts::inspect_installer(&installer)
                 .uses_repository_scope_protocol()
-            {
-                bail!(
-                    "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
-                    manifest_contract_version,
-                    installer_path.display()
-                );
-            }
+        {
+            bail!(
+                "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
+                manifest_contract_version,
+                installer_path.display()
+            );
         }
     }
     Ok(())
@@ -610,9 +609,7 @@ fn render_context(
     answers: &RenderAnswers,
     contract_version: Option<u32>,
 ) -> Result<JsonValue> {
-    let repository = RepositoryRenderModel::from_answers(answers)?;
-    let repository_toml = repository.authored_toml()?;
-    let repository_commands_toml = repository.commands_toml()?;
+    let contract_version = contract_version.unwrap_or(crate::context::CURRENT_CONTRACT_VERSION);
     let mut context = serde_json::to_value(answers)?
         .as_object()
         .cloned()
@@ -621,12 +618,21 @@ fn render_context(
         "frontend_harness_enabled".into(),
         JsonValue::Bool(answers.frontend_harness_enabled()),
     );
-    context.insert("repository".into(), serde_json::to_value(repository)?);
-    context.insert("repository_toml".into(), repository_toml.into());
-    context.insert(
-        "repository_commands_toml".into(),
-        repository_commands_toml.into(),
-    );
+    if contract_version >= 6 {
+        let repository = RepositoryRenderModel::from_answers(answers)?;
+        let repository_toml = repository.authored_toml()?;
+        let repository_commands_toml = repository.commands_toml()?;
+        context.insert(
+            "frontend_contracts_enabled".into(),
+            JsonValue::Bool(repository.frontend_contracts_enabled()),
+        );
+        context.insert("repository".into(), serde_json::to_value(repository)?);
+        context.insert("repository_toml".into(), repository_toml.into());
+        context.insert(
+            "repository_commands_toml".into(),
+            repository_commands_toml.into(),
+        );
+    }
     context.insert(
         "_jig".into(),
         json!({
@@ -638,8 +644,7 @@ fn render_context(
             },
             "template_mode": template.template_mode_answer().unwrap_or(""),
             "template_local_path": template.template_local_path_answer().unwrap_or(""),
-            "contract_version": contract_version
-                .unwrap_or(crate::context::CURRENT_CONTRACT_VERSION),
+            "contract_version": contract_version,
         }),
     );
     Ok(JsonValue::Object(context))
@@ -758,6 +763,8 @@ fn executable_script_paths(destination: &Path) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::bootstrap::template_source::PrivateAnswerOverrides;
+
     use super::*;
 
     #[test]
@@ -799,5 +806,48 @@ mod tests {
         ] {
             output_relative_path(Path::new(relative)).unwrap();
         }
+    }
+
+    #[test]
+    fn legacy_go_postgres_render_preserves_a_custom_sqlc_command() {
+        let template_root = tempfile::tempdir().unwrap();
+        let project_templates = template_root.path().join("templates/project");
+        fs::create_dir_all(&project_templates).unwrap();
+        fs::write(
+            project_templates.join(".jig.toml.jinja"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../templates/project/.jig.toml.jinja"
+            )),
+        )
+        .unwrap();
+        let answers_root = tempfile::tempdir().unwrap();
+        let answers_path = answers_root.path().join("answers.toml");
+        let custom_command = r#"go tool sqlc diff --file="custom sqlc.yaml""#;
+        fs::write(
+            &answers_path,
+            format!(
+                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\ngo_database = \"postgres\"\nsqlx_enabled = false\nschema_dump_enabled = false\nsqlc_check_command = {}\n",
+                toml::Value::String(custom_command.into())
+            ),
+        )
+        .unwrap();
+        let answers = RenderAnswers::from_answers_file(&answers_path).unwrap();
+        let template = PreparedTemplateSource::test_local(
+            "fixture".into(),
+            template_root.path().to_path_buf(),
+            None,
+            PrivateAnswerOverrides::default(),
+        );
+        let destination = answers_root.path().join("rendered");
+
+        render_template_files(&template, &answers, &destination, None, Some(5)).unwrap();
+
+        let rendered = fs::read_to_string(destination.join(".jig.toml")).unwrap();
+        let config = toml::from_str::<toml::Value>(&rendered).unwrap();
+        assert_eq!(
+            config["commands"]["sqlc_check_command"].as_str(),
+            Some(custom_command)
+        );
     }
 }

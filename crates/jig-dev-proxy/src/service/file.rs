@@ -386,10 +386,10 @@ fn ensure_service_directory_chain_is_safe(
 
 #[cfg(unix)]
 fn service_directory_chain_root(parent: &Path) -> Result<PathBuf> {
-    if let Some(home_dir) = dirs::home_dir() {
-        if parent.starts_with(&home_dir) {
-            return Ok(home_dir);
-        }
+    if let Some(home_dir) = dirs::home_dir()
+        && parent.starts_with(&home_dir)
+    {
+        return Ok(home_dir);
     }
 
     let euid = current_euid();

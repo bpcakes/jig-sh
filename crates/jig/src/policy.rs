@@ -31,9 +31,11 @@ const SOFT_LIMIT_START: usize = 500;
 const SOFT_LIMIT_END: usize = 600;
 // Files above this emit informational guidance for agent-review ergonomics.
 const TARGET_HIGH: usize = 400;
-mod agent_map;
-mod schema;
-mod sqlx;
+// Git output is sometimes repository authority rather than user-facing
+// diagnostics (for example an unborn schema snapshot's complete file list).
+// Keep that capture bounded, but large enough for ordinary repositories and
+// fail closed below if the bound is ever exceeded.
+const CONTROLLED_GIT_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 
 pub(crate) struct AgentMapInput {
     pub(crate) map_path: PathBuf,
@@ -224,6 +226,15 @@ pub(crate) fn validate_contract(
                 }
             }
         }
+    } else {
+        for gate in ctx.work_gates() {
+            if let WorkGate::Evidence(gate) = gate {
+                errors.push(format!(
+                    "Work gate '{}': evidence gates require jig contract version 6 or later.",
+                    gate.id
+                ));
+            }
+        }
     }
 
     let tool_names = ctx
@@ -298,72 +309,8 @@ pub(crate) fn validate_contract(
     }
 }
 
-pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
-    if !ctx.migration_policy_enabled() {
-        bail!("migration add requires a configured SQLx or Go/PostgreSQL migration backend");
-    }
-    let migration_dir = ctx
-        .migration_relative_dir()
-        .context("migration_dir is empty, unsafe, or has no legacy rust_migration_dir fallback")?;
-    let slug = slugify(name);
-    if slug.is_empty() {
-        bail!("Migration name {name:?} must contain at least one alphanumeric character.");
-    }
-    let timestamp = utc_timestamp();
-    validate_repository_directory_path(ctx.root(), &migration_dir)?;
-    let base = ctx
-        .root()
-        .join(&migration_dir)
-        .join(format!("{timestamp}_{slug}"));
-    if ctx.is_go_backend() {
-        return goose_migration_add(&base, &slug);
-    }
-    sqlx_migration_add(&base, &slug)
-}
-
-fn goose_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
-    let migration = base.with_extension("sql");
-    if migration.exists() {
-        bail!("Migration file already exists: {}.", migration.display());
-    }
-    if let Some(parent) = migration.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(
-        &migration,
-        format!(
-            "-- +goose Up\n-- forward migration: {slug}\n\n-- +goose Down\n-- rollback migration: {slug}\n"
-        ),
-    )
-    .with_context(|| format!("Failed to write {}", migration.display()))?;
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: format!("Created:\n  - {}\n", migration.display()),
-        stderr: String::new(),
-    })
-}
-
-fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
-    let up = base.with_extension("up.sql");
-    let down = base.with_extension("down.sql");
-    if up.exists() || down.exists() {
-        bail!("Migration files already exist for {}.", base.display());
-    }
-    if let Some(parent) = up.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(&up, format!("-- forward migration: {slug}\n"))
-        .with_context(|| format!("Failed to write {}", up.display()))?;
-    fs::write(&down, format!("-- rollback migration: {slug}\n"))
-        .with_context(|| format!("Failed to write {}", down.display()))?;
-    Ok(NativeToolOutput {
-        exit_status: 0,
-        stdout: format!("Created:\n  - {}\n  - {}\n", up.display(), down.display()),
-        stderr: String::new(),
-    })
-}
+mod migration_add;
+pub(crate) use migration_add::migration_add;
 
 #[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
@@ -413,41 +360,92 @@ struct ControlledOutput {
     stderr: String,
 }
 
+struct ControlledBytesOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+}
+
 fn controlled_output(
     command: &mut Command,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<ControlledOutput> {
+    controlled_output_with_limits(command, deadline, ProcessOutputLimits::default(), cancelled)
+}
+
+fn controlled_output_with_limits(
+    command: &mut Command,
+    deadline: Instant,
+    limits: ProcessOutputLimits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledOutput> {
+    let output = controlled_output_bytes_with_limits(command, deadline, limits, cancelled)?;
+    Ok(ControlledOutput {
+        status: output.status,
+        stdout: controlled_bytes_text(output.stdout, output.stdout_truncated),
+        stderr: controlled_bytes_text(output.stderr, output.stderr_truncated),
+    })
+}
+
+fn controlled_output_bytes_with_limits(
+    command: &mut Command,
+    deadline: Instant,
+    limits: ProcessOutputLimits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledBytesOutput> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
     }
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let output = run_owned_process_tree_with_output_limits(
-        command,
-        remaining,
-        ProcessOutputLimits::default(),
-        cancelled,
-    )?;
-    let stdout = controlled_output_text(output.stdout, "stdout")?;
-    let stderr = controlled_output_text(output.stderr, "stderr")?;
-    Ok(ControlledOutput {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = run_owned_process_tree_with_output_limits(command, remaining, limits, cancelled)?;
+    let stdout_truncated = output
+        .stdout
+        .as_ref()
+        .is_some_and(|output| output.truncated);
+    let stderr_truncated = output
+        .stderr
+        .as_ref()
+        .is_some_and(|output| output.truncated);
+    let stdout = controlled_output_bytes(output.stdout, "stdout")?;
+    let stderr = controlled_output_bytes(output.stderr, "stderr")?;
+    Ok(ControlledBytesOutput {
         status: output.status,
         stdout,
         stderr,
+        stdout_truncated,
+        stderr_truncated,
     })
 }
 
+#[cfg(test)]
 fn controlled_output_text(output: Option<BoundedProcessOutput>, stream: &str) -> Result<String> {
+    let output = output.with_context(|| format!("{stream} was not captured"))?;
+    let truncated = output.truncated;
+    let bytes = controlled_output_bytes(Some(output), stream)?;
+    Ok(controlled_bytes_text(bytes, truncated))
+}
+
+fn controlled_output_bytes(output: Option<BoundedProcessOutput>, stream: &str) -> Result<Vec<u8>> {
     let output = output.with_context(|| format!("{stream} was not captured"))?;
     if !output.complete {
         bail!("{stream} capture did not complete");
     }
-    let mut text = output.to_string_lossy();
-    if output.truncated {
+    Ok(output.bytes)
+}
+
+fn controlled_bytes_text(bytes: Vec<u8>, truncated: bool) -> String {
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
         text.push_str("\n[output truncated by Jig]\n");
     }
-    Ok(text)
+    text
 }
 
 fn controlled_git_text(
@@ -456,18 +454,63 @@ fn controlled_git_text(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<String> {
-    let mut command = Command::new("git");
-    command.current_dir(root).args(args);
-    let output = controlled_output(&mut command, deadline, cancelled)?;
+    let output = controlled_git_output(root, args, deadline, cancelled)?;
     if !output.status.success() {
         bail!(
             "git {} failed with status {}\nstderr:\n{}",
             args.join(" "),
             output.status.code().unwrap_or(1),
-            output.stderr
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("git {} returned non-UTF-8 text", args.join(" ")))
+}
+
+fn controlled_git_bytes(
+    root: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<u8>> {
+    let output = controlled_git_output(root, args, deadline, cancelled)?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed with status {}\nstderr:\n{}",
+            args.join(" "),
+            output.status.code().unwrap_or(1),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
     Ok(output.stdout)
+}
+
+fn controlled_git_output(
+    root: &Path,
+    args: &[&str],
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ControlledBytesOutput> {
+    let mut command = Command::new("git");
+    command.current_dir(root).args(args);
+    crate::bootstrap::scrub_known_repository_git_environment(&mut command);
+    let output = controlled_output_bytes_with_limits(
+        &mut command,
+        deadline,
+        ProcessOutputLimits {
+            stdout: CONTROLLED_GIT_OUTPUT_LIMIT,
+            stderr: CONTROLLED_GIT_OUTPUT_LIMIT,
+        },
+        cancelled,
+    )?;
+    if output.stdout_truncated || output.stderr_truncated {
+        bail!(
+            "git {} output exceeded the {} byte schema-check capture limit",
+            args.join(" "),
+            CONTROLLED_GIT_OUTPUT_LIMIT
+        );
+    }
+    Ok(output)
 }
 
 pub(crate) fn write_agent_map(root: &Path, map_path: &Path) -> Result<()> {
@@ -796,5 +839,8 @@ fn utc_timestamp() -> String {
     )
 }
 
+mod agent_map;
+mod schema;
+mod sqlx;
 #[cfg(test)]
 mod tests;

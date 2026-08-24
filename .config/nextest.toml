@@ -40,5 +40,7 @@ test-group = 'vault-crypto'
 threads-required = 4
 
 [[profile.default.overrides]]
+# Keep this broader filter after the vault_tui-specific override so nextest's
+# first matching group/weight assignment preserves its four-thread reservation.
 filter = 'package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))'
 test-group = 'vault-crypto'

@@ -18,7 +18,6 @@ use crate::state::{
 
 mod checks;
 #[cfg(test)]
-#[cfg(test)]
 pub(in crate::runtime) use checks::check_tools_collect_failures_with_observer;
 mod gates;
 mod goal;
@@ -149,7 +148,18 @@ fn finish_with_cancellation(
     // plan-state errors instead of misleading gate failures. plans_close
     // rechecks after gates to preserve the state-layer invariant.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
-    gates::ensure_required_gates_passed_with_cancellation(ctx, &opts.plan_id, cancelled)?;
+    let evaluated_worktree_fingerprint =
+        gates::ensure_required_gates_passed_with_cancellation(ctx, &opts.plan_id, cancelled)?;
+    finish_after_required_gates_passed(ctx, opts, evaluated_worktree_fingerprint, cancelled)
+}
+
+pub(in crate::runtime) fn finish_after_required_gates_passed(
+    ctx: &RepoContext,
+    opts: WorkFinishRequest,
+    evaluated_worktree_fingerprint: Option<String>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Value> {
+    ensure_finish_authority_is_current(ctx, evaluated_worktree_fingerprint.as_deref(), cancelled)?;
 
     let plan = plans_close(ctx, (&opts).into())?;
     let session = match current_session(ctx)? {
@@ -165,6 +175,54 @@ fn finish_with_cancellation(
         "plan": plan,
         "session": session,
     }))
+}
+
+fn ensure_finish_authority_is_current(
+    ctx: &RepoContext,
+    evaluated_worktree_fingerprint: Option<&str>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
+    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+        .context("Failed to reload repository authority before closing the work plan")?;
+    ensure_finish_config_is_current(ctx, &current)?;
+    if let Some(evaluated) = evaluated_worktree_fingerprint {
+        let current_fingerprint =
+            crate::state::current_worktree_fingerprint_with_cancellation(&current, cancelled)?;
+        let Some(current_fingerprint) = current_fingerprint.fingerprint else {
+            anyhow::bail!(
+                "Current worktree fingerprint could not be verified after evaluating required work gates: {}",
+                current_fingerprint
+                    .error
+                    .unwrap_or_else(|| "unknown fingerprint error".into())
+            );
+        };
+        if current_fingerprint != evaluated {
+            anyhow::bail!(
+                "Worktree changed while evaluating required work gates; rerun `jig work gates` and retry"
+            );
+        }
+    }
+    // The worktree scan excludes `.agent/**`; reload once more afterward so a
+    // manifest-only authority change racing that scan cannot reach plan close.
+    crate::cancellation::ensure_status_collection_active(cancelled)?;
+    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+        .context("Failed to recheck repository authority before closing the work plan")?;
+    ensure_finish_config_is_current(ctx, &current)
+}
+
+fn ensure_finish_config_is_current(ctx: &RepoContext, current: &RepoContext) -> Result<()> {
+    if current.contract_digest() != ctx.contract_digest() {
+        anyhow::bail!(
+            "Repository execution authority changed while evaluating required work gates; rerun `jig work gates` and retry"
+        );
+    }
+    if current.work_gates() != ctx.work_gates() {
+        anyhow::bail!(
+            "Work gate configuration changed while evaluating required work gates; rerun `jig work gates` and retry"
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn start_from_args(ctx: &RepoContext, args: Value) -> Result<Value> {

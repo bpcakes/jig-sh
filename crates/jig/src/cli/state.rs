@@ -5,10 +5,14 @@ use clap::{Args, Subcommand};
 use crate::tool_defs;
 
 pub(super) const STATE_ARCHIVE_AFTER_HELP: &str = "\
-Archive old receipt records out of .agent/state/receipts.jsonl while retaining
-evidence required by open-plan gates. A complete pre-rewrite recovery backup is
-written under .agent/.cache/state-backups. --before accepts YYYY-MM-DD
-interpreted as UTC midnight, or a Unix millisecond timestamp.
+Archive old receipt records and, with --include-runs, completed run histories
+while retaining open-plan evidence. Apply mode first terminalizes an abandoned
+run when its stable worker lease proves that no worker remains. Preview is
+strictly read-only. Archival then requires every known run to be terminal so a
+live reader's durable journal cursor cannot be shifted.
+Complete per-stream pre-rewrite recovery backups are written under
+.agent/.cache/state-backups. --before accepts YYYY-MM-DD interpreted as UTC
+midnight, or a Unix millisecond timestamp.
 
 Examples:
   jig state summary
@@ -17,6 +21,7 @@ Examples:
   jig state restore --backup .agent/.cache/state-backups/<id>
   jig state export receipts --before 2026-01-01 --output receipts.jsonl.gz
   jig state archive --before 2026-01-01
+  jig state archive --before 2026-01-01 --include-runs
   jig state archive --before 2026-01-01 --dry-run";
 
 #[derive(Debug, Subcommand)]
@@ -42,7 +47,7 @@ pub(crate) enum StateCommand {
         #[command(subcommand)]
         command: StateExportCommand,
     },
-    /// Archive old receipts while preserving required open-plan evidence.
+    /// Archive old receipts and completed runs while preserving open-plan state.
     #[command(
         name = tool_defs::cli_command::STATE_ARCHIVE,
         after_help = STATE_ARCHIVE_AFTER_HELP
@@ -108,6 +113,12 @@ pub(crate) struct StateArchiveOpts {
         help = "Archive receipts older than YYYY-MM-DD UTC or a Unix millisecond timestamp"
     )]
     pub(crate) before: String,
+
+    #[arg(
+        long,
+        help = "Also archive completed run histories not linked to open work plans"
+    )]
+    pub(crate) include_runs: bool,
 
     #[arg(long, help = "Report what would be archived without rewriting state")]
     pub(crate) dry_run: bool,

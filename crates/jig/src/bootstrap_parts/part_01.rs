@@ -633,6 +633,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         allow_answers_overwrite: expands_minimal_harness || establishes_manifest,
         allow_contract_overwrite: expands_minimal_harness,
         reserved_output_paths: Vec::new(),
+        scaffolded_frontend_contracts: false,
         init_transaction: None,
         progress,
     })?;

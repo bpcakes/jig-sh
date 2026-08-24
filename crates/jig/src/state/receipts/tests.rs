@@ -92,7 +92,7 @@ fn receipt_protection_is_limited_to_open_configured_gate_evidence() {
         index.observe(receipt, &open_plan_ids, &check_gate_tools, &review_gate_ids);
     }
 
-    let protected = index.protected_receipt_ids();
+    let protected = index.protected_receipt_ids().unwrap();
 
     assert_eq!(
         protected,
@@ -143,12 +143,43 @@ fn receipt_archive_protection_keeps_only_the_selected_evidence_group_after_overf
     }
 
     assert_eq!(
-        index.protected_receipt_ids(),
+        index.protected_receipt_ids().unwrap(),
         BTreeSet::from([
             "receipt_complete_lint".to_string(),
             "receipt_complete_test".to_string(),
         ])
     );
+}
+
+#[test]
+fn receipt_archive_refuses_to_drop_protection_when_evidence_indexing_overflows() {
+    let open_plan_ids = BTreeSet::from(["plan_open".to_string()]);
+    let evidence_targets = BTreeMap::from([(
+        "verify".to_string(),
+        BTreeSet::from(["api:lint".parse().unwrap(), "api:test".parse().unwrap()]),
+    )]);
+    let mut index = ReceiptProtectionIndex::with_evidence(&open_plan_ids, &evidence_targets);
+
+    for sequence in 0..=16 * 1024 {
+        let mut partial = test_receipt(
+            &format!("receipt_partial_{sequence}"),
+            "plan_open",
+            "jig.target_run",
+            sequence,
+            json!({}),
+        );
+        partial.run_id = Some(format!("run_partial_{sequence}"));
+        partial.target = Some("api:lint".parse().unwrap());
+        index.observe(&partial, &open_plan_ids, &BTreeSet::new(), &BTreeSet::new());
+    }
+
+    let error = index.protected_receipt_ids().unwrap_err().to_string();
+
+    assert!(
+        error.contains("cannot safely archive target evidence"),
+        "{error}"
+    );
+    assert!(error.contains("incomplete run groups"), "{error}");
 }
 
 #[test]
@@ -194,7 +225,7 @@ fn receipt_protection_matches_successful_legacy_batch_lookup() {
         );
     }
 
-    let protected = index.protected_receipt_ids();
+    let protected = index.protected_receipt_ids().unwrap();
 
     assert_eq!(
         protected,
@@ -251,7 +282,7 @@ fn newest_review_protects_its_worker_receipt_by_physical_order() {
         );
     }
 
-    let protected = index.protected_receipt_ids();
+    let protected = index.protected_receipt_ids().unwrap();
 
     assert_eq!(
         protected,

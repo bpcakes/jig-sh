@@ -2,7 +2,6 @@ package database
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -81,7 +80,7 @@ func migrate(ctx context.Context, databaseURL string) error {
 	if err != nil {
 		return fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
-	var db *sql.DB = stdlib.OpenDB(*config)
+	db := stdlib.OpenDB(*config)
 	defer db.Close()
 	if err := goose.SetDialect("postgres"); err != nil {
 		return fmt.Errorf("configure Goose: %w", err)

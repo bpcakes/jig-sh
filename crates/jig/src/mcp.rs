@@ -53,13 +53,7 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
                 "id": id,
                 "result": {}
             })),
-            "tools/list" => Some(json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "tools": tool_defs::tool_descriptors(ctx.contract_version(), ctx.tool_specs())
-                }
-            })),
+            "tools/list" => Some(handle_tools_list(ctx, id)),
             "tools/call" => Some(handle_tool_call(ctx, id, params, &mut writer, framing)),
             other => Some(json!({
                 "jsonrpc": "2.0",
@@ -74,6 +68,29 @@ pub fn serve(ctx: &RepoContext) -> Result<()> {
         if let Some(response) = response {
             write_message(&mut writer, &response, framing)?;
         }
+    }
+}
+
+fn handle_tools_list(ctx: &RepoContext, id: Option<Value>) -> Value {
+    match crate::runtime::refreshed_repository_context(ctx) {
+        Ok(current) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": tool_defs::tool_descriptors(
+                    current.contract_version(),
+                    current.tool_specs(),
+                )
+            }
+        }),
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32000,
+                "message": error.to_string()
+            }
+        }),
     }
 }
 
@@ -363,17 +380,60 @@ fn write_message(writer: &mut dyn Write, value: &Value, framing: MessageFraming)
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::Cursor;
     use std::time::Duration;
 
     use anyhow::anyhow;
     use serde_json::json;
+    use tempfile::tempdir;
 
     use super::{
-        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, read_message,
-        write_message,
+        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, handle_tools_list,
+        read_message, write_message,
     };
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
+    use crate::test_env::TestRepoBuilder;
+
+    #[test]
+    fn tools_list_refreshes_manifest_tools_after_server_start() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"[commands]
+custom_check_command = "printf 'check\n'"
+"#,
+            )
+            .required_commands(["custom_check_command"])
+            .tool(json!({
+                "name": "jig.old_check",
+                "kind": "command",
+                "description": "Run the old check name.",
+                "command": "custom_check_command"
+            }))
+            .write();
+        let ctx = crate::context::RepoContext::load_from(temp.path()).unwrap();
+        let manifest_path = temp.path().join(".agent/jig-contract.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["tools"][0]["name"] = json!("jig.new_check");
+        fs::write(
+            manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let response = handle_tools_list(&ctx, Some(json!(1)));
+        let names = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"jig.new_check"), "{response:#}");
+        assert!(!names.contains(&"jig.old_check"), "{response:#}");
+    }
 
     #[test]
     fn read_message_accepts_json_line() {

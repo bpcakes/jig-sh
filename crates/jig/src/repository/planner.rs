@@ -10,10 +10,20 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     context::RepoContext,
-    git_receipts::{repo_changed_paths_since, repository_source_snapshot},
+    git_receipts::{
+        repo_changed_paths_since, repo_observed_ignored_dotenv_paths, repository_source_snapshot,
+    },
 };
 
-use super::{RepositoryCatalog, affected::select_affected_targets};
+use super::{
+    RepositoryCatalog,
+    affected::{
+        MAX_SELECTION_REASONS, TargetSelection, TargetSelectionReasons,
+        add_selection_reason_digest, select_affected_targets, selection_reason_item_digest,
+    },
+};
+
+const SELECTION_REASONS_DIGEST_DOMAIN: &[u8] = b"jig-selection-reasons-v2\0";
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PlanRunRequest {
@@ -69,11 +79,13 @@ fn plan_run_with_policy(
         bail!("affected selection requires repository contract version 6 or later");
     }
     let source = current_source_identity(ctx)?;
-    let changed_paths = request
-        .affected_base
-        .as_deref()
-        .map(|base| repo_changed_paths_since(ctx.root(), base))
-        .transpose()?;
+    let (changed_paths, observed_input_paths) = match request.affected_base.as_deref() {
+        Some(base) => (
+            Some(repo_changed_paths_since(ctx.root(), base)?),
+            repo_observed_ignored_dotenv_paths(ctx.root())?,
+        ),
+        None => (None, Vec::new()),
+    };
     if changed_paths.is_some() && current_source_identity(ctx)? != source {
         bail!("repository source changed while resolving affected paths; plan again");
     }
@@ -82,6 +94,7 @@ fn plan_run_with_policy(
         request,
         source,
         changed_paths.as_deref(),
+        &observed_input_paths,
         arguments,
         policy,
     )
@@ -94,6 +107,35 @@ fn current_source_identity(ctx: &RepoContext) -> Result<SourceIdentity> {
         source.head_commit,
         source.worktree_fingerprint,
     ))
+}
+
+pub(crate) fn validate_run_plan_source(ctx: &RepoContext, plan: &RunPlan) -> Result<()> {
+    if current_source_identity(ctx)? != plan.source {
+        bail!(
+            "run plan '{}' is stale: repository source changed after planning",
+            plan.id
+        );
+    }
+    Ok(())
+}
+
+/// Confirms that the execution authority currently on disk still matches the
+/// digest under which a plan was derived. The source fingerprint deliberately
+/// excludes `.agent/**`, so this check is the independent guard for manifest
+/// changes as well as config changes that race a long-lived `RepoContext`.
+pub(crate) fn validate_current_repository_authority(
+    ctx: &RepoContext,
+    expected_digest: &str,
+) -> Result<()> {
+    let current = RepoContext::load_from_root(ctx.root().to_path_buf())
+        .context("Failed to reload current repository execution authority")?;
+    if current.contract_digest() != expected_digest {
+        bail!(
+            "repository execution authority changed (expected {expected_digest}, current {}); plan again",
+            current.contract_digest()
+        );
+    }
+    Ok(())
 }
 
 /// Re-resolves a plan request against current checked-in configuration and
@@ -117,6 +159,10 @@ pub(crate) fn validate_run_plan(
             plan.id
         );
     }
+    // The submitted targets choose only which deterministic resolution path
+    // to replay. They cannot grant themselves execution authority: the full
+    // re-resolved plan, including targets, effects, runners, and source
+    // identity, must still compare equal below.
     let policy = if plan.targets.iter().all(|target| {
         target.intent == ActionIntent::Check
             && target.effects.contains(&ActionEffect::ReadOnly)
@@ -150,6 +196,10 @@ pub(crate) fn validate_run_plan(
             plan.id
         );
     }
+    // Check after the source-dependent re-derivation so a manifest-only
+    // change that races that work cannot escape through the `.agent/**`
+    // exclusion in the source fingerprint.
+    validate_current_repository_authority(ctx, catalog.config_digest())?;
     Ok(())
 }
 
@@ -164,6 +214,7 @@ fn plan_run_with_source(
         request,
         source,
         None,
+        &[],
         BTreeMap::new(),
         PlanningPolicy::ChecksOnly,
     )
@@ -174,6 +225,7 @@ fn plan_run_with_source_and_paths(
     mut request: PlanRunRequest,
     source: SourceIdentity,
     changed_paths: Option<&[String]>,
+    observed_input_paths: &[String],
     arguments: BTreeMap<TargetId, ActionArguments>,
     policy: PlanningPolicy,
 ) -> Result<RunPlan> {
@@ -193,7 +245,7 @@ fn plan_run_with_source_and_paths(
         _ => {}
     }
 
-    let mut selected = BTreeMap::<TargetId, BTreeSet<SelectionReason>>::new();
+    let mut selected = TargetSelection::new();
     let selected_profile = match request.profile.as_deref() {
         Some(profile) => Some(ProfileId::parse(profile)?),
         None if request.selectors.is_empty() => catalog.default_check_profile().cloned(),
@@ -220,7 +272,7 @@ fn plan_run_with_source_and_paths(
         select_explicit(catalog, selector, &mut selected)?;
     }
     if let Some(changed_paths) = changed_paths {
-        selected = select_affected_targets(catalog, selected, changed_paths)?;
+        selected = select_affected_targets(catalog, selected, changed_paths, observed_input_paths)?;
     }
     expand_action_dependencies(catalog, &mut selected)?;
     match policy {
@@ -243,7 +295,7 @@ fn plan_run_with_source_and_paths(
             target,
             action.intent,
             action.runner.clone(),
-            action_input_digest(action, &source.worktree_fingerprint),
+            conservative_action_input_digest(action, &source.worktree_fingerprint),
         );
         planned.arguments = arguments.get(&planned.target).cloned().unwrap_or_default();
         planned.effects.clone_from(&action.effects);
@@ -251,7 +303,11 @@ fn plan_run_with_source_and_paths(
         planned.depends_on.clone_from(&action.depends_on);
         planned.timeout_seconds = action.timeout_seconds;
         planned.result_parser = action.result_parser;
-        planned.reasons = reasons.into_iter().collect();
+        let bounded_reasons = bounded_selection_reasons(reasons)?;
+        planned.reasons = bounded_reasons.preview;
+        planned.selection_reason_count = bounded_reasons.total;
+        planned.selection_reasons_truncated = bounded_reasons.truncated;
+        planned.selection_reasons_digest = bounded_reasons.digest;
         targets.push(planned);
     }
 
@@ -349,7 +405,7 @@ fn bind_action_arguments<'a>(
 fn select_explicit(
     catalog: &RepositoryCatalog,
     selector: &str,
-    selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
+    selected: &mut TargetSelection,
 ) -> Result<()> {
     let legacy_alias = catalog.target_for_alias(selector);
     let canonical = match super::RepositorySelector::parse(selector) {
@@ -383,11 +439,7 @@ fn select_explicit(
     Ok(())
 }
 
-fn select_legacy_alias(
-    selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
-    alias: &str,
-    target: &TargetId,
-) {
+fn select_legacy_alias(selected: &mut TargetSelection, alias: &str, target: &TargetId) {
     selected
         .entry(target.clone())
         .or_default()
@@ -398,7 +450,7 @@ fn select_legacy_alias(
 
 fn expand_action_dependencies(
     catalog: &RepositoryCatalog,
-    selected: &mut BTreeMap<TargetId, BTreeSet<SelectionReason>>,
+    selected: &mut TargetSelection,
 ) -> Result<()> {
     let mut pending = selected.keys().cloned().collect::<Vec<_>>();
     while let Some(target) = pending.pop() {
@@ -420,13 +472,18 @@ fn expand_action_dependencies(
     Ok(())
 }
 
-fn validate_check_actions<'a>(
+pub(super) fn validate_check_actions<'a>(
     catalog: &RepositoryCatalog,
     targets: impl Iterator<Item = &'a TargetId>,
 ) -> Result<()> {
-    for target in targets {
+    let mut pending = targets.cloned().collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    while let Some(target) = pending.pop() {
+        if !seen.insert(target.clone()) {
+            continue;
+        }
         let action = catalog
-            .action(target)
+            .action(&target)
             .expect("selected targets must exist in the repository catalog");
         if action.intent != ActionIntent::Check
             || !action.effects.contains(&ActionEffect::ReadOnly)
@@ -439,6 +496,7 @@ fn validate_check_actions<'a>(
                 action.effects
             );
         }
+        pending.extend(action.depends_on.iter().cloned());
     }
     Ok(())
 }
@@ -492,10 +550,20 @@ pub(crate) fn target_input_digest(
     let action = catalog
         .action(target)
         .ok_or_else(|| anyhow::anyhow!("target '{target}' is not defined"))?;
-    Ok(action_input_digest(action, worktree_fingerprint))
+    Ok(conservative_action_input_digest(
+        action,
+        worktree_fingerprint,
+    ))
 }
 
-fn action_input_digest(action: &jig_contract::ActionSpec, worktree_fingerprint: &str) -> String {
+/// Binds a target receipt to both its declared inputs and the repository-wide
+/// source projection. This is intentionally conservative freshness authority,
+/// not a per-target artifact-cache key: any observed source change invalidates
+/// the receipt even when it falls outside the target's selection patterns.
+fn conservative_action_input_digest(
+    action: &jig_contract::ActionSpec,
+    worktree_fingerprint: &str,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"jig-target-input-v1\0");
     hasher.update(action.target.to_string().as_bytes());
@@ -506,6 +574,75 @@ fn action_input_digest(action: &jig_contract::ActionSpec, worktree_fingerprint: 
         hasher.update(input.as_bytes());
     }
     format!("sha256:{:x}", hasher.finalize())
+}
+
+struct BoundedSelectionReasons {
+    preview: Vec<SelectionReason>,
+    total: Option<usize>,
+    truncated: bool,
+    digest: Option<String>,
+}
+
+fn bounded_selection_reasons(reasons: TargetSelectionReasons) -> Result<BoundedSelectionReasons> {
+    let mut total = reasons.explicit.len();
+    let mut sum_digest = [0u8; 32];
+    for reason in &reasons.explicit {
+        add_selection_reason_digest(&mut sum_digest, selection_reason_item_digest(reason)?);
+    }
+    let mut preview = reasons.explicit.into_iter().collect::<BTreeSet<_>>();
+    for batch in reasons.batches {
+        total = total.saturating_add(batch.count);
+        add_selection_reason_digest(&mut sum_digest, batch.sum_digest);
+        preview.extend(batch.preview.iter().cloned());
+    }
+    let mut preview = preview.into_iter().collect::<Vec<_>>();
+    if total <= MAX_SELECTION_REASONS {
+        if preview.len() != total {
+            bail!(
+                "could not construct deterministic selection evidence because reason batches overlap (expected {total} unique reasons, observed {}); retry planning and report this as a Jig defect if it recurs",
+                preview.len()
+            );
+        }
+        return Ok(BoundedSelectionReasons {
+            preview,
+            total: None,
+            truncated: false,
+            digest: None,
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(SELECTION_REASONS_DIGEST_DOMAIN);
+    hasher.update((total as u64).to_be_bytes());
+    hasher.update(sum_digest);
+    let digest = format!("sha256:{:x}", hasher.finalize());
+
+    // Preserve intent and dependency explanations before path-expanded detail.
+    // Natural ordering remains the tie-breaker within each semantic class.
+    preview.sort_by(|left, right| {
+        selection_reason_priority(left)
+            .cmp(&selection_reason_priority(right))
+            .then_with(|| left.cmp(right))
+    });
+    preview.truncate(MAX_SELECTION_REASONS);
+    Ok(BoundedSelectionReasons {
+        preview,
+        total: Some(total),
+        truncated: true,
+        digest: Some(digest),
+    })
+}
+
+const fn selection_reason_priority(reason: &SelectionReason) -> u8 {
+    match reason {
+        SelectionReason::Explicit { .. }
+        | SelectionReason::Profile { .. }
+        | SelectionReason::ActionDependency { .. }
+        | SelectionReason::LegacyAlias { .. } => 0,
+        SelectionReason::DirectInput { .. }
+        | SelectionReason::UnclaimedInput { .. }
+        | SelectionReason::ComponentDependency { .. } => 1,
+    }
 }
 
 #[derive(Serialize)]
@@ -538,433 +675,4 @@ fn plan_digest(plan: &RunPlan) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use jig_contract::{
-        ActionArguments, ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentId,
-        ComponentSpec, ManifestTool, ProfileId, ProfileSpec, SelectionReason, SourceIdentity,
-        TargetId,
-    };
-
-    use super::{
-        PlanRunRequest, PlanningPolicy, plan_run_with_source, plan_run_with_source_and_paths,
-    };
-    use crate::repository::RepositoryCatalog;
-
-    fn fixture() -> RepositoryCatalog {
-        let components = [
-            ComponentSpec::new(ComponentId::parse("api").unwrap(), "api"),
-            ComponentSpec::new(ComponentId::parse("web").unwrap(), "web"),
-        ];
-        let api_target: TargetId = "api:test".parse().unwrap();
-        let web_target: TargetId = "web:test".parse().unwrap();
-        let mut api = ActionSpec::new(
-            api_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("go_test_command"),
-        );
-        api.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        api.inputs.push("api/**/*.go".into());
-        let mut web = ActionSpec::new(
-            web_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("typescript_test_command"),
-        );
-        web.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-        web.inputs.push("web/**/*.ts".into());
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![api_target, web_target]);
-        RepositoryCatalog::from_native(
-            6,
-            "sha256:config",
-            &components,
-            &[api, web],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap()
-    }
-
-    fn source() -> SourceIdentity {
-        SourceIdentity::new(Some("abc123".into()), "worktree")
-    }
-
-    #[test]
-    fn unqualified_action_selects_each_component_deterministically() {
-        let plan = plan_run_with_source(
-            &fixture(),
-            PlanRunRequest {
-                selectors: vec!["test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-        assert_eq!(
-            plan.targets
-                .iter()
-                .map(|target| target.target.to_string())
-                .collect::<Vec<_>>(),
-            ["api:test", "web:test"]
-        );
-        assert!(plan.targets.iter().all(|target| {
-            target.reasons
-                == [SelectionReason::Explicit {
-                    selector: "test".into(),
-                }]
-        }));
-    }
-
-    #[test]
-    fn bare_selection_uses_the_default_profile() {
-        let plan = plan_run_with_source(&fixture(), PlanRunRequest::default(), source()).unwrap();
-        assert_eq!(plan.profile.unwrap().as_str(), "verify");
-        assert_eq!(plan.targets.len(), 2);
-    }
-
-    #[test]
-    fn exact_and_wildcard_selectors_share_one_resolver() {
-        let exact = plan_run_with_source(
-            &fixture(),
-            PlanRunRequest {
-                selectors: vec!["api:test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-        let wildcard = plan_run_with_source(
-            &fixture(),
-            PlanRunRequest {
-                selectors: vec!["*:test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-        assert_eq!(exact.targets.len(), 1);
-        assert_eq!(wildcard.targets.len(), 2);
-    }
-
-    #[test]
-    fn canonical_shaped_legacy_alias_falls_back_when_it_matches_no_target() {
-        let tools = [
-            ManifestTool::new("api:test", "command", "Run legacy API tests.")
-                .with_command("api_test_command"),
-        ];
-        let checks = vec!["api:test".to_owned()];
-        let catalog = RepositoryCatalog::from_legacy(5, "sha256:config", &tools, &checks).unwrap();
-
-        let plan = plan_run_with_source(
-            &catalog,
-            PlanRunRequest {
-                selectors: vec!["api:test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-
-        assert_eq!(plan.targets.len(), 1);
-        assert_eq!(
-            plan.targets[0].reasons,
-            [SelectionReason::LegacyAlias {
-                alias: "api:test".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn equivalent_selector_order_has_the_same_plan_id() {
-        let first = plan_run_with_source(
-            &fixture(),
-            PlanRunRequest {
-                selectors: vec!["web:test".into(), "api:test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-        let second = plan_run_with_source(
-            &fixture(),
-            PlanRunRequest {
-                selectors: vec!["api:test".into(), "web:test".into()],
-                ..PlanRunRequest::default()
-            },
-            source(),
-        )
-        .unwrap();
-        assert_eq!(first.id, second.id);
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn action_dependencies_form_separate_execution_layers() {
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let lint_target: TargetId = "api:lint".parse().unwrap();
-        let test_target: TargetId = "api:test".parse().unwrap();
-        let mut lint = ActionSpec::new(
-            lint_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("lint_command"),
-        );
-        lint.effects.push(ActionEffect::ReadOnly);
-        let mut test = ActionSpec::new(
-            test_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("test_command"),
-        );
-        test.effects.push(ActionEffect::ReadOnly);
-        test.depends_on.push(lint_target.clone());
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![test_target.clone()]);
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[lint, test],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-
-        let plan = plan_run_with_source(&catalog, PlanRunRequest::default(), source()).unwrap();
-        assert_eq!(
-            plan.execution_layers,
-            [vec![lint_target], vec![test_target]]
-        );
-    }
-
-    #[test]
-    fn affected_plan_filters_candidates_before_expanding_action_dependencies() {
-        let components = [
-            ComponentSpec::new(ComponentId::parse("api").unwrap(), "api"),
-            ComponentSpec::new(ComponentId::parse("web").unwrap(), "web"),
-        ];
-        let lint_target: TargetId = "api:lint".parse().unwrap();
-        let api_target: TargetId = "api:test".parse().unwrap();
-        let web_target: TargetId = "web:test".parse().unwrap();
-        let mut lint = ActionSpec::new(
-            lint_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("lint_command"),
-        );
-        lint.effects.push(ActionEffect::ReadOnly);
-        lint.inputs.push("api/**/*.go".into());
-        let mut api = ActionSpec::new(
-            api_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("api_test_command"),
-        );
-        api.effects.push(ActionEffect::ReadOnly);
-        api.inputs.push("api/**/*.go".into());
-        api.depends_on.push(lint_target.clone());
-        let mut web = ActionSpec::new(
-            web_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("web_test_command"),
-        );
-        web.effects.push(ActionEffect::ReadOnly);
-        web.inputs.push("web/**/*.ts".into());
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![api_target.clone(), web_target]);
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &components,
-            &[lint, api, web],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-
-        let plan = plan_run_with_source_and_paths(
-            &catalog,
-            PlanRunRequest {
-                affected_base: Some(" main ".into()),
-                ..PlanRunRequest::default()
-            },
-            source(),
-            Some(&["api/main.go".into()]),
-            BTreeMap::new(),
-            PlanningPolicy::ChecksOnly,
-        )
-        .unwrap();
-
-        assert_eq!(plan.affected_base.as_deref(), Some("main"));
-        assert_eq!(
-            plan.targets
-                .iter()
-                .map(|target| target.target.to_string())
-                .collect::<Vec<_>>(),
-            ["api:lint", "api:test"]
-        );
-        assert_eq!(
-            plan.execution_layers,
-            [vec![lint_target], vec![api_target.clone()]]
-        );
-        assert_eq!(
-            plan.targets[0].reasons,
-            [SelectionReason::ActionDependency { target: api_target }]
-        );
-        assert_eq!(
-            plan.targets[1].reasons,
-            [
-                SelectionReason::Profile {
-                    profile: profile_id,
-                },
-                SelectionReason::DirectInput {
-                    path: "api/main.go".into(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn affected_plan_allows_a_deterministic_empty_selection() {
-        let plan = plan_run_with_source_and_paths(
-            &fixture(),
-            PlanRunRequest {
-                affected_base: Some("HEAD~1".into()),
-                ..PlanRunRequest::default()
-            },
-            source(),
-            Some(&["docs/guide.md".into()]),
-            BTreeMap::new(),
-            PlanningPolicy::ChecksOnly,
-        )
-        .unwrap();
-
-        assert!(plan.targets.is_empty());
-        assert!(plan.execution_layers.is_empty());
-        assert!(plan.effects.is_empty());
-        assert_eq!(plan.affected_base.as_deref(), Some("HEAD~1"));
-    }
-
-    #[test]
-    fn check_rejects_effectful_actions() {
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let target: TargetId = "api:generate".parse().unwrap();
-        let mut action = ActionSpec::new(
-            target.clone(),
-            ActionIntent::Generate,
-            ActionRunner::command("generate_command"),
-        );
-        action.effects.push(ActionEffect::Worktree);
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-
-        let error = plan_run_with_source(&catalog, PlanRunRequest::default(), source())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("not a read-only check"));
-    }
-
-    #[test]
-    fn action_plans_bind_required_native_arguments_into_the_digest() {
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let target: TargetId = "api:migration-add".parse().unwrap();
-        let mut action = ActionSpec::new(
-            target.clone(),
-            ActionIntent::Generate,
-            ActionRunner::native(jig_contract::tool::MIGRATION_ADD),
-        );
-        action.effects = vec![ActionEffect::Worktree, ActionEffect::Process];
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![target.clone()]);
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[action],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-        let request = PlanRunRequest {
-            selectors: vec![target.to_string()],
-            ..PlanRunRequest::default()
-        };
-
-        let missing = plan_run_with_source_and_paths(
-            &catalog,
-            request.clone(),
-            source(),
-            None,
-            BTreeMap::new(),
-            PlanningPolicy::DeclaredActions,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(missing.contains("requires string argument 'name'"));
-
-        let arguments = BTreeMap::from([(
-            target,
-            ActionArguments {
-                name: Some("create_examples".into()),
-            },
-        )]);
-        let plan = plan_run_with_source_and_paths(
-            &catalog,
-            request,
-            source(),
-            None,
-            arguments,
-            PlanningPolicy::DeclaredActions,
-        )
-        .unwrap();
-
-        assert_eq!(
-            plan.targets[0].arguments.name.as_deref(),
-            Some("create_examples")
-        );
-        assert!(plan.id.starts_with("run-plan_sha256:"));
-    }
-
-    #[test]
-    fn action_dependency_cycles_are_reported_with_the_targets() {
-        let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
-        let lint_target: TargetId = "api:lint".parse().unwrap();
-        let test_target: TargetId = "api:test".parse().unwrap();
-        let mut lint = ActionSpec::new(
-            lint_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("lint_command"),
-        );
-        lint.effects.push(ActionEffect::ReadOnly);
-        lint.depends_on.push(test_target.clone());
-        let mut test = ActionSpec::new(
-            test_target.clone(),
-            ActionIntent::Check,
-            ActionRunner::command("test_command"),
-        );
-        test.effects.push(ActionEffect::ReadOnly);
-        test.depends_on.push(lint_target);
-        let profile_id = ProfileId::parse("verify").unwrap();
-        let profile = ProfileSpec::new(profile_id.clone(), vec![test_target]);
-        let catalog = RepositoryCatalog::from_native(
-            6,
-            "digest",
-            &[component],
-            &[lint, test],
-            &[profile],
-            Some(&profile_id),
-        )
-        .unwrap();
-
-        let error = plan_run_with_source(&catalog, PlanRunRequest::default(), source())
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("action dependency cycle among: api:lint, api:test"));
-    }
-}
+mod tests;
