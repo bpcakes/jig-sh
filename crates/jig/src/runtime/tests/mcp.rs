@@ -70,6 +70,37 @@ rust_migration_dir = "migrations"
 }
 
 #[test]
+fn mcp_rejects_advertised_migration_add_for_versioned_artifacts_without_mutation() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+rust_migration_dir = "schema"
+rust_migration_layout = "versioned_artifacts"
+"#,
+        )
+        .contract_version(2)
+        .tool(json!({
+            "name": "jig.migration_add",
+            "kind": "native",
+            "description": "Add migration."
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error =
+        call_tool(&ctx, "jig.migration_add", json!({ "name": "create_users" })).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("rust_migration_layout = \"versioned_artifacts\"")
+    );
+    assert!(!temp.path().join("schema").exists());
+}
+
+#[test]
 fn mcp_native_contract_check_validates_manifest() {
     let temp = tempdir().unwrap();
     fs::create_dir_all(temp.path().join("scripts")).unwrap();

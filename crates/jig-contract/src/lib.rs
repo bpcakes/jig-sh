@@ -130,6 +130,10 @@ pub trait FeatureContext {
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
 
+    fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled()
+    }
+
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()
             .iter()

@@ -20,6 +20,44 @@ mod mcp;
 mod work;
 
 #[test]
+fn cli_runtime_rejects_migration_add_for_versioned_artifacts_without_mutation() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path())
+        .config(
+            r#"
+sqlx_enabled = true
+rust_migration_dir = "schema"
+rust_migration_layout = "versioned_artifacts"
+"#,
+        )
+        .tool(serde_json::json!({
+            "name": "jig.migration_add",
+            "kind": "native",
+            "description": "Add migration."
+        }))
+        .write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = super::dispatch(
+        &ctx,
+        RuntimeCommand::Sqlx(crate::command::SqlxCommand::MigrationAdd(
+            crate::command::MigrationAddRequest {
+                name: "create_users".into(),
+                tool: crate::command::ToolRequest::default(),
+            },
+        )),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("rust_migration_layout = \"versioned_artifacts\"")
+    );
+    assert!(!temp.path().join("schema").exists());
+}
+
+#[test]
 fn dispatch_vault_run_injects_redacts_and_verifies_audit() {
     let _env = lock_env();
     let temp = tempdir().unwrap();

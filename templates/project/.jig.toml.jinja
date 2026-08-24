@@ -11,6 +11,7 @@ sqlx_enabled = [% if sqlx_enabled %]true[% else %]false[% endif %]
 rust_crate_roots = [[% for root in rust_crate_roots %]"<<[ root | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"[% if not loop.last %], [% endif %][% endfor %]]
 [% if sqlx_enabled %]
 rust_migration_dir = "<<[ rust_migration_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
+rust_migration_layout = "<<[ rust_migration_layout ]>>"
 rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]

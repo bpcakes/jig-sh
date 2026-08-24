@@ -17,7 +17,7 @@ use crate::execution::NoopExecutionObserver;
 use crate::execution::{
     ExecutionCommandError, ExecutionControl, run_authoritative_execution_command,
 };
-use crate::tool_defs::{self, kind};
+use crate::tool_defs::{self, kind, tool};
 
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 // New or growing files above this fail unless an explicit exception is present.
@@ -193,6 +193,15 @@ pub(crate) fn validate_contract(
             kind::NATIVE => {
                 if !jig_features::is_supported_native_tool(&tool.name) {
                     errors.push(format!("Unsupported native tool: {}.", tool.name));
+                } else if tool.name == tool::MIGRATION_ADD
+                    && ctx.sqlx_enabled()
+                    && !ctx.migration_add_enabled()
+                {
+                    errors.push(format!(
+                        "Unavailable native tool {} for rust_migration_layout = \"{}\".",
+                        tool.name,
+                        ctx.rust_migration_layout().as_str()
+                    ));
                 }
             }
             kind::COMMAND => {
@@ -253,6 +262,12 @@ pub(crate) fn validate_contract(
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
     if !ctx.sqlx_enabled() {
         bail!("sqlx migration add requires sqlx_enabled = true");
+    }
+    if !ctx.migration_add_enabled() {
+        bail!(
+            "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
+            ctx.rust_migration_layout().as_str()
+        );
     }
     let migration_dir = ctx.rust_migration_dir();
     if migration_dir.trim().is_empty() {

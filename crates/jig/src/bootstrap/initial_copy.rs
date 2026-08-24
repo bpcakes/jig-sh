@@ -309,6 +309,11 @@ pub(super) fn seed_answers_toml(
     );
     insert_string(
         &mut mapping,
+        "rust_migration_layout",
+        opts.rust_migration_layout.map(|layout| layout.as_str()),
+    );
+    insert_string(
+        &mut mapping,
         "rust_sqlx_metadata_dir",
         opts.rust_sqlx_metadata_dir.as_deref(),
     );

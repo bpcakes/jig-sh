@@ -30,7 +30,7 @@ fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     if sqlx_enabled || ctx.has_required_command(SQLX_CHECK_COMMAND) {
         required.push(tool::SQLX_CHECK);
     }
-    if sqlx_enabled || ctx.has_required_command(MIGRATION_ADD_COMMAND) {
+    if ctx.migration_add_enabled() {
         required.push(tool::MIGRATION_ADD);
     }
     if schema_dump_enabled || ctx.has_required_command(SCHEMA_CHECK_COMMAND) {
@@ -52,6 +52,9 @@ fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option
         )),
         tool::SQLX_CHECK | tool::MIGRATION_ADD if !ctx.sqlx_enabled() => Some(format!(
             "{tool_name} is not available because sqlx_enabled = false in .jig.toml. Enable SQLx, then run `jig update --recopy`, or remove this command/gate."
+        )),
+        tool::MIGRATION_ADD if !ctx.migration_add_enabled() => Some(format!(
+            "{tool_name} is not available because rust_migration_layout = \"versioned_artifacts\" in .jig.toml. Versioned schema artifacts must be advanced with a repository-owned forward-only version, not a flat migration stub."
         )),
         _ => None,
     }

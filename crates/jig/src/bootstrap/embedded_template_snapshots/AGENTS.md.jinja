@@ -19,7 +19,11 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Prefer direct cutovers only for internal code-only changes that can ship in one coordinated deploy.
 - Preserve compatibility or stage rollouts for persisted database state, queued job types, public API contracts, bookmarked routes, webhook boundaries, or source-of-truth moves that can straddle deploys.
 [% if sqlx_enabled %]
+[% if rust_migration_layout == "flat_migrations" %]
 - Never overwrite an existing database migration; add a new forward-only migration instead.
+[% else %]
+- The migration tree contains complete versioned schema artifacts. Never overwrite a shipped version; add the next forward-only version and its repository-owned cutover artifact.
+[% endif %]
 [% endif %]
 
 ## Backend Defaults
@@ -27,7 +31,11 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
 [% if sqlx_enabled %]
+[% if rust_migration_layout == "flat_migrations" %]
 - SQL migrations live under `<<[ rust_migration_dir ]>>`.
+[% else %]
+- Versioned SQL schema artifacts live under `<<[ rust_migration_dir ]>>`; do not use `scripts/jig sqlx migration add` in this layout.
+[% endif %]
 - SQLx metadata is committed in `<<[ rust_sqlx_metadata_dir ]>>`.
 [% endif %]
 - Keep transport logic thin and business logic in the owning crate.
@@ -80,7 +88,9 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig check schema`
 - `scripts/jig sqlx schema dump`
 [% endif %]
+[% if rust_migration_layout == "flat_migrations" %]
 - `scripts/jig sqlx migration add NAME`
+[% endif %]
 [% endif %]
 - `scripts/jig check contract`
 

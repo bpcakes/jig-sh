@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 use jig_contract::{FeatureContext, ManifestTool};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 
@@ -90,6 +91,9 @@ struct RepoConfig {
     rust_migration_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
+    rust_migration_layout: RustMigrationLayout,
+    #[allow(dead_code)]
+    #[serde(default)]
     rust_sqlx_metadata_dir: String,
     #[allow(dead_code)]
     #[serde(default)]
@@ -155,6 +159,28 @@ enum HarnessFootprintConfig {
     #[default]
     Full,
     Minimal,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+#[value(rename_all = "snake_case")]
+pub(crate) enum RustMigrationLayout {
+    #[default]
+    FlatMigrations,
+    VersionedArtifacts,
+}
+
+impl RustMigrationLayout {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::FlatMigrations => "flat_migrations",
+            Self::VersionedArtifacts => "versioned_artifacts",
+        }
+    }
+
+    pub(crate) const fn allows_migration_add(self) -> bool {
+        matches!(self, Self::FlatMigrations)
+    }
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -441,6 +467,14 @@ impl RepoContext {
         &self.config.rust_migration_dir
     }
 
+    pub(crate) const fn rust_migration_layout(&self) -> RustMigrationLayout {
+        self.config.rust_migration_layout
+    }
+
+    pub(crate) const fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled() && self.rust_migration_layout().allows_migration_add()
+    }
+
     pub(crate) fn schema_dump_command(&self) -> &str {
         &self.config.schema_dump_command
     }
@@ -592,6 +626,10 @@ impl FeatureContext for RepoContext {
 
     fn schema_dump_enabled(&self) -> bool {
         self.schema_dump_enabled()
+    }
+
+    fn migration_add_enabled(&self) -> bool {
+        self.migration_add_enabled()
     }
 
     fn frontend_app_count(&self) -> usize {
