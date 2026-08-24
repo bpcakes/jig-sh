@@ -318,15 +318,11 @@ pub(super) fn infer_sqlx(
         };
         if let Some(warning) = warning {
             push_scan_warning(warnings, root, warning);
-            if synthesized_migration_dir {
-                if let Some(migration_dir) = &mut out.migration_dir {
-                    migration_dir.warnings.push(warning.into());
-                }
+            if synthesized_migration_dir && let Some(migration_dir) = &mut out.migration_dir {
+                migration_dir.warnings.push(warning.into());
             }
-            if synthesized_metadata_dir {
-                if let Some(metadata_dir) = &mut out.metadata_dir {
-                    metadata_dir.warnings.push(warning.into());
-                }
+            if synthesized_metadata_dir && let Some(metadata_dir) = &mut out.metadata_dir {
+                metadata_dir.warnings.push(warning.into());
             }
         }
         let metadata_dir = out

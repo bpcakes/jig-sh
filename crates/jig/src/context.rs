@@ -951,17 +951,17 @@ fn resolve_current_session_path(root: &Path) -> PathBuf {
         .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE])
         .output();
 
-    if let Ok(output) = output {
-        if output.status.success() {
-            let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                let path = PathBuf::from(&resolved);
-                return if path.is_absolute() {
-                    path
-                } else {
-                    root.join(path)
-                };
-            }
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !resolved.is_empty() {
+            let path = PathBuf::from(&resolved);
+            return if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
         }
     }
 

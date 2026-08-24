@@ -315,12 +315,11 @@ impl StreamPump {
                 Ok(0) => {
                     self.reader = None;
                     if self.failure.is_none() {
-                        if let Some(redactor) = self.redactor.take() {
-                            if let Err(error) =
+                        if let Some(redactor) = self.redactor.take()
+                            && let Err(error) =
                                 redactor.finish(writer).and_then(|()| writer.flush())
-                            {
-                                self.failure = Some(sanitized_failure("output", error));
-                            }
+                        {
+                            self.failure = Some(sanitized_failure("output", error));
                         }
                     } else {
                         self.redactor = None;

@@ -1420,13 +1420,13 @@ pub(super) fn resolve_init_destination(path: &Path, base: &Path) -> Result<PathB
     } else {
         base.join(normalized)
     };
-    if let Ok(metadata) = fs::symlink_metadata(&normalized) {
-        if metadata.file_type().is_symlink() {
-            // Preserve the requested final leaf so destination validation can
-            // reject it. Only symlink ancestors of a genuinely missing tail
-            // are canonicalized below.
-            return Ok(normalized);
-        }
+    if let Ok(metadata) = fs::symlink_metadata(&normalized)
+        && metadata.file_type().is_symlink()
+    {
+        // Preserve the requested final leaf so destination validation can
+        // reject it. Only symlink ancestors of a genuinely missing tail
+        // are canonicalized below.
+        return Ok(normalized);
     }
     let (existing, missing) = split_existing_ancestor(&normalized)?;
     let mut resolved = existing;

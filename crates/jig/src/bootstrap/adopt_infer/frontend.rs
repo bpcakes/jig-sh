@@ -294,11 +294,11 @@ fn yaml_workspace_glob(value: &YamlValue) -> Option<String> {
             // Unquoted YAML entries like `!packages/private` parse as a tag
             // with a null value. Recover that shape as the pnpm exclusion glob
             // the user wrote.
-            if let YamlValue::Tagged(tagged) = value {
-                if matches!(tagged.value, YamlValue::Null) {
-                    let tag = tagged.tag.to_string();
-                    return tag.starts_with('!').then_some(tag);
-                }
+            if let YamlValue::Tagged(tagged) = value
+                && matches!(tagged.value, YamlValue::Null)
+            {
+                let tag = tagged.tag.to_string();
+                return tag.starts_with('!').then_some(tag);
             }
             None
         })
@@ -538,13 +538,13 @@ pub(super) fn segment_matches(pattern: &str, name: &str) -> bool {
     };
     let mut remaining = name;
     let mut parts = pattern.split('*').peekable();
-    if let Some(first) = parts.next() {
-        if !first.is_empty() {
-            let Some(stripped) = remaining.strip_prefix(first) else {
-                return false;
-            };
-            remaining = stripped;
-        }
+    if let Some(first) = parts.next()
+        && !first.is_empty()
+    {
+        let Some(stripped) = remaining.strip_prefix(first) else {
+            return false;
+        };
+        remaining = stripped;
     }
     while let Some(part) = parts.next() {
         if part.is_empty() {
