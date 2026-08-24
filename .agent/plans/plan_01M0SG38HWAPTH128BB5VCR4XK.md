@@ -9,7 +9,7 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 - [x] Add flat and versioned fixtures for rendering, rejection, and recursive immutability.
 - [x] Regenerate embedded template snapshots and validate the required contract and test gates.
 - [x] Revalidate the final local commits with the focused migration suite, template consistency, formatting, the complete standard `jig-sh` suite, and a lint pass that exempts only unrelated Rust 1.97 baseline lints.
-- [ ] Publish a source commit that downstream consumers can pin.
+- [x] Publish the validated branch and open upstream pull request https://github.com/bpcakes/jig-sh/pull/11 so downstream consumers can pin a reachable source revision.
 
 ## Surprises & Discoveries
 
@@ -27,7 +27,7 @@ Introduce a closed repository migration-layout setting so Jig distinguishes ordi
 
 ## Outcomes & Retrospective
 
-The implementation is committed locally as `dbd12c5` plus the template-output cleanup `2f1a744`. Focused acceptance tests, formatting, template consistency, the contract gate, the complete standard suite, the isolated Nextest regression, and the scoped lint pass all succeed. Later full-gate reruns are blocked only by the documented unrelated Nextest process-cleanup flake. Publishing a reachable upstream source revision and then pinning/regenerating the downstream harness remain pending.
+The implementation is committed as `dbd12c5` plus the template-output cleanup `2f1a744` and published on `codex/migration-layout` in pull request #11. Focused acceptance tests, formatting, template consistency, the contract gate, the complete standard suite, the isolated Nextest regression, and the scoped lint pass all succeed. Later full-gate reruns are blocked only by the documented unrelated Nextest process-cleanup flake. Downstream consumers can now pin the reachable PR head and regenerate their managed harness.
 
 ## Context and orientation
 
