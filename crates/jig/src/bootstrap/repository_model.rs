@@ -87,6 +87,15 @@ impl AuthoredRepositoryModel {
             .iter()
             .any(|component| component.adapters.iter().any(|adapter| adapter == expected))
     }
+
+    pub(super) fn command_references_resolve(&self, commands: &BTreeMap<String, String>) -> bool {
+        self.actions.iter().all(|action| match &action.runner {
+            ActionRunner::Command { command, .. } => commands
+                .get(command)
+                .is_some_and(|value| !value.trim().is_empty()),
+            ActionRunner::Native { .. } => true,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -165,6 +174,22 @@ impl RepositoryRenderModel {
             tools: tools.into_values().collect(),
             commands,
         })
+    }
+
+    pub(super) fn matches_authored_projection(
+        &self,
+        authored: &AuthoredRepositoryModel,
+        authored_commands: &BTreeMap<String, String>,
+    ) -> bool {
+        self.affected_ignore == authored.affected_ignore
+            && self.components == authored.components
+            && self.actions == authored.actions
+            && self.profiles == authored.profiles
+            && self.default_check_profile == authored.default_check_profile
+            && self
+                .commands
+                .iter()
+                .all(|(key, value)| authored_commands.get(key) == Some(value))
     }
 
     pub(super) fn authored_toml(&self) -> Result<String> {

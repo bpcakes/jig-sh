@@ -5,6 +5,136 @@ use tempfile::tempdir;
 use super::*;
 
 #[test]
+fn common_answer_resolution_preserves_authored_repository_authority() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        r#"repo_name = "ExampleProject"
+sqlx_enabled = false
+schema_dump_enabled = false
+
+[commands]
+api_verify_command = "go test ./..."
+worker_verify_command = "cargo test -p worker"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = ["rust"]
+
+[[repository.actions]]
+target = { component = "api", action = "verify-custom" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_verify_command" }
+
+[[repository.actions]]
+target = { component = "worker", action = "verify-custom" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "worker_verify_command" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  { component = "api", action = "verify-custom" },
+  { component = "worker", action = "verify-custom" },
+]
+"#,
+    )
+    .unwrap();
+    let input = AnswerInput::from_file(&path).unwrap();
+
+    let (resolved, notes) =
+        AnswerResolution::from_input(input, &AnswerOpts::default(), temp.path(), false)
+            .unwrap()
+            .into_parts();
+    let model =
+        crate::bootstrap::repository_model::RepositoryRenderModel::from_answers(&resolved).unwrap();
+
+    assert!(notes.is_empty());
+    assert_eq!(
+        model
+            .components
+            .iter()
+            .map(|component| component.id.as_str())
+            .collect::<Vec<_>>(),
+        ["api", "worker"]
+    );
+    assert_eq!(
+        model
+            .actions
+            .iter()
+            .map(|action| action.target.to_string())
+            .collect::<Vec<_>>(),
+        ["api:verify-custom", "worker:verify-custom"]
+    );
+    assert_eq!(
+        model.required_commands,
+        ["api_verify_command", "worker_verify_command"]
+    );
+    let commands = model.commands_toml().unwrap();
+    assert!(commands.contains("api_verify_command = \"go test ./...\""));
+    assert!(commands.contains("worker_verify_command = \"cargo test -p worker\""));
+}
+
+#[test]
+fn authored_repository_command_maps_fail_closed_before_resolution() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        r#"repo_name = "ExampleProject"
+
+[commands]
+custom_check_command = 7
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "custom"
+root = "."
+
+[[repository.actions]]
+target = { component = "custom", action = "check" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "custom_check_command" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [{ component = "custom", action = "check" }]
+"#,
+    )
+    .unwrap();
+
+    let error = AnswerInput::from_opts(&AnswerOpts {
+        answers_file: Some(path),
+        ..AnswerOpts::default()
+    })
+    .err()
+    .unwrap()
+    .to_string();
+
+    assert!(
+        error.contains(
+            "complete authored [repository] model requires [commands] to be a table of string values"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
 fn status_provider_answers_survive_effective_options_and_render_serialization() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("answers.toml");

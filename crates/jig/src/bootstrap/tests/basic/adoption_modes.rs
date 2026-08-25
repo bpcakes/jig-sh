@@ -360,6 +360,66 @@ fn minimal_to_full_uses_existing_answers_and_preserves_runtime_tables() {
 }
 
 #[test]
+fn minimal_to_full_preserves_a_complete_authored_repository_model() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let template = materialize_template_worktree();
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(repo.join("services/api")).unwrap();
+    fs::create_dir_all(repo.join("services/worker")).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), true, false)).unwrap();
+    let config_path = repo.join(".jig.toml");
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let authored = authored_mixed_repository_config();
+    config["commands"] = authored["commands"].clone();
+    config["repository"] = authored["repository"].clone();
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    run_adopt(footprint_adopt_opts(&repo, template.path(), false, true)).unwrap();
+
+    let updated =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let targets = updated["repository"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|action| {
+            format!(
+                "{}:{}",
+                action["target"]["component"].as_str().unwrap(),
+                action["target"]["action"].as_str().unwrap()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        [
+            "repo:contract",
+            "repo:bootstrap",
+            "api:verify-custom",
+            "worker:verify-custom"
+        ]
+    );
+    assert_eq!(
+        updated["repository"]["profiles"][0]["targets"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        updated["commands"]["api_verify_command"].as_str(),
+        Some("go test ./...")
+    );
+    assert_eq!(
+        updated["commands"]["worker_verify_command"].as_str(),
+        Some("cargo test -p worker")
+    );
+}
+
+#[test]
 fn minimal_to_full_uses_explicit_answers_file_and_preserves_runtime_tables() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();

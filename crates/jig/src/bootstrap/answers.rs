@@ -122,6 +122,8 @@ pub(super) struct AnswerResolution {
 pub(super) struct AnswerInput {
     raw: RawAnswers,
     shape: AnswerInputShape,
+    authored_repository_commands: Option<BTreeMap<String, String>>,
+    preserve_repository_model: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -148,9 +150,11 @@ impl AnswerInput {
             return Ok(Self {
                 raw: RawAnswers::default(),
                 shape: AnswerInputShape::default(),
+                authored_repository_commands: Some(BTreeMap::new()),
+                preserve_repository_model: false,
             });
         };
-        Self::from_file(path)
+        Self::from_explicit_file(path)
     }
 
     pub(super) fn from_opts_at(opts: &AnswerOpts, path_base: &Path) -> Result<Self> {
@@ -158,6 +162,8 @@ impl AnswerInput {
             return Ok(Self {
                 raw: RawAnswers::default(),
                 shape: AnswerInputShape::default(),
+                authored_repository_commands: Some(BTreeMap::new()),
+                preserve_repository_model: false,
             });
         };
         let path = if path.is_absolute() {
@@ -165,7 +171,7 @@ impl AnswerInput {
         } else {
             path_base.join(path)
         };
-        Self::from_file(&path)
+        Self::from_explicit_file(&path)
     }
 
     pub(super) fn from_file(path: &Path) -> Result<Self> {
@@ -183,10 +189,32 @@ impl AnswerInput {
         raw.normalize_repository_model(&table);
         raw.normalize_app_dirs()?;
         raw.normalize_legacy_frontend_metadata(&table);
+        let authored_repository_commands = authored_repository_commands_from_table(&table);
+        let preserve_repository_model =
+            loaded_repository_model_is_custom(&raw, authored_repository_commands.as_ref());
         Ok(Self {
             raw,
             shape: AnswerInputShape::from_table(&table),
+            authored_repository_commands,
+            preserve_repository_model,
         })
+    }
+
+    fn from_explicit_file(path: &Path) -> Result<Self> {
+        let mut input = Self::from_file(path)?;
+        if input
+            .raw
+            .repository
+            .as_ref()
+            .is_some_and(AuthoredRepositoryModel::is_complete)
+            && input.authored_repository_commands.is_none()
+        {
+            bail!(
+                "A complete authored [repository] model requires [commands] to be a table of string values"
+            );
+        }
+        input.preserve_repository_model = true;
+        Ok(input)
     }
 
     pub(super) const fn shape(&self) -> &AnswerInputShape {
@@ -400,7 +428,12 @@ impl AnswerResolution {
         destination: &Path,
         use_defaults: bool,
     ) -> Result<Self> {
-        let mut raw = input.raw;
+        let AnswerInput {
+            mut raw,
+            authored_repository_commands,
+            preserve_repository_model,
+            ..
+        } = input;
         raw.merge_opts(opts);
         let vault_note = raw.apply_existing_vault_default(destination)?;
         let sqlx_defaulted_to_tooling_only = if use_defaults {
@@ -408,7 +441,12 @@ impl AnswerResolution {
         } else {
             false
         };
-        let answers = raw.resolve(default_repo_name(destination))?;
+        let answers = resolve_render_answers(
+            raw,
+            default_repo_name(destination),
+            authored_repository_commands,
+            preserve_repository_model,
+        )?;
         let mut notes = Vec::new();
         if sqlx_defaulted_to_tooling_only {
             notes.push(
@@ -431,22 +469,12 @@ impl RenderAnswers {
     pub(super) fn from_answers_file(path: &Path) -> Result<Self> {
         let authored_repository_commands = authored_repository_commands(path)?;
         let mut raw = RawAnswers::from_file(path)?;
-        let authored_repository = raw
-            .repository
-            .take()
-            .filter(AuthoredRepositoryModel::is_complete)
-            .filter(|_| authored_repository_commands.is_some());
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
-        let mut answers = raw.resolve_with_authored_repository(None, authored_repository)?;
+        let mut answers = resolve_render_answers(raw, None, authored_repository_commands, true)?;
         answers.go_postgres_integration_script = path
             .parent()
             .is_some_and(has_go_postgres_integration_script);
-        if let Some(authored_repository_commands) = authored_repository_commands
-            && answers.authored_repository.is_some()
-        {
-            answers.authored_repository_commands = authored_repository_commands;
-        }
         Ok(answers)
     }
 
@@ -716,16 +744,75 @@ fn authored_repository_commands(path: &Path) -> Result<Option<BTreeMap<String, S
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let value = toml::from_str::<toml::Value>(&text)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
-    let Some(commands) = value.get("commands") else {
-        return Ok(Some(BTreeMap::new()));
+    let table = value
+        .as_table()
+        .ok_or_else(|| anyhow::anyhow!("Failed to parse {} as TOML table", path.display()))?;
+    Ok(authored_repository_commands_from_table(table))
+}
+
+fn authored_repository_commands_from_table(
+    table: &toml::Table,
+) -> Option<BTreeMap<String, String>> {
+    let Some(commands) = table.get("commands") else {
+        return Some(BTreeMap::new());
     };
-    let Some(commands) = commands.as_table() else {
-        return Ok(None);
-    };
-    Ok(commands
+    let commands = commands.as_table()?;
+    commands
         .iter()
         .map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_owned())))
-        .collect())
+        .collect()
+}
+
+fn loaded_repository_model_is_custom(
+    raw: &RawAnswers,
+    authored_repository_commands: Option<&BTreeMap<String, String>>,
+) -> bool {
+    let Some(authored_repository) = raw
+        .repository
+        .as_ref()
+        .filter(|repository| repository.is_complete())
+    else {
+        return false;
+    };
+    let Some(authored_repository_commands) = authored_repository_commands else {
+        return false;
+    };
+    if !authored_repository.command_references_resolve(authored_repository_commands) {
+        return false;
+    }
+
+    let mut generated_raw = raw.clone();
+    generated_raw.repository = None;
+    let Ok(generated_answers) = generated_raw.resolve_with_authored_repository(None, None) else {
+        return true;
+    };
+    let Ok(generated) =
+        crate::bootstrap::repository_model::RepositoryRenderModel::from_answers(&generated_answers)
+    else {
+        return true;
+    };
+    !generated.matches_authored_projection(authored_repository, authored_repository_commands)
+}
+
+fn resolve_render_answers(
+    mut raw: RawAnswers,
+    default_repo_name: Option<String>,
+    authored_repository_commands: Option<BTreeMap<String, String>>,
+    preserve_repository_model: bool,
+) -> Result<RenderAnswers> {
+    let authored_repository = preserve_repository_model
+        .then(|| raw.repository.take())
+        .flatten()
+        .filter(AuthoredRepositoryModel::is_complete)
+        .filter(|_| authored_repository_commands.is_some());
+    let mut answers =
+        raw.resolve_with_authored_repository(default_repo_name, authored_repository)?;
+    if let Some(authored_repository_commands) = authored_repository_commands
+        && answers.authored_repository.is_some()
+    {
+        answers.authored_repository_commands = authored_repository_commands;
+    }
+    Ok(answers)
 }
 
 fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {

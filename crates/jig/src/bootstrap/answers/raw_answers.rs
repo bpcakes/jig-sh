@@ -439,6 +439,7 @@ impl RawAnswers {
         vault::apply_existing_default(&mut self.vault, destination)
     }
 
+    #[cfg(test)]
     pub(super) fn resolve(self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
         self.resolve_with_authored_repository(default_repo_name, None)
     }
