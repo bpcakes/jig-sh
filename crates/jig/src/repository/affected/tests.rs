@@ -438,3 +438,40 @@ fn affected_path_policy_rejects_escaping_roots_and_inputs() {
     .to_string();
     assert!(error.contains("must not match repository execution authority"));
 }
+
+#[test]
+fn affected_path_policy_rejects_sources_inside_the_unobserved_agent_tree() {
+    let target: TargetId = "api:test".parse().unwrap();
+    let profile_id = ProfileId::parse("verify").unwrap();
+
+    let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), ".agent/api");
+    let action = check_action(target.clone(), "api_test_command");
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target.clone()]);
+    let error = RepositoryCatalog::from_native(
+        6,
+        "digest",
+        &[component],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("excluded from source identity"), "{error}");
+
+    let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
+    let mut action = check_action(target.clone(), "api_test_command");
+    action.inputs.push(".agent/generated/**".into());
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+    let error = RepositoryCatalog::from_native(
+        6,
+        "digest",
+        &[component],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("excluded from source identity"), "{error}");
+}

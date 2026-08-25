@@ -234,6 +234,13 @@ fn validate_component_root(component: &ComponentSpec) -> Result<()> {
         return Ok(());
     }
     validate_authored_repository_relative_text("component root", root)?;
+    if let Err(error) = validate_observable_source_declaration("component root", root) {
+        bail!(
+            "component '{}' has invalid root {:?}: {error}",
+            component.id,
+            root
+        )
+    }
     if root.contains(['*', '?', '[', ']', '{', '}']) {
         bail!(
             "component '{}' has invalid root {:?}: component roots must be literal repository-relative directories",
@@ -245,12 +252,24 @@ fn validate_component_root(component: &ComponentSpec) -> Result<()> {
 }
 
 fn compile_input(target: &TargetId, input: &str) -> Result<GlobMatcher> {
+    if let Err(error) = validate_observable_source_declaration("action input", input) {
+        bail!("target '{target}' has invalid input pattern {input:?}: {error}")
+    }
     match compile_path_pattern("action input", input) {
         Ok(matcher) => Ok(matcher),
         Err(error) => {
             bail!("target '{target}' has invalid input pattern {input:?}: {error}")
         }
     }
+}
+
+fn validate_observable_source_declaration(kind: &str, value: &str) -> Result<()> {
+    if value.split('/').next() == Some(".agent") {
+        bail!(
+            "{kind} must not be inside .agent/** because that runtime and harness tree is excluded from source identity and affected selection"
+        );
+    }
+    Ok(())
 }
 
 fn compile_path_pattern(kind: &str, input: &str) -> Result<GlobMatcher> {

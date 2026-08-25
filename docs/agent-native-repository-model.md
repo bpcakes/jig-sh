@@ -141,9 +141,10 @@ the containing path. Generated repositories counter the remaining unavoidable
 uncertainty with reviewed default ignore patterns while retaining observed
 dotenv contents in the source fingerprint; removing those defaults or declaring
 a dotenv as an explicit action input intentionally makes its presence keep the
-owning component's candidates. Append-only `.agent/`
-state is excluded. Action input globs use validated,
-repository-relative forward-slash syntax. An input outside its component root
+owning component's candidates. The complete `.agent/` harness and runtime tree
+is excluded and therefore cannot be used as a non-root component root or an
+explicit action input. Action input globs use validated, repository-relative
+forward-slash syntax. An input outside its component root
 is an explicit repository-global input. If no action input matches a changed
 path, Jig falls back to the most-specific containing component root. A root
 component (`root = "."`) with declared inputs is intentionally input-authoritative

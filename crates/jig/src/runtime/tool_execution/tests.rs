@@ -196,14 +196,14 @@ target = { component = "repo", action = "check" }
 intent = "check"
 effects = ["read_only"]
 runner = { kind = "native", operation = "jig.contract_check" }
-inputs = [".jig.toml", ".agent/jig-contract.json"]
+inputs = [".jig.toml"]
 legacy_aliases = ["jig.compat_contract"]"#,
         serde_json::json!({
             "target": {"component": "repo", "action": "check"},
             "intent": "check",
             "effects": ["read_only"],
             "runner": {"kind": "native", "operation": "jig.contract_check"},
-            "inputs": [".jig.toml", ".agent/jig-contract.json"],
+            "inputs": [".jig.toml"],
             "legacy_aliases": ["jig.compat_contract"]
         }),
         vec![

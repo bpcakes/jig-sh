@@ -898,8 +898,7 @@ fn slugify(value: &str) -> String {
     slug.trim_matches('_').to_string()
 }
 
-fn utc_timestamp() -> String {
-    let now = time::OffsetDateTime::now_utc();
+fn utc_timestamp_at(now: time::OffsetDateTime) -> String {
     format!(
         "{:04}{:02}{:02}{:02}{:02}{:02}",
         now.year(),

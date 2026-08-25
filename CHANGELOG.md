@@ -26,6 +26,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
 - Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
 - Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.
 - Make run cancellation cursors atomic with queued-event persistence, preserve prior target failures during abandoned-run recovery, reject unsafe run identifiers and live-journal restores, and retain bounded stdout/stderr evidence for configured-command and schema-generator overflow failures.

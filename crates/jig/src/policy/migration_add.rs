@@ -1,4 +1,9 @@
 use super::*;
+use std::fs::{File, OpenOptions};
+
+use fs4::fs_std::FileExt;
+
+const MIGRATION_ADD_LOCK_PATH: &str = ".agent/.cache/migration-add.lock";
 
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
     let backend = ctx.migration_backend()?.ok_or_else(|| {
@@ -25,8 +30,12 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
     if slug.is_empty() {
         bail!("Migration name {name:?} must contain at least one alphanumeric character.");
     }
-    let timestamp = utc_timestamp();
     validate_repository_directory_path(ctx.root(), &migration_dir)?;
+    // A migration version is backend-wide identity, not part of the human
+    // slug. Hold one repository lease across allocation and creation so two
+    // Jig processes cannot publish different names with the same version.
+    let _lock = acquire_migration_add_lock(ctx)?;
+    let timestamp = next_migration_version(&ctx.root().join(&migration_dir))?;
     let base = ctx
         .root()
         .join(&migration_dir)
@@ -35,6 +44,69 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
         crate::context::MigrationBackend::Goose => goose_migration_add(&base, &slug),
         crate::context::MigrationBackend::Sqlx => sqlx_migration_add(&base, &slug),
     }
+}
+
+fn acquire_migration_add_lock(ctx: &RepoContext) -> Result<File> {
+    let lock_path = ctx.root().join(MIGRATION_ADD_LOCK_PATH);
+    let parent = lock_path
+        .parent()
+        .expect("the migration-add lock path has a parent");
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("Failed to open {}", lock_path.display()))?;
+    FileExt::lock_exclusive(&file)
+        .with_context(|| format!("Failed to lock {}", lock_path.display()))?;
+    Ok(file)
+}
+
+fn next_migration_version(migration_dir: &Path) -> Result<String> {
+    next_migration_version_from(migration_dir, time::OffsetDateTime::now_utc())
+}
+
+fn next_migration_version_from(
+    migration_dir: &Path,
+    mut candidate: time::OffsetDateTime,
+) -> Result<String> {
+    let occupied = occupied_migration_versions(migration_dir)?;
+    loop {
+        let version = utc_timestamp_at(candidate);
+        if !occupied.contains(&version) {
+            return Ok(version);
+        }
+        candidate = candidate
+            .checked_add(time::Duration::SECOND)
+            .context("Migration timestamp overflowed while finding a unique version")?;
+    }
+}
+
+fn occupied_migration_versions(migration_dir: &Path) -> Result<HashSet<String>> {
+    let entries = match fs::read_dir(migration_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read {}", migration_dir.display()));
+        }
+    };
+    let mut occupied = HashSet::new();
+    for entry in entries {
+        let entry = entry
+            .with_context(|| format!("Failed to read an entry in {}", migration_dir.display()))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some((version, _)) = name.split_once('_')
+            && version.len() == 14
+            && version.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            occupied.insert(version.to_owned());
+        }
+    }
+    Ok(occupied)
 }
 
 fn goose_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
@@ -79,4 +151,25 @@ fn sqlx_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {
         stdout: format!("Created:\n  - {}\n  - {}\n", up.display(), down.display()),
         stderr: String::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_versions_advance_by_valid_utc_seconds_across_name_collisions() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("20261231235959_first.sql"), "").unwrap();
+        fs::write(temp.path().join("20270101000000_second.up.sql"), "").unwrap();
+        let start = time::OffsetDateTime::parse(
+            "2026-12-31T23:59:59Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+
+        let version = next_migration_version_from(temp.path(), start).unwrap();
+
+        assert_eq!(version, "20270101000001");
+    }
 }
