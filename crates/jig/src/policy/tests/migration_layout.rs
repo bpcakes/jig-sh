@@ -245,3 +245,44 @@ fn v6_missing_owner_reports_ownership_instead_of_a_sqlx_layout_error() {
     assert!(error.contains("no component owns native migration authoring"));
     assert!(!error.contains("migration layout"));
 }
+
+#[test]
+fn contract_validation_resolves_custom_migration_alias_arity_for_work_checks() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "api");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "inputs = [\"database/migrations/**\"]",
+        "inputs = [\"database/migrations/**\"]\nlegacy_aliases = [\"jig.custom_migration\"]",
+    );
+    fs::write(
+        &config_path,
+        format!("{config}\n[work]\nchecks = [\"jig.custom_migration\"]\n"),
+    )
+    .unwrap();
+
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["actions"][0]["legacy_aliases"] = json!(["jig.custom_migration"]);
+    contract["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.custom_migration",
+        "kind": kind::NATIVE,
+        "description": "Create a migration through a compatibility alias."
+    }));
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = validate_contract(&ctx).unwrap_err().to_string();
+
+    assert!(
+        error.contains(
+            "Configured work check or gate tool requires an argument: jig.custom_migration"
+        ),
+        "{error}"
+    );
+}

@@ -262,8 +262,7 @@ pub(crate) fn validate_contract(
     for tool in ctx.tool_specs() {
         let alias_action = catalog
             .as_ref()
-            .and_then(|catalog| catalog.target_for_alias(&tool.name))
-            .and_then(|target| catalog.as_ref()?.action(target));
+            .and_then(|catalog| catalog.action_for_alias(&tool.name));
         let native_operation = alias_action.and_then(|action| match &action.runner {
             jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
             jig_contract::ActionRunner::Command { .. } => None,
@@ -349,16 +348,23 @@ pub(crate) fn validate_contract(
             ));
             continue;
         };
-        if !tool_defs::is_no_arg_execution_tool(tool) {
-            if !tool_defs::is_execution_tool(tool) {
-                errors.push(format!(
-                    "Configured work check or gate tool is not an execution tool: {name}."
-                ));
-            } else {
-                errors.push(format!(
-                    "Configured work check or gate tool requires an argument: {name}."
-                ));
-            }
+        if !tool_defs::is_execution_tool(tool) {
+            errors.push(format!(
+                "Configured work check or gate tool is not an execution tool: {name}."
+            ));
+            continue;
+        }
+        let native_operation = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.action_for_alias(&name))
+            .and_then(|action| match &action.runner {
+                jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                jig_contract::ActionRunner::Command { .. } => None,
+            });
+        if tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation) {
+            errors.push(format!(
+                "Configured work check or gate tool requires an argument: {name}."
+            ));
         }
     }
 

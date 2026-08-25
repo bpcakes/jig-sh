@@ -94,6 +94,34 @@ fn v6_schema_check_reuses_the_owning_dump_actions_complete_runner() {
 }
 
 #[test]
+fn v6_schema_check_rejects_an_invalid_dump_runner_environment() {
+    let temp = tempdir().unwrap();
+    write_v6_schema_policy_repo(temp.path(), "true", "true");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("SCHEMA_VALUE = \"changed\"", "\"A=B\" = \"invalid\"");
+    fs::write(config_path, config).unwrap();
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["actions"][1]["runner"]["environment"] = json!({"A=B": "invalid"});
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = validate_contract(&ctx).unwrap_err().to_string();
+
+    assert!(
+        error.contains("environment variable name \"A=B\" is invalid"),
+        "{error}"
+    );
+}
+
+#[test]
 fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
     let temp = tempdir().unwrap();
     write_v6_schema_policy_repo(

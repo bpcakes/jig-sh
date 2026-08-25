@@ -193,10 +193,7 @@ fn execute_manifest_tool_with_options(
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
     let action = if ctx.contract_version() >= 6 {
         let catalog = RepositoryCatalog::from_context(ctx)?;
-        catalog
-            .target_for_alias(tool_name)
-            .and_then(|target| catalog.action(target))
-            .cloned()
+        catalog.action_for_alias(tool_name).cloned()
     } else {
         None
     };

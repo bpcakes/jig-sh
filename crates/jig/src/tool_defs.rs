@@ -475,6 +475,16 @@ pub(crate) fn execution_tool_requires_name(tool: &ManifestTool) -> bool {
     jig_features::native_tool_requires_name(&tool.name)
 }
 
+pub(crate) fn execution_tool_requires_name_for_native_operation(
+    tool: &ManifestTool,
+    native_operation: Option<&str>,
+) -> bool {
+    native_operation.map_or_else(
+        || execution_tool_requires_name(tool),
+        jig_features::native_tool_requires_name,
+    )
+}
+
 fn execution_input_schema(tool: &ManifestTool) -> Value {
     if execution_tool_requires_name(tool) {
         return object_schema(

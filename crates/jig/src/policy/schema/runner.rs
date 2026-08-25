@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use jig_contract::{ActionRunner, TargetId, tool};
 
 use crate::context::RepoContext;
+use crate::repository_path::validate_runner_environment;
 
 const LEGACY_SCHEMA_DUMP_COMMAND: &str = "schema_dump_command";
 const SCHEMA_DUMP_ACTION: &str = "schema-dump";
@@ -57,6 +58,7 @@ pub(super) fn resolve<'a>(
             schema_dump.target
         );
     };
+    validate_runner_environment(environment)?;
 
     Ok(SchemaDumpRunner {
         command_key: command,

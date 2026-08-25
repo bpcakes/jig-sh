@@ -387,6 +387,11 @@ impl RepositoryCatalog {
         self.aliases.get(alias)
     }
 
+    pub(crate) fn action_for_alias(&self, alias: &str) -> Option<&ActionSpec> {
+        self.target_for_alias(alias)
+            .and_then(|target| self.action(target))
+    }
+
     pub(crate) fn aliases_for_target(&self, target: &TargetId) -> &[String] {
         self.target_aliases.get(target).map_or(&[], Vec::as_slice)
     }

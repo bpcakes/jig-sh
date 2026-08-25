@@ -379,6 +379,10 @@ fn native_catalog_allows_mixed_database_adapters_with_one_migration_owner() {
         ActionIntent::Generate,
         ActionRunner::native(tool::MIGRATION_ADD),
     );
+    let action = ActionSpec {
+        effects: vec![ActionEffect::Worktree, ActionEffect::Process],
+        ..action
+    };
     let profile_id = ProfileId::parse("operate").unwrap();
     let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
 
@@ -391,6 +395,50 @@ fn native_catalog_allows_mixed_database_adapters_with_one_migration_owner() {
         Some(&profile_id),
     )
     .unwrap();
+}
+
+#[test]
+fn native_catalog_rejects_incorrect_migration_mutation_semantics() {
+    let component = ComponentSpec {
+        adapters: vec!["rust".into(), "sqlx".into()],
+        ..ComponentSpec::new(ComponentId::parse("api").unwrap(), "services/api")
+    };
+    let target: TargetId = "api:migration-add".parse().unwrap();
+    let profile_id = ProfileId::parse("operate").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target.clone()]);
+
+    for (intent, effects, expected) in [
+        (
+            ActionIntent::Check,
+            vec![ActionEffect::Worktree],
+            "must declare intent 'generate'",
+        ),
+        (
+            ActionIntent::Generate,
+            vec![ActionEffect::Process],
+            "must declare the 'worktree' effect",
+        ),
+    ] {
+        let mut action = ActionSpec::new(
+            target.clone(),
+            intent,
+            ActionRunner::native(tool::MIGRATION_ADD),
+        );
+        action.effects = effects;
+
+        let error = RepositoryCatalog::from_native(
+            6,
+            "digest",
+            std::slice::from_ref(&component),
+            &[action],
+            std::slice::from_ref(&profile),
+            Some(&profile_id),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 #[test]

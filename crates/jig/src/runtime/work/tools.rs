@@ -30,14 +30,14 @@ pub(super) fn validate_check_tool(ctx: &RepoContext, name: &str, label: &str) ->
     }
     let requires_name = if ctx.contract_version() >= 6 {
         let catalog = RepositoryCatalog::from_context(ctx)?;
-        catalog
-            .target_for_alias(name)
-            .and_then(|target| catalog.action(target))
-            .and_then(|action| match &action.runner {
-                jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
-                jig_contract::ActionRunner::Command { .. } => None,
-            })
-            .is_some_and(jig_features::native_tool_requires_name)
+        let native_operation =
+            catalog
+                .action_for_alias(name)
+                .and_then(|action| match &action.runner {
+                    jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+                    jig_contract::ActionRunner::Command { .. } => None,
+                });
+        tool_defs::execution_tool_requires_name_for_native_operation(tool, native_operation)
     } else {
         tool_defs::execution_tool_requires_name(tool)
     };

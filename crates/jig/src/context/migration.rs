@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use clap::ValueEnum;
-use jig_contract::{ActionRunner, ActionSpec, ComponentSpec, tool};
+use jig_contract::{ActionEffect, ActionIntent, ActionRunner, ActionSpec, ComponentSpec, tool};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +57,18 @@ pub(crate) fn native_migration_backend(
                 .join(", ")
         );
     };
+    if action.intent != ActionIntent::Generate {
+        bail!(
+            "native migration authoring target '{}' must declare intent 'generate'",
+            action.target
+        );
+    }
+    if !action.effects.contains(&ActionEffect::Worktree) {
+        bail!(
+            "native migration authoring target '{}' must declare the 'worktree' effect",
+            action.target
+        );
+    }
     let component = components
         .iter()
         .find(|component| component.id == action.target.component)
