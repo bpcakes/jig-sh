@@ -127,9 +127,30 @@ pub(super) fn numeric_version_authority(
         })
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct GoModuleVersionRequirement {
+    pub(super) numeric: NumericVersion,
+    pub(super) selector: String,
+    latest_compatible_patch: bool,
+}
+
+#[derive(Debug)]
+pub(super) struct GoModuleAuthorityError {
+    pub(super) path: PathBuf,
+    pub(super) reason: String,
+}
+
+#[cfg(test)]
 pub(super) fn go_module_version_authority(
     path: &Path,
 ) -> std::result::Result<Option<NumericVersion>, String> {
+    go_module_version_requirement(path)
+        .map(|requirement| requirement.map(|requirement| requirement.numeric))
+}
+
+pub(super) fn go_module_version_requirement(
+    path: &Path,
+) -> std::result::Result<Option<GoModuleVersionRequirement>, String> {
     let contents = read_bounded_authority(path, GO_MODULE_AUTHORITY_MAX_BYTES).map_err(
         |error| match error {
             AuthorityReadError::Inspect => {
@@ -194,7 +215,11 @@ pub(super) fn go_module_version_authority(
                         path.display()
                     ));
                 }
-                go_version = Some(parse_go_module_version(token, "go", path)?);
+                go_version = Some(GoModuleVersionRequirement {
+                    numeric: parse_go_module_version(token, "go", path)?,
+                    selector: token.to_owned(),
+                    latest_compatible_patch: token.matches('.').count() == 1,
+                });
             }
             "toolchain" => {
                 if toolchain_seen {
@@ -213,7 +238,11 @@ pub(super) fn go_module_version_authority(
                             path.display()
                         )
                     })?;
-                    Some(parse_go_module_version(version, "toolchain", path)?)
+                    Some(GoModuleVersionRequirement {
+                        numeric: parse_go_module_version(version, "toolchain", path)?,
+                        selector: version.to_owned(),
+                        latest_compatible_patch: version.matches('.').count() == 1,
+                    })
                 };
             }
             _ => unreachable!(),
@@ -227,16 +256,45 @@ pub(super) fn go_module_version_authority(
         )
     })?;
     if let Some(toolchain_version) = toolchain_version {
-        if toolchain_version < go_version {
+        if toolchain_version.numeric < go_version.numeric {
             return Err(format!(
-                "Go module authority {} declares toolchain {toolchain_version} below required go version {go_version}",
-                path.display()
+                "Go module authority {} declares toolchain {} below required go version {}",
+                path.display(),
+                toolchain_version.numeric,
+                go_version.numeric,
             ));
         }
         Ok(Some(toolchain_version))
     } else {
         Ok(Some(go_version))
     }
+}
+
+pub(super) fn select_go_module_version_requirement(
+    authority_paths: &[PathBuf],
+) -> std::result::Result<Option<(PathBuf, GoModuleVersionRequirement)>, GoModuleAuthorityError> {
+    let mut selected = None::<(PathBuf, GoModuleVersionRequirement)>;
+    for path in authority_paths {
+        let requirement = go_module_version_requirement(path)
+            .map_err(|reason| GoModuleAuthorityError {
+                path: path.clone(),
+                reason,
+            })?
+            .ok_or_else(|| GoModuleAuthorityError {
+                path: path.clone(),
+                reason: format!("Go version authority {} is missing", path.display()),
+            })?;
+        let replace = selected.as_ref().is_none_or(|(_, current)| {
+            requirement.numeric > current.numeric
+                || (requirement.numeric == current.numeric
+                    && requirement.latest_compatible_patch
+                    && !current.latest_compatible_patch)
+        });
+        if replace {
+            selected = Some((path.clone(), requirement));
+        }
+    }
+    Ok(selected)
 }
 
 pub(super) fn unquote_go_module_token(token: &str) -> Option<&str> {
@@ -436,62 +494,32 @@ pub(super) fn go_runtime_check(
         .iter()
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
-    let mut selected_authority = None;
-    for authority_path in &authority_paths {
-        let required = match go_module_version_authority(authority_path) {
-            Ok(Some(required)) => required,
-            Ok(None) => {
-                return Some(
-                    check(
-                        "go_runtime",
-                        "Go runtime",
-                        true,
-                        false,
-                        "invalid authority",
-                        format!(
-                            "Go version authority {} is missing",
-                            authority_path.display()
-                        ),
-                    )
-                    .with_fix(&format!(
-                        "Restore {} with a numeric Go directive such as `go 1.26.0`.",
-                        authority_path.display()
-                    ))
-                    .with_data(json!({
-                        "authority": authority_path.display().to_string(),
-                        "authorities": authorities,
-                    })),
-                );
-            }
-            Err(reason) => {
-                return Some(
-                    check(
-                        "go_runtime",
-                        "Go runtime",
-                        true,
-                        false,
-                        "invalid authority",
-                        reason,
-                    )
-                    .with_fix(&format!(
-                        "Correct the Go/toolchain directives in {}, then rerun scripts/jig doctor.",
-                        authority_path.display()
-                    ))
-                    .with_data(json!({
-                        "authority": authority_path.display().to_string(),
-                        "authorities": authorities,
-                    })),
-                );
-            }
-        };
-        if selected_authority
-            .as_ref()
-            .is_none_or(|(_, selected_required)| required > *selected_required)
-        {
-            selected_authority = Some((authority_path, required));
+    let (authority_path, requirement) = match select_go_module_version_requirement(&authority_paths)
+    {
+        Ok(Some(selected)) => selected,
+        Ok(None) => return None,
+        Err(error) => {
+            return Some(
+                check(
+                    "go_runtime",
+                    "Go runtime",
+                    true,
+                    false,
+                    "invalid authority",
+                    error.reason,
+                )
+                .with_fix(&format!(
+                    "Correct or restore {}, then rerun scripts/jig doctor.",
+                    error.path.display()
+                ))
+                .with_data(json!({
+                    "authority": error.path.display().to_string(),
+                    "authorities": authorities,
+                })),
+            );
         }
-    }
-    let (authority_path, required) = selected_authority.expect("authority paths are non-empty");
+    };
+    let required = requirement.numeric;
     let Some(resolution) = resolve_program(ctx.root(), "go", environment.search_path.as_deref())
     else {
         return Some(

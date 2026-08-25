@@ -437,6 +437,22 @@ fn affected_path_policy_rejects_escaping_roots_and_inputs() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("must not match repository execution authority"));
+
+    let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "services/\napi");
+    let target: TargetId = "api:test".parse().unwrap();
+    let action = check_action(target.clone(), "api_test_command");
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+    let error = RepositoryCatalog::from_native(
+        6,
+        "digest",
+        &[component],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("must not contain control characters"));
 }
 
 #[test]

@@ -488,6 +488,9 @@ pub(crate) struct InfoOpts {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum InfoCommand {
+    /// Print the highest Go module toolchain selector used by managed CI.
+    #[command(name = "go-version", hide = true)]
+    GoVersion,
     /// Inspect the normalized workspace catalog.
     Workspace,
     /// List addressable repository components.

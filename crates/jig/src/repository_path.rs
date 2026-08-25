@@ -45,6 +45,9 @@ pub(crate) fn normalize_portable_repo_path(value: &str, label: &str) -> Result<S
     if value.contains('\\') {
         bail!("{label} must use portable '/' separators and stay repository-relative: {value}");
     }
+    if value.chars().any(char::is_control) {
+        bail!("{label} must not contain control characters: {value:?}");
+    }
 
     let mut normalized = Vec::new();
     for component in value.split('/') {

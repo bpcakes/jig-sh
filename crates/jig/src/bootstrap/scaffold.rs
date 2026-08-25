@@ -274,6 +274,16 @@ impl InitScaffoldPlan {
         !self.frontends.is_empty()
     }
 
+    pub(super) fn scaffolds_go_postgres_integration(&self) -> bool {
+        matches!(
+            &self.backend,
+            ScaffoldBackendPlan::Go(GoScaffoldPlan {
+                database: GoDatabase::Postgres,
+                ..
+            })
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn write(&self, destination: &Path, force: bool) -> Result<Value> {
         let files = self.render_files()?;

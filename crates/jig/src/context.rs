@@ -535,7 +535,6 @@ impl RepoContext {
                 .into_iter()
                 .collect());
         }
-
         self.component_specs()
             .iter()
             .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
@@ -559,8 +558,17 @@ impl RepoContext {
                 let mut module_root = component_root.clone();
                 loop {
                     let authority = module_root.join(GO_TOOLCHAIN_AUTHORITY_PATH);
-                    if fs::symlink_metadata(&authority).is_ok() {
-                        break Ok(authority);
+                    match fs::symlink_metadata(&authority) {
+                        Ok(_) => break Ok(authority),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(error).with_context(|| {
+                                format!(
+                                    "Failed to inspect Go module authority {}",
+                                    authority.display()
+                                )
+                            });
+                        }
                     }
                     if module_root == self.root {
                         break Ok(component_root.join(GO_TOOLCHAIN_AUTHORITY_PATH));

@@ -299,8 +299,8 @@ fn validate_authored_repository_relative_text(kind: &str, value: &str) -> Result
     if value.as_bytes().get(1) == Some(&b':') {
         bail!("{kind} must not use an absolute drive path");
     }
-    if value.contains('\0') {
-        bail!("{kind} must not contain a NUL byte");
+    if value.chars().any(char::is_control) {
+        bail!("{kind} must not contain control characters");
     }
     for segment in value.split('/') {
         if segment.is_empty() {

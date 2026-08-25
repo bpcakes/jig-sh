@@ -9,7 +9,10 @@ use toml::{Table, Value as TomlValue};
 
 use super::AnswerOpts;
 use super::InitMutationTransaction;
-use super::answers::{AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers};
+use super::answers::{
+    AnswerInput, AnswerResolution, HarnessFootprint, RenderAnswers,
+    has_go_postgres_integration_script,
+};
 use super::gate_preview::generated_gates;
 use super::renderer::{RenderStageRequest, stage_render};
 use super::sync::ApplyRenderReport;
@@ -42,6 +45,7 @@ pub(super) struct BootstrapCopyRequest<'a> {
     pub(super) allow_contract_overwrite: bool,
     pub(super) reserved_output_paths: Vec<PathBuf>,
     pub(super) scaffolded_frontend_contracts: bool,
+    pub(super) scaffolded_go_postgres_integration: bool,
     pub(super) init_transaction: Option<&'a mut InitMutationTransaction>,
     pub(super) progress: CliProgress,
 }
@@ -94,6 +98,15 @@ pub(super) fn render_and_copy_bootstrap_template(
     let (mut answers, mut notes) = answer_resolution.into_parts();
     if request.scaffolded_frontend_contracts {
         answers.enable_scaffolded_frontend_contracts();
+    }
+    if request.scaffolded_go_postgres_integration {
+        answers.enable_go_postgres_integration_script();
+    }
+    if request
+        .seed_repo_path
+        .is_some_and(has_go_postgres_integration_script)
+    {
+        answers.enable_go_postgres_integration_script();
     }
     let full_to_minimal_transition = request.prior_harness_footprint
         == Some(HarnessFootprint::Full)

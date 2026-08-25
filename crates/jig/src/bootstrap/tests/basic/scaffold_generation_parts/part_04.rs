@@ -396,14 +396,18 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             "{workflow_name} must install Rust before invoking scripts/jig"
         );
         assert!(
-            workflow.contains(r#"go-version-file: "go.mod""#),
-            "{workflow_name} must use the generated Go module as its toolchain authority"
+            workflow.contains("go-version: ${{ steps.go-version.outputs.version }}"),
+            "{workflow_name} must pass the resolved component authority to setup-go"
         );
+        assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
         assert!(
-            !workflow.contains(".go-version"),
+            !workflow.contains("go-version-file: .go-version")
+                && !workflow.contains("go-version-file: \".go-version\""),
             "{workflow_name} must not refer to the retired Go version file"
         );
-        assert!(workflow.contains("cache-dependency-path: |\n            go.sum\n            go.mod"));
+        assert!(workflow.contains(
+            "cache-dependency-path: |\n            go.mod\n            go.sum\n            go.work\n            go.work.sum\n            **/go.mod"
+        ));
         for path in [
             "go.mod",
             "go.sum",
@@ -477,8 +481,9 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert!(gitignore.contains(".contract-client-stage-*/"));
 
     let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
-    assert!(browser_e2e.contains("go-version-file: go.mod"));
-    assert!(browser_e2e.contains("cache-dependency-path: go.mod"));
+    assert!(browser_e2e.contains("version=\"$(scripts/jig info go-version)\""));
+    assert!(browser_e2e.contains("go-version: ${{ steps.go-version.outputs.version }}"));
+    assert!(browser_e2e.contains("cache-dependency-path: |"));
 
     let config = fs::read_to_string(destination.join(".jig.toml")).unwrap();
     assert!(config.contains(r#"migration_dir = "internal/database/migrations""#));
@@ -548,6 +553,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     assert!(root_guide.contains("scripts/jig migration add NAME"));
     let go_mod = fs::read_to_string(destination.join("go.mod")).unwrap();
     assert!(!go_mod.contains("github.com/pressly/goose/v3/cmd/goose"));
+    let context = crate::context::RepoContext::load_from(&destination).unwrap();
+    assert_eq!(crate::doctor::go_version_selector(&context).unwrap(), "1.26.0");
     let http_api = fs::read_to_string(destination.join("internal/httpapi/httpapi.go")).unwrap();
     assert!(http_api.contains("config.CreateHooks = nil"));
     let http_api_test =
@@ -645,6 +652,44 @@ export async function createClient({ output }) {
         assert!(!backend_marker.exists(), "client-check invoked Go");
         assert_eq!(regular_file_tree_snapshot(&destination), before);
     }
+
+    let nested_module_dir = destination.join("services/api");
+    fs::create_dir_all(&nested_module_dir).unwrap();
+    fs::rename(destination.join("go.mod"), nested_module_dir.join("go.mod")).unwrap();
+    let mut config =
+        toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    let api_component = config["repository"]["components"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|component| component["id"].as_str() == Some("api"))
+        .unwrap();
+    api_component["root"] = toml::Value::String("services/api".into());
+    fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    run_update(update_opts(&destination, template.path(), true)).unwrap();
+
+    for workflow_name in ["go-tests.yml", "repo-policy.yml"] {
+        let workflow = fs::read_to_string(
+            destination
+                .join(".github/workflows")
+                .join(workflow_name),
+        )
+        .unwrap();
+        assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
+        assert!(!workflow.contains("go-version-file: go.mod"));
+    }
+    let context = crate::context::RepoContext::load_from(&destination).unwrap();
+    assert_eq!(crate::doctor::go_version_selector(&context).unwrap(), "1.26.0");
+    let browser_e2e = fs::read_to_string(destination.join(".github/workflows/e2e.yml")).unwrap();
+    assert!(browser_e2e.contains("version=\"$(scripts/jig info go-version)\""));
+    assert!(!browser_e2e.contains("go-version-file: go.mod"));
+
+    fs::remove_file(destination.join("scripts/test-postgres.sh")).unwrap();
+    run_update(update_opts(&destination, template.path(), true)).unwrap();
+    let go_tests =
+        fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+    assert!(go_tests.contains("scripts/jig check sqlc"));
+    assert!(!go_tests.contains("postgres-integration:"));
 }
 
 #[test]

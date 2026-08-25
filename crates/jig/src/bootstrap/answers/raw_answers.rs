@@ -541,6 +541,7 @@ impl RawAnswers {
             authored_repository: None,
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
+            go_postgres_integration_script: false,
             repo_name,
             default_branch: self.default_branch.unwrap_or_else(|| "main".into()),
             ci_github_runner: self

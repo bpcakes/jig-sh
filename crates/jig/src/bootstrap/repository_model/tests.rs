@@ -497,15 +497,23 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert!(answers.go_backend_enabled());
     assert!(answers.rust_backend_enabled());
     assert!(answers.sqlx_enabled());
+    assert!(!answers.go_ci_workflow_enabled());
+    assert!(!answers.rust_ci_workflow_enabled());
     assert!(
-        !crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
+        crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
             std::path::Path::new(".github/workflows/go-tests.yml"),
             &answers,
         )
     );
     assert!(
-        !crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
+        crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
             std::path::Path::new(".github/workflows/rust-tests.yml"),
+            &answers,
+        )
+    );
+    assert!(
+        !crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
+            std::path::Path::new(".github/workflows/repo-policy.yml"),
             &answers,
         )
     );

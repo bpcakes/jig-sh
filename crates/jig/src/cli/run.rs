@@ -217,7 +217,25 @@ fn run_command(cli: Cli) -> Result<()> {
             finish_after_json_output(require_json_ok(true, &output), json_output)
         }
         CommandKind::Info(opts) => {
+            if matches!(opts.subject.as_ref(), Some(super::InfoCommand::GoVersion)) {
+                if opts.commands {
+                    bail!("--commands cannot be combined with an info subject");
+                }
+                let ctx = RepoContext::load()?;
+                let selector = doctor::go_version_selector(&ctx)?;
+                if json_output {
+                    print_json(&serde_json::json!({
+                        "ok": true,
+                        "command": "info go-version",
+                        "version": selector,
+                    }))?;
+                } else {
+                    writeln!(std::io::stdout().lock(), "{selector}")?;
+                }
+                return Ok(());
+            }
             let request = opts.subject.map(|subject| match subject {
+                super::InfoCommand::GoVersion => unreachable!("handled above"),
                 super::InfoCommand::Workspace => crate::repository::InspectRequest::Workspace,
                 super::InfoCommand::Components => crate::repository::InspectRequest::Components,
                 super::InfoCommand::Component { id } => {

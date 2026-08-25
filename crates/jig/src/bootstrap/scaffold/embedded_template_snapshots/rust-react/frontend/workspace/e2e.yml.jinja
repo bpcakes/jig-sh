@@ -83,12 +83,32 @@ jobs:
         with:
           node-version: <<[ node_version | tojson ]>>
 [% if backend_language == "go" %]
+      - name: Install Rust toolchain for Jig
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
+          rustflags: ""
+      - name: Resolve Go toolchain version
+        id: go-version
+        run: |
+          version="$(scripts/jig info go-version)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Install Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version-file: <<[ go_toolchain_authority_path ]>>
+          go-version: ${{ steps.go-version.outputs.version }}
           cache: true
-          cache-dependency-path: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            go.work
+            go.work.sum
+            **/go.mod
+            **/go.sum
+            **/go.work
+            **/go.work.sum
+            vendor/modules.txt
+            **/vendor/modules.txt
 [% else %]
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -626,6 +626,31 @@ fn go_module_authority_prefers_a_newer_toolchain_and_accepts_default() {
 }
 
 #[test]
+fn go_module_selector_uses_the_highest_authority_and_preserves_partial_patch_semantics() {
+    let temp = tempdir().unwrap();
+    let api = temp.path().join("api.mod");
+    let worker = temp.path().join("worker.mod");
+    fs::write(&api, "module example.com/Api\n\ngo 1.26\n").unwrap();
+    fs::write(
+        &worker,
+        "module example.com/Worker\n\ngo 1.26.1\ntoolchain go1.27.3\n",
+    )
+    .unwrap();
+
+    let (_, selected) = select_go_module_version_requirement(&[api.clone(), worker.clone()])
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.selector, "1.27.3");
+
+    fs::write(&api, "module example.com/Api\n\ngo 1.27\n").unwrap();
+    fs::write(&worker, "module example.com/Worker\n\ngo 1.27.0\n").unwrap();
+    let (_, selected) = select_go_module_version_requirement(&[worker, api])
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.selector, "1.27");
+}
+
+#[test]
 fn go_module_authority_rejects_ambiguous_and_malformed_directives() {
     for (contents, expected) in [
         (

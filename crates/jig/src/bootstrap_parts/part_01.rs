@@ -634,6 +634,7 @@ pub fn run_adopt(opts: AdoptOpts) -> Result<Value> {
         allow_contract_overwrite: expands_minimal_harness,
         reserved_output_paths: Vec::new(),
         scaffolded_frontend_contracts: false,
+        scaffolded_go_postgres_integration: false,
         init_transaction: None,
         progress,
     })?;

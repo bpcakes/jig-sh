@@ -3,7 +3,7 @@ name: Repo Policy
 on:
   pull_request:
     paths:
-[% if go_backend_enabled %]
+[% if go_ci_workflow_enabled %]
       - "**/*.go"
       - "go.mod"
       - "go.sum"
@@ -15,7 +15,7 @@ on:
       - "**/go.work.sum"
       - "vendor/modules.txt"
       - "**/vendor/modules.txt"
-[% if go_postgres_enabled %]
+[% if go_sqlc_ci_enabled %]
       - "sqlc.yaml"
       - "**/*.sql"
       - "internal/database/queries/**"
@@ -39,7 +39,7 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% if go_backend_enabled %]
+[% if go_ci_workflow_enabled %]
       - "**/*.go"
       - "go.mod"
       - "go.sum"
@@ -51,7 +51,7 @@ on:
       - "**/go.work.sum"
       - "vendor/modules.txt"
       - "**/vendor/modules.txt"
-[% if go_postgres_enabled %]
+[% if go_sqlc_ci_enabled %]
       - "sqlc.yaml"
       - "**/*.sql"
       - "internal/database/queries/**"
@@ -84,7 +84,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-[% if go_backend_enabled %]
+[% if go_ci_workflow_enabled %]
   go-policy:
     name: Validate Go policy and contract
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -99,21 +99,34 @@ jobs:
         with:
           cache: false
           rustflags: ""
+      - name: Resolve Go toolchain version
+        id: go-version
+        run: |
+          version="$(scripts/jig info go-version)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Install Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version-file: <<[ go_toolchain_authority_path | tojson ]>>
+          go-version: ${{ steps.go-version.outputs.version }}
           cache: true
           cache-dependency-path: |
-            go.sum
             go.mod
+            go.sum
+            go.work
+            go.work.sum
+            **/go.mod
+            **/go.sum
+            **/go.work
+            **/go.work.sum
+            vendor/modules.txt
+            **/vendor/modules.txt
       - name: Validate contract
         run: scripts/jig check contract
       - name: Check formatting
         run: scripts/jig check fmt
       - name: Run Go vet
         run: scripts/jig check lint
-[% if go_postgres_enabled %]
+[% if go_sqlc_ci_enabled %]
       - name: Check sqlc drift
         run: scripts/jig check sqlc
 [% endif %]

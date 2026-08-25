@@ -228,6 +228,28 @@ mod tests {
                 .count(),
             1
         );
+
+        let go = e2e_workflow_paths_for_backend(
+            ScaffoldPreset::GoReact,
+            ScaffoldDb::Postgres,
+            "database/migrations",
+            ".sqlx",
+            &[],
+        );
+        for authority in [
+            "go.mod",
+            "**/go.mod",
+            "go.work",
+            "**/go.work",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
+            ".jig.toml",
+            ".agent/jig-contract.json",
+            "scripts/jig",
+            "scripts/install-jig.sh",
+        ] {
+            assert!(go.iter().any(|path| path == authority), "missing {authority}");
+        }
     }
 
     #[test]

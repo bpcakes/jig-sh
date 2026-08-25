@@ -243,10 +243,15 @@ pub(super) fn should_omit_unmanaged_rendered_path(
 ) -> bool {
     if relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
-        || (!answers.rust_backend_enabled()
+        || (!answers.rust_ci_workflow_enabled()
             && relative == Path::new(".github/workflows/rust-tests.yml"))
-        || (!answers.go_backend_enabled()
+        || (!answers.go_ci_workflow_enabled()
             && relative == Path::new(".github/workflows/go-tests.yml"))
+        || (!(answers.go_ci_workflow_enabled()
+            || answers.rust_backend_enabled()
+            || answers.sqlx_enabled()
+            || answers.go_postgres_enabled())
+            && relative == Path::new(".github/workflows/repo-policy.yml"))
     {
         return true;
     }

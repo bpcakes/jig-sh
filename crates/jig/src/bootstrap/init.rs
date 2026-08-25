@@ -131,6 +131,9 @@ fn execute_init(prepared: PreparedInit) -> Result<InitReport> {
             scaffolded_frontend_contracts: scaffold_plan
                 .as_ref()
                 .is_some_and(scaffold::InitScaffoldPlan::scaffolds_frontend_contracts),
+            scaffolded_go_postgres_integration: scaffold_plan
+                .as_ref()
+                .is_some_and(scaffold::InitScaffoldPlan::scaffolds_go_postgres_integration),
             init_transaction: Some(&mut transaction),
             progress,
         })?;

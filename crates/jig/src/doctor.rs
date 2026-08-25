@@ -84,5 +84,15 @@ include!("doctor_parts/part_09.rs");
 include!("doctor_parts/part_10.rs");
 include!("doctor_parts/part_11.rs");
 
+pub(crate) fn go_version_selector(ctx: &RepoContext) -> Result<String> {
+    let authority_paths = ctx
+        .go_module_authority_paths()
+        .context("Could not resolve Go module authority")?;
+    let (_, requirement) = select_go_module_version_requirement(&authority_paths)
+        .map_err(|error| anyhow!(error.reason))?
+        .context("This repository does not declare a Go module authority")?;
+    Ok(requirement.selector)
+}
+
 #[cfg(test)]
 mod tests;

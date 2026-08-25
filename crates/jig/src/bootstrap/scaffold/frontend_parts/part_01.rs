@@ -604,7 +604,6 @@ pub(super) fn render_frontend_workspace_files_for_backend(
     let context = json!({
         "package_name": package_name,
         "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
-        "go_toolchain_authority_path": GO_TOOLCHAIN_AUTHORITY_PATH,
         "package_manager": package_manager,
         "package_manager_spec": generated_package_manager_spec(package_manager),
         "package_manager_version": generated_package_manager_version(package_manager),
@@ -696,7 +695,22 @@ fn e2e_workflow_paths_for_backend(
         paths.push(format!("{migration_dir}/**"));
     }
     paths.extend(if preset == super::ScaffoldPreset::GoReact {
-        vec!["go.mod", "go.sum"]
+        vec![
+            "go.mod",
+            "go.sum",
+            "go.work",
+            "go.work.sum",
+            "**/go.mod",
+            "**/go.sum",
+            "**/go.work",
+            "**/go.work.sum",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
+            ".jig.toml",
+            ".agent/jig-contract.json",
+            "scripts/jig",
+            "scripts/install-jig.sh",
+        ]
     } else {
         vec![
             "Cargo.toml",

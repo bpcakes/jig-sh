@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use jig_contract::tool;
 use serde::{Deserialize, Serialize};
 
 use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
@@ -51,6 +52,8 @@ pub(super) struct RenderAnswers {
     authored_repository_commands: BTreeMap<String, String>,
     #[serde(skip)]
     scaffolded_frontend_contracts: bool,
+    #[serde(skip)]
+    go_postgres_integration_script: bool,
     repo_name: String,
     default_branch: String,
     ci_github_runner: String,
@@ -104,6 +107,11 @@ pub(super) struct RenderAnswers {
     status: StatusConfig,
     execution: ExecutionConfig,
     agent_tooling: AgentToolingAnswers,
+}
+
+pub(super) fn has_go_postgres_integration_script(root: &Path) -> bool {
+    fs::symlink_metadata(root.join("scripts/test-postgres.sh"))
+        .is_ok_and(|metadata| metadata.is_file())
 }
 
 pub(super) struct AnswerResolution {
@@ -427,6 +435,9 @@ impl RenderAnswers {
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
         let mut answers = raw.resolve(None)?;
+        answers.go_postgres_integration_script = path
+            .parent()
+            .is_some_and(has_go_postgres_integration_script);
         if let Some(authored_repository_commands) = authored_repository_commands
             && authored_repository.as_ref().is_some_and(|repository| {
                 !repository.components.is_empty()
@@ -477,6 +488,32 @@ impl RenderAnswers {
         })
     }
 
+    fn authored_repository_has_aliases(
+        &self,
+        expected: &[&str],
+        owning_adapters: &[&str],
+    ) -> Option<bool> {
+        self.authored_repository.as_ref().map(|repository| {
+            let owning_components = repository
+                .components
+                .iter()
+                .filter(|component| {
+                    component
+                        .adapters
+                        .iter()
+                        .any(|adapter| owning_adapters.contains(&adapter.as_str()))
+                })
+                .map(|component| component.id.clone())
+                .collect::<BTreeSet<_>>();
+            expected.iter().all(|expected| {
+                repository.actions.iter().any(|action| {
+                    owning_components.contains(&action.target.component)
+                        && action.legacy_aliases.iter().any(|alias| alias == expected)
+                })
+            })
+        })
+    }
+
     pub(super) fn go_backend_enabled(&self) -> bool {
         self.authored_repository_has_adapter("go")
             .unwrap_or_else(|| self.backend_language.is_go())
@@ -501,6 +538,40 @@ impl RenderAnswers {
             .unwrap_or_else(|| self.backend_language.is_go() && self.go_database.is_postgres())
     }
 
+    pub(super) fn go_ci_workflow_enabled(&self) -> bool {
+        self.go_backend_enabled()
+            && self
+                .authored_repository_has_aliases(
+                    &[tool::FMT_CHECK, tool::LINT, tool::TEST_LOCKED],
+                    &["go"],
+                )
+                .unwrap_or(true)
+    }
+
+    pub(super) fn rust_ci_workflow_enabled(&self) -> bool {
+        self.rust_backend_enabled()
+            && self
+                .authored_repository_has_aliases(
+                    &[tool::FMT_CHECK, tool::CLIPPY, tool::TEST_LOCKED],
+                    &["rust", "sqlx"],
+                )
+                .unwrap_or(true)
+    }
+
+    pub(super) fn go_sqlc_ci_enabled(&self) -> bool {
+        self.go_postgres_enabled()
+            && self.go_ci_workflow_enabled()
+            && self
+                .authored_repository_has_aliases(&[tool::SQLC_CHECK], &["go-postgres"])
+                .unwrap_or(true)
+    }
+
+    pub(super) fn go_postgres_integration_ci_enabled(&self) -> bool {
+        self.go_postgres_enabled()
+            && self.go_ci_workflow_enabled()
+            && self.go_postgres_integration_script
+    }
+
     pub(super) const fn go_database(&self) -> GoDatabase {
         self.go_database
     }
@@ -519,6 +590,10 @@ impl RenderAnswers {
 
     pub(super) fn enable_scaffolded_frontend_contracts(&mut self) {
         self.scaffolded_frontend_contracts = true;
+    }
+
+    pub(super) fn enable_go_postgres_integration_script(&mut self) {
+        self.go_postgres_integration_script = true;
     }
 
     pub(super) fn dev_apps_configured(&self) -> bool {

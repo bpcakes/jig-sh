@@ -630,6 +630,22 @@ fn render_context(
         "go_postgres_enabled".into(),
         JsonValue::Bool(answers.go_postgres_enabled()),
     );
+    context.insert(
+        "go_ci_workflow_enabled".into(),
+        JsonValue::Bool(answers.go_ci_workflow_enabled()),
+    );
+    context.insert(
+        "rust_ci_workflow_enabled".into(),
+        JsonValue::Bool(answers.rust_ci_workflow_enabled()),
+    );
+    context.insert(
+        "go_sqlc_ci_enabled".into(),
+        JsonValue::Bool(answers.go_sqlc_ci_enabled()),
+    );
+    context.insert(
+        "go_postgres_integration_ci_enabled".into(),
+        JsonValue::Bool(answers.go_postgres_integration_ci_enabled()),
+    );
     if contract_version >= 6 {
         let repository = RepositoryRenderModel::from_answers(answers)?;
         let repository_toml = repository.authored_toml()?;
