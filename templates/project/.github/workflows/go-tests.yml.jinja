@@ -17,6 +17,7 @@ on:
       - "openapi/**"
 [% if go_sqlc_ci_enabled %]
       - "sqlc.yaml"
+      - "**/sqlc.yaml"
       - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
@@ -26,6 +27,8 @@ on:
 [% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
       - ".github/workflows/go-tests.yml"
   push:
     branches:
@@ -45,6 +48,7 @@ on:
       - "openapi/**"
 [% if go_sqlc_ci_enabled %]
       - "sqlc.yaml"
+      - "**/sqlc.yaml"
       - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
@@ -54,6 +58,8 @@ on:
 [% endif %]
       - ".jig.toml"
       - ".agent/jig-contract.json"
+      - "scripts/jig"
+      - "scripts/install-jig.sh"
       - ".github/workflows/go-tests.yml"
   merge_group:
     types:
@@ -96,10 +102,10 @@ jobs:
             **/go.work.sum
             vendor/modules.txt
             **/vendor/modules.txt
-      - run: scripts/jig check fmt
-      - run: scripts/jig check lint
-      - run: scripts/jig check test-locked
-[% if go_sqlc_ci_enabled %]      - run: scripts/jig check sqlc
+      - run: scripts/jig check <<[ go_fmt_ci_target ]>>
+      - run: scripts/jig check <<[ go_lint_ci_target ]>>
+      - run: scripts/jig check <<[ go_test_locked_ci_target ]>>
+[% if go_sqlc_ci_enabled %]      - run: scripts/jig check <<[ go_sqlc_ci_target ]>>
 [% endif %]
 [% if go_postgres_integration_ci_enabled %]
   postgres-integration:

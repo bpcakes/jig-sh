@@ -419,6 +419,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             "**/go.work.sum",
             "vendor/modules.txt",
             "**/vendor/modules.txt",
+            "sqlc.yaml",
+            "**/sqlc.yaml",
         ] {
             assert_eq!(
                 workflow.matches(&format!(r#"- "{path}""#)).count(),
@@ -444,6 +446,12 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
+    for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
+        assert!(
+            go_tests.contains(&format!("scripts/jig check {target}")),
+            "Go CI must invoke the exact managed target {target}"
+        );
+    }
     for path in [
         "go.mod",
         "go.sum",
@@ -455,6 +463,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         "**/go.work.sum",
         "vendor/modules.txt",
         "**/vendor/modules.txt",
+        "scripts/jig",
+        "scripts/install-jig.sh",
     ] {
         assert_eq!(
             go_tests.matches(&format!(r#"- "{path}""#)).count(),
@@ -688,7 +698,7 @@ export async function createClient({ output }) {
     run_update(update_opts(&destination, template.path(), true)).unwrap();
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
-    assert!(go_tests.contains("scripts/jig check sqlc"));
+    assert!(go_tests.contains("scripts/jig check api:sqlc"));
     assert!(!go_tests.contains("postgres-integration:"));
 }
 

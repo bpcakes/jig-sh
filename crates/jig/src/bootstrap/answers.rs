@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use jig_contract::tool;
+use jig_contract::{TargetId, tool};
 use serde::{Deserialize, Serialize};
 
 use super::repository_model::{AuthoredRepositoryModel, frontend_component_id};
@@ -488,11 +488,11 @@ impl RenderAnswers {
         })
     }
 
-    fn authored_repository_has_aliases(
+    fn authored_repository_managed_target(
         &self,
-        expected: &[&str],
+        alias: &str,
         owning_adapters: &[&str],
-    ) -> Option<bool> {
+    ) -> Option<Option<TargetId>> {
         self.authored_repository.as_ref().map(|repository| {
             let owning_components = repository
                 .components
@@ -505,13 +505,68 @@ impl RenderAnswers {
                 })
                 .map(|component| component.id.clone())
                 .collect::<BTreeSet<_>>();
-            expected.iter().all(|expected| {
-                repository.actions.iter().any(|action| {
-                    owning_components.contains(&action.target.component)
-                        && action.legacy_aliases.iter().any(|alias| alias == expected)
-                })
-            })
+            let mut matching = repository.actions.iter().filter(|action| {
+                action
+                    .legacy_aliases
+                    .iter()
+                    .any(|candidate| candidate == alias)
+            });
+            let action = matching.next()?;
+            if matching.next().is_some() || !owning_components.contains(&action.target.component) {
+                return None;
+            }
+
+            if crate::repository::validate_read_only_check_closure(
+                &repository.actions,
+                std::iter::once(&action.target),
+            )
+            .is_err()
+            {
+                return None;
+            }
+            Some(action.target.clone())
         })
+    }
+
+    fn managed_ci_target(
+        &self,
+        alias: &str,
+        owning_adapters: &[&str],
+        generated_target: &str,
+    ) -> Option<String> {
+        self.authored_repository_managed_target(alias, owning_adapters)
+            .map_or_else(
+                || Some(generated_target.to_owned()),
+                |target| target.map(|target| target.to_string()),
+            )
+    }
+
+    pub(super) fn go_fmt_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::FMT_CHECK, &["go"], "api:fmt")
+    }
+
+    pub(super) fn go_lint_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::LINT, &["go"], "api:lint")
+    }
+
+    pub(super) fn go_test_locked_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::TEST_LOCKED, &["go"], "api:test-locked")
+    }
+
+    pub(super) fn rust_fmt_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::FMT_CHECK, &["rust", "sqlx"], "api:fmt")
+    }
+
+    pub(super) fn rust_clippy_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::CLIPPY, &["rust", "sqlx"], "api:clippy")
+    }
+
+    pub(super) fn rust_test_locked_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::TEST_LOCKED, &["rust", "sqlx"], "api:test-locked")
+    }
+
+    pub(super) fn go_sqlc_ci_target(&self) -> Option<String> {
+        self.managed_ci_target(tool::SQLC_CHECK, &["go-postgres"], "api:sqlc")
     }
 
     pub(super) fn go_backend_enabled(&self) -> bool {
@@ -540,30 +595,22 @@ impl RenderAnswers {
 
     pub(super) fn go_ci_workflow_enabled(&self) -> bool {
         self.go_backend_enabled()
-            && self
-                .authored_repository_has_aliases(
-                    &[tool::FMT_CHECK, tool::LINT, tool::TEST_LOCKED],
-                    &["go"],
-                )
-                .unwrap_or(true)
+            && self.go_fmt_ci_target().is_some()
+            && self.go_lint_ci_target().is_some()
+            && self.go_test_locked_ci_target().is_some()
     }
 
     pub(super) fn rust_ci_workflow_enabled(&self) -> bool {
         self.rust_backend_enabled()
-            && self
-                .authored_repository_has_aliases(
-                    &[tool::FMT_CHECK, tool::CLIPPY, tool::TEST_LOCKED],
-                    &["rust", "sqlx"],
-                )
-                .unwrap_or(true)
+            && self.rust_fmt_ci_target().is_some()
+            && self.rust_clippy_ci_target().is_some()
+            && self.rust_test_locked_ci_target().is_some()
     }
 
     pub(super) fn go_sqlc_ci_enabled(&self) -> bool {
         self.go_postgres_enabled()
             && self.go_ci_workflow_enabled()
-            && self
-                .authored_repository_has_aliases(&[tool::SQLC_CHECK], &["go-postgres"])
-                .unwrap_or(true)
+            && self.go_sqlc_ci_target().is_some()
     }
 
     pub(super) fn go_postgres_integration_ci_enabled(&self) -> bool {

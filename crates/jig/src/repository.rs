@@ -118,6 +118,76 @@ pub(crate) fn resolve_evidence_targets(
     Ok(targets)
 }
 
+pub(crate) fn validate_read_only_check_closure<'a, 'b>(
+    actions: impl IntoIterator<Item = &'a ActionSpec>,
+    targets: impl IntoIterator<Item = &'b TargetId>,
+) -> Result<()> {
+    let mut actions_by_target = BTreeMap::new();
+    for action in actions {
+        if actions_by_target
+            .insert(action.target.clone(), action)
+            .is_some()
+        {
+            bail!("duplicate target '{}'", action.target);
+        }
+    }
+
+    let mut pending = targets.into_iter().cloned().collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    while let Some(target) = pending.pop() {
+        if !seen.insert(target.clone()) {
+            continue;
+        }
+        let action = actions_by_target
+            .get(&target)
+            .ok_or_else(|| anyhow::anyhow!("selected target '{target}' is not defined"))?;
+        if action.intent != ActionIntent::Check
+            || !action.effects.contains(&ActionEffect::ReadOnly)
+            || action.effects.contains(&ActionEffect::Worktree)
+            || action.effects.contains(&ActionEffect::External)
+        {
+            bail!(
+                "target '{target}' is not a read-only check; use the action-specific command or plan and execute it through the MCP repository tools for {:?} actions with {:?} effects",
+                action.intent,
+                action.effects
+            );
+        }
+        pending.extend(action.depends_on.iter().cloned());
+    }
+
+    let mut remaining = seen;
+    let mut completed = BTreeSet::new();
+    while !remaining.is_empty() {
+        let ready = remaining
+            .iter()
+            .filter(|target| {
+                actions_by_target
+                    .get(*target)
+                    .expect("check closure targets must remain defined")
+                    .depends_on
+                    .iter()
+                    .all(|dependency| completed.contains(dependency))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            bail!(
+                "action dependency cycle among: {}",
+                remaining
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for target in ready {
+            remaining.remove(&target);
+            completed.insert(target);
+        }
+    }
+    Ok(())
+}
+
 /// The one version-neutral repository view consumed by planning and inspection.
 #[derive(Clone, Debug)]
 pub(crate) struct RepositoryCatalog {

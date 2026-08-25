@@ -642,6 +642,23 @@ fn render_context(
         "go_sqlc_ci_enabled".into(),
         JsonValue::Bool(answers.go_sqlc_ci_enabled()),
     );
+    for (name, target) in [
+        ("go_fmt_ci_target", answers.go_fmt_ci_target()),
+        ("go_lint_ci_target", answers.go_lint_ci_target()),
+        (
+            "go_test_locked_ci_target",
+            answers.go_test_locked_ci_target(),
+        ),
+        ("go_sqlc_ci_target", answers.go_sqlc_ci_target()),
+        ("rust_fmt_ci_target", answers.rust_fmt_ci_target()),
+        ("rust_clippy_ci_target", answers.rust_clippy_ci_target()),
+        (
+            "rust_test_locked_ci_target",
+            answers.rust_test_locked_ci_target(),
+        ),
+    ] {
+        context.insert(name.into(), target.unwrap_or_default().into());
+    }
     context.insert(
         "go_postgres_integration_ci_enabled".into(),
         JsonValue::Bool(answers.go_postgres_integration_ci_enabled()),

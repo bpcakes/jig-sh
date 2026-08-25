@@ -698,7 +698,7 @@ fn adopt_accepts_npm_frontend_app_and_renders_current_web_and_dev_config() {
     assert!(!web_workflow.contains("oven-sh/setup-bun"));
 
     let rust_workflow = fs::read_to_string(repo.join(".github/workflows/rust-tests.yml")).unwrap();
-    assert!(rust_workflow.contains("scripts/jig check fmt"));
+    assert!(rust_workflow.contains("scripts/jig check api:fmt"));
     assert_eq!(rust_workflow.matches(r#"- "rust-toolchain""#).count(), 2);
     assert!(!rust_workflow.contains("scripts/jig fmt-check"));
 

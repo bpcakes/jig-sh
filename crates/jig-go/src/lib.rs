@@ -84,7 +84,7 @@ const GO_POSTGRES_ACTIONS: &[AdapterActionDescriptor] = &[
         ActionIntent::Check,
         CHECK_EFFECTS,
         AdapterRunnerDescriptor::Command(SQLC_CHECK_COMMAND),
-        &["sqlc.yaml", "**/*.sql"],
+        &["sqlc.yaml", "**/sqlc.yaml", "**/*.sql"],
         Some(tool::SQLC_CHECK),
     ),
     AdapterActionDescriptor::new(

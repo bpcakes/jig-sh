@@ -476,29 +476,7 @@ pub(super) fn validate_check_actions<'a>(
     catalog: &RepositoryCatalog,
     targets: impl Iterator<Item = &'a TargetId>,
 ) -> Result<()> {
-    let mut pending = targets.cloned().collect::<Vec<_>>();
-    let mut seen = BTreeSet::new();
-    while let Some(target) = pending.pop() {
-        if !seen.insert(target.clone()) {
-            continue;
-        }
-        let action = catalog
-            .action(&target)
-            .expect("selected targets must exist in the repository catalog");
-        if action.intent != ActionIntent::Check
-            || !action.effects.contains(&ActionEffect::ReadOnly)
-            || action.effects.contains(&ActionEffect::Worktree)
-            || action.effects.contains(&ActionEffect::External)
-        {
-            bail!(
-                "target '{target}' is not a read-only check; use the action-specific command or plan and execute it through the MCP repository tools for {:?} actions with {:?} effects",
-                action.intent,
-                action.effects
-            );
-        }
-        pending.extend(action.depends_on.iter().cloned());
-    }
-    Ok(())
+    super::validate_read_only_check_closure(catalog.actions(), targets)
 }
 
 fn execution_layers<'a>(
