@@ -304,6 +304,48 @@ fn frontend_actions_depend_on_their_shared_runner() {
 }
 
 #[test]
+fn aggregate_typescript_actions_track_every_frontend_app() {
+    let answers = scaffold_answers(
+        r#"
+[[frontend_apps]]
+name = "web"
+dir = "frontend/web"
+coverage_threshold = 80
+kind = "vite"
+role = "spa"
+
+[[frontend_apps]]
+name = "admin"
+dir = "frontend/admin"
+coverage_threshold = 85
+kind = "vite"
+role = "admin"
+"#,
+    );
+    let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    for target in [
+        "repo:typescript-lint",
+        "repo:typescript-typecheck",
+        "repo:typescript-build",
+        "repo:typescript-coverage",
+    ] {
+        let action = model
+            .actions
+            .iter()
+            .find(|action| action.target.to_string() == target)
+            .unwrap();
+        assert!(action.inputs.contains(&"frontend/web/**/*".to_owned()));
+        assert!(action.inputs.contains(&"frontend/admin/**/*".to_owned()));
+        assert!(
+            action
+                .inputs
+                .contains(&"scripts/check-webapps.sh".to_owned())
+        );
+    }
+}
+
+#[test]
 fn generated_migration_action_uses_the_effective_configured_directory() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("answers.toml");

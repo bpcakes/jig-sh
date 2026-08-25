@@ -150,6 +150,10 @@ fn active_plan_linked_mcp_run_blocks_plan_close_until_terminal() {
         terminal["result"]["run"]["result"]["conclusion"],
         "cancelled"
     );
+    // The terminal event is durable before the worker drops its execution
+    // guards. Wait for that cleanup boundary so this assertion tests plan
+    // lease release rather than racing the worker's final stack unwinding.
+    crate::runtime::mcp_repository::wait_for_live_runs(&ctx);
     crate::state::plans_close(
         &ctx,
         crate::state::PlanCloseRequest {

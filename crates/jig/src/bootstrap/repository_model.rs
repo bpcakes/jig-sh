@@ -529,6 +529,8 @@ impl<'a> ModelBuilder<'a> {
             );
             action.description = Some(description.clone());
             action.effects = descriptor.effects.to_vec();
+            action.inputs =
+                aggregate_frontend_inputs(self.answers.frontend_apps(), descriptor.inputs);
             action.legacy_aliases = descriptor
                 .legacy_alias
                 .into_iter()
@@ -537,6 +539,7 @@ impl<'a> ModelBuilder<'a> {
             action.provenance = provenance(&[
                 ("target", FieldProvenance::Inferred),
                 ("runner", FieldProvenance::Inherited),
+                ("inputs", FieldProvenance::Inferred),
                 ("legacy_aliases", FieldProvenance::Inherited),
             ]);
             if let Some(alias) = descriptor.legacy_alias {
@@ -729,6 +732,14 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
     resolved.sort();
     resolved.dedup();
     resolved
+}
+
+fn aggregate_frontend_inputs(apps: &[FrontendApp], inputs: &[&str]) -> Vec<String> {
+    apps.iter()
+        .flat_map(|app| frontend_inputs(&app.dir, inputs))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn frontend_contract_inputs(include_public_artifacts: bool) -> Vec<String> {
