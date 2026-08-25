@@ -222,6 +222,10 @@ pub(crate) fn validate_contract(
                             "Target {} references unsupported native operation {operation}.",
                             action.target
                         ));
+                    } else if operation == jig_contract::tool::SCHEMA_CHECK
+                        && let Err(error) = schema::validate_runner(ctx, &action.target)
+                    {
+                        errors.push(format!("Target {}: {error}.", action.target));
                     }
                 }
             }
@@ -317,29 +321,34 @@ pub(crate) use migration_add::migration_add;
 
 #[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    schema_check_with_observer(ctx, &mut NoopExecutionObserver)
+    schema_check_with_observer(ctx, None, &mut NoopExecutionObserver)
         .map_err(ExecutionCommandError::into_anyhow)
 }
 
 pub(crate) fn schema_check_with_observer(
     ctx: &RepoContext,
+    schema_check_target: Option<&jig_contract::TargetId>,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
     if observer.cancelled() {
         return Err(ExecutionCommandError::CancelledBeforeStart);
     }
-    schema::check_with_control(ctx, ctx.command_timeout().duration(), &|| {
-        observer.cancelled()
-    })
+    schema::check_with_control(
+        ctx,
+        schema_check_target,
+        ctx.command_timeout().duration(),
+        &|| observer.cancelled(),
+    )
     .map_err(|error| schema_execution_error(error, ctx.command_timeout().as_secs()))
 }
 
 pub(crate) fn schema_check_with_control(
     ctx: &RepoContext,
+    schema_check_target: Option<&jig_contract::TargetId>,
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
-    schema::check_with_control(ctx, timeout, cancelled)
+    schema::check_with_control(ctx, schema_check_target, timeout, cancelled)
 }
 
 fn schema_execution_error(error: anyhow::Error, timeout_seconds: u64) -> ExecutionCommandError {

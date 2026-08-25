@@ -68,6 +68,74 @@ fn schema_check_reports_stale_schema_dump() {
 }
 
 #[test]
+fn v6_schema_check_reuses_the_owning_dump_actions_complete_runner() {
+    let temp = tempdir().unwrap();
+    write_v6_schema_policy_repo(
+        temp.path(),
+        "printf 'stable\\n' > docs/schema/tables.sql",
+        "mkdir -p ../docs/schema && printf '%s\\n' \"$SCHEMA_VALUE\" > ../docs/schema/tables.sql",
+    );
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("Schema dump is stale"));
+    assert!(output.stderr.contains("+changed"), "{}", output.stderr);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("docs/schema/tables.sql")).unwrap(),
+        "stable\n"
+    );
+}
+
+#[test]
+fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
+    let temp = tempdir().unwrap();
+    write_v6_schema_policy_repo(
+        temp.path(),
+        "true",
+        "printf 'generator stdout'; printf 'generator stderr' >&2; exit 7",
+    );
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = crate::runtime::dispatch(
+        &ctx,
+        crate::command::RuntimeCommand::Check(crate::command::CheckCommand::Repository(
+            crate::command::RepositoryCheckRequest {
+                selectors: vec!["api:schema".into()],
+                profile: None,
+                affected_base: None,
+                explain: false,
+                fail_fast: false,
+                tool: crate::command::ToolRequest::new(None, false),
+            },
+        )),
+    )
+    .unwrap();
+
+    assert_eq!(output["run"]["conclusion"], "failure");
+    assert_eq!(output["run"]["targets"][0]["conclusion"], "failure");
+    assert_eq!(output["run"]["targets"][0]["exit_code"], 7);
+    assert_eq!(output["results"][0]["response"]["result"]["exit_status"], 7);
+    assert_eq!(
+        output["results"][0]["response"]["result"]["stdout"],
+        "generator stdout"
+    );
+    assert_eq!(
+        output["results"][0]["response"]["result"]["stderr"],
+        "generator stderr"
+    );
+}
+
+#[test]
 fn schema_check_snapshots_dirty_worktrees_without_repository_git_identity() {
     let temp = tempdir().unwrap();
     write_schema_policy_repo(temp.path(), "cat schema-input > docs/schema/tables.sql");
@@ -474,7 +542,7 @@ fn schema_check_preserves_pre_start_cancellation() {
     write_schema_policy_repo(temp.path(), "exit 99");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = schema_check_with_observer(&ctx, &mut Cancelled).unwrap_err();
+    let error = schema_check_with_observer(&ctx, None, &mut Cancelled).unwrap_err();
 
     assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
 }

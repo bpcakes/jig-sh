@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use jig_contract::TargetId;
 use tempfile::TempDir;
 
 use crate::context::{CommandOutputLimit, RepoContext};
@@ -22,18 +23,23 @@ use super::{
     controlled_output,
 };
 
+mod runner;
+use runner::SchemaDumpRunner;
+
 const SCHEMA_SNAPSHOT_GIT_NAME: &str = "user.name=Jig Schema Snapshot";
 const SCHEMA_SNAPSHOT_GIT_EMAIL: &str = "user.email=jig-schema-snapshot@example.invalid";
 
+pub(super) fn validate_runner(ctx: &RepoContext, schema_check_target: &TargetId) -> Result<()> {
+    runner::resolve(ctx, Some(schema_check_target)).map(|_| ())
+}
+
 pub(super) fn check_with_control(
     ctx: &RepoContext,
+    schema_check_target: Option<&TargetId>,
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
-    let command_text = ctx.schema_dump_command();
-    if command_text.trim().is_empty() {
-        bail!("schema_dump_command is empty");
-    }
+    let runner = runner::resolve(ctx, schema_check_target)?;
     let configured_schema_docs_dir =
         env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
     let schema_docs_dir =
@@ -59,7 +65,7 @@ pub(super) fn check_with_control(
     let sandbox = SchemaSandbox::create(ctx.root(), deadline, cancelled)?;
     run_schema_drift_check(
         sandbox.root(),
-        command_text,
+        &runner,
         schema_docs_dir,
         ctx.command_output_limit(),
         deadline,
@@ -442,17 +448,27 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<()> {
 
 fn run_schema_drift_check(
     sandbox_root: &Path,
-    command_text: &str,
+    runner: &SchemaDumpRunner<'_>,
     schema_docs_dir: &str,
     output_limit: CommandOutputLimit,
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
+    let working_directory = crate::repository_path::resolve_repository_working_directory(
+        sandbox_root,
+        runner.working_directory,
+    )?;
     let mut dump = Command::new("bash");
-    dump.current_dir(sandbox_root)
+    dump.current_dir(working_directory)
+        .envs(
+            runner
+                .environment
+                .into_iter()
+                .flat_map(|values| values.iter()),
+        )
         .env("JIG_REPO_ROOT", sandbox_root)
         .arg("-c")
-        .arg(command_text);
+        .arg(runner.command_text);
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());
@@ -462,7 +478,7 @@ fn run_schema_drift_check(
         &mut dump,
         remaining,
         output_limit,
-        "schema_dump_command",
+        runner.command_key,
         &mut control,
     ) {
         Ok(output) => output,
@@ -485,7 +501,8 @@ fn run_schema_drift_check(
                 stderr.push('\n');
             }
             stderr.push_str(&format!(
-                "schema_dump_command exceeded the {} byte {stream} capture limit",
+                "{} exceeded the {} byte {stream} capture limit",
+                runner.command_key,
                 output_limit.bytes()
             ));
             return Ok(NativeToolOutput {
@@ -495,16 +512,15 @@ fn run_schema_drift_check(
             });
         }
         Err(SupervisedExecutionError::Failed { error, .. }) => {
-            return Err(error).context("Failed to run schema_dump_command");
+            return Err(error).with_context(|| format!("Failed to run {}", runner.command_key));
         }
     };
     if !output.status.success() {
-        bail!(
-            "schema_dump_command failed with status {}\nstdout:\n{}\nstderr:\n{}",
-            output.status.code().unwrap_or(1),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+        return Ok(NativeToolOutput {
+            exit_status: output.status.code().unwrap_or(1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
     }
     let status = schema_path_status(sandbox_root, schema_docs_dir, deadline, cancelled)?;
     if !status.trim().is_empty() {
@@ -519,7 +535,8 @@ fn run_schema_drift_check(
             exit_status: 1,
             stdout: String::new(),
             stderr: format!(
-                "Schema dump is stale. Re-run {command_text} and commit {schema_docs_dir} changes.\n{status}{diff}"
+                "Schema dump is stale. Re-run {} and commit {schema_docs_dir} changes.\n{status}{diff}",
+                runner.command_text
             ),
         });
     }

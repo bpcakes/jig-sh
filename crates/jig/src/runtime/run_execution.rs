@@ -333,6 +333,7 @@ fn run_target(
             Ok(timeout) => match run_native_tool_with_control(
                 ctx,
                 operation,
+                Some(&planned.target),
                 &json!(planned.arguments),
                 timeout,
                 &|| control.is_cancelled(),

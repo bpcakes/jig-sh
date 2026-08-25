@@ -612,10 +612,6 @@ impl RepoContext {
         self.sqlx_enabled() && self.rust_migration_layout().allows_migration_add()
     }
 
-    pub(crate) fn schema_dump_command(&self) -> &str {
-        &self.config.schema_dump_command
-    }
-
     pub(crate) fn source_commit(&self) -> &str {
         &self.config.commit
     }

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use jig_contract::{ManifestTool, NativeToolKind};
+use jig_contract::{ManifestTool, NativeToolKind, TargetId};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -224,6 +224,7 @@ fn execute_manifest_tool_with_options(
 pub(super) fn run_native_tool_with_control(
     ctx: &RepoContext,
     tool_name: &str,
+    target: Option<&TargetId>,
     args_value: &Value,
     timeout: Duration,
     cancelled: &dyn Fn() -> bool,
@@ -244,7 +245,7 @@ pub(super) fn run_native_tool_with_control(
             crate::policy::migration_add(ctx, name)
         }
         NativeToolKind::SchemaCheck => {
-            crate::policy::schema_check_with_control(ctx, timeout, cancelled)
+            crate::policy::schema_check_with_control(ctx, target, timeout, cancelled)
         }
         _ => bail!("Unsupported native tool kind for {tool_name}"),
     }?;
@@ -290,7 +291,14 @@ fn run_native_tool(
             crate::policy::migration_add(ctx, name).map(NativeToolRun::Completed)
         }
         NativeToolKind::SchemaCheck => {
-            match crate::policy::schema_check_with_observer(ctx, observer) {
+            let target = ctx.action_specs().iter().find_map(|action| {
+                action
+                    .legacy_aliases
+                    .iter()
+                    .any(|alias| alias == tool_name)
+                    .then_some(&action.target)
+            });
+            match crate::policy::schema_check_with_observer(ctx, target, observer) {
                 Ok(output) => Ok(NativeToolRun::Completed(output)),
                 Err(ExecutionCommandError::CancelledBeforeStart) => {
                     Ok(NativeToolRun::CancelledBeforeStart)
@@ -591,6 +599,7 @@ mod tests {
         let error = run_native_tool_with_control(
             &ctx,
             tool::CONTRACT_CHECK,
+            None,
             &serde_json::json!({}),
             Duration::ZERO,
             &|| false,
@@ -621,6 +630,7 @@ migration_dir = "migrations"
         let output = run_native_tool_with_control(
             &ctx,
             tool::MIGRATION_ADD,
+            None,
             &serde_json::json!({args::NAME: "create_examples"}),
             Duration::from_secs(30),
             &|| probes.fetch_add(1, Ordering::SeqCst) > 0,

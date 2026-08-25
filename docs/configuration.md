@@ -700,9 +700,12 @@ runners deliberately do not receive the migration-name argument. The legacy
 `migration_add_command` extension remains available only through contract 5.
 
 `scripts/jig check schema` is a read-only freshness gate. It requires
-`SCHEMA_DOCS_DIR` to be clean, reruns `schema_dump_command` in a disposable
-snapshot of the current repository, and reports any drift without letting the
-generator write to the live worktree. The snapshot includes current tracked and
+`SCHEMA_DOCS_DIR` to be clean and reruns the owning component's `schema-dump`
+action in a disposable snapshot of the current repository, resolving that
+action's command key through `[commands]` and preserving its working directory
+and environment. Pre-v6 contracts use the legacy `schema_dump_command` binding.
+The check reports any drift without letting the generator write to the live
+worktree. The snapshot includes current tracked and
 staged content, non-ignored untracked files, ignored `.env`/`.env.*` files under
 directories that are not themselves ignored, and
 the working trees of initialized local submodules; unrelated special untracked

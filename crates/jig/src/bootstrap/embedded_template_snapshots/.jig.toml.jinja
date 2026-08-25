@@ -22,7 +22,7 @@ rust_migration_layout = "<<[ rust_migration_layout ]>>"
 rust_sqlx_metadata_dir = "<<[ rust_sqlx_metadata_dir | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 schema_dump_enabled = [% if schema_dump_enabled %]true[% else %]false[% endif %]
-[% if sqlx_enabled and schema_dump_enabled %]
+[% if _jig.contract_version < 6 and sqlx_enabled and schema_dump_enabled %]
 schema_dump_command = "<<[ schema_dump_command | replace("\\", "\\\\") | replace("\"", "\\\"") ]>>"
 [% endif %]
 [% if sqlx_enabled %]

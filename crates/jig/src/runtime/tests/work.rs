@@ -16,26 +16,52 @@ effects = {effects_toml}
 runner = {{ kind = "native", operation = "jig.schema_check" }}
 inputs = ["api/**"]
 
+[[repository.actions]]
+target = {{ component = "api", action = "schema-dump" }}
+intent = "generate"
+effects = ["worktree", "process"]
+runner = {{ kind = "command", command = "api_schema_dump_command" }}
+inputs = ["api/**"]
+
 [[repository.profiles]]"#
     );
     let config = fs::read_to_string(&config_path)
         .unwrap()
         .replace(
             "default_branch = \"main\"",
-            "default_branch = \"main\"\nschema_dump_command = \"printf 'schema\\n' > docs/schema/schema.sql\"",
+            "default_branch = \"main\"\nschema_dump_enabled = true",
         )
+        .replace(
+            "[commands]",
+            "[commands]\napi_schema_dump_command = \"printf 'schema\\n' > docs/schema/schema.sql\"",
+        )
+        .replace("adapters = [\"go\"]", "adapters = [\"go\", \"sqlx\"]")
         .replace("[[repository.profiles]]", &action);
     fs::write(config_path, config).unwrap();
     let manifest_path = root.join(".agent/jig-contract.json");
     let mut manifest: Value =
         serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    manifest["actions"].as_array_mut().unwrap().push(json!({
-        "target": {"component": "api", "action": "schema"},
-        "intent": "check",
-        "effects": effects,
-        "runner": {"kind": "native", "operation": "jig.schema_check"},
-        "inputs": ["api/**"]
-    }));
+    manifest["required_commands"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("api_schema_dump_command"));
+    manifest["components"][0]["adapters"] = json!(["go", "sqlx"]);
+    manifest["actions"].as_array_mut().unwrap().extend([
+        json!({
+            "target": {"component": "api", "action": "schema"},
+            "intent": "check",
+            "effects": effects,
+            "runner": {"kind": "native", "operation": "jig.schema_check"},
+            "inputs": ["api/**"]
+        }),
+        json!({
+            "target": {"component": "api", "action": "schema-dump"},
+            "intent": "generate",
+            "effects": ["worktree", "process"],
+            "runner": {"kind": "command", "command": "api_schema_dump_command"},
+            "inputs": ["api/**"]
+        }),
+    ]);
     fs::write(
         manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
