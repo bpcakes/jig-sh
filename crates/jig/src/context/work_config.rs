@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 use jig_contract::{ProfileId, TargetId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkConfig {
     #[serde(default)]
@@ -16,7 +16,7 @@ pub(crate) struct WorkConfig {
     refinements: Vec<WorkRefinementConfig>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WorkGateConfig {
     id: String,
@@ -96,7 +96,7 @@ pub(crate) enum ReviewScopeArg<'a> {
     Commit(&'a str),
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkRefinementConfig {
     pub(crate) id: String,

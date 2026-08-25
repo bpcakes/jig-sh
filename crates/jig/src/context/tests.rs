@@ -38,6 +38,24 @@ fn contract_digest_uses_canonical_execution_authority() {
         contract_source_digest(&changed.config, &manifest).unwrap(),
         expected
     );
+
+    for authority_change in [
+        "harness_footprint = \"minimal\"\n",
+        "[[frontend_apps]]\nname = \"web\"\ndir = \"web\"\n",
+        "[work]\nchecks = [\"jig.contract_check\"]\n",
+    ] {
+        fs::write(
+            &config_path,
+            format!("{}\n{authority_change}", original_source.trim_end()),
+        )
+        .unwrap();
+        let changed = load_config_snapshot(&config_path).unwrap();
+        assert_ne!(
+            contract_source_digest(&changed.config, &manifest).unwrap(),
+            expected,
+            "native contract-check input must participate in execution authority: {authority_change}"
+        );
+    }
 }
 
 #[test]

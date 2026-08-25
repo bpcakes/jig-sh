@@ -212,14 +212,14 @@ fn ensure_finish_authority_is_current(
 }
 
 fn ensure_finish_config_is_current(ctx: &RepoContext, current: &RepoContext) -> Result<()> {
-    if current.contract_digest() != ctx.contract_digest() {
-        anyhow::bail!(
-            "Repository execution authority changed while evaluating required work gates; rerun `jig work gates` and retry"
-        );
-    }
     if current.work_gates() != ctx.work_gates() {
         anyhow::bail!(
             "Work gate configuration changed while evaluating required work gates; rerun `jig work gates` and retry"
+        );
+    }
+    if current.contract_digest() != ctx.contract_digest() {
+        anyhow::bail!(
+            "Repository execution authority changed while evaluating required work gates; rerun `jig work gates` and retry"
         );
     }
     Ok(())

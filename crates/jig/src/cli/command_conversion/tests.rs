@@ -26,6 +26,27 @@ fn external_check_selectors_accept_execution_flags_after_targets() {
 }
 
 #[test]
+fn built_in_action_names_compose_with_additional_selectors() {
+    let request = command::CheckCommand::try_from(CheckOpts {
+        tool: ToolOpts::default(),
+        profile: None,
+        affected: None,
+        explain: false,
+        fail_fast: false,
+        command: Some(CheckCommand::Test(CheckTargetOpts {
+            tool: ToolOpts::default(),
+            selectors: vec!["api:lint".into()],
+        })),
+    })
+    .unwrap();
+
+    let command::CheckCommand::Repository(request) = request else {
+        panic!("expected repository check request");
+    };
+    assert_eq!(request.selectors, ["test", "api:lint"]);
+}
+
+#[test]
 fn dev_conversion_preserves_default_launch_and_replace() {
     let request: command::DevCommand = DevOpts {
         command: None,

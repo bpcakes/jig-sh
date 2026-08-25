@@ -78,9 +78,12 @@ fn cli_dispatch_requires_manifest_tool_declaration() {
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Fmt(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Fmt(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -99,9 +102,12 @@ fn unavailable_schema_check_explains_disabled_config() {
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Schema(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -123,9 +129,12 @@ fn explicit_schema_check_executes_a_declared_read_only_action_on_contract_six() 
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Schema(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -145,9 +154,12 @@ fn explicit_schema_check_rejects_a_declared_worktree_effect() {
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Schema(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Schema(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -166,9 +178,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
     let lint_error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Lint(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Lint(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -180,9 +195,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
     let sqlc_error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Sqlc(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -199,9 +217,12 @@ fn unavailable_go_checks_explain_backend_and_database_capabilities() {
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Sqlc(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Sqlc(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -229,9 +250,12 @@ coverage_threshold = 80
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::TypeScriptLint(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::TypeScriptLint(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )

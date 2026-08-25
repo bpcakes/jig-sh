@@ -542,7 +542,13 @@ fn schema_check_preserves_pre_start_cancellation() {
     write_schema_policy_repo(temp.path(), "exit 99");
     let ctx = RepoContext::load_from(temp.path()).unwrap();
 
-    let error = schema_check_with_observer(&ctx, None, &mut Cancelled).unwrap_err();
+    let error = schema_check_with_observer_and_timeout(
+        &ctx,
+        None,
+        ctx.command_timeout().duration(),
+        &mut Cancelled,
+    )
+    .unwrap_err();
 
     assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
 }

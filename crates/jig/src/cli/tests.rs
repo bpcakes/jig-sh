@@ -54,7 +54,7 @@ fn parses_check_namespace_commands() {
             command: Some(CheckCommand::Fmt(opts)),
             ..
         }) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_1"));
+            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_1"));
         }
         other => panic!("expected check fmt command, got {other:?}"),
     }
@@ -83,7 +83,7 @@ fn parses_check_namespace_commands() {
             command: Some(CheckCommand::TypeScriptTypecheck(opts)),
             ..
         }) => {
-            assert_eq!(opts.plan_id.as_deref(), Some("plan_2"));
+            assert_eq!(opts.tool.plan_id.as_deref(), Some("plan_2"));
         }
         other => panic!("expected check typescript-typecheck command, got {other:?}"),
     }
@@ -152,6 +152,16 @@ fn parses_agent_native_check_selections() {
             ..
         })
     ));
+
+    let mixed = Cli::try_parse_from(["jig", "check", "test", "api:lint", "--explain"]).unwrap();
+    match mixed.command {
+        CommandKind::Check(CheckOpts {
+            explain: true,
+            command: Some(CheckCommand::Test(opts)),
+            ..
+        }) => assert_eq!(opts.selectors, ["api:lint"]),
+        other => panic!("expected built-in plus target selectors, got {other:?}"),
+    }
 
     let profile = Cli::try_parse_from(["jig", "check", "--profile", "ci", "--explain"]).unwrap();
     assert!(matches!(
@@ -790,8 +800,8 @@ fn parses_tool_no_receipt_flag() {
             command: Some(CheckCommand::Contract(opts)),
             ..
         }) => {
-            assert!(opts.no_receipt);
-            assert_eq!(opts.plan_id, None);
+            assert!(opts.tool.no_receipt);
+            assert_eq!(opts.tool.plan_id, None);
         }
         other => panic!("expected check contract command, got {other:?}"),
     }

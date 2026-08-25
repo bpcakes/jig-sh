@@ -206,7 +206,7 @@ struct AuthoredRepositoryConfig {
     profiles: Vec<ProfileSpec>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum HarnessFootprintConfig {
     #[default]
@@ -215,7 +215,7 @@ enum HarnessFootprintConfig {
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FrontendAppConfig {
     pub(crate) name: String,
@@ -751,6 +751,7 @@ fn load_config(config_path: &Path) -> Result<RepoConfig> {
 struct RepositoryExecutionAuthority<'a> {
     schema_version: u32,
     manifest: &'a serde_json::Value,
+    harness_footprint: HarnessFootprintConfig,
     backend_language: BackendLanguage,
     go_database: GoDatabase,
     sqlx_enabled: bool,
@@ -761,6 +762,8 @@ struct RepositoryExecutionAuthority<'a> {
     rust_sqlx_metadata_dir: &'a str,
     schema_dump_enabled: bool,
     commands: BTreeMap<String, &'a str>,
+    frontend_apps: &'a [FrontendAppConfig],
+    work: &'a WorkConfig,
     execution: &'a ExecutionConfig,
 }
 
@@ -778,7 +781,7 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         ci_github_runner: _,
         jig_version: _,
         template_source_url: _,
-        harness_footprint: _,
+        harness_footprint,
         backend_language,
         go_database,
         sqlx_enabled,
@@ -801,11 +804,11 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_test_locked_command: _,
         commands,
         web_package_manager: _,
-        frontend_apps: _,
+        frontend_apps,
         repository: _,
         vault: _,
         dev: _,
-        work: _,
+        work,
         loop_config: _,
         status: _,
         execution,
@@ -821,8 +824,9 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
             .or_insert_with(|| accessor(config));
     }
     let authority = RepositoryExecutionAuthority {
-        schema_version: 1,
+        schema_version: 2,
         manifest,
+        harness_footprint: *harness_footprint,
         backend_language: *backend_language,
         go_database: *go_database,
         sqlx_enabled: *sqlx_enabled,
@@ -833,12 +837,14 @@ fn contract_source_digest(config: &RepoConfig, manifest: &serde_json::Value) -> 
         rust_sqlx_metadata_dir,
         schema_dump_enabled: *schema_dump_enabled,
         commands: effective_commands,
+        frontend_apps,
+        work,
         execution,
     };
     let encoded = serde_json::to_vec(&authority)
         .context("Failed to canonicalize repository execution authority")?;
     let mut hasher = Sha256::new();
-    hasher.update(b"jig-repository-execution-authority-v1\0");
+    hasher.update(b"jig-repository-execution-authority-v2\0");
     hasher.update((encoded.len() as u64).to_be_bytes());
     hasher.update(encoded);
     Ok(format!("sha256:{:x}", hasher.finalize()))

@@ -658,9 +658,12 @@ command_timeout_seconds = 1
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: true,
+            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: true,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -706,9 +709,12 @@ rust_test_locked_command = "printf 'test locked\n'"
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Contract(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: true,
+            crate::cli::CheckCommand::Contract(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: true,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )
@@ -749,9 +755,12 @@ rust_test_command = "printf 'tool failed stdout\n'; printf 'tool failed stderr\n
     let error = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: false,
+            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: false,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )

@@ -4,17 +4,17 @@ use crate::command;
 
 use super::{
     AgentBootstrapOpts, AgentCommand, AgentMapCommand, AgentMapOpts, CheckCommand,
-    CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts, DevLaunchOpts, DevOpts,
-    DevStatusOpts, DevStopOpts, DevSubcommand, GenerateSqlxUncheckedQueriesTodoOpts,
-    LoopClearAttemptOpts, LoopCommand, LoopRunOpts, LoopStatusOpts, LoopTickOpts, ProxyAliasOpts,
-    ProxyCertCommand, ProxyCertGenerateOpts, ProxyCertRuntimeOpts, ProxyCertTrustOpts,
-    ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts, ProxyPruneOpts, ProxyRunOpts,
-    ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts, ProxyServiceRuntimeOpts,
-    ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand, StateCompactCommand,
-    StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand, StateExportReceiptsOpts,
-    StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts, WorkCommand, WorkDecisionAddOpts,
-    WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts, WorkGoalOpts, WorkReceiptsOpts,
-    WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
+    CheckMigrationImmutabilityOpts, CheckOpts, CheckRustFileLocOpts, CheckTargetOpts,
+    DevLaunchOpts, DevOpts, DevStatusOpts, DevStopOpts, DevSubcommand,
+    GenerateSqlxUncheckedQueriesTodoOpts, LoopClearAttemptOpts, LoopCommand, LoopRunOpts,
+    LoopStatusOpts, LoopTickOpts, ProxyAliasOpts, ProxyCertCommand, ProxyCertGenerateOpts,
+    ProxyCertRuntimeOpts, ProxyCertTrustOpts, ProxyCertUntrustOpts, ProxyCommand, ProxyListOpts,
+    ProxyPruneOpts, ProxyRunOpts, ProxyRuntimeOpts, ProxyServiceCommand, ProxyServiceInstallOpts,
+    ProxyServiceRuntimeOpts, ProxyStartOpts, ProxyStopOpts, StateArchiveOpts, StateCommand,
+    StateCompactCommand, StateCompactSessionsOpts, StateDiagnoseOpts, StateExportCommand,
+    StateExportReceiptsOpts, StateRestoreOpts, ToolOpts, WorkAppendOpts, WorkCheckOpts,
+    WorkCommand, WorkDecisionAddOpts, WorkEvidenceOpts, WorkFinishOpts, WorkGatesOpts,
+    WorkGoalOpts, WorkReceiptsOpts, WorkRefineOpts, WorkReviewOpts, WorkStartOpts,
 };
 
 impl From<ToolOpts> for command::ToolRequest {
@@ -79,15 +79,24 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     tool: tool.into(),
                 }))
             }
-            Some(command) if profile.is_some() || affected.is_some() || explain || fail_fast => {
-                let (selector, child_tool) = repository_selector(command)?;
+            Some(command)
+                if profile.is_some()
+                    || affected.is_some()
+                    || explain
+                    || fail_fast
+                    || command.has_additional_selectors() =>
+            {
+                let (selector, child) = repository_selector(command)?;
+                let mut selectors = Vec::with_capacity(child.selectors.len() + 1);
+                selectors.push(selector.into());
+                selectors.extend(child.selectors);
                 Ok(Self::Repository(command::RepositoryCheckRequest {
-                    selectors: vec![selector.into()],
+                    selectors,
                     profile,
                     affected_base: affected,
                     explain,
                     fail_fast,
-                    tool: merge_tool_opts(tool, child_tool)?.into(),
+                    tool: merge_tool_opts(tool, child.tool)?.into(),
                 }))
             }
             Some(command) => direct_check_command(command, tool),
@@ -167,43 +176,43 @@ fn direct_check_command(
 ) -> Result<command::CheckCommand> {
     let command = match command {
         CheckCommand::Fmt(opts) => {
-            command::CheckCommand::Fmt(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Fmt(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Lint(opts) => {
-            command::CheckCommand::Lint(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Lint(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Clippy(opts) => {
-            command::CheckCommand::Clippy(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Clippy(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Test(opts) => {
-            command::CheckCommand::Test(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Test(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::TestLocked(opts) => {
-            command::CheckCommand::TestLocked(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::TestLocked(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::TypeScriptLint(opts) => {
-            command::CheckCommand::TypeScriptLint(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::TypeScriptLint(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
-        CheckCommand::TypeScriptTypecheck(opts) => {
-            command::CheckCommand::TypeScriptTypecheck(merge_tool_opts(parent_tool, opts)?.into())
-        }
+        CheckCommand::TypeScriptTypecheck(opts) => command::CheckCommand::TypeScriptTypecheck(
+            merge_tool_opts(parent_tool, opts.tool)?.into(),
+        ),
         CheckCommand::TypeScriptBuild(opts) => {
-            command::CheckCommand::TypeScriptBuild(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::TypeScriptBuild(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
-        CheckCommand::TypeScriptCoverage(opts) => {
-            command::CheckCommand::TypeScriptCoverage(merge_tool_opts(parent_tool, opts)?.into())
-        }
+        CheckCommand::TypeScriptCoverage(opts) => command::CheckCommand::TypeScriptCoverage(
+            merge_tool_opts(parent_tool, opts.tool)?.into(),
+        ),
         CheckCommand::Sqlx(opts) => {
-            command::CheckCommand::Sqlx(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Sqlx(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Sqlc(opts) => {
-            command::CheckCommand::Sqlc(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Sqlc(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Schema(opts) => {
-            command::CheckCommand::Schema(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Schema(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::Contract(opts) => {
-            command::CheckCommand::Contract(merge_tool_opts(parent_tool, opts)?.into())
+            command::CheckCommand::Contract(merge_tool_opts(parent_tool, opts.tool)?.into())
         }
         CheckCommand::AgentMap(opts) => {
             reject_repository_options(&parent_tool)?;
@@ -236,7 +245,7 @@ fn direct_check_command(
     Ok(command)
 }
 
-fn repository_selector(command: CheckCommand) -> Result<(&'static str, ToolOpts)> {
+fn repository_selector(command: CheckCommand) -> Result<(&'static str, CheckTargetOpts)> {
     match command {
         CheckCommand::Fmt(opts) => Ok(("fmt", opts)),
         CheckCommand::Lint(opts) => Ok(("lint", opts)),

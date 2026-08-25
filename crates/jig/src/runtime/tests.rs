@@ -483,9 +483,12 @@ rust_test_command = "printf 'command tool ran\n'"
     let output = dispatch(
         &ctx,
         CommandKind::Check(crate::cli::CheckOpts::with_command(
-            crate::cli::CheckCommand::Test(crate::cli::ToolOpts {
-                plan_id: None,
-                no_receipt: true,
+            crate::cli::CheckCommand::Test(crate::cli::CheckTargetOpts {
+                tool: crate::cli::ToolOpts {
+                    plan_id: None,
+                    no_receipt: true,
+                },
+                selectors: Vec::new(),
             }),
         )),
     )

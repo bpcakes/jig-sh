@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use jig_contract::{ManifestTool, NativeToolKind, TargetId};
+use jig_contract::{ActionRunner, ManifestTool, NativeToolKind, TargetId};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -13,6 +13,7 @@ use crate::execution::{
     SupervisedExecutionError, run_supervised_execution_command,
 };
 use crate::policy::NativeToolOutput;
+use crate::repository::RepositoryCatalog;
 use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
@@ -187,16 +188,87 @@ fn execute_manifest_tool_with_options(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    if let Some(error) = jig_features::tool_admission_error(ctx, tool_name) {
-        bail!(error);
-    }
     let tool = ctx
         .tool_spec(tool_name)
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
+    let action = if ctx.contract_version() >= 6 {
+        let catalog = RepositoryCatalog::from_context(ctx)?;
+        catalog
+            .target_for_alias(tool_name)
+            .and_then(|target| catalog.action(target))
+            .cloned()
+    } else {
+        None
+    };
+    let admission_name = action
+        .as_ref()
+        .and_then(|action| match &action.runner {
+            ActionRunner::Native { operation } => Some(operation.as_str()),
+            ActionRunner::Command { .. } => None,
+        })
+        .unwrap_or(tool_name);
+    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
+        bail!(error);
+    }
+    if let Some(action) = action {
+        return match action.runner {
+            ActionRunner::Native { operation } => execute_native_tool(
+                ctx,
+                NativeToolInvocation {
+                    tool_name: &tool.name,
+                    operation: &operation,
+                    target: Some(&action.target),
+                    timeout_seconds: action.timeout_seconds,
+                },
+                args,
+                plan_id,
+                options,
+                position,
+                observer,
+            ),
+            ActionRunner::Command {
+                command,
+                working_directory,
+                environment,
+            } => {
+                let command_text = ctx.command_for_key(&command)?;
+                execute_command_tool(
+                    ctx,
+                    CommandToolInvocation {
+                        tool_name: &tool.name,
+                        command_key: &command,
+                        command_text,
+                        working_directory: working_directory.as_deref(),
+                        environment: Some(&environment),
+                        timeout: action
+                            .timeout_seconds
+                            .map(Duration::from_secs)
+                            .unwrap_or_else(|| ctx.command_timeout().duration()),
+                    },
+                    args,
+                    plan_id,
+                    options,
+                    position,
+                    observer,
+                )
+            }
+        };
+    }
     match tool.kind.as_str() {
-        kind::NATIVE => {
-            execute_native_tool(ctx, &tool.name, args, plan_id, options, position, observer)
-        }
+        kind::NATIVE => execute_native_tool(
+            ctx,
+            NativeToolInvocation {
+                tool_name: &tool.name,
+                operation: &tool.name,
+                target: None,
+                timeout_seconds: None,
+            },
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+        ),
         kind::COMMAND => {
             let command_key = tool
                 .command
@@ -209,6 +281,9 @@ fn execute_manifest_tool_with_options(
                     tool_name: &tool.name,
                     command_key,
                     command_text: command,
+                    working_directory: None,
+                    environment: None,
+                    timeout: ctx.command_timeout().duration(),
                 },
                 args,
                 plan_id,
@@ -273,12 +348,14 @@ enum NativeToolRun {
 
 fn run_native_tool(
     ctx: &RepoContext,
-    tool_name: &str,
+    operation: &str,
+    target: Option<&TargetId>,
+    timeout: Duration,
     args_value: &Value,
     observer: &mut dyn ExecutionControl,
 ) -> Result<NativeToolRun> {
-    let output = match jig_features::native_tool_kind(tool_name)
-        .ok_or_else(|| anyhow!("Unsupported native tool: {tool_name}"))?
+    let output = match jig_features::native_tool_kind(operation)
+        .ok_or_else(|| anyhow!("Unsupported native tool: {operation}"))?
     {
         NativeToolKind::ContractCheck => {
             Ok(NativeToolRun::Completed(crate::policy::contract_check(ctx)))
@@ -291,14 +368,9 @@ fn run_native_tool(
             crate::policy::migration_add(ctx, name).map(NativeToolRun::Completed)
         }
         NativeToolKind::SchemaCheck => {
-            let target = ctx.action_specs().iter().find_map(|action| {
-                action
-                    .legacy_aliases
-                    .iter()
-                    .any(|alias| alias == tool_name)
-                    .then_some(&action.target)
-            });
-            match crate::policy::schema_check_with_observer(ctx, target, observer) {
+            match crate::policy::schema_check_with_observer_and_timeout(
+                ctx, target, timeout, observer,
+            ) {
                 Ok(output) => Ok(NativeToolRun::Completed(output)),
                 Err(ExecutionCommandError::CancelledBeforeStart) => {
                     Ok(NativeToolRun::CancelledBeforeStart)
@@ -307,7 +379,7 @@ fn run_native_tool(
                 Err(ExecutionCommandError::Failed(error)) => Err(error),
             }
         }
-        _ => bail!("Unsupported native tool kind for {tool_name}"),
+        _ => bail!("Unsupported native tool kind for {operation}"),
     }?;
     Ok(match output {
         NativeToolRun::Completed(output) => NativeToolRun::Completed(bound_native_output(output)),
@@ -335,15 +407,28 @@ fn truncate_native_stream(value: &mut String, limit: usize) {
     value.push_str("\n[output truncated by Jig]\n");
 }
 
+struct NativeToolInvocation<'a> {
+    tool_name: &'a str,
+    operation: &'a str,
+    target: Option<&'a TargetId>,
+    timeout_seconds: Option<u64>,
+}
+
 fn execute_native_tool(
     ctx: &RepoContext,
-    tool_name: &str,
+    invocation: NativeToolInvocation<'_>,
     args: Value,
     plan_id: Option<String>,
     options: ManifestToolExecutionOptions,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
+    let NativeToolInvocation {
+        tool_name,
+        operation,
+        target,
+        timeout_seconds,
+    } = invocation;
     let started = now_ms();
     if observer.cancelled() {
         return cancelled_native_tool_outcome(
@@ -360,7 +445,10 @@ fn execute_native_tool(
         );
     }
     let phase = ExecutionPhase::start(observer, tool_name, position);
-    let output = run_native_tool(ctx, tool_name, &args, observer);
+    let timeout = timeout_seconds
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| ctx.command_timeout().duration());
+    let output = run_native_tool(ctx, operation, target, timeout, &args, observer);
     phase.finish(
         observer,
         output.as_ref().is_ok_and(
@@ -568,82 +656,4 @@ mod command_tool;
 use command_tool::*;
 
 #[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use tempfile::tempdir;
-
-    use super::*;
-    use crate::test_env::TestRepoBuilder;
-
-    #[test]
-    fn native_output_is_bounded_at_the_common_execution_seam() {
-        let limit = jig_owned_process::ProcessOutputLimits::default().stdout;
-        let output = bound_native_output(NativeToolOutput {
-            exit_status: 0,
-            stdout: "x".repeat(limit + 1),
-            stderr: "y".repeat(limit + 1),
-        });
-
-        assert!(output.stdout.starts_with(&"x".repeat(limit)));
-        assert!(output.stdout.ends_with("[output truncated by Jig]\n"));
-        assert!(output.stderr.ends_with("[output truncated by Jig]\n"));
-    }
-
-    #[test]
-    fn native_runner_rejects_an_elapsed_timeout_before_start() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path()).write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-        let error = run_native_tool_with_control(
-            &ctx,
-            tool::CONTRACT_CHECK,
-            None,
-            &serde_json::json!({}),
-            Duration::ZERO,
-            &|| false,
-        )
-        .unwrap_err();
-
-        assert!(matches!(
-            error.downcast_ref::<jig_owned_process::OwnedProcessTreeError>(),
-            Some(jig_owned_process::OwnedProcessTreeError::TimedOut)
-        ));
-    }
-
-    #[test]
-    fn cancellation_after_an_in_process_mutation_does_not_reclassify_completion() {
-        let temp = tempdir().unwrap();
-        TestRepoBuilder::new(temp.path())
-            .config(
-                r#"
-backend_language = "go"
-go_database = "postgres"
-migration_dir = "migrations"
-"#,
-            )
-            .write();
-        let ctx = RepoContext::load_from(temp.path()).unwrap();
-        let probes = AtomicUsize::new(0);
-
-        let output = run_native_tool_with_control(
-            &ctx,
-            tool::MIGRATION_ADD,
-            None,
-            &serde_json::json!({args::NAME: "create_examples"}),
-            Duration::from_secs(30),
-            &|| probes.fetch_add(1, Ordering::SeqCst) > 0,
-        )
-        .unwrap();
-
-        assert_eq!(output.exit_status, 0);
-        assert_eq!(probes.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            std::fs::read_dir(temp.path().join("migrations"))
-                .unwrap()
-                .count(),
-            1
-        );
-    }
-}
+mod tests;

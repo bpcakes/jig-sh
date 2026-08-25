@@ -83,11 +83,54 @@ impl CheckOpts {
     }
 
     pub(crate) fn is_contract_only(&self) -> bool {
-        matches!(self.command, Some(CheckCommand::Contract(_)))
-            && self.profile.is_none()
+        matches!(
+            self.command,
+            Some(CheckCommand::Contract(CheckTargetOpts {
+                ref selectors,
+                ..
+            })) if selectors.is_empty()
+        ) && self.profile.is_none()
             && self.affected.is_none()
             && !self.explain
             && !self.fail_fast
+    }
+}
+
+#[derive(Args, Clone, Debug, Default)]
+pub(crate) struct CheckTargetOpts {
+    #[command(flatten)]
+    pub(crate) tool: ToolOpts,
+    #[arg(
+        value_name = "SELECTOR",
+        help = "Additional component action or target selectors"
+    )]
+    pub(crate) selectors: Vec<String>,
+}
+
+impl CheckCommand {
+    pub(crate) fn has_additional_selectors(&self) -> bool {
+        match self {
+            Self::Fmt(opts)
+            | Self::Lint(opts)
+            | Self::Clippy(opts)
+            | Self::Test(opts)
+            | Self::TestLocked(opts)
+            | Self::TypeScriptLint(opts)
+            | Self::TypeScriptTypecheck(opts)
+            | Self::TypeScriptBuild(opts)
+            | Self::TypeScriptCoverage(opts)
+            | Self::Sqlx(opts)
+            | Self::Sqlc(opts)
+            | Self::Schema(opts)
+            | Self::Contract(opts) => !opts.selectors.is_empty(),
+            Self::AgentMap(_)
+            | Self::AgentGuides
+            | Self::RustFileLoc(_)
+            | Self::NoModRs
+            | Self::MigrationImmutability(_)
+            | Self::SqlxUncheckedNonTest
+            | Self::Selectors(_) => false,
+        }
     }
 }
 
@@ -95,43 +138,43 @@ impl CheckOpts {
 pub(crate) enum CheckCommand {
     /// Run the configured Rust format check.
     #[command(name = tool_defs::cli_command::CHECK_FMT)]
-    Fmt(ToolOpts),
+    Fmt(CheckTargetOpts),
     /// Run the configured language lint check.
     #[command(name = tool_defs::cli_command::CHECK_LINT)]
-    Lint(ToolOpts),
+    Lint(CheckTargetOpts),
     /// Run the configured Rust clippy check.
     #[command(name = tool_defs::cli_command::CHECK_CLIPPY)]
-    Clippy(ToolOpts),
+    Clippy(CheckTargetOpts),
     /// Run the configured default test command.
     #[command(name = tool_defs::cli_command::CHECK_TEST)]
-    Test(ToolOpts),
+    Test(CheckTargetOpts),
     /// Run the configured locked test command.
     #[command(name = tool_defs::cli_command::CHECK_TEST_LOCKED)]
-    TestLocked(ToolOpts),
+    TestLocked(CheckTargetOpts),
     /// Run the configured TypeScript lint command.
     #[command(name = tool_defs::cli_command::CHECK_TYPESCRIPT_LINT)]
-    TypeScriptLint(ToolOpts),
+    TypeScriptLint(CheckTargetOpts),
     /// Run the configured TypeScript typecheck command.
     #[command(name = tool_defs::cli_command::CHECK_TYPESCRIPT_TYPECHECK)]
-    TypeScriptTypecheck(ToolOpts),
+    TypeScriptTypecheck(CheckTargetOpts),
     /// Run the configured TypeScript build command.
     #[command(name = tool_defs::cli_command::CHECK_TYPESCRIPT_BUILD)]
-    TypeScriptBuild(ToolOpts),
+    TypeScriptBuild(CheckTargetOpts),
     /// Run the configured TypeScript coverage command.
     #[command(name = tool_defs::cli_command::CHECK_TYPESCRIPT_COVERAGE)]
-    TypeScriptCoverage(ToolOpts),
+    TypeScriptCoverage(CheckTargetOpts),
     /// Verify committed SQLx metadata when SQLx is enabled.
     #[command(name = tool_defs::cli_command::CHECK_SQLX)]
-    Sqlx(ToolOpts),
+    Sqlx(CheckTargetOpts),
     /// Verify sqlc queries and checked-in generated output.
     #[command(name = tool_defs::cli_command::CHECK_SQLC)]
-    Sqlc(ToolOpts),
+    Sqlc(CheckTargetOpts),
     /// Verify generated schema documentation when schema dumps are enabled.
     #[command(name = tool_defs::cli_command::CHECK_SCHEMA)]
-    Schema(ToolOpts),
+    Schema(CheckTargetOpts),
     /// Validate the generated Jig command contract and runtime wiring.
     #[command(name = tool_defs::cli_command::CHECK_CONTRACT)]
-    Contract(ToolOpts),
+    Contract(CheckTargetOpts),
     /// Check agent-map.md coverage and links.
     #[command(name = tool_defs::cli_command::CHECK_AGENT_MAP)]
     AgentMap(AgentMapOpts),

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
@@ -101,6 +102,18 @@ pub(crate) fn resolve_repository_working_directory(
         bail!("working_directory is not a directory");
     }
     Ok(candidate)
+}
+
+pub(crate) fn validate_runner_environment(environment: &BTreeMap<String, String>) -> Result<()> {
+    for (name, value) in environment {
+        if name.is_empty() || name.contains(['=', '\0']) {
+            bail!("environment variable name {name:?} is invalid");
+        }
+        if value.contains('\0') {
+            bail!("environment variable {name:?} contains a NUL byte");
+        }
+    }
+    Ok(())
 }
 
 /// Validates a repository-relative directory immediately before a caller may

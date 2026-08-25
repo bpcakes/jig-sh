@@ -1,6 +1,9 @@
 use std::process::{Command, Stdio};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
+
+use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
 
 use super::*;
 
@@ -8,6 +11,9 @@ pub(super) struct CommandToolInvocation<'a> {
     pub(super) tool_name: &'a str,
     pub(super) command_key: &'a str,
     pub(super) command_text: &'a str,
+    pub(super) working_directory: Option<&'a str>,
+    pub(super) environment: Option<&'a BTreeMap<String, String>>,
+    pub(super) timeout: Duration,
 }
 
 enum ConfiguredCommandOutcome {
@@ -42,14 +48,7 @@ pub(super) fn execute_command_tool(
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
     let started = now_ms();
-    let run_result = run_configured_command(
-        ctx,
-        invocation.tool_name,
-        invocation.command_text,
-        &args,
-        position,
-        observer,
-    );
+    let run_result = run_configured_command(ctx, &invocation, &args, position, observer);
     let ended = now_ms();
     let output = match run_result {
         Ok(ConfiguredCommandOutcome::Completed(output)) => output,
@@ -308,22 +307,32 @@ pub(super) fn maybe_record_receipt(
 
 fn run_configured_command(
     ctx: &RepoContext,
-    tool_name: &str,
-    command_text: &str,
+    invocation: &CommandToolInvocation<'_>,
     args: &Value,
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ConfiguredCommandOutcome> {
+    let working_directory =
+        resolve_repository_working_directory(ctx.root(), invocation.working_directory)?;
+    if let Some(environment) = invocation.environment {
+        validate_runner_environment(environment)?;
+    }
     let mut command = Command::new("bash");
     command
-        .current_dir(ctx.root())
+        .current_dir(working_directory)
         .arg("-c")
-        .arg(command_text)
+        .arg(invocation.command_text)
+        .envs(
+            invocation
+                .environment
+                .into_iter()
+                .flat_map(|environment| environment.iter()),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if tool_name == tool::MIGRATION_ADD {
+    if invocation.tool_name == tool::MIGRATION_ADD {
         let name = args
             .get(args::NAME)
             .and_then(Value::as_str)
@@ -331,11 +340,11 @@ fn run_configured_command(
         command.env("NAME", name);
     }
 
-    let phase = ExecutionPhase::start(observer, tool_name, position);
-    let label = format!("Configured command for {tool_name}");
+    let phase = ExecutionPhase::start(observer, invocation.tool_name, position);
+    let label = format!("Configured command for {}", invocation.tool_name);
     let result = match run_supervised_execution_command(
         &mut command,
-        ctx.command_timeout().duration(),
+        invocation.timeout,
         ctx.command_output_limit(),
         &label,
         observer,
@@ -351,7 +360,7 @@ fn run_configured_command(
         Err(SupervisedExecutionError::Cancelled) => Ok(ConfiguredCommandOutcome::Cancelled),
         Err(SupervisedExecutionError::TimedOut) => Err(anyhow!(
             "{label} timed out after {} seconds",
-            ctx.command_timeout().as_secs()
+            invocation.timeout.as_secs()
         )),
         Err(SupervisedExecutionError::OutputLimitExceeded {
             stream,

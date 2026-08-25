@@ -184,7 +184,7 @@ pub(crate) fn validate_contract(
             errors.push(error.to_string());
         }
     }
-    if ctx.contract_version() >= 6 {
+    let catalog = if ctx.contract_version() >= 6 {
         match crate::repository::RepositoryCatalog::from_context(ctx) {
             Ok(catalog) => {
                 for gate in ctx.work_gates() {
@@ -197,9 +197,17 @@ pub(crate) fn validate_contract(
                         errors.push(format!("Work gate '{}': {error}.", gate.id));
                     }
                 }
+                Some(catalog)
             }
-            Err(error) => errors.push(format!("Invalid repository model: {error}.")),
+            Err(error) => {
+                errors.push(format!("Invalid repository model: {error}."));
+                None
+            }
         }
+    } else {
+        None
+    };
+    if ctx.contract_version() >= 6 {
         for action in ctx.action_specs() {
             match &action.runner {
                 jig_contract::ActionRunner::Command { command, .. } => {
@@ -252,16 +260,52 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
-        if let Some(error) = jig_features::tool_admission_error(ctx, &tool.name) {
+        let alias_action = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.target_for_alias(&tool.name))
+            .and_then(|target| catalog.as_ref()?.action(target));
+        let native_operation = alias_action.and_then(|action| match &action.runner {
+            jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
+            jig_contract::ActionRunner::Command { .. } => None,
+        });
+        let admission_name = native_operation.unwrap_or(&tool.name);
+        if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
             errors.push(error);
         }
         match tool.kind.as_str() {
             kind::NATIVE => {
-                if !jig_features::is_supported_native_tool(&tool.name) {
-                    errors.push(format!("Unsupported native tool: {}.", tool.name));
+                if matches!(
+                    alias_action.map(|action| &action.runner),
+                    Some(jig_contract::ActionRunner::Command { .. })
+                ) {
+                    errors.push(format!(
+                        "Native tool {} aliases a command-backed action.",
+                        tool.name
+                    ));
+                    continue;
+                }
+                let operation = native_operation.unwrap_or(&tool.name);
+                if !jig_features::is_supported_native_tool(operation) {
+                    if operation == tool.name {
+                        errors.push(format!("Unsupported native tool: {}.", tool.name));
+                    } else {
+                        errors.push(format!(
+                            "Unsupported native operation {operation} for tool {}.",
+                            tool.name
+                        ));
+                    }
                 }
             }
             kind::COMMAND => {
+                if let Some(jig_contract::ActionRunner::Native { operation }) =
+                    alias_action.map(|action| &action.runner)
+                {
+                    errors.push(format!(
+                        "Command-backed tool {} aliases native operation {operation}.",
+                        tool.name
+                    ));
+                    continue;
+                }
                 let Some(command_key) = tool.command.as_deref().filter(|key| !key.is_empty())
                 else {
                     errors.push(format!(
@@ -270,6 +314,15 @@ pub(crate) fn validate_contract(
                     ));
                     continue;
                 };
+                if let Some(jig_contract::ActionRunner::Command { command, .. }) =
+                    alias_action.map(|action| &action.runner)
+                    && command != command_key
+                {
+                    errors.push(format!(
+                        "Command-backed tool {} projects command {command_key}, but its owning action uses {command}.",
+                        tool.name
+                    ));
+                }
                 if !ctx
                     .required_commands()
                     .iter()
@@ -321,25 +374,26 @@ pub(crate) use migration_add::migration_add;
 
 #[cfg(test)]
 pub(crate) fn schema_check(ctx: &RepoContext) -> Result<NativeToolOutput> {
-    schema_check_with_observer(ctx, None, &mut NoopExecutionObserver)
-        .map_err(ExecutionCommandError::into_anyhow)
+    schema_check_with_observer_and_timeout(
+        ctx,
+        None,
+        ctx.command_timeout().duration(),
+        &mut NoopExecutionObserver,
+    )
+    .map_err(ExecutionCommandError::into_anyhow)
 }
 
-pub(crate) fn schema_check_with_observer(
+pub(crate) fn schema_check_with_observer_and_timeout(
     ctx: &RepoContext,
     schema_check_target: Option<&jig_contract::TargetId>,
+    timeout: Duration,
     observer: &mut dyn ExecutionControl,
 ) -> std::result::Result<NativeToolOutput, ExecutionCommandError> {
     if observer.cancelled() {
         return Err(ExecutionCommandError::CancelledBeforeStart);
     }
-    schema::check_with_control(
-        ctx,
-        schema_check_target,
-        ctx.command_timeout().duration(),
-        &|| observer.cancelled(),
-    )
-    .map_err(|error| schema_execution_error(error, ctx.command_timeout().as_secs()))
+    schema::check_with_control(ctx, schema_check_target, timeout, &|| observer.cancelled())
+        .map_err(|error| schema_execution_error(error, timeout.as_secs()))
 }
 
 pub(crate) fn schema_check_with_control(

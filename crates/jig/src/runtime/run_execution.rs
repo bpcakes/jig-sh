@@ -3,7 +3,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use jig_contract::{
     ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser, RunConclusion, RunPlan,
     RunStatus, TargetId, TargetRunResult,
@@ -18,7 +18,7 @@ use crate::execution::{
     PhasePosition, SupervisedExecutionError, run_supervised_execution_command,
 };
 use crate::repository::{RepositoryCatalog, target_input_digest};
-use crate::repository_path::resolve_repository_working_directory;
+use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
 use crate::state::{
     ReceiptInput, TargetReceiptMetadata, complete_run, mark_run_running, mark_target_started,
     now_ms, record_target_receipt, record_target_result, run_by_id, start_run,
@@ -595,7 +595,7 @@ fn run_command_target(
                 .with_command_key(command_key);
             }
         };
-    if let Err(error) = validate_environment(environment) {
+    if let Err(error) = validate_runner_environment(environment) {
         return TargetCapture::blocked(format!(
             "target '{}' has an invalid runner environment: {error:#}",
             planned.target
@@ -682,18 +682,6 @@ fn run_command_target(
             .with_command_key(command_key)
         }
     }
-}
-
-fn validate_environment(environment: &BTreeMap<String, String>) -> Result<()> {
-    for (name, value) in environment {
-        if name.is_empty() || name.contains(['=', '\0']) {
-            bail!("environment variable name {name:?} is invalid");
-        }
-        if value.contains('\0') {
-            bail!("environment variable {name:?} contains a NUL byte");
-        }
-    }
-    Ok(())
 }
 
 mod target_result;
