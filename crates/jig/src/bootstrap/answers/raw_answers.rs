@@ -439,8 +439,19 @@ impl RawAnswers {
         vault::apply_existing_default(&mut self.vault, destination)
     }
 
-    pub(super) fn resolve(mut self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
+    pub(super) fn resolve(self, default_repo_name: Option<String>) -> Result<RenderAnswers> {
+        self.resolve_with_authored_repository(default_repo_name, None)
+    }
+
+    pub(super) fn resolve_with_authored_repository(
+        mut self,
+        default_repo_name: Option<String>,
+        authored_repository: Option<AuthoredRepositoryModel>,
+    ) -> Result<RenderAnswers> {
         self.normalize_app_dirs()?;
+        let authored_has_rust_backend = authored_repository
+            .as_ref()
+            .is_some_and(|model| model.has_adapter("rust") || model.has_adapter("sqlx"));
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
         let repo_name = self
@@ -450,7 +461,7 @@ impl RawAnswers {
             .ok_or_else(|| anyhow::anyhow!("Missing required answer: repo_name"))?;
         let sqlx_enabled = self.sqlx_enabled.unwrap_or(true);
         let rust_migration_layout = self.rust_migration_layout.unwrap_or_default();
-        if backend_language.is_go() && sqlx_enabled {
+        if backend_language.is_go() && sqlx_enabled && !authored_has_rust_backend {
             bail!(
                 "backend_language = \"go\" cannot be combined with sqlx_enabled = true; Go repositories use --go-database and Goose/sqlc, while SQLx is owned by the Rust backend"
             );
@@ -538,7 +549,7 @@ impl RawAnswers {
         };
 
         Ok(RenderAnswers {
-            authored_repository: None,
+            authored_repository,
             authored_repository_commands: BTreeMap::new(),
             scaffolded_frontend_contracts: false,
             go_postgres_integration_script: false,
@@ -556,7 +567,9 @@ impl RawAnswers {
             go_database,
             go_toolchain_authority_path: GO_TOOLCHAIN_AUTHORITY_PATH,
             sqlx_enabled,
-            rust_crate_roots: if backend_language == BackendLanguage::Go {
+            rust_crate_roots: if backend_language == BackendLanguage::Go
+                && !authored_has_rust_backend
+            {
                 Vec::new()
             } else {
                 self.rust_crate_roots

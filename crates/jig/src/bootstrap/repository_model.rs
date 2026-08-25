@@ -77,6 +77,18 @@ pub(super) struct AuthoredRepositoryModel {
     pub(super) profiles: Vec<ProfileSpec>,
 }
 
+impl AuthoredRepositoryModel {
+    pub(super) fn is_complete(&self) -> bool {
+        !self.components.is_empty() && !self.actions.is_empty() && !self.profiles.is_empty()
+    }
+
+    pub(super) fn has_adapter(&self, expected: &str) -> bool {
+        self.components
+            .iter()
+            .any(|component| component.adapters.iter().any(|adapter| adapter == expected))
+    }
+}
+
 #[derive(Serialize)]
 struct AuthoredRepositoryDocument<'a> {
     repository: AuthoredRepository<'a>,

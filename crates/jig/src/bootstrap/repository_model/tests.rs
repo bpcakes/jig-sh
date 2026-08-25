@@ -499,7 +499,7 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     fs::write(
             &path,
         format!(
-                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = true\nmigration_dir = \"database/migrations\"\nschema_dump_enabled = false\n{}\n{}",
+                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = true\nrust_crate_roots = [\"services/worker\"]\nmigration_dir = \"database/migrations\"\nschema_dump_enabled = false\n{}\n{}",
                 authored.authored_toml().unwrap(),
                 authored.commands_toml().unwrap()
             ),
@@ -510,6 +510,10 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     assert!(answers.go_backend_enabled());
     assert!(answers.rust_backend_enabled());
     assert!(answers.sqlx_enabled());
+    assert_eq!(
+        serde_json::to_value(&answers).unwrap()["rust_crate_roots"],
+        serde_json::json!(["services/worker"])
+    );
     assert!(!answers.go_ci_workflow_enabled());
     assert!(!answers.rust_ci_workflow_enabled());
     assert!(

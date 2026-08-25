@@ -431,21 +431,20 @@ impl RenderAnswers {
     pub(super) fn from_answers_file(path: &Path) -> Result<Self> {
         let authored_repository_commands = authored_repository_commands(path)?;
         let mut raw = RawAnswers::from_file(path)?;
-        let authored_repository = raw.repository.take();
+        let authored_repository = raw
+            .repository
+            .take()
+            .filter(AuthoredRepositoryModel::is_complete)
+            .filter(|_| authored_repository_commands.is_some());
         raw.normalize_legacy_sqlx_disabled_schema_dump();
         raw.normalize_legacy_generated_cargo_command_defaults();
-        let mut answers = raw.resolve(None)?;
+        let mut answers = raw.resolve_with_authored_repository(None, authored_repository)?;
         answers.go_postgres_integration_script = path
             .parent()
             .is_some_and(has_go_postgres_integration_script);
         if let Some(authored_repository_commands) = authored_repository_commands
-            && authored_repository.as_ref().is_some_and(|repository| {
-                !repository.components.is_empty()
-                    && !repository.actions.is_empty()
-                    && !repository.profiles.is_empty()
-            })
+            && answers.authored_repository.is_some()
         {
-            answers.authored_repository = authored_repository;
             answers.authored_repository_commands = authored_repository_commands;
         }
         Ok(answers)
