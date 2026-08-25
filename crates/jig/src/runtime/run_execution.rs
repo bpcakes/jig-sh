@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use jig_contract::{
-    ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser, RunConclusion, RunPlan,
-    RunStatus, TargetId, TargetRunResult,
+    ActionEffect, ActionRunner, Finding, FindingSeverity, PlannedTarget, ResultParser,
+    RunConclusion, RunPlan, RunStatus, TargetId, TargetRunResult,
 };
 use jig_owned_process::OwnedProcessTreeError;
 use serde::Serialize;
@@ -19,10 +19,11 @@ use crate::execution::{
 };
 use crate::repository::{RepositoryCatalog, target_input_digest};
 use crate::repository_path::{resolve_repository_working_directory, validate_runner_environment};
+#[cfg(test)]
+use crate::state::start_run;
 use crate::state::{
     ReceiptInput, TargetReceiptMetadata, complete_run, mark_run_running, mark_target_started,
-    now_ms, record_target_receipt, record_target_result, run_by_id, start_run,
-    start_run_with_event_cursor,
+    now_ms, record_target_receipt, record_target_result, run_by_id,
 };
 
 use super::tool_execution::run_native_tool_with_control;
@@ -37,10 +38,17 @@ pub(super) struct CheckRunExecution {
     pub(super) source_observations: SourceObservationMetrics,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub(super) struct SourceObservationMetrics {
     count: usize,
     elapsed_ms: u64,
+}
+
+impl SourceObservationMetrics {
+    fn add(&mut self, other: Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.elapsed_ms = self.elapsed_ms.saturating_add(other.elapsed_ms);
+    }
 }
 
 pub(super) struct ExecuteCheckRunRequest {
@@ -75,6 +83,8 @@ pub(super) fn execute_freshly_planned_check_run(
     request: ExecuteCheckRunRequest,
     observer: &mut dyn ExecutionControl,
 ) -> Result<CheckRunExecution> {
+    let repository_execution =
+        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
     crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     // A nonempty run gets the same source check from its first target
     // precondition. An empty affected plan has no such target, so it must prove
@@ -83,7 +93,12 @@ pub(super) fn execute_freshly_planned_check_run(
         crate::repository::validate_run_plan_source(ctx, &plan)?;
         crate::repository::validate_current_repository_authority(ctx, &plan.config_digest)?;
     }
-    let (run, _lease) = start_run(ctx, plan, request.work_plan_id.clone())?;
+    let (run, _lease) = crate::state::start_run_with_execution_lease(
+        ctx,
+        plan,
+        request.work_plan_id.clone(),
+        repository_execution,
+    )?;
     let mut control = ObservedRunControl { observer };
     execute_started_check_run_with_control(ctx, catalog, run, request, &mut control)
 }
@@ -95,8 +110,10 @@ pub(super) fn start_check_run(
     plan: RunPlan,
     work_plan_id: Option<String>,
 ) -> Result<(crate::state::DurableRun, crate::state::RunLease)> {
+    let repository_execution =
+        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    start_run(ctx, plan, work_plan_id)
+    crate::state::start_run_with_execution_lease(ctx, plan, work_plan_id, repository_execution)
 }
 
 pub(super) fn start_check_run_with_event_cursor(
@@ -109,8 +126,15 @@ pub(super) fn start_check_run_with_event_cursor(
     crate::state::RunLease,
     crate::state::RunEventCursor,
 )> {
+    let repository_execution =
+        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
-    start_run_with_event_cursor(ctx, plan, work_plan_id)
+    crate::state::start_run_with_event_cursor_and_execution_lease(
+        ctx,
+        plan,
+        work_plan_id,
+        repository_execution,
+    )
 }
 
 pub(super) fn execute_started_check_run(
@@ -169,6 +193,7 @@ fn execute_started_check_run_inner(
     let mut stop_after_failure = false;
     let mut source_epoch =
         ExecutionSourceEpoch::from_plan(run.plan.source.worktree_fingerprint.clone());
+    let mut parallel_source_observations = SourceObservationMetrics::default();
     let finisher = TargetFinisher {
         ctx,
         catalog,
@@ -180,9 +205,63 @@ fn execute_started_check_run_inner(
     let mut target_index = 0;
 
     for layer in &run.plan.execution_layers {
-        for target_id in layer {
+        let planned_layer = layer
+            .iter()
+            .map(|target| planned_target(&run.plan, target))
+            .collect::<Result<Vec<_>>>()?;
+        let can_run_concurrently = !request.fail_fast
+            && !stop_after_failure
+            && planned_layer.len() > 1
+            && planned_layer.iter().all(|planned| {
+                planned.intent == jig_contract::ActionIntent::Check
+                    && planned.effects.contains(&ActionEffect::ReadOnly)
+                    && !planned.effects.contains(&ActionEffect::Worktree)
+                    && !planned.effects.contains(&ActionEffect::External)
+                    && planned.depends_on.iter().all(|dependency| {
+                        conclusions.get(dependency) == Some(&RunConclusion::Success)
+                    })
+            });
+        if can_run_concurrently {
+            let positioned = planned_layer
+                .iter()
+                .enumerate()
+                .map(|(offset, planned)| {
+                    let position = PhasePosition::new(target_index + offset + 1, target_count)
+                        .expect("planned target position must be valid");
+                    (*planned, position)
+                })
+                .collect::<Vec<_>>();
+            target_index += positioned.len();
+            let outcomes =
+                execute_parallel_read_only_layer(ctx, catalog, &run, control, &positioned)?;
+            for ((target_id, planned), outcome) in
+                layer.iter().zip(planned_layer.iter()).zip(outcomes)
+            {
+                parallel_source_observations.add(outcome.source_observations);
+                let (result, compatibility) = finisher.finish(
+                    planned,
+                    outcome.started_at_ms,
+                    outcome.capture,
+                    outcome.fingerprint,
+                )?;
+                record_finished_target(
+                    ctx,
+                    &run_id,
+                    target_id,
+                    result,
+                    compatibility,
+                    request.fail_fast,
+                    &mut conclusions,
+                    &mut failed_targets,
+                    &mut compatibility_results,
+                    &mut stop_after_failure,
+                )?;
+            }
+            continue;
+        }
+
+        for (target_id, planned) in layer.iter().zip(planned_layer) {
             target_index += 1;
-            let planned = planned_target(&run.plan, target_id)?;
             let dependency_failed = planned.depends_on.iter().any(|dependency| {
                 conclusions
                     .get(dependency)
@@ -257,21 +336,18 @@ fn execute_started_check_run_inner(
                 finisher.finish(planned, Some(started_at_ms), capture, fingerprint)?
             };
 
-            let conclusion = result
-                .conclusion
-                .expect("finished target results always have a conclusion");
-            conclusions.insert(target_id.clone(), conclusion);
-            if matches!(
-                conclusion,
-                RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
-            ) {
-                failed_targets.push(target_id.clone());
-                stop_after_failure |= request.fail_fast;
-            }
-            record_target_result(ctx, &run_id, result)?;
-            if let Some(compatibility) = compatibility {
-                compatibility_results.push(compatibility);
-            }
+            record_finished_target(
+                ctx,
+                &run_id,
+                target_id,
+                result,
+                compatibility,
+                request.fail_fast,
+                &mut conclusions,
+                &mut failed_targets,
+                &mut compatibility_results,
+                &mut stop_after_failure,
+            )?;
         }
     }
 
@@ -281,7 +357,8 @@ fn execute_started_check_run_inner(
     }
     let conclusion = aggregate_conclusion(conclusions.values().copied());
     complete_run(ctx, &run_id, conclusion)?;
-    let source_observations = source_epoch.metrics();
+    let mut source_observations = source_epoch.metrics();
+    source_observations.add(parallel_source_observations);
     debug_assert!(source_observations.count <= target_count.saturating_mul(2));
     Ok(CheckRunExecution {
         run: run_by_id(ctx, &run_id)?,
@@ -290,6 +367,40 @@ fn execute_started_check_run_inner(
         source_observations,
     })
 }
+
+#[allow(clippy::too_many_arguments)]
+fn record_finished_target(
+    ctx: &RepoContext,
+    run_id: &str,
+    target_id: &TargetId,
+    result: TargetRunResult,
+    compatibility: Option<Value>,
+    fail_fast: bool,
+    conclusions: &mut BTreeMap<TargetId, RunConclusion>,
+    failed_targets: &mut Vec<TargetId>,
+    compatibility_results: &mut Vec<Value>,
+    stop_after_failure: &mut bool,
+) -> Result<()> {
+    let conclusion = result
+        .conclusion
+        .expect("finished target results always have a conclusion");
+    conclusions.insert(target_id.clone(), conclusion);
+    if matches!(
+        conclusion,
+        RunConclusion::Failure | RunConclusion::TimedOut | RunConclusion::Blocked
+    ) {
+        failed_targets.push(target_id.clone());
+        *stop_after_failure |= fail_fast;
+    }
+    record_target_result(ctx, run_id, result)?;
+    if let Some(compatibility) = compatibility {
+        compatibility_results.push(compatibility);
+    }
+    Ok(())
+}
+
+mod parallel;
+use parallel::*;
 
 pub(super) fn block_started_check_run(
     ctx: &RepoContext,

@@ -108,6 +108,50 @@ fn mcp_repository_cancel_is_cooperative_idempotent_and_cleans_registry() {
 }
 
 #[test]
+fn parallel_read_only_layer_observes_mcp_cancellation() {
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("printf 'api tests passed\\n'", "sleep 30")
+        .replace("printf 'web tests passed\\n'", "sleep 30");
+    fs::write(&config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({})).unwrap();
+    assert_eq!(
+        planned["plan"]["execution_layers"][0]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let accepted = call_tool(
+        &ctx,
+        tool::EXECUTE_RUN,
+        json!({"plan": planned["plan"].clone()}),
+    )
+    .unwrap();
+    let run_id = accepted["run_id"].as_str().unwrap();
+
+    call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": run_id})).unwrap();
+    let terminal = wait_for_repository_run(&ctx, run_id);
+
+    assert_eq!(
+        terminal["result"]["run"]["result"]["conclusion"],
+        "cancelled"
+    );
+    assert!(
+        terminal["result"]["run"]["result"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|target| target["conclusion"] == "cancelled")
+    );
+}
+
+#[test]
 fn active_plan_linked_mcp_run_blocks_plan_close_until_terminal() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
@@ -162,6 +206,60 @@ fn active_plan_linked_mcp_run_blocks_plan_close_until_terminal() {
         },
     )
     .unwrap();
+}
+
+#[test]
+fn concurrent_worktree_runs_serialize_before_revalidating_source() {
+    use std::sync::mpsc;
+
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    add_v6_effectful_evidence_actions(temp.path());
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "api_test_command = \"printf 'api tests passed\\n'\"",
+        "api_test_command = \"if [ -f .agent/.cache/generator-active ]; then printf 'overlap\\n' > overlap.txt; fi; touch .agent/.cache/generator-active; sleep 1; printf 'generated\\n' >> api/generated.txt; rm -f .agent/.cache/generator-active\"",
+    );
+    fs::write(config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let planned = call_tool(&ctx, tool::PLAN_RUN, json!({"selectors": ["api:generate"]})).unwrap();
+    let execute_args = json!({
+        "plan": planned["plan"].clone(),
+        "approved_effects": ["worktree"]
+    });
+    let first = call_tool(&ctx, tool::EXECUTE_RUN, execute_args.clone()).unwrap();
+    let first_run_id = first["run_id"].as_str().unwrap();
+    let marker = temp.path().join(".agent/.cache/generator-active");
+    let marker_deadline = Instant::now() + Duration::from_secs(2);
+    while !marker.exists() {
+        assert!(
+            Instant::now() < marker_deadline,
+            "first worktree run did not start"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let second_ctx = ctx.clone();
+    let (second_tx, second_rx) = mpsc::channel();
+    thread::spawn(move || {
+        second_tx
+            .send(call_tool(&second_ctx, tool::EXECUTE_RUN, execute_args))
+            .unwrap();
+    });
+
+    let first_terminal = wait_for_repository_run(&ctx, first_run_id);
+    assert_eq!(
+        first_terminal["result"]["run"]["result"]["conclusion"],
+        "success"
+    );
+    let second_error = second_rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(second_error.contains("stale"), "{second_error}");
+    assert!(!temp.path().join("overlap.txt").exists());
 }
 
 #[test]

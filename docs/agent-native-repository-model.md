@@ -185,12 +185,16 @@ building a second one.
 Execution verifies the complete repository source before and after each
 started target so a read-only target cannot silently mutate inputs used by a
 later target. An adjacent read-only target reuses the preceding postcondition;
-worktree-mutating targets and unobserved gaps take a fresh precondition. The
-execution phase therefore performs at most two source observations per started
-target and reports their actual `count` and `elapsed_ms` as
-`source_observations` in structured check output. This cost is intentionally
-linear in executed targets because coalescing postconditions would lose exact
-effect attribution and could let a later target run against mutated source.
+concurrent read-only targets, worktree-mutating targets, and unobserved gaps
+take independent preconditions. Every run also holds a checkout-wide execution
+lease: safe read-only runs share it, while worktree, external, and otherwise
+effectful runs hold it exclusively from freshness validation through terminal
+execution. The execution phase therefore performs at most two source
+observations per started target and reports their actual `count` and
+`elapsed_ms` as `source_observations` in structured check output. This cost is
+intentionally linear in executed targets because coalescing postconditions
+would lose exact effect attribution and could let a later target run against
+mutated source.
 
 ## Human command-line experience
 
@@ -218,11 +222,14 @@ Affected planning is available only to component-native contract-v6
 repositories, where the required inputs and propagation policy are inspectable.
 The same request and reasons are available through CLI JSON and `jig.plan_run`.
 
-Independent checks are grouped into dependency layers and currently run in a
-deterministic sequence within each layer. All failures are collected by default
-so a developer or agent can repair a complete batch; `--fail-fast` is an
-explicit override. CI does not silently choose different targets; it selects a
-checked-in profile or the same explicit selectors.
+Independent safe read-only checks run concurrently within each dependency
+layer, with at most eight target workers and deterministic result recording
+after the layer joins. Layers containing effectful actions remain sequential.
+All failures are collected by default so a developer or agent can repair a
+complete batch; `--fail-fast` is an explicit override that preserves strict
+stop-after-first-failure behavior by running sequentially. CI does not silently
+choose different targets; it selects a checked-in profile or the same explicit
+selectors.
 
 `jig info` is the static discovery surface for workspace, component, action,
 target, profile, and configuration provenance. `jig status` is the dynamic

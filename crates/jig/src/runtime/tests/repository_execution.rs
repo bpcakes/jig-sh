@@ -337,6 +337,86 @@ fn repository_affected_check_rejects_legacy_contracts_before_git_resolution() {
 }
 
 #[test]
+fn independent_read_only_layer_targets_execute_concurrently() {
+    #[derive(Default)]
+    struct RecordingObserver {
+        started: Vec<String>,
+        finished: Vec<String>,
+    }
+
+    impl crate::execution::ExecutionObserver for RecordingObserver {
+        fn event(&mut self, event: crate::execution::ExecutionEvent<'_>) {
+            match event {
+                crate::execution::ExecutionEvent::PhaseStarted { label, .. } => {
+                    self.started.push(label.to_owned());
+                }
+                crate::execution::ExecutionEvent::PhaseFinished { label, .. } => {
+                    self.finished.push(label.to_owned());
+                }
+                crate::execution::ExecutionEvent::Output { .. }
+                | crate::execution::ExecutionEvent::Heartbeat { .. } => {}
+            }
+        }
+    }
+
+    impl crate::execution::ExecutionCancellation for RecordingObserver {}
+
+    let temp = tempdir().unwrap();
+    write_v6_evidence_fixture_repo(temp.path(), "");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"touch .agent/.cache/api-started; for attempt in $(seq 1 200); do [ -f .agent/.cache/web-started ] && exit 0; sleep 0.01; done; exit 9\"",
+        )
+        .replace(
+            "web_test_command = \"printf 'web tests passed\\n'\"",
+            "web_test_command = \"touch .agent/.cache/web-started; for attempt in $(seq 1 200); do [ -f .agent/.cache/api-started ] && exit 0; sleep 0.01; done; exit 9\"",
+        );
+    fs::write(config_path, config).unwrap();
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let catalog = crate::repository::RepositoryCatalog::from_context(&ctx).unwrap();
+    let plan =
+        crate::repository::plan_run(&ctx, &catalog, crate::repository::PlanRunRequest::default())
+            .unwrap();
+    assert_eq!(plan.execution_layers.len(), 1);
+    assert_eq!(plan.execution_layers[0].len(), 2);
+    let mut observer = RecordingObserver::default();
+
+    let execution = super::run_execution::execute_freshly_planned_check_run(
+        &ctx,
+        &catalog,
+        plan,
+        super::run_execution::ExecuteCheckRunRequest {
+            work_plan_id: None,
+            record_receipts: false,
+            fail_fast: false,
+        },
+        &mut observer,
+    )
+    .unwrap();
+
+    assert_eq!(
+        execution.run.result.conclusion,
+        Some(jig_contract::RunConclusion::Success)
+    );
+    assert_eq!(
+        execution
+            .run
+            .result
+            .targets
+            .iter()
+            .map(|target| target.target.to_string())
+            .collect::<Vec<_>>(),
+        ["api:test", "web:test"]
+    );
+    assert_eq!(observer.started.len(), 2);
+    assert_eq!(observer.finished.len(), 2);
+}
+
+#[test]
 fn repository_execution_records_cancelled_results_for_every_target() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
@@ -600,7 +680,10 @@ fn plain_v6_named_test_routes_through_repository_planning_for_every_component() 
             json!({"component": "web", "action": "test"}),
         ]
     );
-    assert_eq!(output["source_observations"]["count"], 3);
+    assert_eq!(
+        output["source_observations"]["count"], 4,
+        "parallel targets each require an independent before/after source observation"
+    );
 }
 
 #[cfg(unix)]

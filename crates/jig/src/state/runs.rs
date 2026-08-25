@@ -63,6 +63,7 @@ pub(crate) struct RunLease {
     // lock a new inode while an inspector still holds the old inode.
     _file: File,
     _work_plan: Option<super::plans::ActivePlanRunLease>,
+    _repository_execution: Option<super::RepositoryExecutionLease>,
 }
 
 #[derive(Deserialize)]
@@ -90,19 +91,48 @@ pub(crate) fn run_cancel_requested_since(
     Ok(requested)
 }
 
+#[cfg(test)]
 pub(crate) fn start_run(
     ctx: &RepoContext,
     plan: RunPlan,
     work_plan_id: Option<String>,
 ) -> Result<(DurableRun, RunLease)> {
-    let (run, lease, _) = start_run_with_event_cursor(ctx, plan, work_plan_id)?;
+    let repository_execution =
+        super::execution_leases::acquire_repository_execution_lease(ctx, &plan.effects)?;
+    start_run_with_execution_lease(ctx, plan, work_plan_id, repository_execution)
+}
+
+pub(crate) fn start_run_with_execution_lease(
+    ctx: &RepoContext,
+    plan: RunPlan,
+    work_plan_id: Option<String>,
+    repository_execution: super::RepositoryExecutionLease,
+) -> Result<(DurableRun, RunLease)> {
+    let (run, lease, _) = start_run_with_event_cursor_and_execution_lease(
+        ctx,
+        plan,
+        work_plan_id,
+        repository_execution,
+    )?;
     Ok((run, lease))
 }
 
+#[cfg(test)]
 pub(crate) fn start_run_with_event_cursor(
     ctx: &RepoContext,
     plan: RunPlan,
     work_plan_id: Option<String>,
+) -> Result<(DurableRun, RunLease, RunEventCursor)> {
+    let repository_execution =
+        super::execution_leases::acquire_repository_execution_lease(ctx, &plan.effects)?;
+    start_run_with_event_cursor_and_execution_lease(ctx, plan, work_plan_id, repository_execution)
+}
+
+pub(crate) fn start_run_with_event_cursor_and_execution_lease(
+    ctx: &RepoContext,
+    plan: RunPlan,
+    work_plan_id: Option<String>,
+    repository_execution: super::RepositoryExecutionLease,
 ) -> Result<(DurableRun, RunLease, RunEventCursor)> {
     validate_run_plan_structure(&plan)?;
     ensure_state_layout(ctx)?;
@@ -113,6 +143,7 @@ pub(crate) fn start_run_with_event_cursor(
     let run_id = new_id("run");
     let mut lease = acquire_run_lease(ctx, &run_id)?;
     lease._work_plan = work_plan_lease;
+    lease._repository_execution = Some(repository_execution);
     let timestamp_ms = now_ms();
     let event_cursor = append_event_with_cursor(
         ctx,
@@ -215,6 +246,7 @@ fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     Ok(RunLease {
         _file: file,
         _work_plan: None,
+        _repository_execution: None,
     })
 }
 
@@ -230,6 +262,7 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
             let _lease = RunLease {
                 _file: file,
                 _work_plan: None,
+                _repository_execution: None,
             };
             let current = run_by_id(ctx, run_id)?;
             if current.result.status != RunStatus::Completed {

@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::tool_defs::tool;
 
+pub(crate) use execution_leases::{RepositoryExecutionLease, acquire_repository_execution_lease};
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;
@@ -40,8 +41,11 @@ use records::{PlanEvent, ReceiptRecord};
 pub(crate) use runs::{
     DurableRun, RunEventCursor, RunLease, block_nonterminal_run, complete_run, mark_run_running,
     mark_target_started, reconcile_run_for_inspection, record_target_result, request_run_cancel,
-    run_by_id, run_cancel_requested_since, start_run, start_run_with_event_cursor,
+    run_by_id, run_cancel_requested_since, start_run_with_event_cursor_and_execution_lease,
+    start_run_with_execution_lease,
 };
+#[cfg(test)]
+pub(crate) use runs::{start_run, start_run_with_event_cursor};
 #[cfg(test)]
 use sessions::build_summary;
 pub(crate) use sessions::current_session;
@@ -59,6 +63,7 @@ pub(crate) use timeline::{
 
 mod compression;
 mod diagnostics;
+mod execution_leases;
 mod jsonl;
 mod maintenance;
 mod plans;

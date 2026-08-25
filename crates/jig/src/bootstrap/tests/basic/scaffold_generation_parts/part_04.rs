@@ -483,6 +483,23 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         go_tests.matches("runs-on: \"ubuntu-latest\"").count(),
         1
     );
+    assert_eq!(
+        go_tests
+            .matches("actions-rust-lang/setup-rust-toolchain@v1")
+            .count(),
+        2,
+        "each job that invokes scripts/jig must provision Rust"
+    );
+    let postgres_job = &go_tests[go_tests.find("postgres-integration:").unwrap()..];
+    assert!(
+        postgres_job
+            .find("actions-rust-lang/setup-rust-toolchain@v1")
+            .unwrap()
+            < postgres_job
+                .find("name: Resolve Go toolchain version")
+                .unwrap(),
+        "the PostgreSQL job must provision Rust before invoking scripts/jig"
+    );
     assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
     assert!(!destination.join(".go-version").exists());
 
