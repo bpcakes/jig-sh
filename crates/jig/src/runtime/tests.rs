@@ -601,6 +601,7 @@ checks = ["jig.fmt_check", "jig.test"]
         .write();
     init_git_repo(temp.path());
     let ctx = RepoContext::load_from(temp.path()).unwrap();
+    crate::state::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
 
     let output = super::dispatch(
         &ctx,

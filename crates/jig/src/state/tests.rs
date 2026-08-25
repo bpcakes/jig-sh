@@ -927,6 +927,60 @@ fn plans_close_rejects_already_closed_plan() {
 }
 
 #[test]
+fn plans_close_rejects_an_active_linked_repository_run() {
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan = plans_open(
+        &ctx,
+        PlanOpenRequest {
+            title: "Run before close".into(),
+            body: Some("Initial body".into()),
+            body_file: None,
+        },
+    )
+    .unwrap();
+    let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+    let run_plan = jig_contract::RunPlan::new(
+        "run-plan_empty",
+        "sha256:config",
+        jig_contract::SourceIdentity::new(Some("abc".into()), "sha256:worktree"),
+        Vec::new(),
+        Vec::new(),
+    );
+    let (run, lease) = start_run(&ctx, run_plan, Some(plan_id.clone())).unwrap();
+
+    let error = plans_close(
+        &ctx,
+        PlanCloseRequest {
+            plan_id: plan_id.clone(),
+            resolution: Some("too early".into()),
+        },
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("active linked repository runs"), "{error}");
+    assert_eq!(plan_status(&ctx, &plan_id).unwrap(), Some(PlanStatus::Open));
+
+    complete_run(
+        &ctx,
+        &run.result.run_id,
+        jig_contract::RunConclusion::Success,
+    )
+    .unwrap();
+    drop(lease);
+    plans_close(
+        &ctx,
+        PlanCloseRequest {
+            plan_id,
+            resolution: Some("done".into()),
+        },
+    )
+    .unwrap();
+}
+
+#[test]
 fn plans_append_rejects_closed_plan() {
     let temp = tempdir().unwrap();
     write_fixture_repo(temp.path());

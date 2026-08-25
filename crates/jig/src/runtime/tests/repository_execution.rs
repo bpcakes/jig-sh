@@ -530,7 +530,7 @@ rust_test_command = "printf 'live stdout'; printf 'live stderr' >&2"
 }
 
 #[test]
-fn repository_command_target_streams_output_and_phases_through_execution_observer() {
+fn plain_v6_named_test_routes_through_repository_planning_for_every_component() {
     #[derive(Default)]
     struct RecordingObserver {
         output: Vec<u8>,
@@ -588,6 +588,18 @@ fn repository_command_target_streams_output_and_phases_through_execution_observe
     assert!(observer.started);
     assert!(observer.finished);
     assert_eq!(output["run"]["targets"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        output["run"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| target["target"].clone())
+            .collect::<Vec<_>>(),
+        [
+            json!({"component": "api", "action": "test"}),
+            json!({"component": "web", "action": "test"}),
+        ]
+    );
     assert_eq!(output["source_observations"]["count"], 3);
 }
 

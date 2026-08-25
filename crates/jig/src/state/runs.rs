@@ -62,6 +62,7 @@ pub(crate) struct RunLease {
     // an advisory-lock file after unlock permits another process to open and
     // lock a new inode while an inspector still holds the old inode.
     _file: File,
+    _work_plan: Option<super::plans::ActivePlanRunLease>,
 }
 
 #[derive(Deserialize)]
@@ -105,8 +106,13 @@ pub(crate) fn start_run_with_event_cursor(
 ) -> Result<(DurableRun, RunLease, RunEventCursor)> {
     validate_run_plan_structure(&plan)?;
     ensure_state_layout(ctx)?;
+    let work_plan_lease = work_plan_id
+        .as_deref()
+        .map(|plan_id| super::plans::acquire_active_plan_run_lease(ctx, plan_id))
+        .transpose()?;
     let run_id = new_id("run");
-    let lease = acquire_run_lease(ctx, &run_id)?;
+    let mut lease = acquire_run_lease(ctx, &run_id)?;
+    lease._work_plan = work_plan_lease;
     let timestamp_ms = now_ms();
     let event_cursor = append_event_with_cursor(
         ctx,
@@ -206,7 +212,10 @@ fn acquire_run_lease(ctx: &RepoContext, run_id: &str) -> Result<RunLease> {
     let file = open_run_lease(ctx, run_id)?;
     file.lock_exclusive()
         .with_context(|| format!("Failed to acquire worker lease for run '{run_id}'"))?;
-    Ok(RunLease { _file: file })
+    Ok(RunLease {
+        _file: file,
+        _work_plan: None,
+    })
 }
 
 pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
@@ -218,7 +227,10 @@ pub(crate) fn reconcile_run_for_inspection(ctx: &RepoContext, run_id: &str) -> R
     let file = open_run_lease(ctx, run_id)?;
     match file.try_lock_exclusive() {
         Ok(true) => {
-            let _lease = RunLease { _file: file };
+            let _lease = RunLease {
+                _file: file,
+                _work_plan: None,
+            };
             let current = run_by_id(ctx, run_id)?;
             if current.result.status != RunStatus::Completed {
                 block_nonterminal_run(

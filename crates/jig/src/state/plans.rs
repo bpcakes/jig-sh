@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use fs4::fs_std::FileExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -14,6 +16,16 @@ use super::jsonl::{append_jsonl, append_text, read_jsonl, read_jsonl_with_cancel
 use super::receipts::{StateToolReceipt, record_successful_state_tool};
 use super::records::PlanEvent;
 use super::support::{ensure_state_layout, new_id, now_ms, rel_path};
+
+const PLAN_EXECUTION_LEASE_DIR: &str = ".agent/.cache/plan-execution-leases";
+
+pub(super) struct ActivePlanRunLease {
+    _file: File,
+}
+
+struct PlanFinishLease {
+    _file: File,
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct PlanOpenRequest {
@@ -137,6 +149,11 @@ pub(crate) fn plans_append(ctx: &RepoContext, request: PlanAppendRequest) -> Res
 pub(crate) fn plans_close(ctx: &RepoContext, request: PlanCloseRequest) -> Result<Value> {
     ensure_state_layout(ctx)?;
     ensure_plan_is_open(ctx, &request.plan_id)?;
+    let _finish_lease = acquire_plan_finish_lease(ctx, &request.plan_id)?;
+    // A linked run that was waiting for the lease may have observed the plan
+    // before this closer won exclusivity. Recheck under the exclusive lease so
+    // no new linked run can cross the close transition.
+    ensure_plan_is_open(ctx, &request.plan_id)?;
 
     let event = PlanEvent::close(
         new_id("plan-event"),
@@ -166,6 +183,68 @@ pub(crate) fn plans_close(ctx: &RepoContext, request: PlanCloseRequest) -> Resul
         "plan_id": event.plan_id(),
         "receipt_id": receipt_id,
     }))
+}
+
+pub(super) fn acquire_active_plan_run_lease(
+    ctx: &RepoContext,
+    plan_id: &str,
+) -> Result<ActivePlanRunLease> {
+    let file = open_plan_execution_lease(ctx, plan_id)?;
+    FileExt::lock_shared(&file)
+        .with_context(|| format!("Failed to acquire execution lease for work plan '{plan_id}'"))?;
+    // Finish holds this lease exclusively across its final open-state check
+    // and close append. Acquiring shared first and checking second prevents a
+    // run from starting after the plan closes.
+    ensure_plan_is_open(ctx, plan_id)?;
+    Ok(ActivePlanRunLease { _file: file })
+}
+
+fn acquire_plan_finish_lease(ctx: &RepoContext, plan_id: &str) -> Result<PlanFinishLease> {
+    let file = open_plan_execution_lease(ctx, plan_id)?;
+    match FileExt::try_lock_exclusive(&file) {
+        Ok(true) => Ok(PlanFinishLease { _file: file }),
+        Ok(false) => bail!(
+            "Plan has active linked repository runs: {plan_id}; wait for them to finish or cancel them before retrying"
+        ),
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => bail!(
+            "Plan has active linked repository runs: {plan_id}; wait for them to finish or cancel them before retrying"
+        ),
+        Err(error) => Err(error)
+            .with_context(|| format!("Failed to inspect active runs for work plan '{plan_id}'")),
+    }
+}
+
+fn open_plan_execution_lease(ctx: &RepoContext, plan_id: &str) -> Result<File> {
+    validate_plan_id_for_lease(plan_id)?;
+    ensure_state_layout(ctx)?;
+    let lease_dir = ctx.root().join(PLAN_EXECUTION_LEASE_DIR);
+    fs::create_dir_all(&lease_dir)
+        .with_context(|| format!("Failed to create {}", lease_dir.display()))?;
+    let path = lease_dir.join(format!("{plan_id}.lock"));
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| {
+            format!(
+                "Failed to open work plan execution lease {}",
+                path.display()
+            )
+        })
+}
+
+fn validate_plan_id_for_lease(plan_id: &str) -> Result<()> {
+    if plan_id.is_empty()
+        || plan_id.len() > 128
+        || !plan_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        bail!("plan id cannot be used as a safe execution lease filename");
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_plan_is_open(ctx: &RepoContext, plan_id: &str) -> Result<()> {

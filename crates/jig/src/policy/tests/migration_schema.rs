@@ -122,6 +122,47 @@ fn v6_schema_check_rejects_an_invalid_dump_runner_environment() {
 }
 
 #[test]
+fn v6_schema_check_uses_the_dump_runner_schema_output_directory() {
+    let temp = tempdir().unwrap();
+    write_v6_schema_policy_repo(
+        temp.path(),
+        "true",
+        "mkdir -p \"$JIG_REPO_ROOT/$SCHEMA_DOCS_DIR\" && printf 'changed\\n' > \"$JIG_REPO_ROOT/$SCHEMA_DOCS_DIR/tables.sql\"",
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "SCHEMA_VALUE = \"changed\"",
+        "SCHEMA_VALUE = \"changed\", SCHEMA_DOCS_DIR = \"generated/schema\"",
+    );
+    fs::write(config_path, config).unwrap();
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["actions"][1]["runner"]["environment"]["SCHEMA_DOCS_DIR"] = json!("generated/schema");
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("generated/schema")).unwrap();
+    fs::write(temp.path().join("generated/schema/tables.sql"), "stable\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("Schema dump is stale"));
+    assert!(output.stderr.contains("generated/schema"));
+    assert_eq!(
+        fs::read_to_string(temp.path().join("generated/schema/tables.sql")).unwrap(),
+        "stable\n"
+    );
+}
+
+#[test]
 fn v6_repository_schema_failure_preserves_the_generator_exit_and_output() {
     let temp = tempdir().unwrap();
     write_v6_schema_policy_repo(

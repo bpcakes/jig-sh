@@ -99,6 +99,10 @@ impl TryFrom<CheckOpts> for command::CheckCommand {
                     tool: merge_tool_opts(tool, child.tool)?.into(),
                 }))
             }
+            // Preserve the named command DTO until runtime has loaded the
+            // repository contract. `dispatch_named_check` executes the legacy
+            // manifest tool only for v2-v5; v6 resolves this name as a
+            // repository selector so every component action is included.
             Some(command) => direct_check_command(command, tool),
         }
     }

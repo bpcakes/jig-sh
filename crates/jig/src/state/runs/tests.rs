@@ -34,6 +34,7 @@ fn plan() -> RunPlan {
 #[test]
 fn lifecycle_round_trips_from_append_only_events() {
     let (_temp, ctx) = context();
+    super::super::seed_open_plan_for_test(&ctx, "plan_work", "Work", "Body").unwrap();
     let (started, _lease) = start_run(&ctx, plan(), Some("plan_work".into())).unwrap();
     let run_id = started.result.run_id;
     let target: TargetId = "repo:test".parse().unwrap();

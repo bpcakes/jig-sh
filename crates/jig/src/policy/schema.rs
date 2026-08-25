@@ -40,8 +40,12 @@ pub(super) fn check_with_control(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<NativeToolOutput> {
     let runner = runner::resolve(ctx, schema_check_target)?;
-    let configured_schema_docs_dir =
-        env::var("SCHEMA_DOCS_DIR").unwrap_or_else(|_| "docs/schema".into());
+    let configured_schema_docs_dir = runner
+        .environment
+        .and_then(|environment| environment.get("SCHEMA_DOCS_DIR"))
+        .cloned()
+        .or_else(|| env::var("SCHEMA_DOCS_DIR").ok())
+        .unwrap_or_else(|| "docs/schema".into());
     let schema_docs_dir =
         normalize_repo_relative_path(Path::new(&configured_schema_docs_dir), "SCHEMA_DOCS_DIR")?;
     let schema_docs_dir = schema_docs_dir
