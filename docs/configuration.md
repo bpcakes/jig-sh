@@ -781,7 +781,7 @@ It also provides runtime-owned append-only memory under `.agent/state/*.jsonl` t
 - `scripts/jig state archive --before YYYY-MM-DD --dry-run`
 - `scripts/jig state archive --before YYYY-MM-DD`
 
-`work finish` closes the plan with `--resolution`. If an active session is also open, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`.
+`work finish` closes the plan with `--resolution`. If an active session is also open, it closes that session with `--outcome`; when `--outcome` is omitted, the session outcome falls back to `--resolution`. Gate evaluation and plan closure hold a shared checkout lease as one decision window, so an effectful repository action cannot invalidate accepted evidence immediately before the close commit point.
 
 Contract tools and work checks intentionally append receipts under `.agent/state/`.
 Read-only inspection commands such as `work status` and `work gates` do not add

@@ -208,6 +208,13 @@ fn execute_manifest_tool_with_options(
         bail!(error);
     }
     if let Some(action) = action {
+        // Contract-v6 actions are the authority for both dispatch and checkout
+        // effects, including compatibility aliases that do not enter through
+        // repository run planning. Keep the lease alive through runner
+        // execution and receipt recording so those aliases participate in the
+        // same checkout-wide isolation as planned runs.
+        let _repository_execution =
+            crate::state::acquire_repository_execution_lease(ctx, &action.effects)?;
         return match action.runner {
             ActionRunner::Native { operation } => execute_native_tool(
                 ctx,

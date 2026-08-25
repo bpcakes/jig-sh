@@ -189,7 +189,14 @@ concurrent read-only targets, worktree-mutating targets, and unobserved gaps
 take independent preconditions. Every run also holds a checkout-wide execution
 lease: safe read-only runs share it, while worktree, external, and otherwise
 effectful runs hold it exclusively from freshness validation through terminal
-execution. The execution phase therefore performs at most two source
+execution. Contract-v6 compatibility aliases acquire the same lease from their
+owning action's effects and retain it through receipt recording. Independent
+read-only members of one execution layer use a bounded worker pool and bounded,
+backpressured event and outcome queues; effectful and fail-fast layers remain
+sequential. `work finish` holds a shared checkout lease while it evaluates gate
+freshness and commits plan closure, preventing an effectful run from invalidating
+the evidence inside that decision window. The execution phase therefore
+performs at most two source
 observations per started target and reports their actual `count` and
 `elapsed_ms` as `source_observations` in structured check output. This cost is
 intentionally linear in executed targets because coalescing postconditions

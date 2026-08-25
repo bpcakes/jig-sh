@@ -139,7 +139,7 @@ pub(super) fn finish(ctx: &RepoContext, opts: WorkFinishRequest) -> Result<Value
     finish_with_cancellation(ctx, opts, &|| false)
 }
 
-fn finish_with_cancellation(
+pub(in crate::runtime) fn finish_with_cancellation(
     ctx: &RepoContext,
     opts: WorkFinishRequest,
     cancelled: &dyn Fn() -> bool,
@@ -148,6 +148,14 @@ fn finish_with_cancellation(
     // plan-state errors instead of misleading gate failures. plans_close
     // rechecks after gates to preserve the state-layer invariant.
     crate::state::ensure_plan_is_open(ctx, &opts.plan_id)?;
+    // Gate evidence and the source fingerprint it authenticates are a
+    // read-only view of the checkout. Retain a shared lease through the plan
+    // close commit point so an unrelated effectful run cannot make that view
+    // stale between the final fingerprint check and durable closure.
+    let _repository_execution = crate::state::acquire_repository_execution_lease(
+        ctx,
+        &[jig_contract::ActionEffect::ReadOnly],
+    )?;
     let evaluated_worktree_fingerprint =
         gates::ensure_required_gates_passed_with_cancellation(ctx, &opts.plan_id, cancelled)?;
     finish_after_required_gates_passed(ctx, opts, evaluated_worktree_fingerprint, cancelled)

@@ -46,6 +46,12 @@ inputs = ["api/**"]
         .unwrap()
         .push(json!("api_schema_dump_command"));
     manifest["components"][0]["adapters"] = json!(["go", "sqlx"]);
+    manifest["tools"].as_array_mut().unwrap().push(json!({
+        "name": "jig.schema_dump",
+        "kind": "command",
+        "description": "Dump the schema.",
+        "command": "api_schema_dump_command"
+    }));
     manifest["actions"].as_array_mut().unwrap().extend([
         json!({
             "target": {"component": "api", "action": "schema"},
@@ -167,6 +173,52 @@ fn explicit_schema_check_rejects_a_declared_worktree_effect() {
     .to_string();
 
     assert!(error.contains("not a read-only check"), "{error}");
+}
+
+#[test]
+fn effectful_v6_compatibility_alias_waits_for_checkout_readers() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    write_v6_schema_check_fixture(temp.path(), &["read_only", "process"]);
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let reader = crate::state::acquire_repository_execution_lease(
+        &ctx,
+        &[jig_contract::ActionEffect::ReadOnly],
+    )
+    .unwrap();
+    let worker_ctx = ctx;
+    let (attempting_tx, attempting_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            attempting_tx.send(()).unwrap();
+            result_tx
+                .send(super::super::dispatch(
+                    &worker_ctx,
+                    crate::command::RuntimeCommand::Sqlx(crate::command::SqlxCommand::SchemaDump(
+                        crate::command::ToolRequest::default(),
+                    )),
+                ))
+                .unwrap();
+        });
+
+        attempting_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        if let Ok(result) = result_rx.recv_timeout(Duration::from_millis(100)) {
+            panic!(
+                "effectful compatibility alias completed while a checkout reader was active: {result:#?}"
+            );
+        }
+        drop(reader);
+        let output = result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(output["ok"], true, "{output:#}");
+    });
 }
 
 #[test]
@@ -1552,6 +1604,75 @@ fn work_finish_allows_passing_required_gates() {
 
     assert_eq!(output["ok"], true);
     assert_eq!(output["plan"]["plan_id"], plan_id);
+}
+
+#[test]
+fn work_finish_holds_checkout_read_lease_through_plan_closure() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let temp = tempdir().unwrap();
+    write_fixture_repo(temp.path());
+    init_git_repo(temp.path());
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+    let plan_id = open_test_plan(&ctx);
+    dispatch(
+        &ctx,
+        CommandKind::Work(crate::cli::WorkCommand::Check(crate::cli::WorkCheckOpts {
+            plan_id: plan_id.clone(),
+            tools: Vec::new(),
+        })),
+    )
+    .unwrap();
+
+    let (start_writer_tx, start_writer_rx) = mpsc::channel();
+    let (attempting_tx, attempting_rx) = mpsc::channel();
+    let (observed_open_tx, observed_open_rx) = mpsc::channel();
+    let worker_root = temp.path().to_path_buf();
+    let worker_plan_id = plan_id.clone();
+    let triggered = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            start_writer_rx.recv().unwrap();
+            let worker_ctx = RepoContext::load_from(&worker_root).unwrap();
+            attempting_tx.send(()).unwrap();
+            let _writer = crate::state::acquire_repository_execution_lease(
+                &worker_ctx,
+                &[jig_contract::ActionEffect::Worktree],
+            )
+            .unwrap();
+            observed_open_tx
+                .send(crate::state::ensure_plan_is_open(&worker_ctx, &worker_plan_id).is_ok())
+                .unwrap();
+        });
+
+        let output = super::super::work::finish_with_cancellation(
+            &ctx,
+            crate::command::WorkFinishRequest {
+                plan_id: plan_id.clone(),
+                resolution: Some("done".into()),
+                outcome: Some("success".into()),
+            },
+            &|| {
+                if !triggered.swap(true, Ordering::AcqRel) {
+                    start_writer_tx.send(()).unwrap();
+                    attempting_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+                false
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output["ok"], true, "{output:#}");
+        assert!(
+            !observed_open_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap(),
+            "an effectful writer acquired the checkout before plan closure committed"
+        );
+    });
 }
 
 #[test]

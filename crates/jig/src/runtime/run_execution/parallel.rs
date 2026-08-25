@@ -6,6 +6,8 @@ use super::*;
 use crate::execution::ExecutionStream;
 
 const MAX_PARALLEL_LAYER_TARGETS: usize = 8;
+const PARALLEL_EVENT_QUEUE_CAPACITY: usize = 64;
+const MAX_EVENTS_PER_COORDINATOR_TICK: usize = 64;
 
 pub(super) struct ParallelTargetOutcome {
     pub(super) started_at_ms: Option<u64>,
@@ -24,9 +26,14 @@ pub(super) fn execute_parallel_read_only_layer(
     let cancellation = Arc::new(ParallelCancellationState::default());
     cancellation.update(control.cancelled());
     let next_target = AtomicUsize::new(0);
-    let (event_tx, event_rx) = mpsc::channel::<OwnedExecutionEvent>();
-    let (outcome_tx, outcome_rx) = mpsc::channel::<(usize, Result<ParallelTargetOutcome>)>();
     let worker_count = targets.len().min(MAX_PARALLEL_LAYER_TARGETS);
+    let (event_tx, event_rx) =
+        mpsc::sync_channel::<OwnedExecutionEvent>(PARALLEL_EVENT_QUEUE_CAPACITY);
+    // An outcome owns the target's bounded stdout/stderr capture, which can be
+    // large. Backpressure workers instead of allowing a second unbounded copy
+    // of the layer's completed results to accumulate in the channel.
+    let (outcome_tx, outcome_rx) =
+        mpsc::sync_channel::<(usize, Result<ParallelTargetOutcome>)>(worker_count.max(1));
 
     thread::scope(|scope| -> Result<Vec<ParallelTargetOutcome>> {
         let mut workers = Vec::with_capacity(worker_count);
@@ -64,7 +71,7 @@ pub(super) fn execute_parallel_read_only_layer(
 
         let mut outcomes = BTreeMap::new();
         while outcomes.len() < targets.len() {
-            replay_parallel_events(&event_rx, control);
+            replay_parallel_events(&event_rx, control, MAX_EVENTS_PER_COORDINATOR_TICK);
             cancellation.update(control.cancelled());
             match outcome_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok((index, outcome)) => {
@@ -79,7 +86,7 @@ pub(super) fn execute_parallel_read_only_layer(
                 .join()
                 .map_err(|_| anyhow::anyhow!("parallel repository target worker panicked"))?;
         }
-        replay_parallel_events(&event_rx, control);
+        drain_parallel_events(&event_rx, control);
 
         (0..targets.len())
             .map(|index| {
@@ -208,7 +215,7 @@ impl ParallelCancellationState {
 
 struct ParallelTargetControl {
     cancellation: Arc<ParallelCancellationState>,
-    events: mpsc::Sender<OwnedExecutionEvent>,
+    events: mpsc::SyncSender<OwnedExecutionEvent>,
 }
 
 impl ExecutionObserver for ParallelTargetControl {
@@ -308,6 +315,19 @@ impl OwnedExecutionEvent {
 }
 
 fn replay_parallel_events(
+    events: &mpsc::Receiver<OwnedExecutionEvent>,
+    control: &mut dyn RepositoryRunControl,
+    limit: usize,
+) {
+    for _ in 0..limit {
+        let Ok(event) = events.try_recv() else {
+            break;
+        };
+        event.replay(control);
+    }
+}
+
+fn drain_parallel_events(
     events: &mpsc::Receiver<OwnedExecutionEvent>,
     control: &mut dyn RepositoryRunControl,
 ) {
