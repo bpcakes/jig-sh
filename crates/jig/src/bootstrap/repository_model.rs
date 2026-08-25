@@ -124,7 +124,8 @@ impl RepositoryRenderModel {
         authored: &AuthoredRepositoryModel,
         authored_commands: &BTreeMap<String, String>,
     ) -> Result<Self> {
-        let mut commands = BTreeMap::new();
+        let commands = authored_commands.clone();
+        let mut required_commands = BTreeSet::new();
         let mut tools = BTreeMap::new();
         for action in &authored.actions {
             let (kind, command_key) = match &action.runner {
@@ -143,7 +144,7 @@ impl RepositoryRenderModel {
                             command
                         );
                     }
-                    commands.insert(command.clone(), value.clone());
+                    required_commands.insert(command.clone());
                     (kind::COMMAND, Some(command.as_str()))
                 }
                 ActionRunner::Native { .. } => (kind::NATIVE, None),
@@ -170,7 +171,7 @@ impl RepositoryRenderModel {
             actions: authored.actions.clone(),
             profiles: authored.profiles.clone(),
             default_check_profile: authored.default_check_profile.clone(),
-            required_commands: commands.keys().cloned().collect(),
+            required_commands: required_commands.into_iter().collect(),
             tools: tools.into_values().collect(),
             commands,
         })

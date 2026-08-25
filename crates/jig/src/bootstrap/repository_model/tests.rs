@@ -439,6 +439,45 @@ fn component_command_overrides_survive_v6_answer_reload() {
 }
 
 #[test]
+fn authored_repository_preserves_commands_that_are_not_action_dependencies() {
+    let initial = answers("");
+    let model = RepositoryRenderModel::from_answers(&initial).unwrap();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    let commands = model.commands_toml().unwrap().replacen(
+        "[commands]\n",
+        "[commands]\nrelease_command = \"just release\"\n",
+        1,
+    );
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
+            model.authored_toml().unwrap(),
+            commands
+        ),
+    )
+    .unwrap();
+
+    let reloaded = RenderAnswers::from_answers_file(&path).unwrap();
+    let rerendered = RepositoryRenderModel::from_answers(&reloaded).unwrap();
+
+    assert_eq!(
+        rerendered
+            .commands
+            .get("release_command")
+            .map(String::as_str),
+        Some("just release")
+    );
+    assert!(
+        !rerendered
+            .required_commands
+            .iter()
+            .any(|command| command == "release_command")
+    );
+}
+
+#[test]
 fn frontend_component_id_rejects_long_non_ascii_names_without_panicking() {
     let error = frontend_component_id(&"é".repeat(40))
         .unwrap_err()

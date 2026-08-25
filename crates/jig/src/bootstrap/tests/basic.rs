@@ -136,6 +136,7 @@ fn authored_mixed_repository_config() -> toml::Value {
 repo_bootstrap_command = "true"
 api_verify_command = "go test ./..."
 worker_verify_command = "cargo test -p worker"
+release_command = "just release"
 
 [repository]
 default_check_profile = "verify"

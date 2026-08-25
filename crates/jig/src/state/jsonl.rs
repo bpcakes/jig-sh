@@ -445,7 +445,7 @@ pub(super) fn read_jsonl_with_cancellation<T: DeserializeOwned>(
     }
 }
 
-fn opened_file_is_current(file: &File, path: &Path) -> Result<bool> {
+pub(super) fn opened_file_is_current(file: &File, path: &Path) -> Result<bool> {
     let opened = file
         .metadata()
         .with_context(|| format!("Failed to inspect open state file {}", path.display()))?;
@@ -463,7 +463,7 @@ fn opened_file_is_current(file: &File, path: &Path) -> Result<bool> {
 
 const DATA_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
-fn lock_existing_cache_with_cancellation(
+pub(super) fn lock_existing_cache_with_cancellation(
     path: &Path,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<File>> {

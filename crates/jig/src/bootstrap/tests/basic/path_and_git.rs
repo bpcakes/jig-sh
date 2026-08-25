@@ -256,6 +256,10 @@ fn run_init_preserves_an_authored_repository_from_its_answers_file() {
         rendered["commands"]["worker_verify_command"].as_str(),
         Some("cargo test -p worker")
     );
+    assert_eq!(
+        rendered["commands"]["release_command"].as_str(),
+        Some("just release")
+    );
 }
 
 #[test]

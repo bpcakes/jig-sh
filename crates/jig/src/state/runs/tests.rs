@@ -61,6 +61,32 @@ fn lifecycle_round_trips_from_append_only_events() {
 }
 
 #[test]
+fn reverse_lookup_reopens_the_run_journal_after_atomic_replacement() {
+    let (_temp, ctx) = context();
+    let (started, lease) = start_run(&ctx, plan(), None).unwrap();
+    let run_id = started.result.run_id;
+    complete_run(&ctx, &run_id, RunConclusion::Success).unwrap();
+    drop(lease);
+    let path = ctx.state_file(RUNS_FILE);
+    let mut replaced = false;
+
+    let events = read_run_events_reverse_with_lock(&path, &run_id, |file| {
+        if !replaced {
+            replaced = true;
+            with_jsonl_write_lock(&path, |guard| {
+                super::super::jsonl::write_jsonl_locked::<RunEventRecord>(guard, &path, &[])
+            })
+            .map_err(|error| std::io::Error::other(format!("{error:#}")))?;
+        }
+        fs4::fs_std::FileExt::lock_shared(file)
+    })
+    .unwrap();
+
+    assert!(replaced);
+    assert!(events.is_empty());
+}
+
+#[test]
 fn abandoned_run_recovery_preserves_a_prior_target_failure() {
     let (_temp, ctx) = context();
     let failed_target: TargetId = "repo:lint".parse().unwrap();

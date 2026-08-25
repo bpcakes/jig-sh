@@ -20,8 +20,8 @@ use crate::context::RepoContext;
 
 use super::jsonl::{
     JsonlWriteGuard, RawJsonlRecord, RawJsonlRewrite, append_jsonl, append_jsonl_with_end_offset,
-    rewrite_jsonl_raw_locked, scan_jsonl_raw, scan_jsonl_raw_from, scan_jsonl_raw_locked,
-    with_jsonl_write_lock,
+    lock_existing_cache_with_cancellation, opened_file_is_current, rewrite_jsonl_raw_locked,
+    scan_jsonl_raw, scan_jsonl_raw_from, scan_jsonl_raw_locked, with_jsonl_write_lock,
 };
 use super::records::RunEventRecord;
 use super::support::{ensure_state_layout, new_id, now_ms};
@@ -452,33 +452,76 @@ pub(crate) fn run_by_id(ctx: &RepoContext, run_id: &str) -> Result<DurableRun> {
 }
 
 fn read_run_events_reverse(path: &Path, run_id: &str) -> Result<Vec<RunEventRecord>> {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("Failed to open {}", path.display()));
-        }
-    };
+    read_run_events_reverse_with_lock(path, run_id, FileExt::lock_shared)
+}
+
+fn read_run_events_reverse_with_lock(
+    path: &Path,
+    run_id: &str,
+    mut lock_shared: impl FnMut(&File) -> io::Result<()>,
+) -> Result<Vec<RunEventRecord>> {
     loop {
-        match FileExt::lock_shared(&file) {
-            Ok(()) => break,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == io::ErrorKind::Unsupported => {
-                return read_run_events_forward(path, run_id);
-            }
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to shared-lock {}", path.display()));
+                return Err(error).with_context(|| format!("Failed to open {}", path.display()));
+            }
+        };
+        loop {
+            match lock_shared(&file) {
+                Ok(()) => break,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                    return read_run_events_forward(path, run_id);
+                }
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Failed to shared-lock {}", path.display()));
+                }
             }
         }
-    }
-    let result = scan_run_events_reverse(&file, path, run_id);
-    let unlock = FileExt::unlock(&file);
-    match (result, unlock) {
-        (Ok(events), Ok(())) => Ok(events),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => {
-            Err(error).with_context(|| format!("Failed to unlock {}", path.display()))
+
+        // Atomic archive and restore operations replace the journal while
+        // holding the stable cache lock. A reader may have opened the old
+        // inode before that replacement and acquired its data-file lock only
+        // after the writer finished, so coordinate with the cache lock and
+        // verify identity before scanning.
+        let cache_lock = match lock_existing_cache_with_cancellation(path, &|| false) {
+            Ok(lock) => lock,
+            Err(error) => {
+                let _ = FileExt::unlock(&file);
+                return Err(error);
+            }
+        };
+        let is_current = opened_file_is_current(&file, path);
+        let result = match is_current {
+            Ok(true) => Some(scan_run_events_reverse(&file, path, run_id)),
+            Ok(false) => None,
+            Err(error) => {
+                let _ = cache_lock.as_ref().map(FileExt::unlock);
+                let _ = FileExt::unlock(&file);
+                return Err(error);
+            }
+        };
+        let cache_unlock = cache_lock.as_ref().map(FileExt::unlock).unwrap_or(Ok(()));
+        let data_unlock = FileExt::unlock(&file);
+        match (result, cache_unlock, data_unlock) {
+            (Some(Ok(events)), Ok(()), Ok(())) => return Ok(events),
+            (Some(Err(error)), _, _) => return Err(error),
+            (Some(Ok(_)), Err(error), _) => {
+                return Err(error).context("Failed to unlock state cache file");
+            }
+            (Some(Ok(_)), Ok(()), Err(error)) => {
+                return Err(error).context("Failed to unlock state data file");
+            }
+            (None, Ok(()), Ok(())) => {}
+            (None, Err(error), _) => {
+                return Err(error).context("Failed to unlock stale state cache file");
+            }
+            (None, Ok(()), Err(error)) => {
+                return Err(error).context("Failed to unlock stale state data file");
+            }
         }
     }
 }
