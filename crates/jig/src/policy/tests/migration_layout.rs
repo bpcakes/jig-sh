@@ -191,3 +191,57 @@ fn migration_add_rejects_versioned_artifacts_before_creating_files() {
     );
     assert!(!temp.path().join("schema").exists());
 }
+
+#[test]
+fn v6_goose_owner_is_not_rejected_by_an_unrelated_versioned_sqlx_component() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "api");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "migration_dir = \"database/migrations\"",
+        "migration_dir = \"database/migrations\"\nrust_migration_layout = \"versioned_artifacts\"",
+    );
+    fs::write(config_path, config).unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    assert!(!jig_contract::FeatureContext::migration_add_enabled(&ctx));
+    assert!(jig_contract::FeatureContext::migration_authoring_enabled(
+        &ctx
+    ));
+    assert!(!jig_contract::FeatureContext::sqlx_owns_migration_authoring(&ctx));
+    assert!(jig_features::tool_admission_error(&ctx, tool::MIGRATION_ADD).is_none());
+}
+
+#[test]
+fn v6_missing_owner_reports_ownership_instead_of_a_sqlx_layout_error() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "worker");
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "operation = \"jig.migration_add\"",
+            "operation = \"jig.contract_check\"",
+        )
+        .replace(
+            "migration_dir = \"database/migrations\"",
+            "migration_dir = \"database/migrations\"\nrust_migration_layout = \"versioned_artifacts\"",
+        );
+    fs::write(config_path, config).unwrap();
+    let contract_path = temp.path().join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["actions"][0]["runner"]["operation"] = json!("jig.contract_check");
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    assert!(!ctx.sqlx_owns_migration_authoring());
+    let error = jig_features::tool_admission_error(&ctx, tool::MIGRATION_ADD).unwrap();
+
+    assert!(error.contains("no component owns native migration authoring"));
+    assert!(!error.contains("migration layout"));
+}

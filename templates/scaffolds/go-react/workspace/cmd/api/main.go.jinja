@@ -26,15 +26,15 @@ func main() {
 }
 
 func run() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
 [% if db_enabled %]	selectedCommand, err := parseCommand(os.Args[1:])
 	if err != nil {
 		return err
 	}
-[% endif %]	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+[% endif %]	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 [% if db_enabled %]	if selectedCommand == commandBootstrapDatabase {

@@ -407,13 +407,9 @@ pub(super) fn go_runtime_check(
     environment: &DoctorEnvironment,
     process_control: DoctorProcessControl<'_>,
 ) -> Option<DoctorCheck> {
-    if !ctx.is_go_backend() {
-        return None;
-    }
-    let authority_path = ctx.root().join(GO_TOOLCHAIN_AUTHORITY_PATH);
-    let required = match go_module_version_authority(&authority_path) {
-        Ok(Some(required)) => required,
-        Ok(None) => {
+    let authority_paths = match ctx.go_module_authority_paths() {
+        Ok(paths) => paths,
+        Err(error) => {
             return Some(
                 check(
                     "go_runtime",
@@ -421,32 +417,81 @@ pub(super) fn go_runtime_check(
                     true,
                     false,
                     "invalid authority",
-                    format!(
-                        "Go version authority {} is missing",
-                        authority_path.display()
-                    ),
+                    format!("Could not resolve Go module authority: {error}"),
                 )
                 .with_fix(
-                    "Restore the root go.mod with a numeric Go directive such as `go 1.26.0`.",
+                    "Correct the repository component roots, then rerun `scripts/jig doctor`.",
                 )
-                .with_data(json!({ "authority": authority_path.display().to_string() })),
-            );
-        }
-        Err(reason) => {
-            return Some(
-                check(
-                    "go_runtime",
-                    "Go runtime",
-                    true,
-                    false,
-                    "invalid authority",
-                    reason,
-                )
-                .with_fix("Correct the root go.mod Go/toolchain directives, then rerun scripts/jig doctor.")
-                .with_data(json!({ "authority": authority_path.display().to_string() })),
+                .with_data(json!({
+                    "authority": "",
+                    "authorities": [],
+                })),
             );
         }
     };
+    if authority_paths.is_empty() {
+        return None;
+    }
+    let authorities = authority_paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let mut selected_authority = None;
+    for authority_path in &authority_paths {
+        let required = match go_module_version_authority(authority_path) {
+            Ok(Some(required)) => required,
+            Ok(None) => {
+                return Some(
+                    check(
+                        "go_runtime",
+                        "Go runtime",
+                        true,
+                        false,
+                        "invalid authority",
+                        format!(
+                            "Go version authority {} is missing",
+                            authority_path.display()
+                        ),
+                    )
+                    .with_fix(&format!(
+                        "Restore {} with a numeric Go directive such as `go 1.26.0`.",
+                        authority_path.display()
+                    ))
+                    .with_data(json!({
+                        "authority": authority_path.display().to_string(),
+                        "authorities": authorities,
+                    })),
+                );
+            }
+            Err(reason) => {
+                return Some(
+                    check(
+                        "go_runtime",
+                        "Go runtime",
+                        true,
+                        false,
+                        "invalid authority",
+                        reason,
+                    )
+                    .with_fix(&format!(
+                        "Correct the Go/toolchain directives in {}, then rerun scripts/jig doctor.",
+                        authority_path.display()
+                    ))
+                    .with_data(json!({
+                        "authority": authority_path.display().to_string(),
+                        "authorities": authorities,
+                    })),
+                );
+            }
+        };
+        if selected_authority
+            .as_ref()
+            .is_none_or(|(_, selected_required)| required > *selected_required)
+        {
+            selected_authority = Some((authority_path, required));
+        }
+    }
+    let (authority_path, required) = selected_authority.expect("authority paths are non-empty");
     let Some(resolution) = resolve_program(ctx.root(), "go", environment.search_path.as_deref())
     else {
         return Some(
@@ -509,6 +554,7 @@ pub(super) fn go_runtime_check(
     )
     .with_data(json!({
         "authority": authority_path.display().to_string(),
+        "authorities": authorities,
         "required": required.to_string(),
         "actual": actual.to_string(),
     }));

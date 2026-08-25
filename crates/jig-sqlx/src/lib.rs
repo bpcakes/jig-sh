@@ -106,7 +106,9 @@ fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option
         tool::SQLX_CHECK if !ctx.sqlx_enabled() => Some(format!(
             "{tool_name} is not available because sqlx_enabled = false in .jig.toml. Enable SQLx, then run `jig update --recopy`, or remove this command/gate."
         )),
-        tool::MIGRATION_ADD if ctx.sqlx_enabled() && !ctx.migration_add_enabled() => {
+        tool::MIGRATION_ADD
+            if ctx.sqlx_owns_migration_authoring() && !ctx.migration_add_enabled() =>
+        {
             Some(migration_add_layout_error(tool_name))
         }
         _ => None,
@@ -114,8 +116,10 @@ fn unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option
 }
 
 fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
-    (tool_name == tool::MIGRATION_ADD && ctx.sqlx_enabled() && !ctx.migration_add_enabled())
-        .then(|| migration_add_layout_error(tool_name))
+    (tool_name == tool::MIGRATION_ADD
+        && ctx.sqlx_owns_migration_authoring()
+        && !ctx.migration_add_enabled())
+    .then(|| migration_add_layout_error(tool_name))
 }
 
 fn migration_add_layout_error(tool_name: &str) -> String {

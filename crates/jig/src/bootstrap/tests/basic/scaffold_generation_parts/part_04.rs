@@ -182,6 +182,13 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         .find(|file| file.relative == "internal/config/config.go")
         .unwrap();
     assert!(api_main.contents.contains("godotenv.Load()"));
+    assert!(
+        api_main
+            .contents
+            .find("parseCommand(os.Args[1:])")
+            .unwrap()
+            < api_main.contents.find("config.Load()").unwrap()
+    );
     assert!(config.contents.contains("DatabaseURL"));
     assert!(config.contents.contains("DATABASE_URL"));
     assert!(api_main.contents.contains("net.Listen(\"tcp\", cfg.Address)"));
@@ -200,6 +207,11 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
         api_main_test
             .contents
             .contains("func TestServeWaitsForInflightRequestsDuringShutdown")
+    );
+    assert!(
+        api_main_test
+            .contents
+            .contains("func TestRunRejectsInvalidCommandBeforeLoadingConfig")
     );
     let database_command = rendered
         .iter()

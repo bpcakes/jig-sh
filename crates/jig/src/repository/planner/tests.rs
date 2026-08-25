@@ -381,7 +381,10 @@ fn check_rejects_effectful_actions() {
 
 #[test]
 fn action_plans_bind_required_native_arguments_into_the_digest() {
-    let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
+    let component = ComponentSpec {
+        adapters: vec!["rust".into(), "sqlx".into()],
+        ..ComponentSpec::new(ComponentId::parse("api").unwrap(), "api")
+    };
     let target: TargetId = "api:migration-add".parse().unwrap();
     let mut action = ActionSpec::new(
         target.clone(),

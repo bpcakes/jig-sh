@@ -12,7 +12,19 @@ import (
 	"time"
 )
 
-func TestServeWaitsForInflightRequestsDuringShutdown(t *testing.T) {
+[% if db_enabled %]func TestRunRejectsInvalidCommandBeforeLoadingConfig(t *testing.T) {
+	originalArgs := os.Args
+	os.Args = []string{"api", "--invalid"}
+	t.Cleanup(func() { os.Args = originalArgs })
+	t.Setenv("DATABASE_URL", "")
+
+	err := run()
+	if err == nil || err.Error() != "usage: api [--bootstrap-database]" {
+		t.Fatalf("run error = %v, want command usage error", err)
+	}
+}
+
+[% endif %]func TestServeWaitsForInflightRequestsDuringShutdown(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)

@@ -1,10 +1,18 @@
 use super::*;
 
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
-    if !ctx.migration_policy_enabled() {
-        bail!("migration add requires a configured SQLx or Go/PostgreSQL migration backend");
-    }
-    if ctx.sqlx_enabled() && !ctx.migration_add_enabled() {
+    let backend = ctx.migration_backend()?.ok_or_else(|| {
+        if ctx.contract_version() >= 6 {
+            anyhow::anyhow!(
+                "migration add requires one declared migration authoring target with a configured SQLx or Go/PostgreSQL migration backend"
+            )
+        } else {
+            anyhow::anyhow!(
+                "migration add requires a configured SQLx or Go/PostgreSQL migration backend"
+            )
+        }
+    })?;
+    if backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         bail!(
             "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
             ctx.rust_migration_layout().as_str()
@@ -23,10 +31,10 @@ pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolO
         .root()
         .join(&migration_dir)
         .join(format!("{timestamp}_{slug}"));
-    if ctx.is_go_backend() {
-        return goose_migration_add(&base, &slug);
+    match backend {
+        crate::context::MigrationBackend::Goose => goose_migration_add(&base, &slug),
+        crate::context::MigrationBackend::Sqlx => sqlx_migration_add(&base, &slug),
     }
-    sqlx_migration_add(&base, &slug)
 }
 
 fn goose_migration_add(base: &Path, slug: &str) -> Result<NativeToolOutput> {

@@ -44,7 +44,8 @@ pub const FEATURE: FeatureDescriptor = FeatureDescriptor::new(
     REPOSITORY_ADAPTERS,
     required_tools,
     no_unavailable_tool_message,
-);
+)
+.with_tool_admission_error(tool_admission_error);
 
 fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
     let mut required = vec![tool::CONTRACT_CHECK];
@@ -58,11 +59,23 @@ fn required_tools(ctx: &dyn FeatureContext) -> Vec<&'static str> {
 }
 
 fn no_unavailable_tool_message(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
-    (tool_name == tool::MIGRATION_ADD && !ctx.migration_authoring_enabled()).then(|| {
+    if tool_name != tool::MIGRATION_ADD || ctx.migration_authoring_enabled() {
+        return None;
+    }
+    if let Some(error) = ctx.migration_authoring_error() {
+        return Some(error);
+    }
+    (!ctx.sqlx_enabled()).then(|| {
         format!(
             "{tool_name} is not available because this repository has no configured migration backend. Enable SQLx or Go/PostgreSQL migrations, then run `jig update --recopy`, or remove this command/gate."
         )
     })
+}
+
+fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
+    (tool_name == tool::MIGRATION_ADD)
+        .then(|| ctx.migration_authoring_error())
+        .flatten()
 }
 
 pub fn dev_app_env_prefix(name: &str) -> String {

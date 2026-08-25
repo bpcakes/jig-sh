@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,7 +10,7 @@ use jig_contract::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::backend::{BackendLanguage, GoDatabase};
+use crate::backend::{BackendLanguage, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase};
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 use crate::repository_path::{
     normalize_portable_repo_path, normalize_portable_repository_directory,
@@ -42,7 +42,7 @@ pub(crate) use runtime::{
 
 pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig};
-pub(crate) use migration::RustMigrationLayout;
+pub(crate) use migration::{MigrationBackend, RustMigrationLayout, native_migration_backend};
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
 use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
@@ -515,12 +515,48 @@ impl RepoContext {
         &self.config.rust_crate_roots
     }
 
-    pub(crate) fn backend_guide_roots(&self) -> Vec<&str> {
-        if self.is_go_backend() {
-            vec!["cmd", "internal"]
+    pub(crate) fn component_root_path(&self, component: &ComponentSpec) -> Result<PathBuf> {
+        let normalized = normalize_portable_repo_path(
+            &component.root,
+            &format!("component '{}' root", component.id),
+        )?;
+        Ok(if normalized == "." {
+            self.root.clone()
         } else {
-            self.rust_crate_roots().iter().map(String::as_str).collect()
+            self.root.join(normalized)
+        })
+    }
+
+    pub(crate) fn go_module_authority_paths(&self) -> Result<Vec<PathBuf>> {
+        if self.contract_version() < 6 {
+            return Ok(self
+                .is_go_backend()
+                .then(|| self.root.join(GO_TOOLCHAIN_AUTHORITY_PATH))
+                .into_iter()
+                .collect());
         }
+
+        self.component_specs()
+            .iter()
+            .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
+            .map(|component| -> Result<PathBuf> {
+                let component_root = self.component_root_path(component)?;
+                let mut module_root = component_root.clone();
+                loop {
+                    let authority = module_root.join(GO_TOOLCHAIN_AUTHORITY_PATH);
+                    if fs::symlink_metadata(&authority).is_ok() {
+                        break Ok(authority);
+                    }
+                    if module_root == self.root {
+                        break Ok(component_root.join(GO_TOOLCHAIN_AUTHORITY_PATH));
+                    }
+                    if !module_root.pop() || !module_root.starts_with(&self.root) {
+                        break Ok(component_root.join(GO_TOOLCHAIN_AUTHORITY_PATH));
+                    }
+                }
+            })
+            .collect::<Result<BTreeSet<_>>>()
+            .map(|paths| paths.into_iter().collect())
     }
 
     pub(crate) fn migration_dir(&self) -> &str {
@@ -540,6 +576,31 @@ impl RepoContext {
             self.has_component_adapter("sqlx") || self.has_component_adapter("go-postgres")
         } else {
             self.sqlx_enabled() || (self.is_go_backend() && self.config.go_database.is_postgres())
+        }
+    }
+
+    pub(crate) fn migration_backend(&self) -> Result<Option<MigrationBackend>> {
+        if self.contract_version() >= 6 {
+            return native_migration_backend(self.component_specs(), self.action_specs());
+        }
+        if !self.migration_policy_enabled() {
+            return Ok(None);
+        }
+        Ok(Some(if self.is_go_backend() {
+            MigrationBackend::Goose
+        } else {
+            MigrationBackend::Sqlx
+        }))
+    }
+
+    pub(crate) fn sqlx_owns_migration_authoring(&self) -> bool {
+        if self.contract_version() < 6 {
+            return self.sqlx_enabled();
+        }
+        match self.migration_backend() {
+            Ok(Some(MigrationBackend::Sqlx)) => true,
+            Ok(Some(MigrationBackend::Goose)) | Err(_) => false,
+            Ok(None) => self.sqlx_enabled() && !self.has_component_adapter("go-postgres"),
         }
     }
 
@@ -808,6 +869,10 @@ impl FeatureContext for RepoContext {
         self.migration_add_enabled()
     }
 
+    fn sqlx_owns_migration_authoring(&self) -> bool {
+        self.sqlx_owns_migration_authoring()
+    }
+
     fn frontend_app_count(&self) -> usize {
         if self.is_minimal_footprint() {
             0
@@ -825,6 +890,38 @@ impl FeatureContext for RepoContext {
             self.has_component_adapter("go-postgres")
         } else {
             self.is_go_backend() && self.config.go_database.is_postgres()
+        }
+    }
+
+    fn migration_authoring_enabled(&self) -> bool {
+        if self.contract_version() >= 6 {
+            self.migration_backend()
+                .is_ok_and(|backend| backend.is_some())
+        } else {
+            self.migration_add_enabled() || <Self as FeatureContext>::go_postgres_enabled(self)
+        }
+    }
+
+    fn migration_authoring_error(&self) -> Option<String> {
+        if self.contract_version() < 6 {
+            return None;
+        }
+        match self.migration_backend() {
+            Err(error) => Some(format!(
+                "jig.migration_add is unavailable because repository migration ownership is invalid: {error}"
+            )),
+            Ok(None)
+                if self.migration_policy_enabled()
+                    && !(self.sqlx_enabled()
+                        && !self.migration_add_enabled()
+                        && !self.has_component_adapter("go-postgres")) =>
+            {
+                Some(
+                    "jig.migration_add is unavailable because no component owns native migration authoring; add one native migration-add action to the owning SQLx or Go/PostgreSQL component, then run `jig update --recopy`."
+                        .into(),
+                )
+            }
+            Ok(None | Some(_)) => None,
         }
     }
 }

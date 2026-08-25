@@ -68,6 +68,31 @@ fn schema_check_reports_stale_schema_dump() {
 }
 
 #[test]
+fn schema_check_snapshots_dirty_worktrees_without_repository_git_identity() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(temp.path(), "cat schema-input > docs/schema/tables.sql");
+    fs::create_dir_all(temp.path().join("docs/schema")).unwrap();
+    fs::write(temp.path().join("docs/schema/tables.sql"), "stable\n").unwrap();
+    fs::write(temp.path().join("schema-input"), "stable\n").unwrap();
+    fs::write(temp.path().join("unrelated.txt"), "baseline\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    git(temp.path(), &["config", "user.name", ""]);
+    git(temp.path(), &["config", "user.email", ""]);
+    fs::write(temp.path().join("unrelated.txt"), "dirty\n").unwrap();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 0, "{}", output.stderr);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("unrelated.txt")).unwrap(),
+        "dirty\n"
+    );
+}
+
+#[test]
 fn schema_check_reports_drift_in_an_unborn_repository_without_mutating_it() {
     let temp = tempdir().unwrap();
     write_schema_policy_repo(

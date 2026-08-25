@@ -380,7 +380,36 @@ fn migration_command(ctx: &RepoContext) -> Value {
             Some("Set migration_dir in .jig.toml, then run `jig update --recopy`."),
         );
     }
-    if ctx.sqlx_enabled() && !ctx.migration_add_enabled() {
+    let migration_backend = match ctx.migration_backend() {
+        Ok(Some(backend)) => backend,
+        Ok(None) => {
+            if ctx.sqlx_owns_migration_authoring() && !ctx.migration_add_enabled() {
+                return ready_command(root_commands::SQLX);
+            }
+            return command_value(
+                root_commands::MIGRATION,
+                "needs_setup",
+                Some(ReasonCode::MigrationAddToolMissing),
+                Some("Migration authoring has no declared component action owner."),
+                Some(
+                    "Add one native migration-add action to the owning SQLx or Go/PostgreSQL component, then run `jig update --recopy`.",
+                ),
+            );
+        }
+        Err(error) => {
+            let reason = format!("Migration authoring ownership is invalid: {error}");
+            return command_value(
+                root_commands::MIGRATION,
+                "needs_setup",
+                Some(ReasonCode::MigrationAddToolInvalid),
+                Some(&reason),
+                Some(
+                    "Run `scripts/jig check contract --no-receipt`, correct the repository migration owner, then run `jig update --recopy`.",
+                ),
+            );
+        }
+    };
+    if migration_backend == crate::context::MigrationBackend::Sqlx && !ctx.migration_add_enabled() {
         return ready_command(root_commands::SQLX);
     }
     manifest_command(

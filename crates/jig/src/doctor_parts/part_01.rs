@@ -659,8 +659,8 @@ fn rust_runtime_probe_required(ctx: &RepoContext) -> bool {
 
 #[cfg(unix)]
 fn go_runtime_probe_required(ctx: &RepoContext) -> bool {
-    ctx.is_go_backend()
-        && fs::symlink_metadata(ctx.root().join(GO_TOOLCHAIN_AUTHORITY_PATH)).is_ok()
+    ctx.go_module_authority_paths()
+        .is_ok_and(|paths| paths.iter().any(|path| fs::symlink_metadata(path).is_ok()))
 }
 
 #[cfg(unix)]

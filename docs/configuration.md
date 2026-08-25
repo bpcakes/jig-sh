@@ -66,7 +66,7 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
 - `sqlx_enabled`: whether to generate SQLx and migration-specific contract pieces
-- `rust_crate_roots`: list of directories whose direct child directories are considered crates
+- `rust_crate_roots`: repository-relative directories whose direct child directories are considered crates, including in contract-v6 component repositories
 
 When `sqlx_enabled` is `true`, these additional keys are required:
 
@@ -76,13 +76,13 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 
 For contracts through version 5, `backend_language = "go"` with `go_database = "postgres"` requires `migration_dir`, and Go backend identity cannot be combined with `sqlx_enabled = true`. Contract 6 does not persist that singular backend identity: the `api` component carries `go` and, when applicable, `go-postgres` adapters.
 
-The root `go.mod` is the Go toolchain authority for both adopted and generated repositories. Doctor reads its required `go` directive and honors a newer optional `toolchain` directive; generated GitHub Actions pass the same file to `actions/setup-go`. Jig does not generate a second `.go-version` authority.
+Generated Go repositories use the root `go.mod` as their Go toolchain authority. For contract-v6 repositories, doctor starts at each `go` component root and uses the nearest ancestor `go.mod` within the repository, deduplicating components that share a module. Doctor reads each module's required `go` directive, honors a newer optional `toolchain` directive, and requires the active Go runtime to satisfy the highest discovered version. Jig does not generate a second `.go-version` authority.
 
 ## Optional Keys
 
 - `backend_language`: legacy contract-v5 application backend identity; accepted values are `rust` and `go`. Contract-v6 renders omit it and derive capability from component adapters.
 - `go_database`: legacy contract-v5 Go database identity. Contract-v6 renders use the composable `go-postgres` adapter instead.
-- `migration_dir`: backend-neutral migration policy directory. It takes precedence over the legacy Rust-specific `rust_migration_dir`; generated Go/PostgreSQL repositories use `internal/database/migrations`.
+- `migration_dir`: backend-neutral, repository-wide migration policy directory. It takes precedence over the legacy Rust-specific `rust_migration_dir`; generated Go/PostgreSQL repositories use `internal/database/migrations`. A contract-v6 repository that declares native migration authoring must have exactly one native `migration-add` action. Its owning component must carry exactly one format adapter: `sqlx` or `go-postgres`.
 - `schema_dump_enabled`: when `true` and `sqlx_enabled` is also `true`, the template renders schema dump and schema freshness commands; when SQLx is disabled, this is rendered as `false`. New init/adopt answers reject explicitly setting this to `true` while SQLx is disabled; `jig update --recopy` normalizes legacy SQLx-disabled configs back to `false`.
 - `schema_dump_command`: command behind `scripts/jig sqlx schema dump` when `sqlx_enabled` and `schema_dump_enabled` are both `true`
 - `sqlx_check_command`: command behind `scripts/jig check sqlx` when `sqlx_enabled` is `true`

@@ -22,6 +22,9 @@ use super::{
     controlled_output,
 };
 
+const SCHEMA_SNAPSHOT_GIT_NAME: &str = "user.name=Jig Schema Snapshot";
+const SCHEMA_SNAPSHOT_GIT_EMAIL: &str = "user.email=jig-schema-snapshot@example.invalid";
+
 pub(super) fn check_with_control(
     ctx: &RepoContext,
     timeout: Duration,
@@ -166,7 +169,15 @@ fn clone_committed_snapshot(
     // is therefore part of the snapshot contract, not an optional supplement.
     let snapshot = controlled_git_text(
         repository_root,
-        &["stash", "create", "jig schema freshness snapshot"],
+        &[
+            "-c",
+            SCHEMA_SNAPSHOT_GIT_NAME,
+            "-c",
+            SCHEMA_SNAPSHOT_GIT_EMAIL,
+            "stash",
+            "create",
+            "jig schema freshness snapshot",
+        ],
         deadline,
         cancelled,
     )?;
@@ -248,9 +259,9 @@ fn commit_unborn_snapshot(
         sandbox_root,
         &[
             "-c",
-            "user.name=Jig Schema Snapshot",
+            SCHEMA_SNAPSHOT_GIT_NAME,
             "-c",
-            "user.email=jig-schema-snapshot@example.invalid",
+            SCHEMA_SNAPSHOT_GIT_EMAIL,
             "commit",
             "--quiet",
             "--allow-empty",

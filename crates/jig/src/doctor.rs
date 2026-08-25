@@ -19,7 +19,6 @@ use jig_owned_process::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::backend::GO_TOOLCHAIN_AUTHORITY_PATH;
 #[cfg(test)]
 use crate::cli::format_doctor_summary_for_test as format_summary;
 use crate::command::{VaultCommand, VaultStatusRequest};

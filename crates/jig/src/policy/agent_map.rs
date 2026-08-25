@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -79,50 +79,130 @@ pub(super) fn check_guides(ctx: &RepoContext) -> Result<Value> {
     ];
     let mut missing_sections = Vec::new();
     let mut missing_entry_ref = Vec::new();
-    let mut guide_count = 0usize;
-    for root in ctx.backend_guide_roots() {
-        let backend_root = ctx.root().join(root);
-        if !backend_root.is_dir() {
-            continue;
+    let guides = backend_guides(ctx)?;
+    for (guide, languages) in &guides {
+        let rel = relative_string(ctx.root(), guide)?;
+        let text = fs::read_to_string(guide)?;
+        for section in required {
+            if !text.lines().any(|line| line.trim_end() == section) {
+                missing_sections.push(format!("{rel}: missing section '{section}'"));
+            }
         }
-        // Backend roots contain first-level packages or crates; deeper AGENTS.md
-        // files are covered by agent-map link validation rather than guide policy.
-        for entry in sorted_dirs(&backend_root)? {
-            let guide = entry.join("AGENTS.md");
-            let rel = relative_string(ctx.root(), &guide)?;
-            if !guide.exists() {
-                continue;
-            }
-            guide_count += 1;
-            let text = fs::read_to_string(&guide)?;
-            for section in required {
-                if !text.lines().any(|line| line.trim_end() == section) {
-                    missing_sections.push(format!("{rel}: missing section '{section}'"));
-                }
-            }
-            let has_entry_ref = if ctx.is_go_backend() {
-                has_backticked_go_entrypoint(&text)
-            } else {
-                text.contains("`src/lib.rs`") || text.contains("`src/main.rs`")
+        for language in languages {
+            let (has_entry_ref, expected) = match language {
+                GuideLanguage::Go => (
+                    has_backticked_go_entrypoint(&text),
+                    "a backticked .go entrypoint",
+                ),
+                GuideLanguage::Rust => (
+                    text.contains("`src/lib.rs`") || text.contains("`src/main.rs`"),
+                    "src/lib.rs or src/main.rs entrypoint reference",
+                ),
             };
             if !has_entry_ref {
-                let expected = if ctx.is_go_backend() {
-                    "a backticked .go entrypoint"
-                } else {
-                    "src/lib.rs or src/main.rs entrypoint reference"
-                };
                 missing_entry_ref.push(format!("{rel}: missing {expected}"));
             }
         }
     }
     Ok(json!({
         "ok": missing_sections.is_empty() && missing_entry_ref.is_empty(),
-        "guide_count": guide_count,
+        "guide_count": guides.len(),
         "missing_guides": [],
         "missing_guides_note": "placeholder backend-level AGENTS.md files are no longer required; existing guides are validated when present",
         "missing_sections": missing_sections,
         "missing_entry_ref": missing_entry_ref,
     }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum GuideLanguage {
+    Go,
+    Rust,
+}
+
+fn backend_guides(ctx: &RepoContext) -> Result<BTreeMap<PathBuf, BTreeSet<GuideLanguage>>> {
+    let mut guides = BTreeMap::new();
+    if ctx.contract_version() < 6 {
+        if ctx.is_go_backend() {
+            for root in ["cmd", "internal"] {
+                add_child_guides(&ctx.root().join(root), GuideLanguage::Go, &mut guides)?;
+            }
+        } else {
+            for root in ctx.rust_crate_roots() {
+                add_child_guides(&ctx.root().join(root), GuideLanguage::Rust, &mut guides)?;
+            }
+        }
+        return Ok(guides);
+    }
+
+    for component in ctx.component_specs() {
+        let component_root = ctx.component_root_path(component)?;
+        if component.adapters.iter().any(|adapter| adapter == "go") {
+            if component_root != ctx.root() {
+                add_guide_if_present(&component_root, GuideLanguage::Go, &mut guides);
+            }
+            for root in ["cmd", "internal"] {
+                add_child_guides(&component_root.join(root), GuideLanguage::Go, &mut guides)?;
+            }
+        }
+        if component.adapters.iter().any(|adapter| adapter == "rust")
+            && component_root != ctx.root()
+        {
+            add_guide_if_present(&component_root, GuideLanguage::Rust, &mut guides);
+        }
+    }
+    for root in ctx.rust_crate_roots() {
+        add_fallback_rust_guides(&ctx.root().join(root), &mut guides)?;
+    }
+    Ok(guides)
+}
+
+fn add_fallback_rust_guides(
+    backend_root: &Path,
+    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
+) -> Result<()> {
+    if !backend_root.is_dir() {
+        return Ok(());
+    }
+    for entry in sorted_dirs(backend_root)? {
+        let guide = entry.join("AGENTS.md");
+        if guide.exists() {
+            guides
+                .entry(guide)
+                .or_insert_with(|| BTreeSet::from([GuideLanguage::Rust]));
+        }
+    }
+    Ok(())
+}
+
+fn add_child_guides(
+    backend_root: &Path,
+    language: GuideLanguage,
+    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
+) -> Result<()> {
+    if !backend_root.is_dir() {
+        return Ok(());
+    }
+    // Backend roots contain first-level packages or crates; deeper AGENTS.md
+    // files are covered by agent-map link validation rather than guide policy.
+    for entry in sorted_dirs(backend_root)? {
+        let guide = entry.join("AGENTS.md");
+        if guide.exists() {
+            guides.entry(guide).or_default().insert(language);
+        }
+    }
+    Ok(())
+}
+
+fn add_guide_if_present(
+    component_root: &Path,
+    language: GuideLanguage,
+    guides: &mut BTreeMap<PathBuf, BTreeSet<GuideLanguage>>,
+) {
+    let guide = component_root.join("AGENTS.md");
+    if guide.exists() {
+        guides.entry(guide).or_default().insert(language);
+    }
 }
 
 fn has_backticked_go_entrypoint(text: &str) -> bool {
@@ -542,5 +622,119 @@ rust_crate_roots = []
         let output = check_guides(&ctx).unwrap();
         assert_eq!(output["ok"], true);
         assert_eq!(output["guide_count"], 2);
+    }
+
+    #[test]
+    fn check_guides_combines_v6_component_languages_with_rust_root_fallbacks() {
+        let temp = tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("services/api")).unwrap();
+        fs::create_dir_all(temp.path().join("services/worker")).unwrap();
+        fs::create_dir_all(temp.path().join("crates/shared")).unwrap();
+        fs::create_dir_all(temp.path().join(".agent")).unwrap();
+        fs::write(
+            temp.path().join(".jig.toml"),
+            r#"_src_path = "/tmp/template"
+_commit = "abc123"
+repo_name = "ExampleProject"
+default_branch = "main"
+rust_crate_roots = ["crates", "services"]
+
+[commands]
+api_test_command = "go test ./..."
+worker_test_command = "cargo test"
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = []
+
+[[repository.actions]]
+target = { component = "api", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+
+[[repository.actions]]
+target = { component = "worker", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "worker_test_command" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  { component = "api", action = "test" },
+  { component = "worker", action = "test" },
+]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join(".agent/jig-contract.json"),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "contract_version": 6,
+                "tool_namespace": "jig",
+                "required_commands": ["api_test_command", "worker_test_command"],
+                "tools": [],
+                "components": [
+                    {"id": "api", "root": "services/api", "adapters": ["go"]},
+                    {"id": "worker", "root": "services/worker"}
+                ],
+                "actions": [
+                    {
+                        "target": {"component": "api", "action": "test"},
+                        "intent": "check",
+                        "effects": ["read_only", "process"],
+                        "runner": {"kind": "command", "command": "api_test_command"}
+                    },
+                    {
+                        "target": {"component": "worker", "action": "test"},
+                        "intent": "check",
+                        "effects": ["read_only", "process"],
+                        "runner": {"kind": "command", "command": "worker_test_command"}
+                    }
+                ],
+                "profiles": [{
+                    "id": "verify",
+                    "targets": [
+                        {"component": "api", "action": "test"},
+                        {"component": "worker", "action": "test"}
+                    ]
+                }],
+                "default_check_profile": "verify"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let required_sections = "## Purpose\nExample component.\n\n## Key entrypoints\nENTRYPOINT\n\n## Edit here for X\nExample edits.\n\n## Invariants\nExample invariant.\n\n## Common commands\nExample command.\n";
+        fs::write(
+            temp.path().join("services/api/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- `main.go`"),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("services/worker/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- `src/lib.rs`"),
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("crates/shared/AGENTS.md"),
+            required_sections.replace("ENTRYPOINT", "- `src/lib.rs`"),
+        )
+        .unwrap();
+
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let output = check_guides(&ctx).unwrap();
+
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["guide_count"], 3);
     }
 }

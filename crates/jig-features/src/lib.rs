@@ -75,9 +75,20 @@ pub fn repository_adapter(id: &str) -> Option<&'static RepositoryAdapterDescript
 }
 
 pub fn tool_admission_error(ctx: &dyn FeatureContext, tool_name: &str) -> Option<String> {
-    FEATURES
+    let mut errors = FEATURES
         .iter()
-        .find_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+        .filter_map(|feature| (feature.tool_admission_error)(ctx, tool_name))
+        .collect::<Vec<_>>();
+    errors.sort();
+    errors.dedup();
+    match errors.as_slice() {
+        [] => None,
+        [error] => Some(error.clone()),
+        _ => Some(format!(
+            "{tool_name} is unavailable for multiple reasons: {}",
+            errors.join(" ")
+        )),
+    }
 }
 
 fn native_tool(tool_name: &str) -> Option<&'static NativeToolDescriptor> {

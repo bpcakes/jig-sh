@@ -235,6 +235,7 @@ impl RepositoryCatalog {
             )?;
         }
         validate_action_dependencies(&actions)?;
+        crate::context::native_migration_backend(component_specs, action_specs)?;
         affected::validate_native_path_policy(&components, &actions, affected_ignore)?;
 
         let profiles = collect_profiles(profile_specs, &actions)?;

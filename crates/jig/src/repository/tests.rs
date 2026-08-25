@@ -362,3 +362,77 @@ fn native_catalog_rejects_unpreemptible_native_timeout_overrides() {
 
     assert!(error.contains("cannot be preempted safely"));
 }
+
+#[test]
+fn native_catalog_allows_mixed_database_adapters_with_one_migration_owner() {
+    let api = ComponentSpec {
+        adapters: vec!["go".into(), "go-postgres".into()],
+        ..ComponentSpec::new(ComponentId::parse("api").unwrap(), "services/api")
+    };
+    let worker = ComponentSpec {
+        adapters: vec!["rust".into(), "sqlx".into()],
+        ..ComponentSpec::new(ComponentId::parse("worker").unwrap(), "services/worker")
+    };
+    let target: TargetId = "worker:migration-add".parse().unwrap();
+    let action = ActionSpec::new(
+        target.clone(),
+        ActionIntent::Generate,
+        ActionRunner::native(tool::MIGRATION_ADD),
+    );
+    let profile_id = ProfileId::parse("operate").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+
+    RepositoryCatalog::from_native(
+        6,
+        "digest",
+        &[api, worker],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap();
+}
+
+#[test]
+fn native_catalog_rejects_multiple_migration_format_owners() {
+    let api = ComponentSpec {
+        adapters: vec!["go".into(), "go-postgres".into()],
+        ..ComponentSpec::new(ComponentId::parse("api").unwrap(), "services/api")
+    };
+    let worker = ComponentSpec {
+        adapters: vec!["rust".into(), "sqlx".into()],
+        ..ComponentSpec::new(ComponentId::parse("worker").unwrap(), "services/worker")
+    };
+    let goose_target: TargetId = "api:migration-add".parse().unwrap();
+    let sqlx_target: TargetId = "worker:migration-add".parse().unwrap();
+    let goose = ActionSpec::new(
+        goose_target.clone(),
+        ActionIntent::Generate,
+        ActionRunner::native(tool::MIGRATION_ADD),
+    );
+    let sqlx = ActionSpec::new(
+        sqlx_target.clone(),
+        ActionIntent::Generate,
+        ActionRunner::native(tool::MIGRATION_ADD),
+    );
+    let profile_id = ProfileId::parse("operate").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![goose_target, sqlx_target]);
+
+    let error = RepositoryCatalog::from_native(
+        6,
+        "digest",
+        &[api, worker],
+        &[goose, sqlx],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("multiple migration authoring targets"),
+        "{error}"
+    );
+    assert!(error.contains("api:migration-add"), "{error}");
+    assert!(error.contains("worker:migration-add"), "{error}");
+}

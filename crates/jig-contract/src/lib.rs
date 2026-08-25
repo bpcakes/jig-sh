@@ -229,8 +229,14 @@ pub trait FeatureContext {
     fn migration_add_enabled(&self) -> bool {
         self.sqlx_enabled()
     }
+    fn sqlx_owns_migration_authoring(&self) -> bool {
+        self.sqlx_enabled()
+    }
     fn migration_authoring_enabled(&self) -> bool {
         self.migration_add_enabled() || self.go_postgres_enabled()
+    }
+    fn migration_authoring_error(&self) -> Option<String> {
+        None
     }
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()

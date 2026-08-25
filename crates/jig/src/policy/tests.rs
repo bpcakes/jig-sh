@@ -78,6 +78,71 @@ migration_dir = "internal/database/migrations"
         .write();
 }
 
+fn write_v6_mixed_migration_policy_repo(root: &Path, owner: &str) {
+    TestRepoBuilder::new(root)
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
+        .config(format!(
+            r#"
+migration_dir = "database/migrations"
+
+[repository]
+default_check_profile = "operate"
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go", "go-postgres"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = ["rust", "sqlx"]
+
+[[repository.actions]]
+target = {{ component = "{owner}", action = "migration-add" }}
+intent = "generate"
+effects = ["worktree", "process"]
+runner = {{ kind = "native", operation = "jig.migration_add" }}
+inputs = ["database/migrations/**"]
+
+[[repository.profiles]]
+id = "operate"
+targets = [{{ component = "{owner}", action = "migration-add" }}]
+"#,
+        ))
+        .required_commands(std::iter::empty::<&str>())
+        .tool(json!({
+            "name": tool::MIGRATION_ADD,
+            "kind": kind::NATIVE,
+            "description": "Create a migration."
+        }))
+        .write();
+    let contract_path = root.join(".agent/jig-contract.json");
+    let mut contract: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
+    contract["components"] = json!([
+        {"id": "api", "root": "services/api", "adapters": ["go", "go-postgres"]},
+        {"id": "worker", "root": "services/worker", "adapters": ["rust", "sqlx"]}
+    ]);
+    contract["actions"] = json!([{
+        "target": {"component": owner, "action": "migration-add"},
+        "intent": "generate",
+        "effects": ["worktree", "process"],
+        "runner": {"kind": "native", "operation": "jig.migration_add"},
+        "inputs": ["database/migrations/**"]
+    }]);
+    contract["profiles"] = json!([{
+        "id": "operate",
+        "targets": [{"component": owner, "action": "migration-add"}]
+    }]);
+    contract["default_check_profile"] = json!("operate");
+    fs::write(
+        contract_path,
+        serde_json::to_string_pretty(&contract).unwrap(),
+    )
+    .unwrap();
+}
+
 fn write_schema_policy_repo(root: &Path, schema_dump_command: &str) {
     write_schema_policy_repo_with_execution(root, schema_dump_command, None, None);
 }
@@ -741,6 +806,47 @@ fn migration_add_creates_a_goose_migration_for_go_postgres() {
     assert_eq!(
         fs::read_to_string(&entries[0]).unwrap(),
         "-- +goose Up\n-- forward migration: create_users\n\n-- +goose Down\n-- rollback migration: create_users\n"
+    );
+}
+
+#[test]
+fn v6_migration_add_uses_the_declared_sqlx_owner_in_a_mixed_repository() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "worker");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    migration_add(&ctx, "Create Users").unwrap();
+
+    let entries = fs::read_dir(temp.path().join("database/migrations"))
+        .unwrap()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .ends_with("_create_users.up.sql")
+    }));
+}
+
+#[test]
+fn v6_migration_add_uses_the_declared_goose_owner_in_a_mixed_repository() {
+    let temp = tempdir().unwrap();
+    write_v6_mixed_migration_policy_repo(temp.path(), "api");
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    migration_add(&ctx, "Create Users").unwrap();
+
+    let entries = fs::read_dir(temp.path().join("database/migrations"))
+        .unwrap()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(
+        fs::read_to_string(entries[0].path())
+            .unwrap()
+            .starts_with("-- +goose Up")
     );
 }
 
