@@ -14,7 +14,7 @@ use crate::backend::{BackendLanguage, GO_TOOLCHAIN_AUTHORITY_PATH, GoDatabase};
 use crate::frontend_metadata::{ResolvedFrontendMetadata, resolve_frontend_metadata};
 use crate::repository_path::{
     normalize_portable_repo_path, normalize_portable_repository_directory,
-    normalize_repo_relative_path,
+    normalize_repo_relative_path, validate_repository_directory_path,
 };
 
 // agentic-loc-exception: repository configuration access remains centralized while runtime cache and launcher-context concerns live in context/runtime.rs.
@@ -540,6 +540,21 @@ impl RepoContext {
             .iter()
             .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
             .map(|component| -> Result<PathBuf> {
+                let component_relative = normalize_portable_repo_path(
+                    &component.root,
+                    &format!("component '{}' root", component.id),
+                )?;
+                if component_relative != "."
+                    && let Err(error) = validate_repository_directory_path(
+                        &self.root,
+                        Path::new(&component_relative),
+                    )
+                {
+                    bail!(
+                        "Go component '{}' root must use real repository directories: {error}",
+                        component.id
+                    );
+                }
                 let component_root = self.component_root_path(component)?;
                 let mut module_root = component_root.clone();
                 loop {

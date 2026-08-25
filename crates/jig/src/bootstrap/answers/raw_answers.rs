@@ -95,17 +95,30 @@ impl RawAnswers {
                 .filter_map(toml::Value::as_str)
                 .any(|adapter| adapter == expected)
         };
-        if self.backend_language.is_none() {
-            self.backend_language = Some(if has_adapter("go") {
-                BackendLanguage::Go
-            } else {
-                BackendLanguage::Rust
-            });
+        let complete_authored_model = self.repository.as_ref().is_some_and(|repository| {
+            !repository.components.is_empty()
+                && !repository.actions.is_empty()
+                && !repository.profiles.is_empty()
+        });
+        if complete_authored_model || self.backend_language.is_none() {
+            // Legacy templates still need one compatibility value, but an
+            // authored v6 model may contain both languages. Prefer Rust when
+            // SQLx or a Rust adapter is present so the legacy Go + SQLx
+            // validation cannot reject a valid mixed component model.
+            self.backend_language = Some(
+                if has_adapter("go") && !has_adapter("rust") && !has_adapter("sqlx") {
+                    BackendLanguage::Go
+                } else {
+                    BackendLanguage::Rust
+                },
+            );
         }
-        if self.go_database.is_none() && has_adapter("go-postgres") {
+        if complete_authored_model {
+            self.go_database = has_adapter("go-postgres").then_some(GoDatabase::Postgres);
+        } else if self.go_database.is_none() && has_adapter("go-postgres") {
             self.go_database = Some(GoDatabase::Postgres);
         }
-        if self.sqlx_enabled.is_none() {
+        if complete_authored_model || self.sqlx_enabled.is_none() {
             self.sqlx_enabled = Some(has_adapter("sqlx"));
         }
         let Some(commands) = table.get("commands").and_then(toml::Value::as_table) else {

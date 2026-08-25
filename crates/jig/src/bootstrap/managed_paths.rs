@@ -10,8 +10,6 @@ use super::answers::{HarnessFootprint, RenderAnswers};
 use super::path::{
     validate_no_reserved_git_metadata_components, validate_repository_relative_ancestors,
 };
-use crate::backend::BackendLanguage;
-
 pub(super) const ROOT_AGENTS_PATH: &str = "AGENTS.md";
 pub(super) const ROOT_AGENTS_BLOCK_BEGIN: &str = "<!-- BEGIN JIG MANAGED BLOCK -->";
 pub(super) const ROOT_AGENTS_BLOCK_END: &str = "<!-- END JIG MANAGED BLOCK -->";
@@ -245,9 +243,9 @@ pub(super) fn should_omit_unmanaged_rendered_path(
 ) -> bool {
     if relative == Path::new("Makefile")
         || (answers.frontend_apps().is_empty() && is_web_managed_path(relative))
-        || (answers.backend_language() == BackendLanguage::Go
+        || (!answers.rust_backend_enabled()
             && relative == Path::new(".github/workflows/rust-tests.yml"))
-        || (answers.backend_language() == BackendLanguage::Rust
+        || (!answers.go_backend_enabled()
             && relative == Path::new(".github/workflows/go-tests.yml"))
     {
         return true;

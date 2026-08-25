@@ -413,6 +413,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             "**/go.sum",
             "**/go.work",
             "**/go.work.sum",
+            "vendor/modules.txt",
+            "**/vendor/modules.txt",
         ] {
             assert_eq!(
                 workflow.matches(&format!(r#"- "{path}""#)).count(),
@@ -432,6 +434,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
                 .count(),
             2
         );
+        assert_eq!(workflow.matches(r#"- "**/*.sql""#).count(), 2);
     }
 
     let go_tests =
@@ -446,6 +449,8 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         "**/go.sum",
         "**/go.work",
         "**/go.work.sum",
+        "vendor/modules.txt",
+        "**/vendor/modules.txt",
     ] {
         assert_eq!(
             go_tests.matches(&format!(r#"- "{path}""#)).count(),
@@ -459,8 +464,11 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
             .count(),
         2
     );
-    assert_eq!(go_tests.matches("runs-on: \"macos-14\"").count(), 2);
-    assert!(!go_tests.contains("runs-on: ubuntu-latest"));
+    assert_eq!(go_tests.matches("runs-on: \"macos-14\"").count(), 1);
+    assert_eq!(
+        go_tests.matches("runs-on: \"ubuntu-latest\"").count(),
+        1
+    );
     assert!(go_tests.contains("run: bash scripts/test-postgres.sh"));
     assert!(!destination.join(".go-version").exists());
 

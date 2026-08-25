@@ -446,7 +446,7 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
         ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
     };
     let worker = ComponentSpec {
-        adapters: vec!["rust".into()],
+        adapters: vec!["rust".into(), "sqlx".into()],
         ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
     };
     let mut api_test = ActionSpec::new(
@@ -485,8 +485,8 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     let path = temp.path().join("answers.toml");
     fs::write(
             &path,
-            format!(
-                "repo_name = \"ExampleProject\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
+        format!(
+                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = true\nmigration_dir = \"database/migrations\"\nschema_dump_enabled = false\n{}\n{}",
                 authored.authored_toml().unwrap(),
                 authored.commands_toml().unwrap()
             ),
@@ -494,6 +494,21 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
         .unwrap();
 
     let answers = RenderAnswers::from_answers_file(&path).unwrap();
+    assert!(answers.go_backend_enabled());
+    assert!(answers.rust_backend_enabled());
+    assert!(answers.sqlx_enabled());
+    assert!(
+        !crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
+            std::path::Path::new(".github/workflows/go-tests.yml"),
+            &answers,
+        )
+    );
+    assert!(
+        !crate::bootstrap::managed_paths::should_omit_unmanaged_rendered_path(
+            std::path::Path::new(".github/workflows/rust-tests.yml"),
+            &answers,
+        )
+    );
     let rerendered = RepositoryRenderModel::from_answers(&answers).unwrap();
 
     assert_eq!(

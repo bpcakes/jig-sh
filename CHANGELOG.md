@@ -26,6 +26,7 @@
 - Report human Codex usage as quota remaining with window/reset context instead of the former used-percent/window shorthand.
 
 ### Fixed
+- Keep accepted MCP repository workers alive through transport shutdown, preserve mixed Go and Rust/SQLx contract-v6 models during recopy, reject symlink-redirection in Go component roots, and make generated Go CI observe vendored modules and SQL inputs while reserving Linux for Docker-backed PostgreSQL tests.
 - Serialize native migration version allocation and advance collisions by valid UTC seconds so different Goose or SQLx names cannot share a backend version; reject component roots and action inputs under the `.agent/` tree excluded from source identity.
 - Keep contract-v6 execution fail-closed across authority changes, source drift, cancellation-poll failures, and work-plan finish; refresh long-lived MCP, status, and UI repository contexts before they consume current configuration.
 - Make Vault PTY integration tests own their private controlling terminal so `/dev/tty` sizing and resize-clear assertions stay hermetic under TTY-wrapped gate runners.

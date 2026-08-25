@@ -13,6 +13,15 @@ const MCP_PROGRESS_EVENT_LIMIT: usize = 64;
 const MCP_OUTPUT_PREVIEW_LIMIT: usize = 4 * 1024;
 
 pub fn serve(ctx: &RepoContext) -> Result<()> {
+    let result = serve_transport(ctx);
+    // Repository runs are accepted as durable work before their response is
+    // published. Keep the owning process alive after EOF or another transport
+    // failure until every accepted worker for this repository terminalizes.
+    crate::runtime::wait_for_mcp_repository_runs(ctx);
+    result
+}
+
+fn serve_transport(ctx: &RepoContext) -> Result<()> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();

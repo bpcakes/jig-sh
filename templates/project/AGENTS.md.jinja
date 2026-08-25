@@ -25,23 +25,24 @@ This repository uses the shared `jig.sh` workflow. Keep repo-local business rule
 - The migration tree contains complete versioned schema artifacts. Never overwrite a shipped version; add the next forward-only version and its repository-owned cutover artifact.
 [% endif %]
 [% else %]
-[% if backend_language == "go" and go_database == "postgres" %]
+[% if go_postgres_enabled %]
 - Never overwrite an existing database migration; add a new forward-only migration instead.
 [% endif %]
 [% endif %]
 
 ## Backend Defaults
 
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
 - Treat `cmd/` as process entrypoints and `internal/` as private application packages.
 - Add package-level `AGENTS.md` files when a package has meaningful ownership, entrypoint, or invariant guidance that should travel with that package.
 - Keep transport logic thin and business logic in the owning package.
 - Keep the Huma API constructor free of database connections, listeners, and other process lifecycle work so `cmd/openapi` remains offline.
-[% if go_database == "postgres" %]
+[% if go_postgres_enabled %]
 - Embedded Goose migrations live under `internal/database/migrations/`; sqlc queries and committed generated code live under `internal/database/queries/` and `internal/database/sqlc/`.
 - Use pgxpool for application traffic and keep Goose's `database/sql` adapter short-lived.
 [% endif %]
-[% else %]
+[% endif %]
+[% if rust_backend_enabled %]
 - Treat [% for root in rust_crate_roots %]`<<[ root ]>>`[% if not loop.last %], [% endif %][% endfor %] as Rust crate roots.
 - Add crate-level `AGENTS.md` files when a crate has meaningful ownership, entrypoint, or invariant guidance that should travel with that crate.
 - Keep transport logic thin and business logic in the owning crate.
@@ -88,9 +89,10 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig dev`
 - `scripts/jig check test`
 - `scripts/jig check fmt`
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
 - `scripts/jig check lint`
-[% else %]
+[% endif %]
+[% if rust_backend_enabled %]
 - `scripts/jig check clippy`
 [% endif %]
 - `scripts/jig work status`
@@ -111,7 +113,7 @@ No web apps are configured in `.jig.toml`.
 - `scripts/jig migration add NAME`
 [% endif %]
 [% endif %]
-[% if backend_language == "go" and go_database == "postgres" %]
+[% if go_postgres_enabled %]
 - `scripts/jig migration add NAME`
 - `scripts/jig check sqlc`
 [% endif %]

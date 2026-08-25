@@ -7,7 +7,7 @@ on:
   # otherwise remove pull_request.paths before making its job a required check.
   pull_request:
     paths:
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
       - "cmd/**"
       - "internal/**"
       - "go.mod"
@@ -69,7 +69,7 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
       - "cmd/**"
       - "internal/**"
       - "go.mod"

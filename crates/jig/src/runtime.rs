@@ -55,6 +55,10 @@ pub(crate) fn probe_codex_marketplace_support(
     )
 }
 
+pub(crate) fn wait_for_mcp_repository_runs(ctx: &RepoContext) {
+    mcp_repository::wait_for_live_runs(ctx);
+}
+
 pub(crate) fn dispatch(ctx: &RepoContext, command: RuntimeCommand) -> Result<Value> {
     dispatch_with_observer(ctx, command, &mut NoopExecutionObserver)
 }

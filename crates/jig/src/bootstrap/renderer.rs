@@ -618,6 +618,18 @@ fn render_context(
         "frontend_harness_enabled".into(),
         JsonValue::Bool(answers.frontend_harness_enabled()),
     );
+    context.insert(
+        "go_backend_enabled".into(),
+        JsonValue::Bool(answers.go_backend_enabled()),
+    );
+    context.insert(
+        "rust_backend_enabled".into(),
+        JsonValue::Bool(answers.rust_backend_enabled()),
+    );
+    context.insert(
+        "go_postgres_enabled".into(),
+        JsonValue::Bool(answers.go_postgres_enabled()),
+    );
     if contract_version >= 6 {
         let repository = RepositoryRenderModel::from_answers(answers)?;
         let repository_toml = repository.authored_toml()?;

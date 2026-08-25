@@ -12,9 +12,12 @@ on:
       - "**/go.sum"
       - "**/go.work"
       - "**/go.work.sum"
+      - "vendor/modules.txt"
+      - "**/vendor/modules.txt"
       - "openapi/**"
-[% if go_database == "postgres" %]
+[% if go_postgres_enabled %]
       - "sqlc.yaml"
+      - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - "scripts/test-postgres.sh"
@@ -35,9 +38,12 @@ on:
       - "**/go.sum"
       - "**/go.work"
       - "**/go.work.sum"
+      - "vendor/modules.txt"
+      - "**/vendor/modules.txt"
       - "openapi/**"
-[% if go_database == "postgres" %]
+[% if go_postgres_enabled %]
       - "sqlc.yaml"
+      - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - "scripts/test-postgres.sh"
@@ -76,11 +82,13 @@ jobs:
       - run: scripts/jig check fmt
       - run: scripts/jig check lint
       - run: scripts/jig check test-locked
-[% if go_database == "postgres" %]      - run: scripts/jig check sqlc
+[% if go_postgres_enabled %]      - run: scripts/jig check sqlc
 [% endif %]
-[% if go_database == "postgres" %]
+[% if go_postgres_enabled %]
   postgres-integration:
-    runs-on: <<[ ci_github_runner | tojson ]>>
+    # GitHub-hosted macOS runners do not provide the Docker daemon required by
+    # scripts/test-postgres.sh.
+    runs-on: "ubuntu-latest"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

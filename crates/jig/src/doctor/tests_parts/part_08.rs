@@ -448,6 +448,32 @@ fn go_runtime_check_uses_the_nearest_parent_module_for_a_nested_component() {
 
 #[cfg(unix)]
 #[test]
+fn go_runtime_check_rejects_a_symlinked_component_root_ancestor() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("repo");
+    let outside = temp.path().join("outside");
+    write_doctor_fixture(&root);
+    configure_doctor_fixture_go_adapter_at(&root, "services/api");
+    fs::create_dir_all(outside.join("api")).unwrap();
+    fs::write(
+        outside.join("api/go.mod"),
+        "module example.com/Outside\n\ngo 9.99.0\n",
+    )
+    .unwrap();
+    symlink(&outside, root.join("services")).unwrap();
+    let ctx = RepoContext::load_from_root(root).unwrap();
+
+    let error = ctx.go_module_authority_paths().unwrap_err().to_string();
+
+    assert!(error.contains("Go component 'api' root"), "{error}");
+    assert!(error.contains("is a symlink"), "{error}");
+    assert!(!error.contains(&outside.display().to_string()), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
 fn go_runtime_check_reports_a_missing_module_at_the_nested_component_root() {
     let temp = tempdir().unwrap();
     let root = temp.path().join("repo");

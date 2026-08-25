@@ -3,7 +3,7 @@ name: Repo Policy
 on:
   pull_request:
     paths:
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
       - "**/*.go"
       - "go.mod"
       - "go.sum"
@@ -13,12 +13,16 @@ on:
       - "**/go.sum"
       - "**/go.work"
       - "**/go.work.sum"
-[% if go_database == "postgres" %]
+      - "vendor/modules.txt"
+      - "**/vendor/modules.txt"
+[% if go_postgres_enabled %]
       - "sqlc.yaml"
+      - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
-[% else %]
+[% endif %]
+[% if rust_backend_enabled %]
 [% for root in rust_crate_roots %]
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
@@ -35,7 +39,7 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
       - "**/*.go"
       - "go.mod"
       - "go.sum"
@@ -45,12 +49,16 @@ on:
       - "**/go.sum"
       - "**/go.work"
       - "**/go.work.sum"
-[% if go_database == "postgres" %]
+      - "vendor/modules.txt"
+      - "**/vendor/modules.txt"
+[% if go_postgres_enabled %]
       - "sqlc.yaml"
+      - "**/*.sql"
       - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
-[% else %]
+[% endif %]
+[% if rust_backend_enabled %]
 [% for root in rust_crate_roots %]
       - <<[ (root ~ "/**") | tojson ]>>
 [% endfor %]
@@ -76,7 +84,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-[% if backend_language == "go" %]
+[% if go_backend_enabled %]
   go-policy:
     name: Validate Go policy and contract
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -105,11 +113,12 @@ jobs:
         run: scripts/jig check fmt
       - name: Run Go vet
         run: scripts/jig check lint
-[% if go_database == "postgres" %]
+[% if go_postgres_enabled %]
       - name: Check sqlc drift
         run: scripts/jig check sqlc
 [% endif %]
-[% else %]
+[% endif %]
+[% if rust_backend_enabled %]
   no-mod-rs:
     name: Check for disallowed mod.rs files
     runs-on: <<[ ci_github_runner | tojson ]>>
@@ -180,7 +189,7 @@ jobs:
 
 [% endif %]
 [% endif %]
-[% if sqlx_enabled or (backend_language == "go" and go_database == "postgres") %]
+[% if sqlx_enabled or go_postgres_enabled %]
   migration-immutability:
     name: Enforce migration immutability
     runs-on: <<[ ci_github_runner | tojson ]>>

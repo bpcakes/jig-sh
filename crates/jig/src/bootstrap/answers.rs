@@ -468,6 +468,39 @@ impl RenderAnswers {
         self.backend_language
     }
 
+    fn authored_repository_has_adapter(&self, expected: &str) -> Option<bool> {
+        self.authored_repository.as_ref().map(|repository| {
+            repository
+                .components
+                .iter()
+                .any(|component| component.adapters.iter().any(|adapter| adapter == expected))
+        })
+    }
+
+    pub(super) fn go_backend_enabled(&self) -> bool {
+        self.authored_repository_has_adapter("go")
+            .unwrap_or_else(|| self.backend_language.is_go())
+    }
+
+    pub(super) fn rust_backend_enabled(&self) -> bool {
+        self.authored_repository
+            .as_ref()
+            .map(|repository| {
+                repository.components.iter().any(|component| {
+                    component
+                        .adapters
+                        .iter()
+                        .any(|adapter| adapter == "rust" || adapter == "sqlx")
+                })
+            })
+            .unwrap_or_else(|| self.backend_language == BackendLanguage::Rust)
+    }
+
+    pub(super) fn go_postgres_enabled(&self) -> bool {
+        self.authored_repository_has_adapter("go-postgres")
+            .unwrap_or_else(|| self.backend_language.is_go() && self.go_database.is_postgres())
+    }
+
     pub(super) const fn go_database(&self) -> GoDatabase {
         self.go_database
     }

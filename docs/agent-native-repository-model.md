@@ -243,6 +243,9 @@ every target:
   explicit selectors.
 - `jig.execute_run` executes an unchanged plan and returns a durable run handle;
   worktree and external effects require exact `approved_effects` acknowledgement.
+  Once that handle is accepted, the serving process drains the process-owned
+  worker to a terminal durable state even if its MCP transport reaches EOF or
+  fails while the worker is still running.
 - `jig.cancel_run` requests cancellation of a running execution.
 - Structured work lifecycle tools remain a separate, bounded `jig.work_*`
   namespace.

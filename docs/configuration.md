@@ -59,9 +59,10 @@ For local git template checkouts, `jig init` / `jig adopt` use a committed sourc
 - `repo_name`: display name used in generated docs. During adoption, repo names inferred from Git remotes preserve dots such as `my.app`, while directory-name fallbacks keep the existing dash-sanitized form.
 - `default_branch`: branch name used for base-ref comparisons
 - `ci_github_runner`: `runs-on` value for GitHub Actions jobs. PostgreSQL browser
-  E2E is the exception: its generated job uses `ubuntu-latest` because GitHub
-  service containers require Linux. Other generated jobs retain this configured
-  runner and select Bash explicitly for repository-owned `run` steps.
+  E2E and Go PostgreSQL integration are the exceptions: their generated jobs use
+  `ubuntu-latest` because service containers and the Docker daemon require Linux.
+  Other generated jobs retain this configured runner and select Bash explicitly
+  for repository-owned `run` steps.
 - `work.gates`: required work evidence gates evaluated before `scripts/jig work finish`
 - `agent_tooling`: agent-client tooling expected for this repository, including Jig Codex skills
 - `template_source_url`: optional canonical template source URL for portable recopy/update
@@ -74,9 +75,9 @@ When `sqlx_enabled` is `true`, these additional keys are required:
 - `rust_migration_layout`: closed migration representation. Use `flat_migrations` for ordinary timestamped SQLx migration files or `versioned_artifacts` for complete versioned schema trees. Older configs that omit the key default to `flat_migrations`.
 - `rust_sqlx_metadata_dir`: committed SQLx metadata directory
 
-For contracts through version 5, `backend_language = "go"` with `go_database = "postgres"` requires `migration_dir`, and Go backend identity cannot be combined with `sqlx_enabled = true`. Contract 6 does not persist that singular backend identity: the `api` component carries `go` and, when applicable, `go-postgres` adapters.
+For contracts through version 5, `backend_language = "go"` with `go_database = "postgres"` requires `migration_dir`, and Go backend identity cannot be combined with `sqlx_enabled = true`. Contract 6 does not persist that singular backend identity: components carry composable adapters, so one authored repository may contain Go and Rust/SQLx components. Recopy derives its compatibility-only singular fields from the complete component model rather than letting stale legacy fields reject that valid mixed model.
 
-Generated Go repositories use the root `go.mod` as their Go toolchain authority. For contract-v6 repositories, doctor starts at each `go` component root and uses the nearest ancestor `go.mod` within the repository, deduplicating components that share a module. Doctor reads each module's required `go` directive, honors a newer optional `toolchain` directive, and requires the active Go runtime to satisfy the highest discovered version. Jig does not generate a second `.go-version` authority.
+Generated Go repositories use the root `go.mod` as their Go toolchain authority. For contract-v6 repositories, doctor starts at each `go` component root and uses the nearest ancestor `go.mod` within the repository, deduplicating components that share a module. Every existing component-root directory segment must be a real directory rather than a symlink, so module discovery cannot escape repository authority. Doctor reads each module's required `go` directive, honors a newer optional `toolchain` directive, and requires the active Go runtime to satisfy the highest discovered version. Jig does not generate a second `.go-version` authority.
 
 ## Optional Keys
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,8 +31,15 @@ struct LiveRunKey {
     run_id: String,
 }
 
-static LIVE_RUNS: LazyLock<Mutex<HashMap<LiveRunKey, Arc<AtomicBool>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+struct LiveRunRegistry {
+    runs: Mutex<HashMap<LiveRunKey, Arc<AtomicBool>>>,
+    completed: Condvar,
+}
+
+static LIVE_RUNS: LazyLock<LiveRunRegistry> = LazyLock::new(|| LiveRunRegistry {
+    runs: Mutex::new(HashMap::new()),
+    completed: Condvar::new(),
+});
 
 struct LiveRunGuard {
     key: LiveRunKey,
@@ -40,7 +47,9 @@ struct LiveRunGuard {
 
 impl Drop for LiveRunGuard {
     fn drop(&mut self) {
+        let registry = &*LIVE_RUNS;
         live_runs().remove(&self.key);
+        registry.completed.notify_all();
     }
 }
 
@@ -376,8 +385,21 @@ fn live_run_key(ctx: &RepoContext, run_id: &str) -> LiveRunKey {
 
 fn live_runs() -> std::sync::MutexGuard<'static, HashMap<LiveRunKey, Arc<AtomicBool>>> {
     LIVE_RUNS
+        .runs
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(super) fn wait_for_live_runs(ctx: &RepoContext) {
+    let root = ctx.root();
+    let registry = &*LIVE_RUNS;
+    let mut runs = live_runs();
+    while runs.keys().any(|key| key.root == root) {
+        runs = registry
+            .completed
+            .wait(runs)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
 }
 
 #[cfg(test)]
@@ -420,5 +442,28 @@ mod tests {
         assert!(first.contains("failed to inspect durable cancellation state"));
         assert!(first.contains("Failed to parse run event identity"));
         assert_eq!(second, first);
+    }
+
+    #[test]
+    fn transport_shutdown_waits_for_accepted_repository_workers() {
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path()).write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let guard = register_live_run(&ctx, "run_fixture", &cancellation);
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let waiter_ctx = ctx;
+        let waiter = thread::spawn(move || {
+            wait_for_live_runs(&waiter_ctx);
+            finished_tx.send(()).unwrap();
+        });
+
+        assert!(
+            finished_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "transport shutdown returned while an accepted worker was live"
+        );
+        drop(guard);
+        finished_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter.join().unwrap();
     }
 }
