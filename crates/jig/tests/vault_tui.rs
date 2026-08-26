@@ -55,7 +55,9 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
     let stdin = slave.try_clone().unwrap();
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
-    let original = terminal_attributes(&slave);
+    // Observe termios through the master because Darwin revokes terminal
+    // ioctls on the retained slave descriptor after its controlling session exits.
+    let original = terminal_attributes(&master);
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
     command
         .args(["vault", "tui", "--home"])
@@ -213,7 +215,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
                 )
             });
     assert!(status.success(), "vault TUI exited with {status}");
-    let restored = terminal_attributes(&slave);
+    let restored = terminal_attributes(&master);
     assert_eq!(
         restored.c_lflag & (libc::ECHO | libc::ICANON),
         original.c_lflag & (libc::ECHO | libc::ICANON),
@@ -269,7 +271,9 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
     let stdin = slave.try_clone().unwrap();
     let stdout = slave.try_clone().unwrap();
     let stderr = slave.try_clone().unwrap();
-    let original = terminal_attributes(&slave);
+    // Observe termios through the master because Darwin revokes terminal
+    // ioctls on the retained slave descriptor after its controlling session exits.
+    let original = terminal_attributes(&master);
     let mut command = Command::new(env!("CARGO_BIN_EXE_jig"));
     command
         .args(["vault", "tui", "--home"])
@@ -304,7 +308,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         "vault TUI exited with {status}; output: {}",
         String::from_utf8_lossy(&output)
     );
-    let restored = terminal_attributes(&slave);
+    let restored = terminal_attributes(&master);
     assert_eq!(
         restored.c_lflag & (libc::ECHO | libc::ICANON),
         original.c_lflag & (libc::ECHO | libc::ICANON),
