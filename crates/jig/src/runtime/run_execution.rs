@@ -461,34 +461,7 @@ fn run_target(
                     output.stderr,
                     planned.result_parser,
                 ),
-                Err(error)
-                    if error
-                        .downcast_ref::<OwnedProcessTreeError>()
-                        .is_some_and(|error| matches!(error, OwnedProcessTreeError::TimedOut)) =>
-                {
-                    TargetCapture::stopped_after_start(
-                        RunConclusion::TimedOut,
-                        format!(
-                            "native target '{}' exceeded its {timeout:?} timeout",
-                            planned.target
-                        ),
-                    )
-                }
-                Err(error)
-                    if error
-                        .downcast_ref::<OwnedProcessTreeError>()
-                        .is_some_and(|error| matches!(error, OwnedProcessTreeError::Cancelled)) =>
-                {
-                    TargetCapture::stopped_after_start(
-                        RunConclusion::Cancelled,
-                        format!("native target '{}' was cancelled", planned.target),
-                    )
-                }
-                Err(error) => TargetCapture::blocked(format!(
-                    "native runner '{operation}' for target '{}' failed: {error:#}",
-                    planned.target
-                ))
-                .with_maybe_executed(true),
+                Err(error) => native_runner_error_capture(planned, operation, timeout, error),
             },
         },
     };
@@ -498,6 +471,36 @@ fn run_target(
     let capture =
         enforce_current_repository_authority(ctx, catalog.config_digest(), planned, capture);
     source_epoch.finish_target(ctx, planned, capture)
+}
+
+fn native_runner_error_capture(
+    planned: &PlannedTarget,
+    operation: &str,
+    timeout: Duration,
+    error: anyhow::Error,
+) -> TargetCapture {
+    match error.downcast_ref::<OwnedProcessTreeError>() {
+        Some(OwnedProcessTreeError::TimedOut) => TargetCapture::stopped_after_start(
+            RunConclusion::TimedOut,
+            format!(
+                "native target '{}' exceeded its {timeout:?} timeout",
+                planned.target
+            ),
+        ),
+        Some(OwnedProcessTreeError::CancelledBeforeStart) => TargetCapture::not_started(
+            RunConclusion::Cancelled,
+            format!("native target '{}' was cancelled", planned.target),
+        ),
+        Some(OwnedProcessTreeError::Cancelled) => TargetCapture::stopped_after_start(
+            RunConclusion::Cancelled,
+            format!("native target '{}' was cancelled", planned.target),
+        ),
+        _ => TargetCapture::blocked(format!(
+            "native runner '{operation}' for target '{}' failed: {error:#}",
+            planned.target
+        ))
+        .with_maybe_executed(true),
+    }
 }
 
 fn enforce_current_repository_authority(

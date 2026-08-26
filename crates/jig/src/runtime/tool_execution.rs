@@ -422,7 +422,7 @@ pub(super) fn run_native_tool_with_control(
 
 fn check_native_control(deadline: std::time::Instant, cancelled: &dyn Fn() -> bool) -> Result<()> {
     if cancelled() {
-        return Err(jig_owned_process::OwnedProcessTreeError::Cancelled.into());
+        return Err(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart.into());
     }
     if std::time::Instant::now() >= deadline {
         return Err(jig_owned_process::OwnedProcessTreeError::TimedOut.into());

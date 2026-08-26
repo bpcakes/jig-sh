@@ -109,6 +109,36 @@ fn cancellation_poll_failures_block_poll_induced_cancellation_without_masking_a_
 }
 
 #[test]
+fn native_cancellation_preserves_whether_a_child_started() {
+    let planned = PlannedTarget::new(
+        "repo:schema".parse().unwrap(),
+        jig_contract::ActionIntent::Check,
+        ActionRunner::native("jig.schema_check"),
+        "sha256:input",
+    );
+
+    let before_start = native_runner_error_capture(
+        &planned,
+        "jig.schema_check",
+        Duration::from_secs(30),
+        OwnedProcessTreeError::CancelledBeforeStart.into(),
+    );
+    let after_start = native_runner_error_capture(
+        &planned,
+        "jig.schema_check",
+        Duration::from_secs(30),
+        OwnedProcessTreeError::Cancelled.into(),
+    );
+
+    assert_eq!(before_start.conclusion, RunConclusion::Cancelled);
+    assert!(!before_start.may_have_executed);
+    assert_eq!(before_start.exit_code, None);
+    assert_eq!(after_start.conclusion, RunConclusion::Cancelled);
+    assert!(after_start.may_have_executed);
+    assert_eq!(after_start.exit_code, None);
+}
+
+#[test]
 fn adjacent_targets_share_the_post_target_source_observation() {
     let target: TargetId = "repo:test".parse().unwrap();
     let planned = PlannedTarget::new(

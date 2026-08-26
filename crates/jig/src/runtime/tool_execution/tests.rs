@@ -99,6 +99,28 @@ fn native_runner_rejects_an_elapsed_timeout_before_start() {
 }
 
 #[test]
+fn native_runner_preserves_cancellation_before_operation_start() {
+    let temp = tempdir().unwrap();
+    TestRepoBuilder::new(temp.path()).write();
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = run_native_tool_with_control(
+        &ctx,
+        tool::CONTRACT_CHECK,
+        None,
+        &serde_json::json!({}),
+        Duration::from_secs(30),
+        &|| true,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error.downcast_ref::<jig_owned_process::OwnedProcessTreeError>(),
+        Some(jig_owned_process::OwnedProcessTreeError::CancelledBeforeStart)
+    ));
+}
+
+#[test]
 fn cancellation_after_an_in_process_mutation_does_not_reclassify_completion() {
     let temp = tempdir().unwrap();
     TestRepoBuilder::new(temp.path())
