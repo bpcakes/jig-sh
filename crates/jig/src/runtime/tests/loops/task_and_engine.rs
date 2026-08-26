@@ -182,13 +182,10 @@ printf 'task complete\n'
         invocation.contains("--ask-for-approval never exec --sandbox read-only --ephemeral -"),
         "{invocation}"
     );
-    let invoked_worktree = invocation.lines().next().unwrap();
-    let relative_worktree = Path::new(worktree).strip_prefix(temp.path()).unwrap();
-    let canonical_worktree = canonical_temp.join(relative_worktree);
-    assert!(
-        invoked_worktree == worktree || Path::new(invoked_worktree) == canonical_worktree,
-        "{invocation}"
-    );
+    let cwd = Path::new(invocation.lines().next().unwrap());
+    let suffix = Path::new(worktree).strip_prefix(temp.path()).unwrap();
+    let matches = cwd == Path::new(worktree) || cwd == canonical_temp.join(suffix);
+    assert!(matches, "{invocation}");
     assert_eq!(
         fs::read_to_string(prompt_log).unwrap(),
         "Review the repository.\n"
