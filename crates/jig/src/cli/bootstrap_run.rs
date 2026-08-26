@@ -262,50 +262,50 @@ pub(super) fn format_presets_human_summary(output: &serde_json::Value) -> String
         if !summary_text.is_empty() {
             let _ = writeln!(summary, "    {summary_text}");
         }
-        if let Some(defaults) = preset["defaults"].as_array() {
-            if !defaults.is_empty() {
-                summary.push_str("    defaults:\n");
-                for default in defaults.iter().filter_map(serde_json::Value::as_str) {
-                    let _ = writeln!(summary, "      - {default}");
-                }
+        if let Some(defaults) = preset["defaults"].as_array()
+            && !defaults.is_empty()
+        {
+            summary.push_str("    defaults:\n");
+            for default in defaults.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "      - {default}");
             }
         }
-        if let Some(layout) = preset["layout"].as_array() {
-            if !layout.is_empty() {
-                summary.push_str("    generated layout:\n");
-                for path in layout.iter().filter_map(serde_json::Value::as_str) {
-                    let _ = writeln!(summary, "      - {path}");
-                }
+        if let Some(layout) = preset["layout"].as_array()
+            && !layout.is_empty()
+        {
+            summary.push_str("    generated layout:\n");
+            for path in layout.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "      - {path}");
             }
         }
-        if let Some(frontends) = preset["frontend_shorthands"].as_array() {
-            if !frontends.is_empty() {
-                summary.push_str("    frontend shorthands:\n");
-                for frontend in frontends {
-                    let shorthand = frontend["name"].as_str().unwrap_or("<unknown>");
-                    let expands_to = frontend["expands_to"].as_str().unwrap_or("");
-                    let _ = writeln!(summary, "      - {shorthand}: {expands_to}");
-                }
+        if let Some(frontends) = preset["frontend_shorthands"].as_array()
+            && !frontends.is_empty()
+        {
+            summary.push_str("    frontend shorthands:\n");
+            for frontend in frontends {
+                let shorthand = frontend["name"].as_str().unwrap_or("<unknown>");
+                let expands_to = frontend["expands_to"].as_str().unwrap_or("");
+                let _ = writeln!(summary, "      - {shorthand}: {expands_to}");
             }
         }
-        if let Some(examples) = preset["examples"].as_array() {
-            if !examples.is_empty() {
-                summary.push_str("    examples:\n");
-                for example in examples.iter().filter_map(serde_json::Value::as_str) {
-                    let _ = writeln!(summary, "      {example}");
-                }
+        if let Some(examples) = preset["examples"].as_array()
+            && !examples.is_empty()
+        {
+            summary.push_str("    examples:\n");
+            for example in examples.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "      {example}");
             }
         }
         if let Some(ownership) = preset["ownership"].as_str() {
             summary.push_str("    ownership:\n");
             let _ = writeln!(summary, "      - {ownership}");
         }
-        if let Some(non_goals) = preset["non_goals"].as_array() {
-            if !non_goals.is_empty() {
-                summary.push_str("    non-goals:\n");
-                for non_goal in non_goals.iter().filter_map(serde_json::Value::as_str) {
-                    let _ = writeln!(summary, "      - {non_goal}");
-                }
+        if let Some(non_goals) = preset["non_goals"].as_array()
+            && !non_goals.is_empty()
+        {
+            summary.push_str("    non-goals:\n");
+            for non_goal in non_goals.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "      - {non_goal}");
             }
         }
     }
@@ -343,23 +343,23 @@ pub(super) fn format_init_human_summary(output: &bootstrap::InitReport) -> Strin
             "  scaffold files: {scaffold_created} created, {scaffold_modified} modified, {scaffold_unchanged} unchanged"
         );
 
-        if let Some(frontends) = scaffold["frontends"].as_array() {
-            if !frontends.is_empty() {
-                let names = frontends
-                    .iter()
-                    .filter_map(|frontend| frontend["name"].as_str())
-                    .collect::<Vec<_>>();
-                if !names.is_empty() {
-                    let _ = writeln!(summary, "  frontends: {}", names.join(", "));
-                }
+        if let Some(frontends) = scaffold["frontends"].as_array()
+            && !frontends.is_empty()
+        {
+            let names = frontends
+                .iter()
+                .filter_map(|frontend| frontend["name"].as_str())
+                .collect::<Vec<_>>();
+            if !names.is_empty() {
+                let _ = writeln!(summary, "  frontends: {}", names.join(", "));
             }
         }
-        if let Some(notices) = scaffold["frontend_notices"].as_array() {
-            if !notices.is_empty() {
-                summary.push_str("  frontend notes:\n");
-                for notice in notices.iter().filter_map(serde_json::Value::as_str) {
-                    let _ = writeln!(summary, "    - {notice}");
-                }
+        if let Some(notices) = scaffold["frontend_notices"].as_array()
+            && !notices.is_empty()
+        {
+            summary.push_str("  frontend notes:\n");
+            for notice in notices.iter().filter_map(serde_json::Value::as_str) {
+                let _ = writeln!(summary, "    - {notice}");
             }
         }
     }
@@ -418,27 +418,27 @@ pub(super) fn format_update_human_summary(output: &serde_json::Value) -> String 
         "  managed files: {created} created, {modified} modified, {removed} removed, {unchanged} unchanged"
     );
 
-    if let Some(conflicts) = report["conflicts"].as_array() {
-        if !conflicts.is_empty() {
-            push_conflict_summary(&mut summary, "conflicts accepted", conflicts);
+    if let Some(conflicts) = report["conflicts"].as_array()
+        && !conflicts.is_empty()
+    {
+        push_conflict_summary(&mut summary, "conflicts accepted", conflicts);
+    }
+
+    if let Some(warnings) = output["warnings"].as_array()
+        && !warnings.is_empty()
+    {
+        summary.push_str("  warnings:\n");
+        for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
+            let _ = writeln!(summary, "    - {warning}");
         }
     }
 
-    if let Some(warnings) = output["warnings"].as_array() {
-        if !warnings.is_empty() {
-            summary.push_str("  warnings:\n");
-            for warning in warnings.iter().filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {warning}");
-            }
-        }
-    }
-
-    if let Some(steps) = output["next_steps"].as_array() {
-        if !steps.is_empty() {
-            summary.push_str("  next steps:\n");
-            for step in steps.iter().filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {step}");
-            }
+    if let Some(steps) = output["next_steps"].as_array()
+        && !steps.is_empty()
+    {
+        summary.push_str("  next steps:\n");
+        for step in steps.iter().filter_map(serde_json::Value::as_str) {
+            let _ = writeln!(summary, "    - {step}");
         }
     }
 
@@ -468,55 +468,55 @@ pub(super) fn format_adopt_human_summary(output: &serde_json::Value) -> String {
 
     push_vault_summary(&mut summary, &output["vault"]);
 
-    if let Some(review) = output["adoption_review"].as_array() {
-        if !review.is_empty() {
-            summary.push_str("  review:\n");
-            for item in review.iter().filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {item}");
-            }
+    if let Some(review) = output["adoption_review"].as_array()
+        && !review.is_empty()
+    {
+        summary.push_str("  review:\n");
+        for item in review.iter().filter_map(serde_json::Value::as_str) {
+            let _ = writeln!(summary, "    - {item}");
         }
     }
 
-    if let Some(notes) = output["notes"].as_array() {
-        if !notes.is_empty() {
-            summary.push_str("  notes:\n");
-            for note in notes.iter().take(8).filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {note}");
-            }
-            if notes.len() > 8 {
-                let _ = writeln!(summary, "    - and {} more", notes.len() - 8);
-            }
+    if let Some(notes) = output["notes"].as_array()
+        && !notes.is_empty()
+    {
+        summary.push_str("  notes:\n");
+        for note in notes.iter().take(8).filter_map(serde_json::Value::as_str) {
+            let _ = writeln!(summary, "    - {note}");
+        }
+        if notes.len() > 8 {
+            let _ = writeln!(summary, "    - and {} more", notes.len() - 8);
         }
     }
 
-    if let Some(conflicts) = report["conflicts"].as_array() {
-        if !conflicts.is_empty() {
-            push_conflict_summary(&mut summary, "conflicts", conflicts);
+    if let Some(conflicts) = report["conflicts"].as_array()
+        && !conflicts.is_empty()
+    {
+        push_conflict_summary(&mut summary, "conflicts", conflicts);
+    }
+
+    if let Some(warnings) = output["detection_report"]["warnings"].as_array()
+        && !warnings.is_empty()
+    {
+        let _ = writeln!(summary, "  warnings: {}", warnings.len());
+        for warning in warnings
+            .iter()
+            .take(5)
+            .filter_map(serde_json::Value::as_str)
+        {
+            let _ = writeln!(summary, "    - {warning}");
+        }
+        if warnings.len() > 5 {
+            let _ = writeln!(summary, "    - and {} more", warnings.len() - 5);
         }
     }
 
-    if let Some(warnings) = output["detection_report"]["warnings"].as_array() {
-        if !warnings.is_empty() {
-            let _ = writeln!(summary, "  warnings: {}", warnings.len());
-            for warning in warnings
-                .iter()
-                .take(5)
-                .filter_map(serde_json::Value::as_str)
-            {
-                let _ = writeln!(summary, "    - {warning}");
-            }
-            if warnings.len() > 5 {
-                let _ = writeln!(summary, "    - and {} more", warnings.len() - 5);
-            }
-        }
-    }
-
-    if let Some(steps) = output["next_steps"].as_array() {
-        if !steps.is_empty() {
-            summary.push_str("  next steps:\n");
-            for step in steps.iter().filter_map(serde_json::Value::as_str) {
-                let _ = writeln!(summary, "    - {step}");
-            }
+    if let Some(steps) = output["next_steps"].as_array()
+        && !steps.is_empty()
+    {
+        summary.push_str("  next steps:\n");
+        for step in steps.iter().filter_map(serde_json::Value::as_str) {
+            let _ = writeln!(summary, "    - {step}");
         }
     }
     summary

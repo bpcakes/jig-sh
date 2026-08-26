@@ -423,14 +423,14 @@ impl RuntimeCompatibilityRequest<'_> {
                 self.repo_root.display()
             )
         })?;
-        if let Some(contract_version) = self.contract_version {
-            if !crate::context::is_supported_contract_version(contract_version) {
-                bail!(
-                    "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
-                    crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
-                    crate::context::CURRENT_CONTRACT_VERSION
-                );
-            }
+        if let Some(contract_version) = self.contract_version
+            && !crate::context::is_supported_contract_version(contract_version)
+        {
+            bail!(
+                "Unsupported Jig contract version {contract_version}; this runtime supports versions {} through {}",
+                crate::context::MIN_SUPPORTED_CONTRACT_VERSION,
+                crate::context::CURRENT_CONTRACT_VERSION
+            );
         }
         Ok(repo_root)
     }
@@ -876,13 +876,12 @@ pub(super) fn moved_check_command_hint(error: &clap::Error) -> Option<String> {
     // usage text and is only a best-effort migration hint. Global options such as
     // --json make the top-level usage line include [OPTIONS]; recheck this matcher
     // on Clap upgrades or when adding more global flags.
-    if message.contains("Usage: jig [OPTIONS] <COMMAND>") {
-        if let Some((_, replacement)) = moved
+    if message.contains("Usage: jig [OPTIONS] <COMMAND>")
+        && let Some((_, replacement)) = moved
             .iter()
             .find(|(legacy, _)| message.contains(&format!("'{legacy}'")))
-        {
-            return Some(moved_check_hint_for(replacement));
-        }
+    {
+        return Some(moved_check_hint_for(replacement));
     }
 
     // Clap 4.6.1 reports nested invalid subcommands through formatted usage text;

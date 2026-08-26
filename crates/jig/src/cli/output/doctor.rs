@@ -24,12 +24,12 @@ pub(in crate::cli) fn format_doctor_summary(value: &serde_json::Value) -> String
         lines.push(format!(
             "  - {label}: {marker} ({status}, {required_label})"
         ));
-        if required && (!ok || status == "present_unverified") {
-            if let Some(detail) = check["detail"].as_str() {
-                if !detail.trim().is_empty() {
-                    lines.push(format!("    Detail: {detail}"));
-                }
-            }
+        if required
+            && (!ok || status == "present_unverified")
+            && let Some(detail) = check["detail"].as_str()
+            && !detail.trim().is_empty()
+        {
+            lines.push(format!("    Detail: {detail}"));
         }
     }
 

@@ -305,20 +305,19 @@ impl VaultTuiBackend {
                 ),
             ));
         }
-        if !replace {
-            if let Some(entry) = entries
+        if !replace
+            && let Some(entry) = entries
                 .iter()
                 .zip(vault.fields())
                 .find_map(|(entry, (_, existed))| existed.then_some(entry))
-            {
-                return Err(VaultUiError::new(
-                    VaultUiErrorKind::Conflict,
-                    format!(
-                        "Vault field '{}' already exists; enable Replace to import over it.",
-                        entry.reference
-                    ),
-                ));
-            }
+        {
+            return Err(VaultUiError::new(
+                VaultUiErrorKind::Conflict,
+                format!(
+                    "Vault field '{}' already exists; enable Replace to import over it.",
+                    entry.reference
+                ),
+            ));
         }
 
         let imported =

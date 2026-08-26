@@ -208,16 +208,15 @@ pub(super) fn validate_staged_runtime_contract(
                     .with_context(|| format!("Failed to read {}", installer_path.display()));
             }
         };
-        if let Some(installer) = installer {
-            if !crate::runtime_artifacts::inspect_installer(&installer)
+        if let Some(installer) = installer
+            && !crate::runtime_artifacts::inspect_installer(&installer)
                 .uses_repository_scope_protocol()
-            {
-                bail!(
-                    "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
-                    manifest_contract_version,
-                    installer_path.display()
-                );
-            }
+        {
+            bail!(
+                "Staged contract-v{} installer {} does not implement the repository-scoped runtime protocol",
+                manifest_contract_version,
+                installer_path.display()
+            );
         }
     }
     Ok(())

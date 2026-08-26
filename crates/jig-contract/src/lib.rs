@@ -105,6 +105,7 @@ pub struct FeatureDescriptor {
     pub native_tools: &'static [NativeToolDescriptor],
     pub required_tools: fn(&dyn FeatureContext) -> Vec<&'static str>,
     pub unavailable_tool_message: fn(&dyn FeatureContext, &str) -> Option<String>,
+    pub tool_admission_error: fn(&dyn FeatureContext, &str) -> Option<String>,
 }
 
 impl FeatureDescriptor {
@@ -119,8 +120,21 @@ impl FeatureDescriptor {
             native_tools,
             required_tools,
             unavailable_tool_message,
+            tool_admission_error: no_tool_admission_error,
         }
     }
+
+    pub const fn with_tool_admission_error(
+        mut self,
+        tool_admission_error: fn(&dyn FeatureContext, &str) -> Option<String>,
+    ) -> Self {
+        self.tool_admission_error = tool_admission_error;
+        self
+    }
+}
+
+fn no_tool_admission_error(_ctx: &dyn FeatureContext, _tool_name: &str) -> Option<String> {
+    None
 }
 
 pub trait FeatureContext {
@@ -129,6 +143,10 @@ pub trait FeatureContext {
     fn sqlx_enabled(&self) -> bool;
     fn schema_dump_enabled(&self) -> bool;
     fn frontend_app_count(&self) -> usize;
+
+    fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled()
+    }
 
     fn has_required_command(&self, command_key: &str) -> bool {
         self.required_commands()

@@ -468,44 +468,44 @@ fn read_mutates_variable(
             index += 1;
             continue;
         }
-        if options_allowed {
-            if let Some(options) = value.strip_prefix('-').filter(|value| !value.is_empty()) {
-                let chars = options.char_indices();
-                let mut consumed_next = false;
-                for (offset, option) in chars {
-                    match option {
-                        'e' | 'r' | 's' => {}
-                        'a' | 'd' | 'i' | 'n' | 'N' | 'p' | 't' | 'u' => {
-                            let value_offset = offset + option.len_utf8();
-                            let attached = &options[value_offset..];
-                            let argument = if attached.is_empty() {
-                                let Some(argument) = words.get(index + 1) else {
-                                    return true;
-                                };
-                                consumed_next = true;
-                                argument
-                            } else {
-                                word
+        if options_allowed
+            && let Some(options) = value.strip_prefix('-').filter(|value| !value.is_empty())
+        {
+            let chars = options.char_indices();
+            let mut consumed_next = false;
+            for (offset, option) in chars {
+                match option {
+                    'e' | 'r' | 's' => {}
+                    'a' | 'd' | 'i' | 'n' | 'N' | 'p' | 't' | 'u' => {
+                        let value_offset = offset + option.len_utf8();
+                        let attached = &options[value_offset..];
+                        let argument = if attached.is_empty() {
+                            let Some(argument) = words.get(index + 1) else {
+                                return true;
                             };
-                            if option == 'a' {
-                                if attached.is_empty() {
-                                    if shell_word_names_variable(argument, variable_matches) {
-                                        return true;
-                                    }
-                                } else if bash_assignment_base_name(attached)
-                                    .is_some_and(variable_matches)
-                                {
+                            consumed_next = true;
+                            argument
+                        } else {
+                            word
+                        };
+                        if option == 'a' {
+                            if attached.is_empty() {
+                                if shell_word_names_variable(argument, variable_matches) {
                                     return true;
                                 }
+                            } else if bash_assignment_base_name(attached)
+                                .is_some_and(variable_matches)
+                            {
+                                return true;
                             }
-                            break;
                         }
-                        _ => return true,
+                        break;
                     }
+                    _ => return true,
                 }
-                index += usize::from(consumed_next) + 1;
-                continue;
             }
+            index += usize::from(consumed_next) + 1;
+            continue;
         }
         options_allowed = false;
         if shell_word_names_variable(word, variable_matches) {
@@ -563,34 +563,34 @@ fn mapfile_mutates_variable(
             index += 1;
             continue;
         }
-        if options_allowed {
-            if let Some(options) = value.strip_prefix('-').filter(|value| !value.is_empty()) {
-                let chars = options.char_indices();
-                let mut consumed_next = false;
-                for (offset, option) in chars {
-                    match option {
-                        't' => {}
-                        'C' => {
-                            // The callback is evaluated as Bash code and can
-                            // mutate arbitrary variables through namerefs.
-                            return true;
-                        }
-                        'c' | 'd' | 'n' | 'O' | 's' | 'u' => {
-                            let value_offset = offset + option.len_utf8();
-                            if options[value_offset..].is_empty() {
-                                if words.get(index + 1).is_none() {
-                                    return true;
-                                }
-                                consumed_next = true;
-                            }
-                            break;
-                        }
-                        _ => return true,
+        if options_allowed
+            && let Some(options) = value.strip_prefix('-').filter(|value| !value.is_empty())
+        {
+            let chars = options.char_indices();
+            let mut consumed_next = false;
+            for (offset, option) in chars {
+                match option {
+                    't' => {}
+                    'C' => {
+                        // The callback is evaluated as Bash code and can
+                        // mutate arbitrary variables through namerefs.
+                        return true;
                     }
+                    'c' | 'd' | 'n' | 'O' | 's' | 'u' => {
+                        let value_offset = offset + option.len_utf8();
+                        if options[value_offset..].is_empty() {
+                            if words.get(index + 1).is_none() {
+                                return true;
+                            }
+                            consumed_next = true;
+                        }
+                        break;
+                    }
+                    _ => return true,
                 }
-                index += usize::from(consumed_next) + 1;
-                continue;
             }
+            index += usize::from(consumed_next) + 1;
+            continue;
         }
         return shell_word_names_variable(word, variable_matches);
     }

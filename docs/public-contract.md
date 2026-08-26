@@ -125,7 +125,7 @@ The following tool names are stable in command-backed contract versions when dec
 SQLx-specific tools are stable when the rendered repo profile includes them:
 
 - `jig.sqlx_check`
-- `jig.migration_add`
+- `jig.migration_add` when `rust_migration_layout` is `flat_migrations`
 - `jig.schema_check` when schema dumps are enabled
 - `jig.schema_dump` when schema dumps are enabled
 
@@ -134,7 +134,7 @@ SQLx-specific tools are stable when `sqlx_enabled` rendered them into the manife
 - `jig.sqlx_check`
 - `jig.schema_check`
 - `jig.schema_dump`
-- `jig.migration_add`
+- `jig.migration_add` only for `flat_migrations`; `versioned_artifacts` contracts omit it
 
 A generated repo may omit optional tools that do not apply to its configuration. Clients must discover available tools from `.agent/jig-contract.json` or MCP tool listing instead of assuming SQLx or schema-dump support.
 

@@ -16,6 +16,11 @@ use crate::policy::NativeToolOutput;
 use crate::state::{ReceiptInput, now_ms, record_receipt_with_cancellation};
 use crate::tool_defs::{self, JsonObject, args, kind, string_arg, tool};
 
+mod failure;
+
+pub(in crate::runtime) use failure::manifest_tool_result_failure;
+use failure::tool_failure_message;
+
 pub(in crate::runtime) fn execute_manifest_tool_request_with_observer(
     ctx: &RepoContext,
     tool_name: &str,
@@ -123,37 +128,6 @@ impl ManifestToolExecutionOutcome {
     }
 }
 
-pub(in crate::runtime) fn manifest_tool_result_failure(
-    response: &Value,
-) -> Result<Option<(i32, String)>> {
-    let tool_name = response
-        .get("tool")
-        .and_then(Value::as_str)
-        .context("Tool execution response is missing `tool`")?;
-    let result = response
-        .get("result")
-        .context("Tool execution response is missing `result`")?;
-    let exit_status = result
-        .get("exit_status")
-        .and_then(Value::as_i64)
-        .and_then(|status| i32::try_from(status).ok())
-        .context("Tool execution response has an invalid `result.exit_status`")?;
-    let stdout = result
-        .get("stdout")
-        .and_then(Value::as_str)
-        .context("Tool execution response is missing `result.stdout`")?;
-    let stderr = result
-        .get("stderr")
-        .and_then(Value::as_str)
-        .context("Tool execution response is missing `result.stderr`")?;
-    let command_key = response.get("command_key").and_then(Value::as_str);
-
-    Ok(
-        tool_failure_message(tool_name, command_key, exit_status, stdout, stderr)
-            .map(|message| (exit_status, message)),
-    )
-}
-
 pub(in crate::runtime) fn undeclared_tool_message(ctx: &RepoContext, tool_name: &str) -> String {
     if let Some(message) = jig_features::unavailable_tool_message(ctx, tool_name) {
         message
@@ -213,6 +187,9 @@ fn execute_manifest_tool_with_options(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
+    if let Some(error) = jig_features::tool_admission_error(ctx, tool_name) {
+        bail!(error);
+    }
     let tool = ctx
         .tool_spec(tool_name)
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
@@ -727,26 +704,6 @@ fn maybe_record_receipt(
     } else {
         Ok(None)
     }
-}
-
-fn tool_failure_message(
-    tool_name: &str,
-    command_key: Option<&str>,
-    exit_status: i32,
-    stdout: &str,
-    stderr: &str,
-) -> Option<String> {
-    if exit_status == 0 {
-        return None;
-    }
-    Some(match command_key {
-        Some(command_key) => format!(
-            "{tool_name} failed with status {exit_status}\ncommand key: {command_key}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-        None => format!(
-            "{tool_name} failed with status {exit_status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        ),
-    })
 }
 
 fn run_configured_command(

@@ -10,6 +10,8 @@ use crate::context::RepoContext;
 use crate::test_env::TestRepoBuilder;
 use crate::tool_defs::{kind, tool};
 
+mod migration_layout;
+
 fn write_policy_repo(root: &Path) {
     fs::create_dir_all(root.join("crates/app/src")).unwrap();
     TestRepoBuilder::new(root)

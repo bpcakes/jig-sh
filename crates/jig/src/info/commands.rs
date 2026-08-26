@@ -367,6 +367,9 @@ fn sqlx_command(ctx: &RepoContext) -> Value {
             Some(&next_step),
         );
     }
+    if !ctx.migration_add_enabled() {
+        return ready_command(root_commands::SQLX);
+    }
     manifest_command(
         ctx,
         root_commands::SQLX,

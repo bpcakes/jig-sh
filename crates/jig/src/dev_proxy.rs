@@ -700,12 +700,12 @@ fn service_value_failure_detail(value: &Value) -> Option<String> {
     {
         return Some("service manager command timed out".to_string());
     }
-    if let Some(status) = value.get("status").and_then(Value::as_i64) {
-        if status != 0 {
-            return Some(format!(
-                "service manager command exited with status {status}"
-            ));
-        }
+    if let Some(status) = value.get("status").and_then(Value::as_i64)
+        && status != 0
+    {
+        return Some(format!(
+            "service manager command exited with status {status}"
+        ));
     }
     None
 }
@@ -933,13 +933,12 @@ const fn flag_override(default: bool, enable: bool, disable: bool) -> bool {
 fn require_existing_state_dir(
     settings: jig_dev_proxy::ProxySettings,
 ) -> Result<jig_dev_proxy::ProxySettings> {
-    if let Some(path) = &settings.state_dir {
-        if !path
+    if let Some(path) = &settings.state_dir
+        && !path
             .try_exists()
             .with_context(|| format!("Failed to inspect proxy state dir {}", path.display()))?
-        {
-            bail!("proxy state dir {} does not exist", path.display());
-        }
+    {
+        bail!("proxy state dir {} does not exist", path.display());
     }
     Ok(settings)
 }

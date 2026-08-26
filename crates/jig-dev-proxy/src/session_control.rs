@@ -435,7 +435,6 @@ const fn loopback_address(port: u16) -> SocketAddr {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read as _, Write as _};
     use std::time::Instant;
 
     use super::*;

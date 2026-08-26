@@ -464,10 +464,9 @@ impl TlsCache {
                 && cache
                     .loaded_at
                     .is_some_and(|loaded_at| loaded_at.elapsed() <= ROUTE_CACHE_MAX_AGE)
+                && let Some(acceptor) = &cache.acceptor
             {
-                if let Some(acceptor) = &cache.acceptor {
-                    return Ok(acceptor.clone());
-                }
+                return Ok(acceptor.clone());
             }
         }
 
@@ -480,10 +479,9 @@ impl TlsCache {
                 && cache
                     .loaded_at
                     .is_some_and(|loaded_at| loaded_at.elapsed() <= ROUTE_CACHE_MAX_AGE)
+                && let Some(acceptor) = &cache.acceptor
             {
-                if let Some(acceptor) = &cache.acceptor {
-                    return Ok(acceptor.clone());
-                }
+                return Ok(acceptor.clone());
             }
         }
 
@@ -591,10 +589,10 @@ async fn serve_http(
             // Keep HTTP/1 single-request so idle clients cannot pin connection permits.
             http1.keep_alive(false);
             let result = http1.serve_connection(io, service).with_upgrades().await;
-            if let Err(error) = result {
-                if !is_disconnect_error(&error) {
-                    eprintln!("jig proxy http connection error: {error}");
-                }
+            if let Err(error) = result
+                && !is_disconnect_error(&error)
+            {
+                eprintln!("jig proxy http connection error: {error}");
             }
         });
     }
@@ -695,10 +693,10 @@ async fn serve_https(
                     .max_frame_size(Some(HTTP2_MAX_FRAME_SIZE))
                     .max_header_list_size(HTTP2_MAX_HEADER_LIST_SIZE);
                 let result = builder.serve_connection_with_upgrades(io, service).await;
-                if let Err(error) = result {
-                    if !is_disconnect_error(error.as_ref()) {
-                        eprintln!("jig proxy https connection error: {error}");
-                    }
+                if let Err(error) = result
+                    && !is_disconnect_error(error.as_ref())
+                {
+                    eprintln!("jig proxy https connection error: {error}");
                 }
             } else {
                 let mut http1 = hyper::server::conn::http1::Builder::new();
@@ -707,10 +705,10 @@ async fn serve_https(
                 // Keep HTTP/1 single-request so idle clients cannot pin connection permits.
                 http1.keep_alive(false);
                 let result = http1.serve_connection(io, service).with_upgrades().await;
-                if let Err(error) = result {
-                    if !is_disconnect_error(&error) {
-                        eprintln!("jig proxy https connection error: {error}");
-                    }
+                if let Err(error) = result
+                    && !is_disconnect_error(&error)
+                {
+                    eprintln!("jig proxy https connection error: {error}");
                 }
             }
         });
@@ -1241,15 +1239,15 @@ fn websocket_token_values<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<
 fn is_disconnect_error(error: &(dyn Error + 'static)) -> bool {
     let mut current = Some(error);
     while let Some(error) = current {
-        if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
-            if matches!(
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
+            && matches!(
                 io_error.kind(),
                 std::io::ErrorKind::BrokenPipe
                     | std::io::ErrorKind::ConnectionAborted
                     | std::io::ErrorKind::ConnectionReset
-            ) {
-                return true;
-            }
+            )
+        {
+            return true;
         }
         current = error.source();
     }

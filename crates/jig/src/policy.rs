@@ -189,6 +189,9 @@ pub(crate) fn validate_contract(
         }
     }
     for tool in ctx.tool_specs() {
+        if let Some(error) = jig_features::tool_admission_error(ctx, &tool.name) {
+            errors.push(error);
+        }
         match tool.kind.as_str() {
             kind::NATIVE => {
                 if !jig_features::is_supported_native_tool(&tool.name) {
@@ -253,6 +256,12 @@ pub(crate) fn validate_contract(
 pub(crate) fn migration_add(ctx: &RepoContext, name: &str) -> Result<NativeToolOutput> {
     if !ctx.sqlx_enabled() {
         bail!("sqlx migration add requires sqlx_enabled = true");
+    }
+    if !ctx.migration_add_enabled() {
+        bail!(
+            "sqlx migration add requires rust_migration_layout = \"flat_migrations\"; this repository has rust_migration_layout = \"{}\"",
+            ctx.rust_migration_layout().as_str()
+        );
     }
     let migration_dir = ctx.rust_migration_dir();
     if migration_dir.trim().is_empty() {

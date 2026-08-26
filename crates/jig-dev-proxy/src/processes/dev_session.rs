@@ -153,12 +153,12 @@ pub(crate) fn finalize_claimed_dev_session_result(
         .transpose()?;
     let interruption = result.as_ref().err().and_then(interruption_reason);
 
-    if let Some(reason) = interruption.filter(|reason| reason.is_requested_stop()) {
-        if !session.cleanup_is_confirmed() {
-            return Err(interruption_error_with_unconfirmed_cleanup(
-                reason, recoveries,
-            ));
-        }
+    if let Some(reason) = interruption.filter(|reason| reason.is_requested_stop())
+        && !session.cleanup_is_confirmed()
+    {
+        return Err(interruption_error_with_unconfirmed_cleanup(
+            reason, recoveries,
+        ));
     }
     if let Ok(value) = &mut result {
         if let Some(recoveries) = recoveries {
@@ -777,10 +777,10 @@ fn run_apps_with_session_and_interrupt_probe(
 
     if proxy_stopped {
         eprintln!("Jig proxy stopped responding; shutting down development session");
-    } else if interrupted.is_none() {
-        if let Some((name, code)) = &first_exit {
-            eprintln!("{name} exited with status {code}; stopping development session");
-        }
+    } else if interrupted.is_none()
+        && let Some((name, code)) = &first_exit
+    {
+        eprintln!("{name} exited with status {code}; stopping development session");
     }
 
     if let Some(reason) = interrupted {

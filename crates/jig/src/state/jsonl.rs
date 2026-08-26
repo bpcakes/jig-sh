@@ -277,10 +277,10 @@ pub(super) fn with_jsonl_write_lock<T>(
     operation: impl FnOnce(&JsonlWriteGuard) -> Result<T>,
 ) -> Result<T> {
     let legacy_lock_file = legacy_lock_for_path(path)?;
-    if let Some(file) = &legacy_lock_file {
-        if let Err(error) = file.lock_exclusive() {
-            return Err(error).context("Failed to lock legacy state file");
-        }
+    if let Some(file) = &legacy_lock_file
+        && let Err(error) = file.lock_exclusive()
+    {
+        return Err(error).context("Failed to lock legacy state file");
     }
     let lock_file = match lock_for_path(path) {
         Ok(file) => file,
@@ -359,14 +359,13 @@ pub(super) fn state_lock_path(path: &Path) -> PathBuf {
     let Some(file_name) = path.file_name() else {
         return path.with_extension("lock");
     };
-    if parent.file_name().and_then(|name| name.to_str()) == Some("state") {
-        if let Some(agent_dir) = parent.parent() {
-            if agent_dir.file_name().and_then(|name| name.to_str()) == Some(".agent") {
-                let mut lock_name = file_name.to_os_string();
-                lock_name.push(".lock");
-                return agent_dir.join(".cache").join("state-locks").join(lock_name);
-            }
-        }
+    if parent.file_name().and_then(|name| name.to_str()) == Some("state")
+        && let Some(agent_dir) = parent.parent()
+        && agent_dir.file_name().and_then(|name| name.to_str()) == Some(".agent")
+    {
+        let mut lock_name = file_name.to_os_string();
+        lock_name.push(".lock");
+        return agent_dir.join(".cache").join("state-locks").join(lock_name);
     }
     let mut lock_name = file_name.to_os_string();
     lock_name.push(".lock");

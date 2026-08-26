@@ -342,12 +342,12 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
                 .join(", ")
         ));
     }
-    if !inference.frontend_apps.is_empty() {
-        if let Some(package_manager) = inference.web_package_manager.as_deref() {
-            inference
-                .signals
-                .push(format!("package manager: {package_manager}"));
-        }
+    if !inference.frontend_apps.is_empty()
+        && let Some(package_manager) = inference.web_package_manager.as_deref()
+    {
+        inference
+            .signals
+            .push(format!("package manager: {package_manager}"));
     }
     if let Some(runner) = inference.ci_github_runner.as_deref() {
         let suffix = if github_ci.runner_was_synthesized {

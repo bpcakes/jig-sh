@@ -17,9 +17,11 @@ pub(crate) use execution_config::{
     CommandOutputLimit, CommandTimeout, MAX_COMMAND_TIMEOUT_SECONDS,
 };
 mod loop_config;
+mod migration;
 mod optional;
 mod runtime;
 mod status_config;
+mod vault_config;
 mod work_config;
 
 pub(crate) use defaults::{
@@ -41,7 +43,9 @@ pub(crate) use runtime::{
 
 pub(crate) use execution_config::ExecutionConfig;
 pub(crate) use loop_config::{LoopConfig, LoopWorkflowConfig, parse_five_field_cron};
+pub(crate) use migration::RustMigrationLayout;
 pub(crate) use status_config::{StatusConfig, StatusProviderConfig};
+use vault_config::{VaultConfig, VaultScopeConfig};
 pub(crate) use work_config::{
     ReviewScopeArg, WorkConfig, WorkGate, WorkRefinementConfig, WorkReviewGate,
     parse_review_scope_arg,
@@ -88,6 +92,9 @@ struct RepoConfig {
     #[allow(dead_code)]
     #[serde(default)]
     rust_migration_dir: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    rust_migration_layout: RustMigrationLayout,
     #[allow(dead_code)]
     #[serde(default)]
     rust_sqlx_metadata_dir: String,
@@ -170,39 +177,6 @@ pub(crate) struct FrontendAppConfig {
     pub(crate) kind: Option<String>,
     #[serde(default)]
     pub(crate) role: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct VaultConfig {
-    #[serde(default)]
-    scope: VaultScopeConfig,
-    #[serde(default)]
-    scope_id: Option<String>,
-    #[serde(default)]
-    allow_global: bool,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum VaultScopeConfig {
-    #[default]
-    Legacy,
-    Repo,
-}
-
-impl VaultConfig {
-    pub(crate) fn repo_scope_id(&self) -> Option<&str> {
-        if self.scope == VaultScopeConfig::Repo {
-            self.scope_id.as_deref()
-        } else {
-            None
-        }
-    }
-
-    pub(crate) const fn allow_global(&self) -> bool {
-        self.allow_global
-    }
 }
 
 #[cfg_attr(not(feature = "dev-proxy"), allow(dead_code))]
@@ -441,6 +415,14 @@ impl RepoContext {
         &self.config.rust_migration_dir
     }
 
+    pub(crate) const fn rust_migration_layout(&self) -> RustMigrationLayout {
+        self.config.rust_migration_layout
+    }
+
+    pub(crate) const fn migration_add_enabled(&self) -> bool {
+        self.sqlx_enabled() && self.rust_migration_layout().allows_migration_add()
+    }
+
     pub(crate) fn schema_dump_command(&self) -> &str {
         &self.config.schema_dump_command
     }
@@ -592,6 +574,10 @@ impl FeatureContext for RepoContext {
 
     fn schema_dump_enabled(&self) -> bool {
         self.schema_dump_enabled()
+    }
+
+    fn migration_add_enabled(&self) -> bool {
+        self.migration_add_enabled()
     }
 
     fn frontend_app_count(&self) -> usize {
@@ -965,17 +951,17 @@ fn resolve_current_session_path(root: &Path) -> PathBuf {
         .args(["rev-parse", "--git-path", CURRENT_SESSION_FILE])
         .output();
 
-    if let Ok(output) = output {
-        if output.status.success() {
-            let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !resolved.is_empty() {
-                let path = PathBuf::from(&resolved);
-                return if path.is_absolute() {
-                    path
-                } else {
-                    root.join(path)
-                };
-            }
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !resolved.is_empty() {
+            let path = PathBuf::from(&resolved);
+            return if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            };
         }
     }
 

@@ -657,10 +657,53 @@ fn adopt_with_real_template_keeps_sqlx_files_when_enabled() {
     );
     let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
     assert!(answers.contains("sqlx_enabled = true"));
+    assert!(answers.contains("rust_migration_layout = \"flat_migrations\""));
     assert!(!answers.contains("migration_add_command"));
     let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
     assert!(contract.contains(r#""name": "jig.migration_add""#));
     assert!(contract.contains(r#""kind": "native""#));
+}
+
+#[test]
+fn adopt_with_versioned_artifacts_omits_migration_add_capability_and_guidance() {
+    let _guard = lock_env();
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    let template = materialize_template_git_worktree();
+    fs::create_dir_all(repo.join("crates/api")).unwrap();
+    fs::write(repo.join("crates/api/AGENTS.md"), "crate guide").unwrap();
+
+    run_adopt(AdoptOpts {
+        path: repo.clone(),
+        template: Some(template.path().display().to_string()),
+        template_mode: Some(TemplateMode::Committed),
+        vcs_ref: None,
+        force: false,
+        write: true,
+        minimal: false,
+        defaults: true,
+        no_input: true,
+        no_vault: true,
+        answers: AnswerOpts {
+            repo_name: Some("demo".into()),
+            sqlx_enabled: Some(true),
+            rust_migration_dir: Some("schema".into()),
+            rust_migration_layout: Some(crate::context::RustMigrationLayout::VersionedArtifacts),
+            rust_sqlx_metadata_dir: Some(".sqlx".into()),
+            ..AnswerOpts::default()
+        },
+    })
+    .unwrap();
+
+    let answers = fs::read_to_string(repo.join(".jig.toml")).unwrap();
+    assert!(answers.contains("rust_migration_layout = \"versioned_artifacts\""));
+    let contract = fs::read_to_string(repo.join(".agent/jig-contract.json")).unwrap();
+    assert!(contract.contains(r#""name": "jig.sqlx_check""#));
+    assert!(!contract.contains(r#""name": "jig.migration_add""#));
+    let guide = fs::read_to_string(repo.join("AGENTS.md")).unwrap();
+    assert!(guide.contains("complete versioned schema artifacts"));
+    assert!(guide.contains("do not use `scripts/jig sqlx migration add`"));
+    assert!(!guide.contains("- `scripts/jig sqlx migration add NAME`"));
 }
 
 #[test]

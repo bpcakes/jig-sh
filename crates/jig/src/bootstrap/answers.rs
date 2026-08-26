@@ -11,9 +11,9 @@ use super::{
     generated_package_manager_version,
 };
 use crate::context::{
-    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig, StatusConfig,
-    config_app_dirs_match, default_codex_marketplace_plugins, normalize_config_app_dir,
-    validate_web_package_manager,
+    DEFAULT_CODEX_MARKETPLACE_ID, DEFAULT_CODEX_MARKETPLACE_SOURCE, ExecutionConfig,
+    RustMigrationLayout, StatusConfig, config_app_dirs_match, default_codex_marketplace_plugins,
+    normalize_config_app_dir, validate_web_package_manager,
 };
 use crate::frontend_metadata::resolve_frontend_metadata;
 use crate::shell::quote as shell_quote;
@@ -53,6 +53,7 @@ pub(super) struct RenderAnswers {
     sqlx_enabled: bool,
     rust_crate_roots: Vec<String>,
     rust_migration_dir: Option<String>,
+    rust_migration_layout: RustMigrationLayout,
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: bool,
     schema_dump_command: String,
@@ -104,6 +105,7 @@ pub(super) struct AnswerInputShape {
 
 const SQLX_SHAPED_ANSWER_KEYS: &[&str] = &[
     "rust_migration_dir",
+    "rust_migration_layout",
     "rust_sqlx_metadata_dir",
     "schema_dump_command",
     "schema_check_command",
@@ -328,6 +330,7 @@ struct RawAnswers {
     sqlx_enabled: Option<bool>,
     rust_crate_roots: Option<Vec<String>>,
     rust_migration_dir: Option<String>,
+    rust_migration_layout: Option<RustMigrationLayout>,
     rust_sqlx_metadata_dir: Option<String>,
     schema_dump_enabled: Option<bool>,
     schema_dump_command: Option<String>,
@@ -458,6 +461,7 @@ impl RawAnswers {
             &mut self.rust_migration_dir,
             opts.rust_migration_dir.clone(),
         );
+        merge_option(&mut self.rust_migration_layout, opts.rust_migration_layout);
         merge_option(
             &mut self.rust_sqlx_metadata_dir,
             opts.rust_sqlx_metadata_dir.clone(),
@@ -546,6 +550,7 @@ impl RawAnswers {
             sqlx_enabled: self.sqlx_enabled,
             rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
             rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),
+            rust_migration_layout: self.rust_migration_layout,
             rust_sqlx_metadata_dir: self.rust_sqlx_metadata_dir,
             schema_dump_enabled: self.schema_dump_enabled,
             schema_dump_command: self.schema_dump_command,
@@ -626,6 +631,7 @@ impl RawAnswers {
             .ok_or_else(|| anyhow::anyhow!("Missing required answer: repo_name"))?;
         let sqlx_enabled = self.sqlx_enabled.unwrap_or(true);
         let rust_migration_dir = self.rust_migration_dir.filter(|value| !value.is_empty());
+        let rust_migration_layout = self.rust_migration_layout.unwrap_or_default();
         if sqlx_enabled && rust_migration_dir.is_none() {
             bail!(
                 "Missing required answer when sqlx_enabled is true (including when schema_dump_enabled implies SQLx): rust_migration_dir. Pass --rust-migration-dir <dir> for SQLx repos, or pass --sqlx-enabled false with schema_dump_enabled = false for tooling-only repos."
@@ -693,6 +699,7 @@ impl RawAnswers {
                 .rust_crate_roots
                 .unwrap_or_else(|| vec!["crates".into()]),
             rust_migration_dir,
+            rust_migration_layout,
             rust_sqlx_metadata_dir,
             schema_dump_enabled,
             schema_dump_command,
@@ -746,6 +753,7 @@ fn answer_opts_has_sqlx_shape(answers: &AnswerOpts) -> bool {
             .rust_migration_dir
             .as_deref()
             .is_some_and(|value| !value.is_empty()),
+        "rust_migration_layout" => answers.rust_migration_layout.is_some(),
         "rust_sqlx_metadata_dir" => answers.rust_sqlx_metadata_dir.is_some(),
         "schema_dump_command" => answers.schema_dump_command.is_some(),
         "schema_check_command" => answers.schema_check_command.is_some(),

@@ -221,12 +221,10 @@ impl ProxyStartLock {
 
 impl Drop for ProxyStartLock {
     fn drop(&mut self) {
-        if !self.unlocked {
-            if let Err(error) = FileExt::unlock(&self.file) {
-                eprintln!(
-                    "jig proxy failed to unlock proxy start lock while dropping guard: {error}"
-                );
-            }
+        if !self.unlocked
+            && let Err(error) = FileExt::unlock(&self.file)
+        {
+            eprintln!("jig proxy failed to unlock proxy start lock while dropping guard: {error}");
         }
     }
 }

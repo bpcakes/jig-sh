@@ -3276,20 +3276,19 @@ fn enforce_import_precondition(
         vault,
         "vault state changed since the import preview; preview again",
     )?;
-    if !replace {
-        if let Some(field) = precondition
+    if !replace
+        && let Some(field) = precondition
             .fields
             .iter()
             .find(|field| field.previous_kind.is_some())
-        {
-            return Err(classified(
-                VaultErrorKind::AlreadyExists,
-                format!(
-                    "vault field '{}' already exists; enable replacement and preview again",
-                    field.reference
-                ),
-            ));
-        }
+    {
+        return Err(classified(
+            VaultErrorKind::AlreadyExists,
+            format!(
+                "vault field '{}' already exists; enable replacement and preview again",
+                field.reference
+            ),
+        ));
     }
     Ok(())
 }
