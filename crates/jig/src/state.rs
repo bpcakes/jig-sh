@@ -5,7 +5,10 @@ use serde_json::{Value, json};
 use crate::context::RepoContext;
 use crate::tool_defs::tool;
 
-pub(crate) use execution_leases::{RepositoryExecutionLease, acquire_repository_execution_lease};
+pub(crate) use execution_leases::{
+    RepositoryExecutionLease, acquire_repository_execution_lease,
+    try_acquire_repository_execution_lease,
+};
 use jsonl::append_jsonl;
 #[cfg(test)]
 use jsonl::read_jsonl;

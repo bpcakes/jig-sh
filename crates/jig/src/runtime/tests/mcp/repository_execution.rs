@@ -209,16 +209,14 @@ fn active_plan_linked_mcp_run_blocks_plan_close_until_terminal() {
 }
 
 #[test]
-fn concurrent_worktree_runs_serialize_before_revalidating_source() {
-    use std::sync::mpsc;
-
+fn incompatible_mcp_run_is_rejected_without_blocking_cancellation() {
     let temp = tempdir().unwrap();
     write_v6_evidence_fixture_repo(temp.path(), "");
     add_v6_effectful_evidence_actions(temp.path());
     let config_path = temp.path().join(".jig.toml");
     let config = fs::read_to_string(&config_path).unwrap().replace(
         "api_test_command = \"printf 'api tests passed\\n'\"",
-        "api_test_command = \"if [ -f .agent/.cache/generator-active ]; then printf 'overlap\\n' > overlap.txt; fi; touch .agent/.cache/generator-active; sleep 1; printf 'generated\\n' >> api/generated.txt; rm -f .agent/.cache/generator-active\"",
+        "api_test_command = \"if [ -f .agent/.cache/generator-active ]; then printf 'overlap\\n' > overlap.txt; fi; touch .agent/.cache/generator-active; sleep 30; printf 'generated\\n' >> api/generated.txt; rm -f .agent/.cache/generator-active\"",
     );
     fs::write(config_path, config).unwrap();
     init_git_repo(temp.path());
@@ -240,25 +238,26 @@ fn concurrent_worktree_runs_serialize_before_revalidating_source() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    let second_ctx = ctx.clone();
-    let (second_tx, second_rx) = mpsc::channel();
-    thread::spawn(move || {
-        second_tx
-            .send(call_tool(&second_ctx, tool::EXECUTE_RUN, execute_args))
-            .unwrap();
-    });
+    let rejected_at = Instant::now();
+    let second_error = call_tool(&ctx, tool::EXECUTE_RUN, execute_args)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        second_error,
+        "repository execution is busy with an incompatible run; retry after it finishes or cancel that run first"
+    );
+    assert!(
+        rejected_at.elapsed() < Duration::from_secs(2),
+        "an incompatible execute request waited on the active run"
+    );
 
+    let cancelled = call_tool(&ctx, tool::CANCEL_RUN, json!({"run_id": first_run_id})).unwrap();
+    assert_eq!(cancelled["worker_signalled"], true);
     let first_terminal = wait_for_repository_run(&ctx, first_run_id);
     assert_eq!(
         first_terminal["result"]["run"]["result"]["conclusion"],
-        "success"
+        "cancelled"
     );
-    let second_error = second_rx
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap()
-        .unwrap_err()
-        .to_string();
-    assert!(second_error.contains("stale"), "{second_error}");
     assert!(!temp.path().join("overlap.txt").exists());
 }
 

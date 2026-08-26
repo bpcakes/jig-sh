@@ -213,6 +213,22 @@ impl RepositoryRenderModel {
         .context("Failed to serialize repository commands")
     }
 
+    pub(super) fn go_ci_input_paths(&self) -> Vec<String> {
+        let roots = self
+            .components
+            .iter()
+            .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
+            .map(|component| component.root.as_str())
+            .collect::<BTreeSet<_>>();
+        if roots.contains(".") {
+            return vec!["**".into()];
+        }
+        roots
+            .into_iter()
+            .map(|root| format!("{}/**", root.trim_end_matches('/')))
+            .collect()
+    }
+
     pub(super) fn frontend_contracts_enabled(&self) -> bool {
         [
             (FRONTEND_CONTRACT_DRIFT_ACTION, "contracts-drift-check"),

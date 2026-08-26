@@ -3,7 +3,9 @@ name: Go Tests
 on:
   pull_request:
     paths:
-      - "**/*.go"
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
       - "go.mod"
       - "go.sum"
       - "go.work"
@@ -34,7 +36,9 @@ on:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-      - "**/*.go"
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
       - "go.mod"
       - "go.sum"
       - "go.work"

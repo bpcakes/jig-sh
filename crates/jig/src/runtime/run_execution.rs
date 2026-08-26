@@ -127,7 +127,13 @@ pub(super) fn start_check_run_with_event_cursor(
     crate::state::RunEventCursor,
 )> {
     let repository_execution =
-        crate::state::acquire_repository_execution_lease(ctx, &plan.effects)?;
+        crate::state::try_acquire_repository_execution_lease(ctx, &plan.effects)?.ok_or_else(
+            || {
+                anyhow::anyhow!(
+                    "repository execution is busy with an incompatible run; retry after it finishes or cancel that run first"
+                )
+            },
+        )?;
     crate::repository::validate_run_plan(ctx, catalog, &plan)?;
     crate::state::start_run_with_event_cursor_and_execution_lease(
         ctx,

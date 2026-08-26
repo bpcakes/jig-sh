@@ -76,6 +76,8 @@ role = "admin"
     );
     let model = RepositoryRenderModel::from_answers(&answers).unwrap();
 
+    assert_eq!(model.go_ci_input_paths(), ["**"]);
+
     assert!(
         model
             .components
@@ -756,6 +758,8 @@ fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
         .unwrap();
 
         let answers = RenderAnswers::from_answers_file(&path).unwrap();
+        let model = RepositoryRenderModel::from_answers(&answers).unwrap();
+        assert_eq!(model.go_ci_input_paths(), ["services/api/**"]);
         assert_eq!(
             [
                 answers.go_fmt_ci_target(),

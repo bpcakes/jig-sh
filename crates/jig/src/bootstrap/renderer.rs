@@ -663,8 +663,20 @@ fn render_context(
         "go_postgres_integration_ci_enabled".into(),
         JsonValue::Bool(answers.go_postgres_integration_ci_enabled()),
     );
+    let repository = (contract_version >= 6 || answers.go_ci_workflow_enabled())
+        .then(|| RepositoryRenderModel::from_answers(answers))
+        .transpose()?;
+    context.insert(
+        "go_ci_input_paths".into(),
+        serde_json::to_value(
+            repository
+                .as_ref()
+                .map(RepositoryRenderModel::go_ci_input_paths)
+                .unwrap_or_default(),
+        )?,
+    );
     if contract_version >= 6 {
-        let repository = RepositoryRenderModel::from_answers(answers)?;
+        let repository = repository.expect("contract v6 always resolves a repository model");
         let repository_toml = repository.authored_toml()?;
         let repository_commands_toml = repository.commands_toml()?;
         context.insert(

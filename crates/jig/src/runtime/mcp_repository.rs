@@ -234,7 +234,11 @@ fn execute(ctx: &RepoContext, args: ExecuteRunArgs) -> Result<Value> {
     thread::Builder::new()
         .name("jig-repository-run".into())
         .spawn(move || {
-            // start_check_run is the single freshness-validation boundary.
+            // start_check_run is the single freshness-validation boundary and
+            // uses a nonblocking repository lease attempt. Contention must be
+            // rejected before this request waits for the durable handle;
+            // otherwise the single MCP request loop cannot accept cancellation
+            // for the run that owns the incompatible lease.
             // The accepted handle is not published until that validation and
             // durable run creation both succeed, so validating once here keeps
             // the same safety ordering without an extra full fingerprint scan

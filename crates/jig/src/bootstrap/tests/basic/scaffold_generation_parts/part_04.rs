@@ -405,6 +405,11 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
                 && !workflow.contains("go-version-file: \".go-version\""),
             "{workflow_name} must not refer to the retired Go version file"
         );
+        assert_eq!(
+            workflow.matches(r#"- "**""#).count(),
+            2,
+            "{workflow_name} must track every input beneath the root Go component"
+        );
         assert!(workflow.contains(
             "cache-dependency-path: |\n            go.mod\n            go.sum\n            go.work\n            go.work.sum\n            **/go.mod"
         ));
@@ -704,6 +709,12 @@ export async function createClient({ output }) {
         .unwrap();
         assert!(workflow.contains("version=\"$(scripts/jig info go-version)\""));
         assert!(!workflow.contains("go-version-file: go.mod"));
+        assert_eq!(
+            workflow.matches(r#"- "services/api/**""#).count(),
+            2,
+            "{workflow_name} must follow the authored Go component root"
+        );
+        assert!(!workflow.contains(r#"- "**""#));
     }
     let context = crate::context::RepoContext::load_from(&destination).unwrap();
     assert_eq!(crate::doctor::go_version_selector(&context).unwrap(), "1.26.0");
