@@ -50,7 +50,7 @@ func TestOpenAPIIsCurrent(t *testing.T) {
 	}
 	generated = append(generated, '\n')
 
-	contractPath := filepath.Join("..", "..", "openapi", "public.json")
+	contractPath := filepath.FromSlash(<<[ go_public_openapi_test_path | tojson ]>>)
 	committed, err := os.ReadFile(contractPath)
 	if err != nil {
 		t.Fatalf("read committed OpenAPI: %v", err)

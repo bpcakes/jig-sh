@@ -171,6 +171,7 @@ impl InitScaffoldPlan {
             "package_name": self.package_name,
             "go_module": backend.module,
             "go_backend_root": backend.component_root,
+            "go_public_openapi_test_path": go_public_openapi_test_path(&backend.component_root),
             "db_enabled": backend.database.is_postgres(),
             "database_url_example": format!(
                 "postgres://postgres:postgres@localhost:5432/{database_name}?sslmode=disable"
@@ -178,6 +179,17 @@ impl InitScaffoldPlan {
             "postgres_test_database_name": postgres_test_database_name,
         })
     }
+}
+
+fn go_public_openapi_test_path(component_root: &str) -> String {
+    let component_depth = if component_root == "." {
+        0
+    } else {
+        component_root.split('/').count()
+    };
+    let mut segments = vec![".."; component_depth + 2];
+    segments.extend(["openapi", "public.json"]);
+    segments.join("/")
 }
 
 fn go_workspace_output_path(backend: &GoScaffoldPlan, output: &str) -> String {

@@ -261,6 +261,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
     assert!(!contracts.contents.contains(r#"run("cargo""#));
     assert!(!contracts.contents.contains("execFile"));
     assert!(!contracts.contents.contains("promisify"));
+    assert!(contracts.contents.contains(r#"join(backendRoot, "go.mod")"#));
     assert!(contracts.contents.contains("async function withStagedClients()"));
     let httpapi_test = rendered
         .iter()
@@ -271,7 +272,7 @@ fn go_react_postgres_renders_go_contract_and_database_boundaries() {
     assert!(
         httpapi_test
             .contents
-            .contains(r#"filepath.Join("..", "..", "openapi", "public.json")"#)
+            .contains(r#"filepath.FromSlash("../../openapi/public.json")"#)
     );
     assert!(!httpapi_test.contents.contains("runtime.Caller"));
 }
@@ -814,6 +815,10 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     assert!(rendered.iter().any(|file| file.relative == "openapi/public.json"));
     let postgres_script = contents("scripts/test-postgres.sh");
     assert!(postgres_script.contains(r#"go -C "services/api" test -count=1"#));
+    let httpapi_test = contents("services/api/internal/httpapi/httpapi_test.go");
+    assert!(httpapi_test.contains(
+        r#"filepath.FromSlash("../../../../openapi/public.json")"#
+    ));
     let workflow = contents(".github/workflows/e2e.yml");
     assert_eq!(workflow.matches(r#"- "services/api/**""#).count(), 2);
     assert_eq!(
@@ -831,6 +836,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     assert!(playwright.contains("cwd: backendRoot"));
     let contracts = contents("scripts/contracts.mjs");
     assert!(contracts.contains(r#"resolve(repoRoot, "services/api")"#));
+    assert!(contracts.contains(r#"join(backendRoot, "go.mod")"#));
     assert!(contracts.contains(
         r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#
     ));

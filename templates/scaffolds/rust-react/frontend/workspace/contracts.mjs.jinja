@@ -232,7 +232,7 @@ async function assertPublicBoundary(
 ) {
   const manifests = [
 [% if backend_language == "go" %]
-    "go.mod",
+    join(backendRoot, "go.mod"),
 [% else %]
     "apps/<<[ package_name ]>>-api/Cargo.toml",
     "crates/<<[ package_name ]>>-http/Cargo.toml",
