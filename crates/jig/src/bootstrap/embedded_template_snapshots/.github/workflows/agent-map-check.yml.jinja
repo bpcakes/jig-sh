@@ -6,8 +6,8 @@ on:
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_component_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"
@@ -19,8 +19,8 @@ on:
       - "AGENTS.md"
       - "**/AGENTS.md"
       - "agent-map.md"
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_component_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
       - "scripts/jig"
       - "scripts/install-jig.sh"

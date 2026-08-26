@@ -467,6 +467,10 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
     }
     for event in ["pull_request", "push"] {
         let paths = rust_workflow_yaml["on"][event]["paths"].as_array().unwrap();
+        assert!(
+            paths.iter().any(|path| path == "**"),
+            "Rust CI must derive its root component input from repository authority"
+        );
         assert!(paths.iter().any(|path| path == "migrations/**"));
         assert!(paths.iter().any(|path| path == ".sqlx/**"));
     }
@@ -494,6 +498,16 @@ fn run_init_rust_react_scaffold_generates_backend_and_frontends() {
         let workflow =
             fs::read_to_string(destination.join(".github/workflows").join(workflow_name)).unwrap();
         let workflow = serde_yaml_ng::from_str::<serde_json::Value>(&workflow).unwrap();
+        for event in ["pull_request", "push"] {
+            assert!(
+                workflow["on"][event]["paths"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|path| path == "**"),
+                "{workflow_name} must derive Rust component paths from repository authority"
+            );
+        }
         for job in jobs {
             assert_eq!(workflow["jobs"][job]["runs-on"], "macos-14");
         }

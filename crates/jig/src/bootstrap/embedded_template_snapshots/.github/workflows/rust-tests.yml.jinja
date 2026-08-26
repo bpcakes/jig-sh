@@ -3,47 +3,33 @@ name: Rust Tests
 on:
   pull_request:
     paths:
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_ci_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   push:
     branches:
       - <<[ default_branch | tojson ]>>
     paths:
-[% for root in rust_crate_roots %]
-      - <<[ (root ~ "/**") | tojson ]>>
+[% for path in rust_ci_input_paths %]
+      - <<[ path | tojson ]>>
 [% endfor %]
 [% if sqlx_enabled %]
       - <<[ (migration_dir ~ "/**") | tojson ]>>
       - <<[ (rust_sqlx_metadata_dir ~ "/**") | tojson ]>>
 [% endif %]
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain"
-      - "rust-toolchain.toml"
-      - ".clippy.toml"
-      - "clippy.toml"
       - ".jig.toml"
       - ".agent/jig-contract.json"
       - "scripts/jig"
       - "scripts/install-jig.sh"
-      - ".cargo/**"
       - ".github/workflows/rust-tests.yml"
   merge_group:
     types:

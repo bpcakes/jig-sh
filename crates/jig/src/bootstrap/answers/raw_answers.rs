@@ -453,6 +453,21 @@ impl RawAnswers {
         let authored_has_rust_backend = authored_repository
             .as_ref()
             .is_some_and(|model| model.has_adapter("rust") || model.has_adapter("sqlx"));
+        let authored_rust_crate_roots = authored_repository.as_ref().map(|model| {
+            model
+                .components
+                .iter()
+                .filter(|component| {
+                    component
+                        .adapters
+                        .iter()
+                        .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
+                })
+                .map(|component| component.root.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
         let repo_name = self
@@ -568,14 +583,14 @@ impl RawAnswers {
             go_database,
             go_toolchain_authority_path: GO_TOOLCHAIN_AUTHORITY_PATH,
             sqlx_enabled,
-            rust_crate_roots: if backend_language == BackendLanguage::Go
-                && !authored_has_rust_backend
-            {
-                Vec::new()
-            } else {
-                self.rust_crate_roots
-                    .unwrap_or_else(|| vec!["crates".into()])
-            },
+            rust_crate_roots: authored_rust_crate_roots.unwrap_or_else(|| {
+                if backend_language == BackendLanguage::Go {
+                    Vec::new()
+                } else {
+                    self.rust_crate_roots
+                        .unwrap_or_else(|| vec!["crates".into()])
+                }
+            }),
             rust_migration_dir,
             migration_dir,
             rust_migration_layout,

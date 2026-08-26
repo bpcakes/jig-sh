@@ -6,24 +6,10 @@ on:
 [% for path in go_ci_input_paths %]
       - <<[ path | tojson ]>>
 [% endfor %]
-      - "go.mod"
-      - "go.sum"
-      - "go.work"
-      - "go.work.sum"
-      - "**/go.mod"
-      - "**/go.sum"
-      - "**/go.work"
-      - "**/go.work.sum"
-      - "vendor/modules.txt"
-      - "**/vendor/modules.txt"
-      - "openapi/**"
 [% if go_sqlc_ci_enabled %]
-      - "sqlc.yaml"
-      - "**/sqlc.yaml"
-      - "**/*.sql"
-      - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+      - "openapi/**"
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]
@@ -39,24 +25,10 @@ on:
 [% for path in go_ci_input_paths %]
       - <<[ path | tojson ]>>
 [% endfor %]
-      - "go.mod"
-      - "go.sum"
-      - "go.work"
-      - "go.work.sum"
-      - "**/go.mod"
-      - "**/go.sum"
-      - "**/go.work"
-      - "**/go.work.sum"
-      - "vendor/modules.txt"
-      - "**/vendor/modules.txt"
-      - "openapi/**"
 [% if go_sqlc_ci_enabled %]
-      - "sqlc.yaml"
-      - "**/sqlc.yaml"
-      - "**/*.sql"
-      - "internal/database/queries/**"
       - <<[ (migration_dir ~ "/**") | tojson ]>>
 [% endif %]
+      - "openapi/**"
 [% if go_postgres_integration_ci_enabled %]
       - "scripts/test-postgres.sh"
 [% endif %]

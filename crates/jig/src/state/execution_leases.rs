@@ -13,6 +13,7 @@ const REPOSITORY_EXECUTION_LEASE: &str = ".agent/.cache/repository-execution.loc
 
 pub(crate) struct RepositoryExecutionLease {
     _file: File,
+    exclusive: bool,
 }
 
 pub(crate) fn acquire_repository_execution_lease(
@@ -20,14 +21,18 @@ pub(crate) fn acquire_repository_execution_lease(
     effects: &[ActionEffect],
 ) -> Result<RepositoryExecutionLease> {
     let file = open_repository_execution_lease(ctx)?;
-    if requires_exclusive_execution(effects) {
+    let exclusive = requires_exclusive_execution(effects);
+    if exclusive {
         FileExt::lock_exclusive(&file)
             .context("Failed to acquire exclusive repository execution lease")?;
     } else {
         FileExt::lock_shared(&file)
             .context("Failed to acquire shared repository execution lease")?;
     }
-    Ok(RepositoryExecutionLease { _file: file })
+    Ok(RepositoryExecutionLease {
+        _file: file,
+        exclusive,
+    })
 }
 
 pub(crate) fn try_acquire_repository_execution_lease(
@@ -35,7 +40,8 @@ pub(crate) fn try_acquire_repository_execution_lease(
     effects: &[ActionEffect],
 ) -> Result<Option<RepositoryExecutionLease>> {
     let file = open_repository_execution_lease(ctx)?;
-    let (acquired, kind) = if requires_exclusive_execution(effects) {
+    let exclusive = requires_exclusive_execution(effects);
+    let (acquired, kind) = if exclusive {
         (FileExt::try_lock_exclusive(&file), "exclusive")
     } else {
         (FileExt::try_lock_shared(&file), "shared")
@@ -48,7 +54,16 @@ pub(crate) fn try_acquire_repository_execution_lease(
                 .with_context(|| format!("Failed to inspect {kind} repository execution lease"));
         }
     };
-    Ok(acquired.then_some(RepositoryExecutionLease { _file: file }))
+    Ok(acquired.then_some(RepositoryExecutionLease {
+        _file: file,
+        exclusive,
+    }))
+}
+
+impl RepositoryExecutionLease {
+    pub(crate) fn permits(&self, effects: &[ActionEffect]) -> bool {
+        self.exclusive || !requires_exclusive_execution(effects)
+    }
 }
 
 fn open_repository_execution_lease(ctx: &RepoContext) -> Result<File> {

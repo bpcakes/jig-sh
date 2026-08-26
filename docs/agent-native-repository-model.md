@@ -190,7 +190,9 @@ take independent preconditions. Every run also holds a checkout-wide execution
 lease: safe read-only runs share it, while worktree, external, and otherwise
 effectful runs hold it exclusively from freshness validation through terminal
 execution. Contract-v6 compatibility aliases acquire the same lease from their
-owning action's effects and retain it through receipt recording. MCP execution
+owning action's effects, reload action and command authority after any wait,
+and retain the lease through receipt recording. If reloaded effects require a
+stronger lease, dispatch repeats acquisition before it runs. MCP execution
 requests do not wait for an incompatible lease: they fail through
 the pre-acceptance protocol error channel so the transport remains able to
 inspect or cancel the active run. Independent

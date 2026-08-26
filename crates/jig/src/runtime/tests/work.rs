@@ -22,6 +22,7 @@ intent = "generate"
 effects = ["worktree", "process"]
 runner = {{ kind = "command", command = "api_schema_dump_command" }}
 inputs = ["api/**"]
+legacy_aliases = ["jig.schema_dump"]
 
 [[repository.profiles]]"#
     );
@@ -65,7 +66,8 @@ inputs = ["api/**"]
             "intent": "generate",
             "effects": ["worktree", "process"],
             "runner": {"kind": "command", "command": "api_schema_dump_command"},
-            "inputs": ["api/**"]
+            "inputs": ["api/**"],
+            "legacy_aliases": ["jig.schema_dump"]
         }),
     ]);
     fs::write(
@@ -176,7 +178,7 @@ fn explicit_schema_check_rejects_a_declared_worktree_effect() {
 }
 
 #[test]
-fn effectful_v6_compatibility_alias_waits_for_checkout_readers() {
+fn effectful_v6_compatibility_alias_refreshes_authority_after_checkout_wait() {
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -212,12 +214,27 @@ fn effectful_v6_compatibility_alias_waits_for_checkout_readers() {
                 "effectful compatibility alias completed while a checkout reader was active: {result:#?}"
             );
         }
+        let config_path = temp.path().join(".jig.toml");
+        let mut config =
+            toml::from_str::<toml::Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        config["commands"]["api_schema_dump_command"] = toml::Value::String(
+            "printf 'refreshed authority\\n'; printf 'schema\\n' > docs/schema/schema.sql".into(),
+        );
+        fs::write(config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
+        let refreshed = RepoContext::load_from(temp.path()).unwrap();
+        assert!(
+            refreshed
+                .command_for_key("api_schema_dump_command")
+                .unwrap()
+                .contains("refreshed authority")
+        );
         drop(reader);
         let output = result_rx
             .recv_timeout(Duration::from_secs(2))
             .unwrap()
             .unwrap();
         assert_eq!(output["ok"], true, "{output:#}");
+        assert_eq!(output["result"]["stdout"], "refreshed authority\n");
     });
 }
 
@@ -314,9 +331,12 @@ coverage_threshold = 80
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("jig.typescript_lint is not declared"));
-    assert!(error.contains("jig update --recopy"));
-    assert!(error.contains("project-owned [commands]"));
+    assert!(
+        error.contains("jig.typescript_lint is not declared"),
+        "{error}"
+    );
+    assert!(error.contains("jig update --recopy"), "{error}");
+    assert!(error.contains("project-owned [commands]"), "{error}");
 }
 
 #[test]

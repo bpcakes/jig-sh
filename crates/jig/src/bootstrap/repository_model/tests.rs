@@ -76,7 +76,8 @@ role = "admin"
     );
     let model = RepositoryRenderModel::from_answers(&answers).unwrap();
 
-    assert_eq!(model.go_ci_input_paths(), ["**"]);
+    assert!(model.go_ci_input_paths().contains(&"**".into()));
+    assert!(model.go_ci_input_paths().contains(&"**/*.go".into()));
 
     assert!(
         model
@@ -557,6 +558,10 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
         ActionRunner::command("worker_test_command"),
     );
     worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
+    worker_test.inputs = vec!["shared/rust-fixtures/**".into()];
+    worker_test
+        .legacy_aliases
+        .push(jig_contract::tool::TEST_LOCKED.into());
     let profile = ProfileSpec::new(
         ProfileId::parse("ci").unwrap(),
         vec![api_test.target.clone(), worker_test.target.clone()],
@@ -582,7 +587,7 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
     fs::write(
             &path,
         format!(
-                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = true\nrust_crate_roots = [\"services/worker\"]\nmigration_dir = \"database/migrations\"\nschema_dump_enabled = false\n{}\n{}",
+                "repo_name = \"ExampleProject\"\nbackend_language = \"go\"\nsqlx_enabled = true\nrust_crate_roots = [\"legacy-rust-root\"]\nmigration_dir = \"database/migrations\"\nschema_dump_enabled = false\n{}\n{}",
                 authored.authored_toml().unwrap(),
                 authored.commands_toml().unwrap()
             ),
@@ -618,6 +623,17 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
         )
     );
     let rerendered = RepositoryRenderModel::from_answers(&answers).unwrap();
+
+    assert!(
+        rerendered
+            .rust_ci_input_paths()
+            .contains(&"services/worker/**".into())
+    );
+    assert!(
+        rerendered
+            .rust_ci_input_paths()
+            .contains(&"shared/rust-fixtures/**".into())
+    );
 
     assert_eq!(
         rerendered
@@ -702,6 +718,7 @@ fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
                 if add_aliases {
                     action.legacy_aliases.push(alias.into());
                 }
+                action.inputs = vec!["shared/proto/**".into()];
                 action
             })
             .collect::<Vec<_>>();
@@ -759,7 +776,17 @@ fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
 
         let answers = RenderAnswers::from_answers_file(&path).unwrap();
         let model = RepositoryRenderModel::from_answers(&answers).unwrap();
-        assert_eq!(model.go_ci_input_paths(), ["services/api/**"]);
+        assert!(
+            model
+                .go_ci_input_paths()
+                .contains(&"services/api/**".into())
+        );
+        assert_eq!(
+            model
+                .go_ci_input_paths()
+                .contains(&"shared/proto/**".into()),
+            add_aliases
+        );
         assert_eq!(
             [
                 answers.go_fmt_ci_target(),

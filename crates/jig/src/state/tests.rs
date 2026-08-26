@@ -990,6 +990,8 @@ fn repository_execution_lease_allows_readers_and_excludes_a_writer() {
     let ctx = RepoContext::load_from(temp.path()).unwrap();
     let first_reader =
         acquire_repository_execution_lease(&ctx, &[jig_contract::ActionEffect::ReadOnly]).unwrap();
+    assert!(first_reader.permits(&[jig_contract::ActionEffect::ReadOnly]));
+    assert!(!first_reader.permits(&[jig_contract::ActionEffect::Worktree]));
     let second_reader = acquire_repository_execution_lease(
         &ctx,
         &[

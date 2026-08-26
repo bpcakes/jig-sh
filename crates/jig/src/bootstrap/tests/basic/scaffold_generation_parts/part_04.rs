@@ -435,12 +435,6 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
         }
         assert_eq!(
             workflow
-                .matches(r#"- "internal/database/queries/**""#)
-                .count(),
-            2
-        );
-        assert_eq!(
-            workflow
                 .matches(r#"- "internal/database/migrations/**""#)
                 .count(),
             2
@@ -697,6 +691,19 @@ export async function createClient({ output }) {
         .find(|component| component["id"].as_str() == Some("api"))
         .unwrap();
     api_component["root"] = toml::Value::String("services/api".into());
+    let locked_test = config["repository"]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|action| {
+            action["target"]["component"].as_str() == Some("api")
+                && action["target"]["action"].as_str() == Some("test-locked")
+        })
+        .unwrap();
+    locked_test["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(toml::Value::String("shared/proto/**".into()));
     fs::write(&config_path, toml::to_string_pretty(&config).unwrap()).unwrap();
     run_update(update_opts(&destination, template.path(), true)).unwrap();
 
@@ -713,6 +720,11 @@ export async function createClient({ output }) {
             workflow.matches(r#"- "services/api/**""#).count(),
             2,
             "{workflow_name} must follow the authored Go component root"
+        );
+        assert_eq!(
+            workflow.matches(r#"- "shared/proto/**""#).count(),
+            2,
+            "{workflow_name} must track declared inputs outside the Go component root"
         );
         assert!(!workflow.contains(r#"- "**""#));
     }

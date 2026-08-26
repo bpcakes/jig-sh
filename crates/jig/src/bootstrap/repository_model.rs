@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use jig_contract::{
     ActionEffect, ActionId, ActionIntent, ActionRunner, ActionSpec, AdapterRunnerDescriptor,
     ComponentId, ComponentSpec, FieldProvenance, ManifestTool, ProfileId, ProfileSpec, TargetId,
-    kind,
+    kind, tool,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -214,19 +214,91 @@ impl RepositoryRenderModel {
     }
 
     pub(super) fn go_ci_input_paths(&self) -> Vec<String> {
-        let roots = self
+        self.backend_ci_input_paths(
+            &["go", "go-postgres"],
+            &[
+                tool::FMT_CHECK,
+                tool::LINT,
+                tool::TEST_LOCKED,
+                tool::SQLC_CHECK,
+            ],
+        )
+    }
+
+    pub(super) fn rust_ci_input_paths(&self) -> Vec<String> {
+        self.backend_ci_input_paths(
+            &["rust", "sqlx"],
+            &[tool::FMT_CHECK, tool::CLIPPY, tool::TEST_LOCKED],
+        )
+    }
+
+    pub(super) fn rust_component_input_paths(&self) -> Vec<String> {
+        let paths = self
             .components
             .iter()
-            .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
-            .map(|component| component.root.as_str())
+            .filter(|component| {
+                component
+                    .adapters
+                    .iter()
+                    .any(|adapter| matches!(adapter.as_str(), "rust" | "sqlx"))
+            })
+            .map(|component| component_root_input(&component.root))
             .collect::<BTreeSet<_>>();
-        if roots.contains(".") {
-            return vec!["**".into()];
+        collapse_all_input(paths)
+    }
+
+    fn backend_ci_input_paths(&self, adapters: &[&str], aliases: &[&str]) -> Vec<String> {
+        let owning_components = self
+            .components
+            .iter()
+            .filter(|component| {
+                component
+                    .adapters
+                    .iter()
+                    .any(|adapter| adapters.contains(&adapter.as_str()))
+            })
+            .map(|component| component.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut paths = owning_components
+            .iter()
+            .filter_map(|component| {
+                self.components
+                    .iter()
+                    .find(|candidate| &candidate.id == component)
+            })
+            .map(|component| component_root_input(&component.root))
+            .collect::<BTreeSet<_>>();
+        let mut pending = self
+            .actions
+            .iter()
+            .filter(|action| {
+                owning_components.contains(&action.target.component)
+                    && action
+                        .legacy_aliases
+                        .iter()
+                        .any(|alias| aliases.contains(&alias.as_str()))
+            })
+            .map(|action| action.target.clone())
+            .collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        while let Some(target) = pending.pop() {
+            if !visited.insert(target.clone()) {
+                continue;
+            }
+            let Some(action) = self.actions.iter().find(|action| action.target == target) else {
+                continue;
+            };
+            paths.extend(action.inputs.iter().cloned());
+            if let Some(component) = self
+                .components
+                .iter()
+                .find(|component| component.id == action.target.component)
+            {
+                paths.insert(component_root_input(&component.root));
+            }
+            pending.extend(action.depends_on.iter().cloned());
         }
-        roots
-            .into_iter()
-            .map(|root| format!("{}/**", root.trim_end_matches('/')))
-            .collect()
+        paths.into_iter().collect()
     }
 
     pub(super) fn frontend_contracts_enabled(&self) -> bool {
@@ -250,6 +322,22 @@ impl RepositoryRenderModel {
                     .is_some_and(|value| value.contains(mode))
             })
         })
+    }
+}
+
+fn component_root_input(root: &str) -> String {
+    if root == "." {
+        "**".into()
+    } else {
+        format!("{}/**", root.trim_end_matches('/'))
+    }
+}
+
+fn collapse_all_input(paths: BTreeSet<String>) -> Vec<String> {
+    if paths.contains("**") {
+        vec!["**".into()]
+    } else {
+        paths.into_iter().collect()
     }
 }
 

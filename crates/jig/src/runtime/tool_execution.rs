@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use jig_contract::{ActionRunner, ManifestTool, NativeToolKind, TargetId};
+use jig_contract::{ActionRunner, ActionSpec, ManifestTool, NativeToolKind, TargetId};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -188,79 +188,32 @@ fn execute_manifest_tool_with_options(
     position: PhasePosition,
     observer: &mut dyn ExecutionControl,
 ) -> Result<ManifestToolExecutionOutcome> {
-    let tool = ctx
+    let current = if ctx.contract_version() >= 6 {
+        super::refreshed_repository_context(ctx)?
+    } else {
+        ctx.clone()
+    };
+    let tool = current
         .tool_spec(tool_name)
-        .ok_or_else(|| anyhow!("{}", undeclared_tool_message(ctx, tool_name)))?;
-    let action = if ctx.contract_version() >= 6 {
-        let catalog = RepositoryCatalog::from_context(ctx)?;
+        .cloned()
+        .ok_or_else(|| anyhow!("{}", undeclared_tool_message(&current, tool_name)))?;
+    let action = if current.contract_version() >= 6 {
+        let catalog = RepositoryCatalog::from_context(&current)?;
         catalog.action_for_alias(tool_name).cloned()
     } else {
         None
     };
-    let admission_name = action
-        .as_ref()
-        .and_then(|action| match &action.runner {
-            ActionRunner::Native { operation } => Some(operation.as_str()),
-            ActionRunner::Command { .. } => None,
-        })
-        .unwrap_or(tool_name);
-    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
-        bail!(error);
+    if action.is_some() {
+        return execute_v6_action_alias(
+            current, tool_name, args, plan_id, options, position, observer,
+        );
     }
-    if let Some(action) = action {
-        // Contract-v6 actions are the authority for both dispatch and checkout
-        // effects, including compatibility aliases that do not enter through
-        // repository run planning. Keep the lease alive through runner
-        // execution and receipt recording so those aliases participate in the
-        // same checkout-wide isolation as planned runs.
-        let _repository_execution =
-            crate::state::acquire_repository_execution_lease(ctx, &action.effects)?;
-        return match action.runner {
-            ActionRunner::Native { operation } => execute_native_tool(
-                ctx,
-                NativeToolInvocation {
-                    tool_name: &tool.name,
-                    operation: &operation,
-                    target: Some(&action.target),
-                    timeout_seconds: action.timeout_seconds,
-                },
-                args,
-                plan_id,
-                options,
-                position,
-                observer,
-            ),
-            ActionRunner::Command {
-                command,
-                working_directory,
-                environment,
-            } => {
-                let command_text = ctx.command_for_key(&command)?;
-                execute_command_tool(
-                    ctx,
-                    CommandToolInvocation {
-                        tool_name: &tool.name,
-                        command_key: &command,
-                        command_text,
-                        working_directory: working_directory.as_deref(),
-                        environment: Some(&environment),
-                        timeout: action
-                            .timeout_seconds
-                            .map(Duration::from_secs)
-                            .unwrap_or_else(|| ctx.command_timeout().duration()),
-                    },
-                    args,
-                    plan_id,
-                    options,
-                    position,
-                    observer,
-                )
-            }
-        };
+    if let Some(error) = jig_features::tool_admission_error(&current, tool_name) {
+        bail!(error);
     }
     match tool.kind.as_str() {
         kind::NATIVE => execute_native_tool(
-            ctx,
+            &current,
             NativeToolInvocation {
                 tool_name: &tool.name,
                 operation: &tool.name,
@@ -278,16 +231,16 @@ fn execute_manifest_tool_with_options(
                 .command
                 .as_deref()
                 .ok_or_else(|| anyhow!("Command-backed tool is missing command: {tool_name}"))?;
-            let command = ctx.command_for_key(command_key)?;
+            let command = current.command_for_key(command_key)?;
             execute_command_tool(
-                ctx,
+                &current,
                 CommandToolInvocation {
                     tool_name: &tool.name,
                     command_key,
                     command_text: command,
                     working_directory: None,
                     environment: None,
-                    timeout: ctx.command_timeout().duration(),
+                    timeout: current.command_timeout().duration(),
                 },
                 args,
                 plan_id,
@@ -298,6 +251,139 @@ fn execute_manifest_tool_with_options(
         }
         _ => bail!("Unsupported tool kind '{}' for {tool_name}", tool.kind),
     }
+}
+
+fn execute_v6_action_alias(
+    mut current: RepoContext,
+    tool_name: &str,
+    args: Value,
+    plan_id: Option<String>,
+    options: ManifestToolExecutionOptions,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+) -> Result<ManifestToolExecutionOutcome> {
+    loop {
+        let action = resolve_action_alias(&current, tool_name)?;
+        validate_action_admission(&current, tool_name, &action)?;
+        // Contract-v6 actions are the authority for both dispatch and checkout
+        // effects. The authority can change while this blocks, so this lease is
+        // only admission to a second resolution below, not permission to run
+        // the action value resolved above.
+        let repository_execution =
+            crate::state::acquire_repository_execution_lease(&current, &action.effects)?;
+
+        let refreshed = super::refreshed_repository_context(&current)?;
+        let tool = refreshed
+            .tool_spec(tool_name)
+            .cloned()
+            .ok_or_else(|| anyhow!("{}", undeclared_tool_message(&refreshed, tool_name)))?;
+        let action = resolve_action_alias(&refreshed, tool_name)?;
+        validate_action_admission(&refreshed, tool_name, &action)?;
+        if !repository_execution.permits(&action.effects) {
+            // Authority became more effectful while a shared lease was being
+            // acquired. Drop it and repeat from that newly refreshed authority
+            // so dispatch never runs beneath a weaker isolation mode.
+            drop(repository_execution);
+            current = refreshed;
+            continue;
+        }
+
+        return execute_action_alias(
+            &refreshed,
+            &tool,
+            action,
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+            repository_execution,
+        );
+    }
+}
+
+fn resolve_action_alias(ctx: &RepoContext, tool_name: &str) -> Result<ActionSpec> {
+    RepositoryCatalog::from_context(ctx)?
+        .action_for_alias(tool_name)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "Contract-v6 compatibility alias '{tool_name}' no longer resolves to a repository action"
+            )
+        })
+}
+
+fn validate_action_admission(
+    ctx: &RepoContext,
+    tool_name: &str,
+    action: &ActionSpec,
+) -> Result<()> {
+    let admission_name = match &action.runner {
+        ActionRunner::Native { operation } => operation.as_str(),
+        ActionRunner::Command { .. } => tool_name,
+    };
+    if let Some(error) = jig_features::tool_admission_error(ctx, admission_name) {
+        bail!(error);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_action_alias(
+    ctx: &RepoContext,
+    tool: &ManifestTool,
+    action: ActionSpec,
+    args: Value,
+    plan_id: Option<String>,
+    options: ManifestToolExecutionOptions,
+    position: PhasePosition,
+    observer: &mut dyn ExecutionControl,
+    repository_execution: crate::state::RepositoryExecutionLease,
+) -> Result<ManifestToolExecutionOutcome> {
+    let outcome = match action.runner {
+        ActionRunner::Native { operation } => execute_native_tool(
+            ctx,
+            NativeToolInvocation {
+                tool_name: &tool.name,
+                operation: &operation,
+                target: Some(&action.target),
+                timeout_seconds: action.timeout_seconds,
+            },
+            args,
+            plan_id,
+            options,
+            position,
+            observer,
+        ),
+        ActionRunner::Command {
+            command,
+            working_directory,
+            environment,
+        } => {
+            let command_text = ctx.command_for_key(&command)?;
+            execute_command_tool(
+                ctx,
+                CommandToolInvocation {
+                    tool_name: &tool.name,
+                    command_key: &command,
+                    command_text,
+                    working_directory: working_directory.as_deref(),
+                    environment: Some(&environment),
+                    timeout: action
+                        .timeout_seconds
+                        .map(Duration::from_secs)
+                        .unwrap_or_else(|| ctx.command_timeout().duration()),
+                },
+                args,
+                plan_id,
+                options,
+                position,
+                observer,
+            )
+        }
+    };
+    drop(repository_execution);
+    outcome
 }
 
 pub(super) fn run_native_tool_with_control(
