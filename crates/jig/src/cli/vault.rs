@@ -153,18 +153,22 @@ to stdout; an existing file requires --overwrite. Private backup creation is
 currently Unix-only.
 
 Example:
-  jig vault backup create --out ./project-vault.backup";
+  jig vault backup create --out ../ExampleProject-vault.backup";
 
 const VAULT_BACKUP_RESTORE_AFTER_HELP: &str = "\
-Restores an encrypted backup into the selected vault home. The complete target
-home must be absent; an existing directory, even an empty one, is never
-overwritten. Use --home to restore into a distinct explicit location. The
-backup is read from a bounded regular file; --in - and symbolic links are
-rejected. Restore is currently Linux-only because other platforms do not yet
-provide the required atomic absent-directory installation path.
+Restores an encrypted backup into the selected vault home. A destination
+checkout configured for repo scope selects its vault home automatically and
+prepares missing private parent directories. Without repo scope, pass --global
+to make legacy user-level selection explicit or --home for a specific location;
+omitting both retains legacy selection for contract-v4 compatibility.
+The target home must be absent; an existing directory, even an empty one, is
+never overwritten. The backup is read from a bounded regular file; --in - and
+symbolic links are rejected. Restore is currently Linux-only because other
+platforms do not yet provide the required atomic absent-directory installation
+path.
 
 Example:
-  jig vault backup restore --in ./project-vault.backup --home ./restored-vault";
+  jig vault backup restore --in ../ExampleProject-vault.backup";
 
 const VAULT_TUI_AFTER_HELP: &str = "\
 Opens one fixed repo, global, or explicit-home vault in a full-screen keyboard

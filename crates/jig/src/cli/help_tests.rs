@@ -284,11 +284,11 @@ fn vault_help_includes_quick_start_examples() {
     assert_help_contains(&vault_help, "jig vault passphrase change");
     assert_help_contains(
         &vault_help,
-        "jig vault backup create --out ./project-vault.backup",
+        "jig vault backup create --out ../ExampleProject-vault.backup",
     );
     assert_help_contains(
         &vault_help,
-        "jig vault backup restore --in ./project-vault.backup --home ./restored-vault",
+        "jig vault backup restore --in ../ExampleProject-vault.backup",
     );
     assert_help_contains(&vault_help, "jig vault secret set api_token --value-prompt");
 
@@ -376,8 +376,14 @@ fn vault_help_includes_quick_start_examples() {
 
     let vault_backup_restore_help = rendered_help(&["vault", "backup", "restore"]);
     assert_help_contains(&vault_backup_restore_help, "--in <FILE>");
-    assert_help_contains(&vault_backup_restore_help, "complete target");
-    assert_help_contains(&vault_backup_restore_help, "home must be absent");
+    assert_help_contains(
+        &vault_backup_restore_help,
+        "selects its vault home automatically",
+    );
+    assert_help_contains(&vault_backup_restore_help, "Without repo scope");
+    assert_help_contains(&vault_backup_restore_help, "pass --global");
+    assert_help_contains(&vault_backup_restore_help, "contract-v4 compatibility");
+    assert_help_contains(&vault_backup_restore_help, "The target home must be absent");
     assert_help_contains(&vault_backup_restore_help, "--in -");
     assert_help_contains(&vault_backup_restore_help, "currently Linux-only");
 

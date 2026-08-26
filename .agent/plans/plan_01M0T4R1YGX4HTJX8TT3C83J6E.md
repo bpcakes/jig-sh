@@ -1,0 +1,1 @@
+Research and implement safe clean-machine restore, explicit legacy scope selection, regression tests, and aligned documentation.

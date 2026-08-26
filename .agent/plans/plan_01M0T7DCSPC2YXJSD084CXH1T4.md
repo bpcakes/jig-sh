@@ -1,0 +1,1 @@
+Make restore parent creation safe for group-writable boundaries, relative paths, and non-default umasks; add regression coverage and document the resolved path and sticky-boundary policy.

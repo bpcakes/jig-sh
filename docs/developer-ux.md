@@ -336,7 +336,7 @@ RESTIC_COMPRESSION=jig://Production/RESTIC_COMPRESSION
 
 Jig reads only the requested dotenv source during this explicit cutover; it does not inspect or modify another project checkout automatically.
 
-Passphrase rotation reseals a version 2 vault without changing its fields or identity. Encrypted backup captures the vault and audit log; restore only installs into an entirely absent vault home. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
+Passphrase rotation reseals a version 2 vault without changing its fields or identity. Encrypted backup captures the vault and audit log; from a checkout configured for repo scope, restore automatically selects that checkout's vault home, prepares missing private parents, and installs only when the vault home itself is entirely absent. `--global` makes legacy user-level selection deliberate, while `--home` remains an explicit recovery and testing override; omitted selection retains the legacy default during contract v4. This gives a project an explicit relocation and recovery path without weakening path-bound repo isolation.
 
 The friendliness here is in the workflow shape: developers get an auditable secret handoff without adding new project-specific secret scripts. The important limits are also clear:
 

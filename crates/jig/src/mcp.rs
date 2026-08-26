@@ -390,7 +390,7 @@ fn write_message(writer: &mut dyn Write, value: &Value, framing: MessageFraming)
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Write};
     use std::time::Duration;
 
     use anyhow::anyhow;
@@ -398,12 +398,12 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, handle_tools_list,
-        read_message, write_message,
+        McpProgressObserver, MessageFraming, combine_tool_and_progress_results, handle_tool_call,
+        handle_tools_list, read_message, write_message,
     };
+    use crate::context::RepoContext;
     use crate::execution::{ExecutionEvent, ExecutionObserver, ExecutionStream, PhasePosition};
     use crate::test_env::TestRepoBuilder;
-
     #[test]
     fn tools_list_refreshes_manifest_tools_after_server_start() {
         let temp = tempdir().unwrap();
@@ -443,7 +443,6 @@ custom_check_command = "printf 'check\n'"
         assert!(names.contains(&"jig.new_check"), "{response:#}");
         assert!(!names.contains(&"jig.old_check"), "{response:#}");
     }
-
     #[test]
     fn read_message_accepts_json_line() {
         let input = json!({
@@ -587,6 +586,64 @@ custom_check_command = "printf 'check\n'"
         assert!(
             error.contains("MCP progress delivery also failed: fixture progress failed"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn tool_call_keeps_tool_failure_primary_when_progress_flush_fails() {
+        struct FailingProgressWriter;
+
+        impl Write for FailingProgressWriter {
+            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("fixture progress sink failed"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let temp = tempdir().unwrap();
+        TestRepoBuilder::new(temp.path())
+            .config(
+                r#"
+[commands]
+fixture_check_command = "printf 'fixture tool failed\n' >&2; exit 7"
+"#,
+            )
+            .required_commands(["fixture_check_command"])
+            .tool(json!({
+                "name": "jig.fixture_check",
+                "kind": "command",
+                "description": "Run the fixture check.",
+                "command": "fixture_check_command"
+            }))
+            .write();
+        let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+        let response = handle_tool_call(
+            &ctx,
+            Some(json!(1)),
+            json!({
+                "name": "jig.fixture_check",
+                "arguments": {},
+                "_meta": { "progressToken": "fixture-progress" }
+            }),
+            &mut FailingProgressWriter,
+            MessageFraming::JsonLine,
+        );
+        let message = response["error"]["message"].as_str().unwrap();
+
+        assert!(
+            message.starts_with("jig.fixture_check failed with status 7"),
+            "{message}"
+        );
+        assert!(message.contains("fixture tool failed"), "{message}");
+        assert!(
+            message.contains(
+                "MCP progress delivery also failed: Failed to send MCP progress notification: fixture progress sink failed"
+            ),
+            "{message}"
         );
     }
 
