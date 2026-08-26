@@ -68,4 +68,6 @@ case "$host_port" in
 esac
 
 export TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:${host_port}/${database_name}?sslmode=disable"
-go test -count=1 -run TestBootstrapCreatesDatabaseAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database
+[% if go_backend_root == "." %]go test -count=1 -run TestBootstrapCreatesDatabaseAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database
+[% else %]go -C <<[ go_backend_root | tojson ]>> test -count=1 -run TestBootstrapCreatesDatabaseAppliesMigrationsAndSupportsGeneratedQueries -v ./internal/database
+[% endif %]

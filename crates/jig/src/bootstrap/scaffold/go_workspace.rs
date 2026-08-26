@@ -9,7 +9,7 @@ use super::templates::{
     ScaffoldTemplateFile, ensure_scaffold_template_paths, render_scaffold_template,
 };
 use super::write::{ScaffoldFile, scaffold_file};
-use super::{GoScaffoldPlan, InitScaffoldPlan};
+use super::{GoScaffoldPlan, InitScaffoldPlan, go_component_path};
 
 const GO_WORKSPACE_TEMPLATES: &[ScaffoldTemplateFile] = &[
     ScaffoldTemplateFile {
@@ -110,7 +110,7 @@ impl InitScaffoldPlan {
         self.go_workspace_template_files(backend)
             .map(|file| {
                 Ok(scaffold_file(
-                    file.output,
+                    go_workspace_output_path(backend, file.output),
                     render_scaffold_template(file.template, &context)?,
                 ))
             })
@@ -119,7 +119,7 @@ impl InitScaffoldPlan {
 
     pub(super) fn go_workspace_relative_paths(&self, backend: &GoScaffoldPlan) -> Vec<PathBuf> {
         self.go_workspace_template_files(backend)
-            .map(|file| PathBuf::from(file.output))
+            .map(|file| PathBuf::from(go_workspace_output_path(backend, file.output)))
             .collect()
     }
 
@@ -139,7 +139,7 @@ impl InitScaffoldPlan {
             commands.push("scripts/check-webapps.sh bootstrap".into());
         }
         if backend.database.is_postgres() {
-            commands.push(DATABASE_CONFIG_GUARD.into());
+            commands.push(in_component(DATABASE_CONFIG_GUARD));
             commands.push(in_component(
                 "go tool sqlc generate && go run ./cmd/api --bootstrap-database",
             ));
@@ -170,11 +170,22 @@ impl InitScaffoldPlan {
             "repo_name": self.repo_name,
             "package_name": self.package_name,
             "go_module": backend.module,
+            "go_backend_root": backend.component_root,
             "db_enabled": backend.database.is_postgres(),
             "database_url_example": format!(
                 "postgres://postgres:postgres@localhost:5432/{database_name}?sslmode=disable"
             ),
             "postgres_test_database_name": postgres_test_database_name,
         })
+    }
+}
+
+fn go_workspace_output_path(backend: &GoScaffoldPlan, output: &str) -> String {
+    // OpenAPI documents and the disposable-database runner are repository-level
+    // integration artifacts. The remaining files are owned by the Go component
+    // and must follow its authored root.
+    match output {
+        "openapi/public.json" | "scripts/test-postgres.sh" => output.to_owned(),
+        _ => go_component_path(&backend.component_root, output),
     }
 }

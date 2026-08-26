@@ -781,6 +781,39 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
             .contents
             .as_str()
     };
+    for path in [
+        "services/api/.env.example",
+        "services/api/go.mod",
+        "services/api/cmd/api/main.go",
+        "services/api/cmd/openapi/main.go",
+        "services/api/sqlc.yaml",
+        "services/api/internal/database/database.go",
+    ] {
+        assert!(
+            rendered.iter().any(|file| file.relative == path),
+            "missing nested Go component output {path}"
+        );
+    }
+    for path in [".env.example", "go.mod", "cmd/api/main.go", "sqlc.yaml"] {
+        assert!(
+            rendered.iter().all(|file| file.relative != path),
+            "Go component output escaped to the repository root: {path}"
+        );
+    }
+    let output_paths = plan.output_paths();
+    assert!(
+        output_paths
+            .iter()
+            .any(|path| path == Path::new("services/api/go.mod"))
+    );
+    assert!(
+        output_paths
+            .iter()
+            .all(|path| path != Path::new("go.mod"))
+    );
+    assert!(rendered.iter().any(|file| file.relative == "openapi/public.json"));
+    let postgres_script = contents("scripts/test-postgres.sh");
+    assert!(postgres_script.contains(r#"go -C "services/api" test -count=1"#));
     let workflow = contents(".github/workflows/e2e.yml");
     assert_eq!(workflow.matches(r#"- "services/api/**""#).count(), 2);
     assert_eq!(
@@ -811,6 +844,7 @@ fn go_browser_scaffold_honors_the_authored_backend_root() {
     assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
     let bootstrap = defaults.bootstrap_command.unwrap();
     assert!(bootstrap.contains("(cd services/api && go mod tidy)"));
+    assert!(bootstrap.contains("(cd services/api && if [ -z"));
     assert!(bootstrap.contains(
         "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)"
     ));
