@@ -1,5 +1,18 @@
 use super::*;
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    static CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn corrupt_next_run_archive_after_publish() {
+    CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH.with(|corrupt| corrupt.set(true));
+}
+
 #[derive(Default)]
 struct RunArchiveLifecycle {
     event_count: usize,
@@ -294,6 +307,75 @@ fn reconcile_abandoned_runs_before_archive(ctx: &RepoContext, path: &Path) -> Re
         })
 }
 
+fn validate_run_archive_artifact(
+    path: &Path,
+    artifact: &GzipWriteReport,
+    expected_event_count: usize,
+) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let (restored, restored_report) =
+        decompress_gzip_to_temp(path, parent, Some(artifact.uncompressed_bytes)).with_context(
+            || format!("Failed to verify published run archive {}", path.display()),
+        )?;
+    let lifecycles = scan_run_archive_lifecycles(restored.path(), |observe| {
+        let report = scan_jsonl_raw(restored.path(), &|| false, &mut *observe)?;
+        Ok(report.unterminated_final_record)
+    })
+    .with_context(|| {
+        format!(
+            "Failed to validate published run archive {}",
+            path.display()
+        )
+    })?;
+    let restored_event_count = lifecycles.values().try_fold(0usize, |count, lifecycle| {
+        count
+            .checked_add(lifecycle.event_count)
+            .context("Run archive event count overflow")
+    })?;
+    if restored_report.uncompressed_bytes != artifact.uncompressed_bytes
+        || restored_report.uncompressed_sha256 != artifact.uncompressed_sha256
+    {
+        bail!(
+            "Run archive content verification failed for {}; refusing to rewrite active state",
+            path.display()
+        );
+    }
+    if restored_event_count != expected_event_count {
+        bail!(
+            "Run archive event count mismatch for {}; expected {expected_event_count}, found {restored_event_count}; refusing to rewrite active state",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn validate_published_run_archive(
+    path: &Path,
+    artifact: GzipWriteReport,
+    expected_event_count: usize,
+) -> Result<GzipWriteReport> {
+    #[cfg(test)]
+    CORRUPT_NEXT_RUN_ARCHIVE_AFTER_PUBLISH.with(|corrupt| {
+        if corrupt.replace(false) {
+            fs::write(path, b"corrupt published run archive")?;
+        }
+        Ok::<_, io::Error>(())
+    })?;
+
+    match validate_run_archive_artifact(path, &artifact, expected_event_count) {
+        Ok(()) => Ok(artifact),
+        Err(error) => {
+            remove_invalid_gzip(path).with_context(|| {
+                format!(
+                    "{error:#}; additionally failed to remove invalid run archive {}",
+                    path.display()
+                )
+            })?;
+            Err(error)
+        }
+    }
+}
+
 pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Result<Value> {
     ensure_state_layout(ctx)?;
     let before_ms = crate::state::receipts::parse_archive_before_ms(before)?;
@@ -398,20 +480,27 @@ pub(crate) fn runs_archive(ctx: &RepoContext, before: &str, dry_run: bool) -> Re
         });
         archive_hint = archive_path.clone();
         let artifact = match &archive_path {
-            Some(path) => Some(write_gzip_atomic(path, |writer| {
-                let report = scan_jsonl_raw_locked(guard, &runs_path, &|| false, |raw| {
-                    let identity = parse_run_event_identity(raw, &runs_path)?;
-                    if archived_run_ids.contains(&identity.run_id) {
-                        writer.write_all(raw.bytes)?;
-                        writer.write_all(b"\n")?;
+            Some(path) => {
+                let artifact = write_gzip_atomic(path, |writer| {
+                    let report = scan_jsonl_raw_locked(guard, &runs_path, &|| false, |raw| {
+                        let identity = parse_run_event_identity(raw, &runs_path)?;
+                        if archived_run_ids.contains(&identity.run_id) {
+                            writer.write_all(raw.bytes)?;
+                            writer.write_all(b"\n")?;
+                        }
+                        Ok(())
+                    })?;
+                    if report.unterminated_final_record {
+                        bail!("Run state changed to an unterminated stream during archive");
                     }
                     Ok(())
                 })?;
-                if report.unterminated_final_record {
-                    bail!("Run state changed to an unterminated stream during archive");
-                }
-                Ok(())
-            })?),
+                Some(validate_published_run_archive(
+                    path,
+                    artifact,
+                    run_events_archived,
+                )?)
+            }
             None => None,
         };
 

@@ -212,6 +212,42 @@ fn archive_removes_completed_runs_and_keeps_recovery_artifacts() {
 }
 
 #[test]
+fn archive_verifies_the_published_artifact_before_rewriting_runs() {
+    let (_temp, ctx) = context();
+    let completed_plan = RunPlan::new(
+        "run-plan_completed",
+        "sha256:config",
+        SourceIdentity::new(Some("abc".into()), "sha256:worktree"),
+        Vec::new(),
+        Vec::new(),
+    );
+    let (completed, completed_lease) = start_run(&ctx, completed_plan, None).unwrap();
+    let completed_id = completed.result.run_id;
+    complete_run(&ctx, &completed_id, RunConclusion::Success).unwrap();
+    drop(completed_lease);
+    let runs_path = ctx.state_file(RUNS_FILE);
+    let before = fs::read(&runs_path).unwrap();
+    super::archive::corrupt_next_run_archive_after_publish();
+
+    let error = runs_archive(&ctx, &u64::MAX.to_string(), false).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("Failed to verify published run archive")
+    );
+    assert_eq!(fs::read(&runs_path).unwrap(), before);
+    assert_eq!(
+        run_by_id(&ctx, &completed_id).unwrap().result.status,
+        RunStatus::Completed
+    );
+    let archives = ctx.root().join(".agent/.cache/state-archives");
+    assert_eq!(fs::read_dir(archives).unwrap().count(), 0);
+    let backups = ctx.root().join(".agent/.cache/state-backups");
+    assert_eq!(fs::read_dir(backups).unwrap().count(), 1);
+}
+
+#[test]
 fn archive_retains_a_terminal_run_until_its_worker_lease_is_released() {
     let (_temp, ctx) = context();
     let (completed, completed_lease) = start_run(&ctx, plan(), None).unwrap();

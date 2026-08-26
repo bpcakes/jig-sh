@@ -25,7 +25,12 @@ use super::jsonl::{
 };
 use super::records::RunEventRecord;
 use super::support::{ensure_state_layout, new_id, now_ms};
-use super::{MAINTENANCE_WRITER_COORDINATION_NOTE, compression::write_gzip_atomic};
+use super::{
+    MAINTENANCE_WRITER_COORDINATION_NOTE,
+    compression::{
+        GzipWriteReport, decompress_gzip_to_temp, remove_invalid_gzip, write_gzip_atomic,
+    },
+};
 
 const RUNS_FILE: &str = "runs.jsonl";
 const RUN_LEASE_DIR: &str = ".agent/.cache/run-leases";
