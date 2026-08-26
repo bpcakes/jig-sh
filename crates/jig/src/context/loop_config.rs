@@ -229,21 +229,21 @@ fn validate_codex_task_fields(workflow: &LoopWorkflowConfig) -> Result<()> {
                 workflow.id
             );
         }
-        if let Some(sandbox) = workflow.sandbox.as_deref() {
-            if !matches!(sandbox, "read-only" | "workspace-write") {
-                bail!(
-                    "loop workflow '{}' sandbox must be 'read-only' or 'workspace-write'",
-                    workflow.id
-                );
-            }
+        if let Some(sandbox) = workflow.sandbox.as_deref()
+            && !matches!(sandbox, "read-only" | "workspace-write")
+        {
+            bail!(
+                "loop workflow '{}' sandbox must be 'read-only' or 'workspace-write'",
+                workflow.id
+            );
         }
-        if let Some(checkout) = workflow.checkout.as_deref() {
-            if !matches!(checkout, "repo" | "worktree") {
-                bail!(
-                    "loop workflow '{}' checkout must be 'repo' or 'worktree'",
-                    workflow.id
-                );
-            }
+        if let Some(checkout) = workflow.checkout.as_deref()
+            && !matches!(checkout, "repo" | "worktree")
+        {
+            bail!(
+                "loop workflow '{}' checkout must be 'repo' or 'worktree'",
+                workflow.id
+            );
         }
         return Ok(());
     }
