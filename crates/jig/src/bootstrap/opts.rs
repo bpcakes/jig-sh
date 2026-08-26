@@ -58,6 +58,9 @@ pub struct AnswerOpts {
     /// Set by the Go scaffold to `none` or `postgres`.
     #[arg(skip)]
     pub(crate) go_database: Option<crate::backend::GoDatabase>,
+    /// Derived from preserved repository authority for scaffold command/path rendering.
+    #[arg(skip)]
+    pub(crate) scaffold_go_component_roots: Vec<String>,
     /// Backend-neutral migration policy path loaded from persisted answers.
     #[arg(skip)]
     pub(crate) migration_dir: Option<String>,

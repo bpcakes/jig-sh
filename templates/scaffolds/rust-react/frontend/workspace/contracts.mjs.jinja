@@ -19,6 +19,9 @@ import { fileURLToPath } from "node:url";
 import { createClient } from "@hey-api/openapi-ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+[% if backend_language == "go" %]
+const backendRoot = resolve(repoRoot, <<[ go_backend_root | tojson ]>>);
+[% endif %]
 [% if backend_language == "rust" %]
 const execFileAsync = promisify(execFile);
 [% endif %]
@@ -93,7 +96,7 @@ async function withStagedContracts(mode) {
       const document = join(stageRoot, "openapi", `${contract.name}.json`);
       const generated = join(stageRoot, "generated", contract.name);
 [% if backend_language == "go" %]
-      await run("go", ["run", "./cmd/openapi", "--output", document]);
+      await run("go", ["run", "./cmd/openapi", "--output", document], backendRoot);
 [% else %]
       await run("cargo", [
         "run",
@@ -373,9 +376,9 @@ async function pathExists(path) {
   }
 }
 
-async function run(command, arguments_) {
+async function run(command, arguments_, cwd = repoRoot) {
   await new Promise((resolveRun, rejectRun) => {
-    const child = spawn(command, arguments_, { cwd: repoRoot, stdio: "inherit" });
+    const child = spawn(command, arguments_, { cwd, stdio: "inherit" });
     child.once("error", rejectRun);
     child.once("exit", (code, signal) => {
       if (code === 0) resolveRun();

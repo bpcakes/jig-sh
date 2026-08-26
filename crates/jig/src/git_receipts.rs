@@ -806,6 +806,7 @@ fn append_untracked_path_fingerprint(
     collection: GitReceiptCollection<'_>,
 ) -> Result<()> {
     collection.ensure_active()?;
+    append_path_permission_fingerprint(contents, metadata);
     let file_type = metadata.file_type();
     if file_type.is_symlink() {
         contents.extend_from_slice(b"symlink\0");
@@ -835,6 +836,19 @@ fn append_untracked_path_fingerprint(
     contents.extend_from_slice(b"other\0");
     append_metadata_fallback(contents, metadata);
     Ok(())
+}
+
+#[cfg(unix)]
+fn append_path_permission_fingerprint(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
+    use std::os::unix::fs::MetadataExt;
+
+    contents.extend_from_slice(format!("mode={:04o}\0", metadata.mode() & 0o7777).as_bytes());
+}
+
+#[cfg(not(unix))]
+fn append_path_permission_fingerprint(contents: &mut Vec<u8>, metadata: &fs::Metadata) {
+    contents
+        .extend_from_slice(format!("readonly={}\0", metadata.permissions().readonly()).as_bytes());
 }
 
 fn append_untracked_file_fingerprint(

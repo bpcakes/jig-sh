@@ -359,6 +359,7 @@ impl RawAnswers {
             harness_footprint: self.harness_footprint,
             backend_language: self.backend_language,
             go_database: self.go_database,
+            scaffold_go_component_roots: Vec::new(),
             sqlx_enabled: self.sqlx_enabled,
             rust_crate_roots: self.rust_crate_roots.unwrap_or_default(),
             rust_migration_dir: self.rust_migration_dir.filter(|value| !value.is_empty()),

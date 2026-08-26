@@ -50,6 +50,8 @@ struct RustScaffoldPlan {
 struct GoScaffoldPlan {
     database: GoDatabase,
     module: String,
+    component_root: String,
+    migration_dir: String,
 }
 
 impl ScaffoldBackendPlan {
@@ -84,8 +86,9 @@ mod templates;
 mod write;
 
 use frontend::{
-    FrontendDatabaseContext, FrontendScaffold, frontend_workspace_relative_paths_for_backend,
-    render_frontend_workspace_files_for_backend, scaffold_bootstrap_command,
+    FrontendBackendContext, FrontendDatabaseContext, FrontendScaffold,
+    frontend_workspace_relative_paths_for_backend, render_frontend_workspace_files_for_backend,
+    scaffold_bootstrap_command,
 };
 use names::{
     default_repo_name, normalize_package_name, normalize_rust_react_package_name,
@@ -159,10 +162,12 @@ impl InitScaffoldPlan {
                 answers.sqlx_enabled = Some(false);
                 answers.rust_crate_roots.clear();
                 answers.rust_migration_dir = None;
-                answers.migration_dir = backend
-                    .database
-                    .is_postgres()
-                    .then(|| GO_POSTGRES_MIGRATION_DIR.into());
+                if answers.migration_dir.is_none() {
+                    answers.migration_dir = backend
+                        .database
+                        .is_postgres()
+                        .then(|| backend.migration_dir.clone());
+                }
                 answers.rust_sqlx_metadata_dir = None;
                 answers.schema_dump_enabled = Some(false);
             }
@@ -214,6 +219,9 @@ impl InitScaffoldPlan {
                 host: None,
                 proxy: true,
             }];
+            if let ScaffoldBackendPlan::Go(backend) = &self.backend {
+                answers.dev_apps[0].dir = Some(backend.component_root.clone());
+            }
             if matches!(&self.backend, ScaffoldBackendPlan::Rust(_)) && self.has_admin_frontend() {
                 answers.dev_apps.push(DevApp {
                     name: RUST_REACT_ADMIN_BACKEND_DEV_APP_NAME.into(),
@@ -308,29 +316,35 @@ impl InitScaffoldPlan {
     }
 
     pub(super) fn render_files(&self) -> Result<Vec<ScaffoldFile>> {
-        let (mut files, migration_dir, sqlx_metadata_dir) = match &self.backend {
+        let (mut files, migration_dir, sqlx_metadata_dir, backend_root) = match &self.backend {
             ScaffoldBackendPlan::Rust(backend) => (
                 self.render_rust_workspace_files(backend)?,
-                backend.migration_dir.as_str(),
-                backend.sqlx_metadata_dir.as_str(),
+                backend.migration_dir.clone(),
+                backend.sqlx_metadata_dir.clone(),
+                ".".to_owned(),
             ),
             ScaffoldBackendPlan::Go(backend) => (
                 self.render_go_workspace_files(backend)?,
-                GO_POSTGRES_MIGRATION_DIR,
-                "internal/database/sqlc",
+                backend.migration_dir.clone(),
+                go_component_path(&backend.component_root, "internal/database/sqlc"),
+                backend.component_root.clone(),
             ),
         };
         let preset = self.backend.preset();
         let database = self.backend.database();
-        files.extend(render_frontend_workspace_files_for_backend(
+        let frontend_backend = FrontendBackendContext {
             preset,
+            root: &backend_root,
+            database: FrontendDatabaseContext {
+                db: database,
+                migration_dir: &migration_dir,
+                sqlx_metadata_dir: &sqlx_metadata_dir,
+            },
+        };
+        files.extend(render_frontend_workspace_files_for_backend(
+            frontend_backend,
             &self.package_manager,
             &self.package_name,
-            FrontendDatabaseContext {
-                db: database,
-                migration_dir,
-                sqlx_metadata_dir,
-            },
             &self.default_branch,
             &self.ci_github_runner,
             &self.frontends,
@@ -341,8 +355,7 @@ impl InitScaffoldPlan {
                 &self.repo_name,
                 &self.repo_dns_label,
                 &self.module_name,
-                database,
-                preset,
+                frontend_backend,
             )?);
         }
         Ok(files)
@@ -522,10 +535,17 @@ impl InitScaffoldPlan {
             &format!("{package_name}-workspace"),
             ScaffoldPreset::GoReact,
         )?;
+        let component_root = go_component_root(answers)?.to_owned();
+        let migration_dir = answers
+            .migration_dir
+            .clone()
+            .unwrap_or_else(|| go_component_path(&component_root, GO_POSTGRES_MIGRATION_DIR));
         Ok(Self {
             backend: ScaffoldBackendPlan::Go(GoScaffoldPlan {
                 database,
                 module: go_module,
+                component_root,
+                migration_dir,
             }),
             requested_repo_name,
             repo_name,
@@ -556,6 +576,33 @@ impl InitScaffoldPlan {
                 .flat_map(FrontendScaffold::relative_paths),
         );
         paths
+    }
+}
+
+pub(super) fn validate_go_component_root(component_root: &str) -> Result<()> {
+    if component_root == "." {
+        Ok(())
+    } else {
+        validate_scaffold_relative_path("Go component root", component_root)
+    }
+}
+
+pub(super) fn go_component_root(answers: &AnswerOpts) -> Result<&str> {
+    match answers.scaffold_go_component_roots.as_slice() {
+        [] => Ok("."),
+        [root] => Ok(root),
+        roots => bail!(
+            "The authored repository model has multiple Go component roots ({}); a Go browser scaffold requires one canonical API component root",
+            roots.join(", ")
+        ),
+    }
+}
+
+pub(super) fn go_component_path(component_root: &str, relative: &str) -> String {
+    if component_root == "." {
+        relative.to_owned()
+    } else {
+        format!("{}/{relative}", component_root.trim_end_matches('/'))
     }
 }
 

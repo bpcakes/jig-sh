@@ -371,6 +371,13 @@ pub(super) struct FrontendDatabaseContext<'a> {
     pub(super) sqlx_metadata_dir: &'a str,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FrontendBackendContext<'a> {
+    pub(super) preset: super::ScaffoldPreset,
+    pub(super) root: &'a str,
+    pub(super) database: FrontendDatabaseContext<'a>,
+}
+
 impl FrontendScaffold {
     pub(super) fn package_name(&self) -> &str {
         &self.package_name
@@ -425,16 +432,14 @@ impl FrontendScaffold {
         repo_name: &str,
         repo_dns_label: &str,
         module_name: &str,
-        db: ScaffoldDb,
-        preset: super::ScaffoldPreset,
+        backend: FrontendBackendContext<'_>,
     ) -> Result<Vec<ScaffoldFile>> {
         self.render_template_files(
             package_manager,
             repo_name,
             repo_dns_label,
             module_name,
-            db,
-            preset,
+            backend,
         )
     }
 
@@ -444,8 +449,7 @@ impl FrontendScaffold {
         repo_name: &str,
         repo_dns_label: &str,
         module_name: &str,
-        db: ScaffoldDb,
-        preset: super::ScaffoldPreset,
+        backend: FrontendBackendContext<'_>,
     ) -> Result<Vec<ScaffoldFile>> {
         let template_files = self.template_files();
         ensure_scaffold_template_paths(&template_files)?;
@@ -463,12 +467,13 @@ impl FrontendScaffold {
             "module_name": module_name,
             "e2e_database_name": e2e_database_name,
             "repo_root_relative": repo_root_relative(&self.dir),
-            "db": match db {
+            "db": match backend.database.db {
                 ScaffoldDb::None => "none",
                 ScaffoldDb::Postgres => "postgres",
                 ScaffoldDb::Sqlite => "sqlite",
             },
-            "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
+            "backend_language": if backend.preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
+            "go_backend_root": backend.root,
             "title": title,
             "subtitle": if self.kind == ScaffoldFrontendKind::Admin {
                 "Operational workspace"
@@ -578,14 +583,18 @@ fn scaffold_package_exec(package_manager: &str) -> &'static str {
 }
 
 pub(super) fn render_frontend_workspace_files_for_backend(
-    preset: super::ScaffoldPreset,
+    backend: FrontendBackendContext<'_>,
     package_manager: &str,
     package_name: &str,
-    database: FrontendDatabaseContext<'_>,
     default_branch: &str,
     ci_github_runner: &str,
     frontends: &[FrontendScaffold],
 ) -> Result<Vec<ScaffoldFile>> {
+    let FrontendBackendContext {
+        preset,
+        root: backend_root,
+        database,
+    } = backend;
     let FrontendDatabaseContext {
         db,
         migration_dir,
@@ -604,6 +613,7 @@ pub(super) fn render_frontend_workspace_files_for_backend(
     let context = json!({
         "package_name": package_name,
         "backend_language": if preset == super::ScaffoldPreset::GoReact { "go" } else { "rust" },
+        "go_backend_root": backend_root,
         "package_manager": package_manager,
         "package_manager_spec": generated_package_manager_spec(package_manager),
         "package_manager_version": generated_package_manager_version(package_manager),
@@ -630,6 +640,7 @@ pub(super) fn render_frontend_workspace_files_for_backend(
             .collect::<Vec<_>>(),
         "e2e_workflow_paths": e2e_workflow_paths_for_backend(
             preset,
+            backend_root,
             db,
             migration_dir,
             sqlx_metadata_dir,
@@ -667,6 +678,7 @@ fn e2e_workflow_paths(
 ) -> Vec<String> {
     e2e_workflow_paths_for_backend(
         super::ScaffoldPreset::RustReact,
+        ".",
         db,
         migration_dir,
         sqlx_metadata_dir,
@@ -676,6 +688,7 @@ fn e2e_workflow_paths(
 
 fn e2e_workflow_paths_for_backend(
     preset: super::ScaffoldPreset,
+    backend_root: &str,
     db: ScaffoldDb,
     migration_dir: &str,
     sqlx_metadata_dir: &str,
@@ -687,7 +700,11 @@ fn e2e_workflow_paths_for_backend(
         .map(|frontend| format!("{}/**", frontend.dir))
         .collect::<Vec<_>>();
     if preset == super::ScaffoldPreset::GoReact {
-        paths.extend(["cmd/**", "internal/**"].map(str::to_owned));
+        paths.push(if backend_root == "." {
+            "**".into()
+        } else {
+            format!("{}/**", backend_root.trim_end_matches('/'))
+        });
     } else {
         paths.extend(["apps/**", "crates/**"].map(str::to_owned));
     }

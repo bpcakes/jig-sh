@@ -5,6 +5,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(appDir, "<<[ repo_root_relative ]>>");
+[% if backend_language == "go" %]
+const backendRoot = path.resolve(repoRoot, <<[ go_backend_root | tojson ]>>);
+[% endif %]
 const webPort = readPort("E2E_WEB_PORT", 4173);
 const apiPort = readPort("E2E_API_PORT", 4174);
 if (webPort === apiPort) {
@@ -94,7 +97,7 @@ export default defineConfig({
         {
           name: "[% if backend_language == "go" %]Go[% else %]Rust[% endif %] API",
           command: backendCommand,
-          cwd: repoRoot,
+          cwd: [% if backend_language == "go" %]backendRoot[% else %]repoRoot[% endif %],
           env: {
             HOST: "127.0.0.1",
             PORT: String(apiPort),

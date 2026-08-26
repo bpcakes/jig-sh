@@ -3,6 +3,7 @@ use std::{fs, process::Command};
 use tempfile::tempdir;
 
 use super::*;
+use crate::bootstrap::{ScaffoldDb, ScaffoldOpts, ScaffoldPreset, scaffold};
 
 #[test]
 fn common_answer_resolution_preserves_authored_repository_authority() {
@@ -53,6 +54,9 @@ targets = [
     )
     .unwrap();
     let input = AnswerInput::from_file(&path).unwrap();
+    let effective = input.effective_opts(&AnswerOpts::default()).unwrap();
+
+    assert_eq!(effective.scaffold_go_component_roots, ["services/api"]);
 
     let (resolved, notes) =
         AnswerResolution::from_input(input, &AnswerOpts::default(), temp.path(), false)
@@ -85,6 +89,79 @@ targets = [
     let commands = model.commands_toml().unwrap();
     assert!(commands.contains("api_verify_command = \"go test ./...\""));
     assert!(commands.contains("worker_verify_command = \"cargo test -p worker\""));
+}
+
+#[test]
+fn go_scaffold_rejects_multiple_authored_go_component_roots() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        r#"repo_name = "ExampleProject"
+
+[commands]
+api_test_command = "go test ./..."
+worker_test_command = "go test ./..."
+
+[repository]
+default_check_profile = "verify"
+
+[[repository.components]]
+id = "api"
+root = "services/api"
+adapters = ["go"]
+
+[[repository.components]]
+id = "worker"
+root = "services/worker"
+adapters = ["go"]
+
+[[repository.actions]]
+target = { component = "api", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "api_test_command" }
+
+[[repository.actions]]
+target = { component = "worker", action = "test" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "worker_test_command" }
+
+[[repository.profiles]]
+id = "verify"
+targets = [
+  { component = "api", action = "test" },
+  { component = "worker", action = "test" },
+]
+"#,
+    )
+    .unwrap();
+    let input = AnswerInput::from_file(&path).unwrap();
+
+    let effective = input.effective_opts(&AnswerOpts::default()).unwrap();
+    assert_eq!(
+        effective.scaffold_go_component_roots,
+        ["services/api", "services/worker"]
+    );
+    let error = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::None),
+            ..ScaffoldOpts::default()
+        },
+        &AnswerOpts {
+            go_module: Some("example.com/ExampleProject".into()),
+            ..effective
+        },
+        temp.path(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("multiple Go component roots"), "{error}");
+    assert!(error.contains("services/api"), "{error}");
+    assert!(error.contains("services/worker"), "{error}");
 }
 
 #[test]

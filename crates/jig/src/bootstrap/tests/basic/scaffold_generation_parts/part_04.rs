@@ -365,8 +365,7 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
     let workflow =
         fs::read_to_string(destination.join(".github/workflows/webapp-checks.yml")).unwrap();
     for path in [
-        r#"- "cmd/**""#,
-        r#"- "internal/**""#,
+        r#"- "**""#,
         r#"- "openapi/**""#,
         r#"- "packages/public-api-client/**""#,
     ] {
@@ -745,6 +744,76 @@ export async function createClient({ output }) {
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
     assert!(go_tests.contains("scripts/jig check api:sqlc"));
     assert!(!go_tests.contains("postgres-integration:"));
+}
+
+#[test]
+fn go_browser_scaffold_honors_the_authored_backend_root() {
+    let planning_root = tempdir().unwrap();
+    let plan = scaffold::InitScaffoldPlan::from_opts(
+        &ScaffoldOpts {
+            preset: Some(ScaffoldPreset::GoReact),
+            db: Some(ScaffoldDb::Postgres),
+            frontends: vec![ScaffoldFrontend {
+                name: "web".into(),
+                kind: ScaffoldFrontendKind::Spa,
+                custom_default_name: false,
+            }],
+            frontend_list: Vec::new(),
+        },
+        &AnswerOpts {
+            repo_name: Some("demo".into()),
+            go_module: Some("example.com/demo".into()),
+            scaffold_go_component_roots: vec!["services/api".into()],
+            migration_dir: Some("services/api/internal/database/migrations".into()),
+            ..AnswerOpts::default()
+        },
+        planning_root.path(),
+    )
+    .unwrap()
+    .unwrap();
+
+    let rendered = plan.render_files().unwrap();
+    let contents = |path: &str| {
+        rendered
+            .iter()
+            .find(|file| file.relative == path)
+            .unwrap_or_else(|| panic!("missing rendered {path}"))
+            .contents
+            .as_str()
+    };
+    let workflow = contents(".github/workflows/e2e.yml");
+    assert_eq!(workflow.matches(r#"- "services/api/**""#).count(), 2);
+    assert_eq!(
+        workflow
+            .matches(r#"- "services/api/internal/database/migrations/**""#)
+            .count(),
+        2
+    );
+    assert!(!workflow.contains(r#"- "cmd/**""#));
+    assert!(!workflow.contains(r#"- "internal/**""#));
+    assert!(!workflow.contains(r#"- "**""#));
+
+    let playwright = contents("web/playwright.config.ts");
+    assert!(playwright.contains(r#"path.resolve(repoRoot, "services/api")"#));
+    assert!(playwright.contains("cwd: backendRoot"));
+    let contracts = contents("scripts/contracts.mjs");
+    assert!(contracts.contains(r#"resolve(repoRoot, "services/api")"#));
+    assert!(contracts.contains(
+        r#"run("go", ["run", "./cmd/openapi", "--output", document], backendRoot)"#
+    ));
+
+    let mut defaults = AnswerOpts::default();
+    plan.apply_answer_defaults(&mut defaults);
+    assert_eq!(
+        defaults.migration_dir.as_deref(),
+        Some("services/api/internal/database/migrations")
+    );
+    assert_eq!(defaults.dev_apps[0].dir.as_deref(), Some("services/api"));
+    let bootstrap = defaults.bootstrap_command.unwrap();
+    assert!(bootstrap.contains("(cd services/api && go mod tidy)"));
+    assert!(bootstrap.contains(
+        "(cd services/api && go tool sqlc generate && go run ./cmd/api --bootstrap-database)"
+    ));
 }
 
 #[test]

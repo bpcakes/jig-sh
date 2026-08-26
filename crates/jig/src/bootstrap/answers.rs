@@ -296,7 +296,14 @@ impl AnswerInput {
         let mut raw = self.raw.clone();
         raw.merge_opts(cli);
         raw.normalize_app_dirs()?;
-        Ok(raw.into_answer_opts(cli.answers_file.clone()))
+        let scaffold_go_component_roots = raw
+            .repository
+            .as_ref()
+            .map(AuthoredRepositoryModel::scaffold_go_component_roots)
+            .unwrap_or_default();
+        let mut answers = raw.into_answer_opts(cli.answers_file.clone());
+        answers.scaffold_go_component_roots = scaffold_go_component_roots;
+        Ok(answers)
     }
 }
 

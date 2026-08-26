@@ -8,10 +8,9 @@ on:
   pull_request:
     paths:
 [% if go_backend_enabled %]
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
 [% endif %]
       - "openapi/**"
       - "packages/public-api-client/**"
@@ -70,10 +69,9 @@ on:
       - <<[ default_branch | tojson ]>>
     paths:
 [% if go_backend_enabled %]
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
+[% for path in go_ci_input_paths %]
+      - <<[ path | tojson ]>>
+[% endfor %]
 [% endif %]
       - "openapi/**"
       - "packages/public-api-client/**"

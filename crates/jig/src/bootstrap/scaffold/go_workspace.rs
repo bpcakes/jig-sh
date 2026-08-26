@@ -124,14 +124,25 @@ impl InitScaffoldPlan {
     }
 
     pub(super) fn go_scaffold_bootstrap_command(&self, backend: &GoScaffoldPlan) -> String {
-        let mut commands = vec!["go mod tidy".to_string()];
+        let in_component = |command: &str| {
+            if backend.component_root == "." {
+                command.to_owned()
+            } else {
+                format!(
+                    "(cd {} && {command})",
+                    crate::shell::quote(&backend.component_root)
+                )
+            }
+        };
+        let mut commands = vec![in_component("go mod tidy")];
         if !self.frontends.is_empty() {
             commands.push("scripts/check-webapps.sh bootstrap".into());
         }
         if backend.database.is_postgres() {
             commands.push(DATABASE_CONFIG_GUARD.into());
-            commands.push("go tool sqlc generate".into());
-            commands.push("go run ./cmd/api --bootstrap-database".into());
+            commands.push(in_component(
+                "go tool sqlc generate && go run ./cmd/api --bootstrap-database",
+            ));
         }
         if !self.frontends.is_empty() {
             commands.push("node scripts/contracts.mjs generate".into());

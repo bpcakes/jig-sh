@@ -495,6 +495,33 @@ fn worktree_fingerprint_changes_when_untracked_file_content_changes() {
     assert_ne!(first, second);
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_fingerprint_changes_when_untracked_file_permissions_change() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env = crate::test_env::lock_env();
+    let temp = tempdir().unwrap();
+    run_git(temp.path(), &["init"]);
+    run_git(
+        temp.path(),
+        &["config", "user.email", "fixture@example.com"],
+    );
+    run_git(temp.path(), &["config", "user.name", "Fixture"]);
+    std::fs::write(temp.path().join("tracked.txt"), "tracked").unwrap();
+    run_git(temp.path(), &["add", "tracked.txt"]);
+    run_git(temp.path(), &["commit", "-m", "initial fixture"]);
+    let script = temp.path().join("untracked-script");
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let first = repo_worktree_fingerprint(temp.path()).unwrap();
+
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let second = repo_worktree_fingerprint(temp.path()).unwrap();
+
+    assert_ne!(first, second);
+}
+
 #[test]
 fn worktree_fingerprint_changes_when_ignored_dotenv_content_changes() {
     let _env = crate::test_env::lock_env();

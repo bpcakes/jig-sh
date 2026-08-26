@@ -96,6 +96,16 @@ impl AuthoredRepositoryModel {
             ActionRunner::Native { .. } => true,
         })
     }
+
+    pub(super) fn scaffold_go_component_roots(&self) -> Vec<String> {
+        self.components
+            .iter()
+            .filter(|component| component.adapters.iter().any(|adapter| adapter == "go"))
+            .map(|component| component.root.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
 }
 
 #[derive(Serialize)]

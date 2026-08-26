@@ -125,14 +125,17 @@ mod tests {
                         &frontends,
                     );
                     let rendered = render_frontend_workspace_files_for_backend(
-                        preset,
+                        FrontendBackendContext {
+                            preset,
+                            root: ".",
+                            database: FrontendDatabaseContext {
+                                db: ScaffoldDb::None,
+                                migration_dir: "migrations",
+                                sqlx_metadata_dir: ".sqlx",
+                            },
+                        },
                         package_manager,
                         "demo",
-                        FrontendDatabaseContext {
-                            db: ScaffoldDb::None,
-                            migration_dir: "migrations",
-                            sqlx_metadata_dir: ".sqlx",
-                        },
                         "main",
                         "ubuntu-latest",
                         &frontends,
@@ -231,6 +234,7 @@ mod tests {
 
         let go = e2e_workflow_paths_for_backend(
             ScaffoldPreset::GoReact,
+            ".",
             ScaffoldDb::Postgres,
             "database/migrations",
             ".sqlx",
