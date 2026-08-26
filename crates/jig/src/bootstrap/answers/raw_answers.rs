@@ -470,6 +470,12 @@ impl RawAnswers {
         });
         let backend_language = self.backend_language.unwrap_or_default();
         let go_database = self.go_database.unwrap_or_default();
+        // A complete authored model owns backend capabilities. The singular
+        // compatibility projection is authoritative only for legacy answers.
+        let go_postgres_migrations_enabled = authored_repository.as_ref().map_or_else(
+            || backend_language.is_go() && go_database.is_postgres(),
+            |model| model.has_adapter("go-postgres"),
+        );
         let repo_name = self
             .repo_name
             .filter(|value| !value.is_empty())
@@ -552,7 +558,7 @@ impl RawAnswers {
         });
         let migration_add_command = self.migration_add_command;
         let migration_dir = migration_dir_answer.or_else(|| {
-            if backend_language.is_go() && go_database.is_postgres() {
+            if go_postgres_migrations_enabled {
                 Some(GO_POSTGRES_MIGRATION_DIR.into())
             } else {
                 legacy_rust_migration_dir.clone()

@@ -659,6 +659,78 @@ fn authored_multi_backend_model_survives_v6_recopy_resolution() {
 }
 
 #[test]
+fn authored_mixed_go_postgres_model_defaults_its_owned_migration_directory() {
+    let api = ComponentSpec {
+        adapters: vec!["go".into(), "go-postgres".into()],
+        ..ComponentSpec::new(component_id("api").unwrap(), "services/api")
+    };
+    let worker = ComponentSpec {
+        adapters: vec!["rust".into()],
+        ..ComponentSpec::new(component_id("worker").unwrap(), "services/worker")
+    };
+    let mut api_test = ActionSpec::new(
+        target_id("api", "test").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("api_test_command"),
+    );
+    api_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
+    let mut worker_test = ActionSpec::new(
+        target_id("worker", "test").unwrap(),
+        ActionIntent::Check,
+        ActionRunner::command("worker_test_command"),
+    );
+    worker_test.effects = vec![jig_contract::ActionEffect::ReadOnly];
+    let authored = RepositoryRenderModel {
+        affected_ignore: Vec::new(),
+        components: vec![api, worker],
+        actions: vec![api_test, worker_test],
+        profiles: vec![ProfileSpec::new(
+            ProfileId::parse("ci").unwrap(),
+            vec![
+                target_id("api", "test").unwrap(),
+                target_id("worker", "test").unwrap(),
+            ],
+        )],
+        default_check_profile: ProfileId::parse("ci").unwrap(),
+        required_commands: vec!["api_test_command".into(), "worker_test_command".into()],
+        tools: Vec::new(),
+        commands: BTreeMap::from([
+            ("api_test_command".into(), "go test ./...".into()),
+            (
+                "worker_test_command".into(),
+                "cargo test -p example-worker".into(),
+            ),
+        ]),
+    };
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("answers.toml");
+    fs::write(
+        &path,
+        format!(
+            "repo_name = \"ExampleProject\"\nbackend_language = \"rust\"\nsqlx_enabled = false\nschema_dump_enabled = false\n{}\n{}",
+            authored.authored_toml().unwrap(),
+            authored.commands_toml().unwrap()
+        ),
+    )
+    .unwrap();
+
+    let answers = RenderAnswers::from_answers_file(&path).unwrap();
+    let rendered = serde_json::to_value(&answers).unwrap();
+
+    assert!(answers.go_backend_enabled());
+    assert!(answers.rust_backend_enabled());
+    assert_eq!(
+        answers.migration_dir(),
+        Some(crate::backend::GO_POSTGRES_MIGRATION_DIR)
+    );
+    assert_eq!(
+        rendered["migration_dir"],
+        crate::backend::GO_POSTGRES_MIGRATION_DIR
+    );
+    assert_eq!(rendered["rust_migration_dir"], serde_json::Value::Null);
+}
+
+#[test]
 fn authored_go_workflow_renders_exact_targets_from_its_capability_aliases() {
     for (action_ids, add_aliases, read_only, add_foreign_fmt, expected) in [
         (
