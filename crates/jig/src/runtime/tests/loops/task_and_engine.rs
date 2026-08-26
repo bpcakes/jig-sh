@@ -116,6 +116,7 @@ fn loop_status_accepts_noop_kind_alias() {
 fn codex_task_uses_safe_defaults_and_removes_clean_successful_worktree() {
     let _guard = lock_env();
     let temp = tempdir().unwrap();
+    let canonical_temp = fs::canonicalize(temp.path()).unwrap();
     write_fixture_repo(temp.path());
     git_ok(temp.path(), ["init"]);
     git_ok(temp.path(), ["config", "user.email", "fixture@example.com"]);
@@ -181,7 +182,13 @@ printf 'task complete\n'
         invocation.contains("--ask-for-approval never exec --sandbox read-only --ephemeral -"),
         "{invocation}"
     );
-    assert!(invocation.starts_with(worktree), "{invocation}");
+    let invoked_worktree = invocation.lines().next().unwrap();
+    let relative_worktree = Path::new(worktree).strip_prefix(temp.path()).unwrap();
+    let canonical_worktree = canonical_temp.join(relative_worktree);
+    assert!(
+        invoked_worktree == worktree || Path::new(invoked_worktree) == canonical_worktree,
+        "{invocation}"
+    );
     assert_eq!(
         fs::read_to_string(prompt_log).unwrap(),
         "Review the repository.\n"
