@@ -73,6 +73,14 @@ fn next_migration_version_from(
     mut candidate: time::OffsetDateTime,
 ) -> Result<String> {
     let occupied = occupied_migration_versions(migration_dir)?;
+    let current_version = utc_timestamp_at(candidate);
+    if let Some(maximum_version) = occupied.iter().max()
+        && maximum_version >= &current_version
+    {
+        candidate = migration_version_timestamp(maximum_version)?
+            .checked_add(time::Duration::SECOND)
+            .context("Migration timestamp overflowed after the latest existing version")?;
+    }
     loop {
         let version = utc_timestamp_at(candidate);
         if !occupied.contains(&version) {
@@ -82,6 +90,37 @@ fn next_migration_version_from(
             .checked_add(time::Duration::SECOND)
             .context("Migration timestamp overflowed while finding a unique version")?;
     }
+}
+
+fn migration_version_timestamp(version: &str) -> Result<time::OffsetDateTime> {
+    if version.len() != 14 || !version.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("Migration version {version:?} is not a 14-digit UTC timestamp");
+    }
+    let year = version[0..4]
+        .parse::<i32>()
+        .with_context(|| format!("Migration version {version:?} has an invalid year"))?;
+    let month = version[4..6]
+        .parse::<u8>()
+        .with_context(|| format!("Migration version {version:?} has an invalid month"))?;
+    let day = version[6..8]
+        .parse::<u8>()
+        .with_context(|| format!("Migration version {version:?} has an invalid day"))?;
+    let hour = version[8..10]
+        .parse::<u8>()
+        .with_context(|| format!("Migration version {version:?} has an invalid hour"))?;
+    let minute = version[10..12]
+        .parse::<u8>()
+        .with_context(|| format!("Migration version {version:?} has an invalid minute"))?;
+    let second = version[12..14]
+        .parse::<u8>()
+        .with_context(|| format!("Migration version {version:?} has an invalid second"))?;
+    let month = time::Month::try_from(month)
+        .with_context(|| format!("Migration version {version:?} has an invalid month"))?;
+    let date = time::Date::from_calendar_date(year, month, day)
+        .with_context(|| format!("Migration version {version:?} has an invalid date"))?;
+    let time = time::Time::from_hms(hour, minute, second)
+        .with_context(|| format!("Migration version {version:?} has an invalid time"))?;
+    Ok(time::PrimitiveDateTime::new(date, time).assume_utc())
 }
 
 fn occupied_migration_versions(migration_dir: &Path) -> Result<HashSet<String>> {
@@ -171,5 +210,43 @@ mod tests {
         let version = next_migration_version_from(temp.path(), start).unwrap();
 
         assert_eq!(version, "20270101000001");
+    }
+
+    #[test]
+    fn migration_versions_advance_after_future_repository_history() {
+        let start = time::OffsetDateTime::parse(
+            "2026-12-31T23:59:59Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+
+        for filename in [
+            "20271231235959_future_goose.sql",
+            "20271231235959_future_sqlx.up.sql",
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            fs::write(temp.path().join(filename), "").unwrap();
+
+            let version = next_migration_version_from(temp.path(), start).unwrap();
+
+            assert_eq!(version, "20280101000000", "{filename}");
+        }
+    }
+
+    #[test]
+    fn invalid_future_migration_versions_fail_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("99999999999999_invalid.sql"), "").unwrap();
+        let start = time::OffsetDateTime::parse(
+            "2026-12-31T23:59:59Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+
+        let error = next_migration_version_from(temp.path(), start)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("invalid month"), "{error}");
     }
 }
