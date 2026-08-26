@@ -1,3 +1,5 @@
+// agentic-loc-exception: MCP repository execution isolation and cancellation cases share one end-to-end runtime fixture.
+
 use super::*;
 
 #[test]

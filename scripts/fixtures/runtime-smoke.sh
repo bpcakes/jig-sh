@@ -21,6 +21,9 @@ import tempfile
 repo_dir = pathlib.Path(os.environ["REPO_DIR"])
 expect_schema_dump = os.environ["EXPECT_SCHEMA_DUMP"] == "1"
 expect_sqlx = os.environ["EXPECT_SQLX"] == "1"
+contract_version = json.loads(
+    (repo_dir / ".agent" / "jig-contract.json").read_text()
+)["contract_version"]
 stderr_file = tempfile.TemporaryFile()
 proc = None
 
@@ -72,11 +75,19 @@ try:
     send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
     response = recv()
     tool_names = {tool["name"] for tool in response["result"]["tools"]}
-    assert "jig.fmt_check" in tool_names, tool_names
-    assert ("jig.schema_check" in tool_names) == expect_schema_dump, tool_names
-    assert ("jig.schema_dump" in tool_names) == expect_schema_dump, tool_names
-    assert ("jig.sqlx_check" in tool_names) == expect_sqlx, tool_names
-    assert ("jig.migration_add" in tool_names) == expect_sqlx, tool_names
+    if contract_version >= 6:
+        assert {"jig.plan_run", "jig.execute_run", "jig.inspect", "jig.cancel_run"} <= tool_names, tool_names
+        assert "jig.fmt_check" not in tool_names, tool_names
+        assert "jig.schema_check" not in tool_names, tool_names
+        assert "jig.schema_dump" not in tool_names, tool_names
+        assert "jig.sqlx_check" not in tool_names, tool_names
+        assert "jig.migration_add" not in tool_names, tool_names
+    else:
+        assert "jig.fmt_check" in tool_names, tool_names
+        assert ("jig.schema_check" in tool_names) == expect_schema_dump, tool_names
+        assert ("jig.schema_dump" in tool_names) == expect_schema_dump, tool_names
+        assert ("jig.sqlx_check" in tool_names) == expect_sqlx, tool_names
+        assert ("jig.migration_add" in tool_names) == expect_sqlx, tool_names
     assert "jig.agent_doctor" in tool_names, tool_names
     assert "jig.work_start" in tool_names, tool_names
     assert "jig.session_start" not in tool_names, tool_names
@@ -284,11 +295,9 @@ assert_capability_discovery_does_not_reinstall_after_strict_failure() {
     echo "Unknown check subcommand unexpectedly succeeded." >&2
     exit 1
   fi
-  grep -q "unrecognized subcommand 'typo'" "$unknown_check_stderr"
-  if grep -q 'fixture strict repository validation failed' "$unknown_check_stderr"; then
-    echo "Strict repository validation hid the unknown check subcommand diagnostic." >&2
-    exit 1
-  fi
+  # Contract v6 accepts selector-shaped values after `check`, so the launcher
+  # must bind even an unknown value to this repository before dispatch.
+  grep -q 'fixture strict repository validation failed' "$unknown_check_stderr"
 
   if (
     cd "$repo_dir"
@@ -572,13 +581,20 @@ expect_sqlx = os.environ["EXPECT_SQLX"] == "1"
 commands = set(manifest.get("required_commands", []))
 tools = {tool["name"] for tool in manifest["tools"]}
 tools_by_name = {tool["name"]: tool for tool in manifest["tools"]}
+expect_migration_add = expect_sqlx or any(
+    "go" in component.get("adapters", []) for component in manifest.get("components", [])
+)
 
-assert ("schema_dump_command" in commands) == expect_schema_dump, manifest
+def has_required_command_tool(name):
+    tool = tools_by_name.get(name, {})
+    return tool.get("kind") == "command" and tool.get("command") in commands
+
+assert has_required_command_tool("jig.schema_dump") == expect_schema_dump, manifest
 assert ("jig.schema_dump" in tools) == expect_schema_dump, manifest
 assert ("jig.schema_check" in tools) == expect_schema_dump, manifest
-assert ("sqlx_check_command" in commands) == expect_sqlx, manifest
+assert has_required_command_tool("jig.sqlx_check") == expect_sqlx, manifest
 assert ("jig.sqlx_check" in tools) == expect_sqlx, manifest
-assert ("jig.migration_add" in tools) == expect_sqlx, manifest
+assert ("jig.migration_add" in tools) == expect_migration_add, manifest
 if "jig.contract_check" in tools_by_name:
     assert tools_by_name["jig.contract_check"]["kind"] == "native", manifest
 if "jig.migration_add" in tools_by_name:
@@ -702,7 +718,7 @@ required = {
 if os.environ["EXPECT_SQLX"] == "1":
     required.update({"jig.sqlx_check", "jig.migration_add"})
 if os.environ["EXPECT_SCHEMA_DUMP"] == "1":
-    required.update({"jig.schema_check", "jig.schema_dump"})
+    required.add("jig.schema_check")
 
 missing = sorted(required - tools)
 if missing:

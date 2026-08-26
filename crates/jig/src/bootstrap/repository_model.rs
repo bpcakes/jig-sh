@@ -1,3 +1,5 @@
+// agentic-loc-exception: keep contract-v6 repository projection, provenance, and validation in one auditable model boundary.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};

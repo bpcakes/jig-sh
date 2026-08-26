@@ -539,11 +539,7 @@ PY
     echo "Bare check unexpectedly succeeded without a check subcommand." >&2
     exit 1
   fi
-  grep -Fq 'Usage: jig check [OPTIONS] <COMMAND>' "$bare_check_stderr"
-  if grep -Fq 'repository contract did not validate' "$bare_check_stderr"; then
-    echo "Repository validation hid bare check's subcommand diagnostic." >&2
-    exit 1
-  fi
+  grep -Fq "Launcher contract version $drift_version does not match repository contract version $contract_version" "$bare_check_stderr"
 }
 
 validate_legacy_contract_uses_version_tag_only_as_source_locator() {

@@ -1,3 +1,5 @@
+// agentic-loc-exception: repository projection cases share one authored-answer fixture and compare the complete v6 contract surface.
+
 use std::fs;
 
 use tempfile::TempDir;

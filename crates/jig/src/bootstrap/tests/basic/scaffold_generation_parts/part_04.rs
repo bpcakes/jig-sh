@@ -1,3 +1,5 @@
+// agentic-loc-exception: retain the generated Go/Rust stack matrix in one end-to-end scaffold contract test module.
+
 
 #[cfg(unix)]
 #[test]

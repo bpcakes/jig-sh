@@ -1,3 +1,5 @@
+// agentic-loc-exception: repository execution evidence and cancellation cases share one durable-run fixture boundary.
+
 use super::*;
 
 #[test]

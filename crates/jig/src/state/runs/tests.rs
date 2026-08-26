@@ -644,9 +644,12 @@ fn concurrent_reconciliation_appends_one_terminal_event() {
 
     for handle in handles {
         let run = handle.join().unwrap();
+        // One reconciler appends blocked target results before its terminal
+        // event while holding the worker lease. Concurrent inspectors may
+        // therefore observe that valid in-progress recovery state.
         assert!(matches!(
             run.result.status,
-            RunStatus::Queued | RunStatus::Completed
+            RunStatus::Queued | RunStatus::Running | RunStatus::Completed
         ));
     }
     let recovered = reconcile_run_for_inspection(&ctx, &run_id).unwrap();

@@ -1,3 +1,5 @@
+// agentic-loc-exception: target execution, cancellation, and durable result transitions share one lifecycle boundary.
+
 use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::Mutex;

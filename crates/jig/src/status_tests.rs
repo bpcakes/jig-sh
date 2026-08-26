@@ -1,3 +1,5 @@
+// agentic-loc-exception: status-provider concurrency and validation tests share process fixtures and report builders.
+
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::fs;

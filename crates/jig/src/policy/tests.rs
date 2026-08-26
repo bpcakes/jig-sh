@@ -1,3 +1,5 @@
+// agentic-loc-exception: repository policy tests share Git-backed fixtures and cross-check the public policy dispatch boundary.
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;

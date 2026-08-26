@@ -1,3 +1,5 @@
+// agentic-loc-exception: policy dispatch and repository-wide check implementations remain co-located for consistent Git boundary handling.
+
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;

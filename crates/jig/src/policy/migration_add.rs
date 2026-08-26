@@ -201,11 +201,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("20261231235959_first.sql"), "").unwrap();
         fs::write(temp.path().join("20270101000000_second.up.sql"), "").unwrap();
-        let start = time::OffsetDateTime::parse(
-            "2026-12-31T23:59:59Z",
-            &time::format_description::well_known::Rfc3339,
-        )
-        .unwrap();
+        let start = migration_version_timestamp("20261231235959").unwrap();
 
         let version = next_migration_version_from(temp.path(), start).unwrap();
 
@@ -214,11 +210,7 @@ mod tests {
 
     #[test]
     fn migration_versions_advance_after_future_repository_history() {
-        let start = time::OffsetDateTime::parse(
-            "2026-12-31T23:59:59Z",
-            &time::format_description::well_known::Rfc3339,
-        )
-        .unwrap();
+        let start = migration_version_timestamp("20261231235959").unwrap();
 
         for filename in [
             "20271231235959_future_goose.sql",
@@ -237,11 +229,7 @@ mod tests {
     fn invalid_future_migration_versions_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("99999999999999_invalid.sql"), "").unwrap();
-        let start = time::OffsetDateTime::parse(
-            "2026-12-31T23:59:59Z",
-            &time::format_description::well_known::Rfc3339,
-        )
-        .unwrap();
+        let start = migration_version_timestamp("20261231235959").unwrap();
 
         let error = next_migration_version_from(temp.path(), start)
             .unwrap_err()

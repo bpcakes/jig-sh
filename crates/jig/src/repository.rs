@@ -1,3 +1,5 @@
+// agentic-loc-exception: repository catalog normalization and validation remain together as one contract-authority boundary.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 

@@ -1,3 +1,5 @@
+// agentic-loc-exception: doctor redaction and dependency diagnostics share security-sensitive process fixtures.
+
 #[cfg(unix)]
 #[test]
 fn required_tools_redacts_every_command_body_and_generic_credential_token() {
