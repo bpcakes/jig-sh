@@ -295,7 +295,7 @@ fn unborn_schema_snapshot_keeps_files_beyond_the_small_diagnostic_output_limit()
     assert!(!temp.path().join("docs/schema/tables.sql").exists());
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn schema_snapshot_preserves_non_utf8_untracked_paths() {
     use std::ffi::OsString;

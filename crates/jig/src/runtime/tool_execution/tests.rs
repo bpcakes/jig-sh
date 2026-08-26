@@ -203,7 +203,10 @@ legacy_aliases = ["jig.compat_check"]"#,
     assert_eq!(result["result"]["exit_status"], 0);
     assert_eq!(
         result["result"]["stdout"],
-        format!("{}|from-action\n", temp.path().join("work").display())
+        format!(
+            "{}|from-action\n",
+            temp.path().join("work").canonicalize().unwrap().display()
+        )
     );
 }
 
