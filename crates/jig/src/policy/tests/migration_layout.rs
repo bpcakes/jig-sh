@@ -252,8 +252,8 @@ fn contract_validation_resolves_custom_migration_alias_arity_for_work_checks() {
     write_v6_mixed_migration_policy_repo(temp.path(), "api");
     let config_path = temp.path().join(".jig.toml");
     let config = fs::read_to_string(&config_path).unwrap().replace(
-        "inputs = [\"database/migrations/**\"]",
-        "inputs = [\"database/migrations/**\"]\nlegacy_aliases = [\"jig.custom_migration\"]",
+        "legacy_aliases = [\"jig.migration_add\"]",
+        "legacy_aliases = [\"jig.custom_migration\"]",
     );
     fs::write(
         &config_path,
@@ -265,11 +265,11 @@ fn contract_validation_resolves_custom_migration_alias_arity_for_work_checks() {
     let mut contract: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&contract_path).unwrap()).unwrap();
     contract["actions"][0]["legacy_aliases"] = json!(["jig.custom_migration"]);
-    contract["tools"].as_array_mut().unwrap().push(json!({
+    contract["tools"][0] = json!({
         "name": "jig.custom_migration",
         "kind": kind::NATIVE,
         "description": "Create a migration through a compatibility alias."
-    }));
+    });
     fs::write(
         contract_path,
         serde_json::to_string_pretty(&contract).unwrap(),

@@ -189,7 +189,11 @@ concurrent read-only targets, worktree-mutating targets, and unobserved gaps
 take independent preconditions. Every run also holds a checkout-wide execution
 lease: safe read-only runs share it, while worktree, external, and otherwise
 effectful runs hold it exclusively from freshness validation through terminal
-execution. Contract-v6 compatibility aliases acquire the same lease from their
+execution. Every contract-v6 action declares at least one effect; an absent
+effect set is invalid because neither approval nor isolation may infer safety.
+Every contract-v6 manifest tool maps to exactly one owning action through
+`legacy_aliases`, so compatibility dispatch cannot fall back around the action
+contract. Contract-v6 compatibility aliases acquire the same lease from their
 owning action's effects, reload action and command authority after any wait,
 and retain the lease through receipt recording. If reloaded effects require a
 stronger lease, dispatch repeats acquisition before it runs. MCP execution

@@ -444,6 +444,11 @@ fn go_react_web_workflow_observes_the_complete_application_contract() {
 
     let go_tests =
         fs::read_to_string(destination.join(".github/workflows/go-tests.yml")).unwrap();
+    let go_tests_workflow: serde_json::Value = serde_yaml_ng::from_str(&go_tests).unwrap();
+    assert_eq!(
+        go_tests_workflow["jobs"]["checks"]["defaults"]["run"]["shell"],
+        "bash"
+    );
     assert_eq!(go_tests.matches(r#"- "openapi/**""#).count(), 2);
     for target in ["api:fmt", "api:lint", "api:test-locked", "api:sqlc"] {
         assert!(

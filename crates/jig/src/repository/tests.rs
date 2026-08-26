@@ -73,6 +73,39 @@ fn native_catalog_validation_rejects_missing_working_directories_before_planning
 }
 
 #[test]
+fn native_catalog_rejects_actions_without_effect_authority() {
+    let component = ComponentSpec::new(ComponentId::parse("api").unwrap(), "api");
+    let target: TargetId = "api:operate".parse().unwrap();
+    let action = ActionSpec::new(
+        target.clone(),
+        ActionIntent::Operate,
+        ActionRunner::command("operate_command"),
+    );
+    let profile_id = ProfileId::parse("operate").unwrap();
+    let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
+
+    let error = RepositoryCatalog::from_native(
+        6,
+        "sha256:config",
+        &[component],
+        &[action],
+        &[profile],
+        Some(&profile_id),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must declare at least one effect"),
+        "{error}"
+    );
+    assert!(
+        error.contains("execution isolation and approval"),
+        "{error}"
+    );
+}
+
+#[test]
 fn legacy_alias_collisions_get_order_independent_target_ids() {
     let tools = [
         command_tool("jig.foo_bar", "foo_command"),
@@ -280,12 +313,14 @@ fn native_catalog_rejects_action_dependency_cycles() {
         ActionIntent::Check,
         ActionRunner::command("lint_command"),
     );
+    lint.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
     lint.depends_on.push(test_target.clone());
     let mut test = ActionSpec::new(
         test_target.clone(),
         ActionIntent::Check,
         ActionRunner::command("test_command"),
     );
+    test.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
     test.depends_on.push(lint_target);
     let profile_id = ProfileId::parse("verify").unwrap();
     let profile = ProfileSpec::new(profile_id.clone(), vec![test_target]);
@@ -317,6 +352,7 @@ fn native_catalog_rejects_invalid_action_timeouts() {
             ActionIntent::Check,
             ActionRunner::command("rust_test_command"),
         );
+        action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
         action.timeout_seconds = Some(timeout);
         let profile_id = ProfileId::parse("verify").unwrap();
         let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
@@ -345,6 +381,7 @@ fn native_catalog_rejects_unpreemptible_native_timeout_overrides() {
         ActionIntent::Check,
         ActionRunner::native(tool::CONTRACT_CHECK),
     );
+    action.effects = vec![ActionEffect::ReadOnly];
     action.timeout_seconds = Some(30);
     let profile_id = ProfileId::parse("verify").unwrap();
     let profile = ProfileSpec::new(profile_id.clone(), vec![target]);
@@ -453,16 +490,18 @@ fn native_catalog_rejects_multiple_migration_format_owners() {
     };
     let goose_target: TargetId = "api:migration-add".parse().unwrap();
     let sqlx_target: TargetId = "worker:migration-add".parse().unwrap();
-    let goose = ActionSpec::new(
+    let mut goose = ActionSpec::new(
         goose_target.clone(),
         ActionIntent::Generate,
         ActionRunner::native(tool::MIGRATION_ADD),
     );
-    let sqlx = ActionSpec::new(
+    goose.effects = vec![ActionEffect::Worktree, ActionEffect::Process];
+    let mut sqlx = ActionSpec::new(
         sqlx_target.clone(),
         ActionIntent::Generate,
         ActionRunner::native(tool::MIGRATION_ADD),
     );
+    sqlx.effects = vec![ActionEffect::Worktree, ActionEffect::Process];
     let profile_id = ProfileId::parse("operate").unwrap();
     let profile = ProfileSpec::new(profile_id.clone(), vec![goose_target, sqlx_target]);
 

@@ -263,6 +263,12 @@ pub(crate) fn validate_contract(
         let alias_action = catalog
             .as_ref()
             .and_then(|catalog| catalog.action_for_alias(&tool.name));
+        if ctx.contract_version() >= 6 && catalog.is_some() && alias_action.is_none() {
+            errors.push(format!(
+                "Contract-v6 tool {} is not mapped to a repository action through legacy_aliases.",
+                tool.name
+            ));
+        }
         let native_operation = alias_action.and_then(|action| match &action.runner {
             jig_contract::ActionRunner::Native { operation } => Some(operation.as_str()),
             jig_contract::ActionRunner::Command { .. } => None,

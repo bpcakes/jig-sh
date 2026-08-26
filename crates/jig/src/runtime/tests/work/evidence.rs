@@ -503,6 +503,18 @@ target = "api:test"
         .replace(
             "api_test_command = \"printf 'api tests passed\\n'\"",
             "api_test_command = \"printf evidence > evidence-target-ran.txt\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "failing-check" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "failing_check_command" }
+inputs = ["api/**"]
+legacy_aliases = ["jig.failing_check"]
+
+[[repository.profiles]]"#,
         );
     fs::write(&config_path, config).unwrap();
     let manifest_path = temp.path().join(".agent/jig-contract.json");
@@ -517,6 +529,14 @@ target = "api:test"
         "kind": "command",
         "description": "Fail the legacy check.",
         "command": "failing_check_command"
+    }));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "failing-check"},
+        "intent": "check",
+        "effects": ["read_only", "process"],
+        "runner": {"kind": "command", "command": "failing_check_command"},
+        "inputs": ["api/**"],
+        "legacy_aliases": ["jig.failing_check"]
     }));
     fs::write(
         &manifest_path,
@@ -566,10 +586,24 @@ target = "api:test"
 "#,
     );
     let config_path = temp.path().join(".jig.toml");
-    let config = fs::read_to_string(&config_path).unwrap().replace(
-        "api_test_command = \"printf 'api tests passed\\n'\"",
-        "api_test_command = \"printf evidence > hard-error-evidence-ran.txt\"",
-    );
+    let config = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace(
+            "api_test_command = \"printf 'api tests passed\\n'\"",
+            "api_test_command = \"printf evidence > hard-error-evidence-ran.txt\"",
+        )
+        .replace(
+            "[[repository.profiles]]",
+            r#"[[repository.actions]]
+target = { component = "api", action = "broken-check" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "missing_check_command" }
+inputs = ["api/**"]
+legacy_aliases = ["jig.broken_check"]
+
+[[repository.profiles]]"#,
+        );
     fs::write(&config_path, config).unwrap();
     let manifest_path = temp.path().join(".agent/jig-contract.json");
     let mut manifest: Value =
@@ -583,6 +617,14 @@ target = "api:test"
         "kind": "command",
         "description": "A deliberately unavailable check.",
         "command": "missing_check_command"
+    }));
+    manifest["actions"].as_array_mut().unwrap().push(json!({
+        "target": {"component": "api", "action": "broken-check"},
+        "intent": "check",
+        "effects": ["read_only", "process"],
+        "runner": {"kind": "command", "command": "missing_check_command"},
+        "inputs": ["api/**"],
+        "legacy_aliases": ["jig.broken_check"]
     }));
     fs::write(
         &manifest_path,

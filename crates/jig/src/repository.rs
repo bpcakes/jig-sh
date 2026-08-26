@@ -271,6 +271,12 @@ impl RepositoryCatalog {
                     action.target.component
                 );
             }
+            if action.effects.is_empty() {
+                bail!(
+                    "target '{}' must declare at least one effect so execution isolation and approval remain fail-closed",
+                    action.target
+                );
+            }
             if action
                 .timeout_seconds
                 .is_some_and(|seconds| CommandTimeout::from_seconds(seconds).is_none())

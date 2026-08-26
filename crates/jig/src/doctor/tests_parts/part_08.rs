@@ -117,7 +117,10 @@ fn doctor_reports_unified_readiness_checks() {
     assert_eq!(output["checks"].as_array().unwrap().len(), 8);
     assert!(check_by_id(&output, "runtime")["ok"].as_bool().unwrap());
     assert!(check_by_id(&output, "config")["ok"].as_bool().unwrap());
-    assert!(check_by_id(&output, "contract")["ok"].as_bool().unwrap());
+    assert!(
+        check_by_id(&output, "contract")["ok"].as_bool().unwrap(),
+        "{output:#}"
+    );
     assert!(
         check_by_id(&output, "required_tools")["ok"]
             .as_bool()
@@ -552,8 +555,14 @@ fn configure_doctor_fixture_go_adapter_at(root: &Path, component_root: &str) {
     contract["components"][0]["adapters"] = json!(["go"]);
     if component_root != "." {
         contract["components"][0]["id"] = json!("api");
-        contract["actions"][0]["target"]["component"] = json!("api");
-        contract["profiles"][0]["targets"][0]["component"] = json!("api");
+        for action in contract["actions"].as_array_mut().unwrap() {
+            action["target"]["component"] = json!("api");
+        }
+        for profile in contract["profiles"].as_array_mut().unwrap() {
+            for target in profile["targets"].as_array_mut().unwrap() {
+                target["component"] = json!("api");
+            }
+        }
     }
     fs::write(
         contract_path,

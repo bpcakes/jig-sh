@@ -243,3 +243,58 @@ legacy_aliases = ["jig.compat_contract"]"#,
             .contains("Unsupported native tool: jig.compat_contract")
     );
 }
+
+#[test]
+fn v6_manifest_tools_without_an_action_alias_fail_closed() {
+    let temp = tempdir().unwrap();
+    write_v6_alias_repo(
+        temp.path(),
+        r#"harness_footprint = "minimal"
+
+[commands]
+alias_command = "printf 'must not run\n'""#,
+        r#"[[repository.actions]]
+target = { component = "repo", action = "check" }
+intent = "check"
+effects = ["read_only", "process"]
+runner = { kind = "command", command = "alias_command" }
+legacy_aliases = ["jig.compat_check"]"#,
+        serde_json::json!({
+            "target": {"component": "repo", "action": "check"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": "alias_command"},
+            "legacy_aliases": ["jig.compat_check"]
+        }),
+        vec![serde_json::json!({
+            "name": "jig.bootstrap",
+            "kind": "command",
+            "description": "Unmapped compatibility tool.",
+            "command": "alias_command"
+        })],
+    );
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let error = execute_manifest_tool_result_without_worktree_fingerprint(
+        &ctx,
+        "jig.bootstrap",
+        serde_json::json!({}),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("does not resolve to a repository action through legacy_aliases"),
+        "{error}"
+    );
+
+    let contract_error = crate::policy::validate_contract(&ctx)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        contract_error.contains(
+            "Contract-v6 tool jig.bootstrap is not mapped to a repository action through legacy_aliases"
+        ),
+        "{contract_error}"
+    );
+}

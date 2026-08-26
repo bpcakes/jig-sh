@@ -21,6 +21,15 @@ intent = "check"
 effects = ["read_only", "process"]
 runner = { kind = "command", command = "bootstrap_command" }
 inputs = ["**"]
+legacy_aliases = ["jig.bootstrap"]
+
+[[repository.actions]]
+target = { component = "repo", action = "contract" }
+intent = "check"
+effects = ["read_only"]
+runner = { kind = "native", operation = "jig.contract_check" }
+inputs = [".jig.toml"]
+legacy_aliases = ["jig.contract_check"]
 
 [[repository.profiles]]
 id = "verify"
@@ -51,13 +60,24 @@ marketplaces = []
         "root": ".",
         "adapters": ["rust"]
     }]);
-    contract["actions"] = json!([{
-        "target": {"component": "repo", "action": "bootstrap"},
-        "intent": "check",
-        "effects": ["read_only", "process"],
-        "runner": {"kind": "command", "command": "bootstrap_command"},
-        "inputs": ["**"]
-    }]);
+    contract["actions"] = json!([
+        {
+            "target": {"component": "repo", "action": "bootstrap"},
+            "intent": "check",
+            "effects": ["read_only", "process"],
+            "runner": {"kind": "command", "command": "bootstrap_command"},
+            "inputs": ["**"],
+            "legacy_aliases": ["jig.bootstrap"]
+        },
+        {
+            "target": {"component": "repo", "action": "contract"},
+            "intent": "check",
+            "effects": ["read_only"],
+            "runner": {"kind": "native", "operation": "jig.contract_check"},
+            "inputs": [".jig.toml"],
+            "legacy_aliases": ["jig.contract_check"]
+        }
+    ]);
     contract["profiles"] = json!([{
         "id": "verify",
         "targets": [{"component": "repo", "action": "bootstrap"}]

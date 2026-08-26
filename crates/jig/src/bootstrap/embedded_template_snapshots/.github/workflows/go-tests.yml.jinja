@@ -52,6 +52,9 @@ concurrency:
 jobs:
   checks:
     runs-on: <<[ ci_github_runner | tojson ]>>
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1

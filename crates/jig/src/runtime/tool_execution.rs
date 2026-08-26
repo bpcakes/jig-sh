@@ -197,13 +197,13 @@ fn execute_manifest_tool_with_options(
         .tool_spec(tool_name)
         .cloned()
         .ok_or_else(|| anyhow!("{}", undeclared_tool_message(&current, tool_name)))?;
-    let action = if current.contract_version() >= 6 {
+    if current.contract_version() >= 6 {
         let catalog = RepositoryCatalog::from_context(&current)?;
-        catalog.action_for_alias(tool_name).cloned()
-    } else {
-        None
-    };
-    if action.is_some() {
+        if catalog.action_for_alias(tool_name).is_none() {
+            bail!(
+                "Contract-v6 tool '{tool_name}' does not resolve to a repository action through legacy_aliases"
+            );
+        }
         return execute_v6_action_alias(
             current, tool_name, args, plan_id, options, position, observer,
         );

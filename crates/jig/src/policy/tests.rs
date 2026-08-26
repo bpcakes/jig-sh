@@ -104,6 +104,7 @@ intent = "generate"
 effects = ["worktree", "process"]
 runner = {{ kind = "native", operation = "jig.migration_add" }}
 inputs = ["database/migrations/**"]
+legacy_aliases = ["jig.migration_add"]
 
 [[repository.profiles]]
 id = "operate"
@@ -129,7 +130,8 @@ targets = [{{ component = "{owner}", action = "migration-add" }}]
         "intent": "generate",
         "effects": ["worktree", "process"],
         "runner": {"kind": "native", "operation": "jig.migration_add"},
-        "inputs": ["database/migrations/**"]
+        "inputs": ["database/migrations/**"],
+        "legacy_aliases": ["jig.migration_add"]
     }]);
     contract["profiles"] = json!([{
         "id": "operate",
