@@ -9,7 +9,11 @@ use std::thread;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use anyhow::Context;
 use anyhow::{Result as AnyResult, anyhow, bail};
+#[cfg(target_os = "linux")]
+use jig_owned_process::unix::linux_process_group_has_live_members;
 use jig_owned_process::unix::{
     ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, WaitidClassificationError,
     classify_waitid_status, waitid_without_reaping,
@@ -24,8 +28,6 @@ use jig_owned_process::unix::{
 use super::process::{
     BrokeredProcess, LeaderObservation, PinnedUnixProcessGroup, terminate_spawn_failure_child,
 };
-#[cfg(target_os = "linux")]
-use super::process_linux::linux_process_group_has_live_members;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::{BROKERED_PROCESS_CLEANUP_TIMEOUT, BROKERED_PROCESS_POLL_INTERVAL};
 
@@ -424,17 +426,25 @@ pub(super) fn confirm_unix_process_group_quiescent(
             2,
             signal_pinned_unix_process_group,
             |process, expected_group, deadline| {
-                with_pinned_unix_process_group(process.process_group.as_ref(), |group| {
-                    if group.id.as_raw() == expected_group {
-                        Ok(())
-                    } else {
-                        Err(io::Error::other(format!(
-                            "brokered process-group identity changed from {expected_group} to {}",
-                            group.id.as_raw()
-                        )))
-                    }
-                })?;
-                linux_process_group_has_live_members(expected_group, deadline)
+                let process_group = with_pinned_unix_process_group(
+                    process.process_group.as_ref(),
+                    |group| {
+                        if group.id.as_raw() == expected_group {
+                            Ok(group.id)
+                        } else {
+                            Err(io::Error::other(format!(
+                                "brokered process-group identity changed from {expected_group} to {}",
+                                group.id.as_raw()
+                            )))
+                        }
+                    },
+                )?;
+                linux_process_group_has_live_members(process_group, deadline)
+                    .with_context(|| {
+                        format!(
+                            "failed to scan brokered process group {expected_group} for live members"
+                        )
+                    })
                     .map(|live_members| !live_members)
             },
             Instant::now,

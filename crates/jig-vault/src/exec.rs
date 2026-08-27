@@ -18,8 +18,10 @@ pub const MAX_EXEC_ENV_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_EXEC_CONCEALED_VALUE_LEN: usize = 64 * 1024;
 pub(crate) const MAX_EXEC_CONCEALED_BINDINGS: usize = 128;
 
-pub(crate) const VAULT_PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
-pub(crate) const VAULT_NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
+/// Environment variable carrying the current Vault passphrase.
+pub const VAULT_PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
+/// Environment variable carrying a replacement Vault passphrase during rotation.
+pub const VAULT_NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 
 /// One environment assignment for a transparent vault execution.
 ///
@@ -245,7 +247,8 @@ fn validate_bindings(bindings: &[ExecEnvBinding]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn is_vault_passphrase_env(name: &str) -> bool {
+/// Returns whether an exact environment name is reserved for Vault passphrase transport.
+pub fn is_vault_passphrase_env(name: &str) -> bool {
     env_names_equal(name, VAULT_PASSPHRASE_ENV) || env_names_equal(name, VAULT_NEW_PASSPHRASE_ENV)
 }
 
@@ -347,12 +350,15 @@ mod tests {
         assert!(VaultExec::new(vec![OsString::from("cmd")], vec![first, second]).is_err());
 
         for reserved in [VAULT_PASSPHRASE_ENV, VAULT_NEW_PASSPHRASE_ENV] {
+            assert!(is_vault_passphrase_env(reserved));
             let binding = ExecEnvBinding::field(
                 var(reserved),
                 VaultReference::parse("jig://Production/TOKEN").unwrap(),
             );
             assert!(VaultExec::new(vec![OsString::from("cmd")], vec![binding]).is_err());
         }
+        assert!(!is_vault_passphrase_env("jig_vault_passphrase"));
+        assert!(!is_vault_passphrase_env("JIG_VAULT_PASSPHRASE_EXTRA"));
     }
 
     #[test]

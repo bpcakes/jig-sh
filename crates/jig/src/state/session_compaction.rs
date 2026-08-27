@@ -15,6 +15,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::de::IgnoredAny;
 use sha2::{Digest, Sha256};
 
+use super::json_scan::{skip_json_string, skip_json_value, skip_whitespace};
+
 const JSONL_READ_CHUNK: usize = 16 * 1024;
 const MAX_EMBEDDED_VALIDATION_CACHE_ENTRIES: usize = 4096;
 
@@ -948,83 +950,6 @@ fn visit_array_value_ranges(
             }
         }
     }
-}
-
-fn skip_json_value(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let start = skip_whitespace(input, start, end);
-    match input.get(start).copied() {
-        Some(b'"') => skip_json_string(input, start, end),
-        Some(b'{') | Some(b'[') => skip_json_composite(input, start, end),
-        Some(_) => {
-            let mut cursor = start;
-            while cursor < end
-                && !input[cursor].is_ascii_whitespace()
-                && !matches!(input[cursor], b',' | b']' | b'}')
-            {
-                cursor += 1;
-            }
-            if cursor == start {
-                bail!("Expected JSON value at byte {start}");
-            }
-            Ok(cursor)
-        }
-        None => bail!("Expected JSON value at byte {start}"),
-    }
-}
-
-fn skip_json_composite(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let mut cursor = start;
-    let mut stack = Vec::new();
-    while cursor < end {
-        match input[cursor] {
-            b'"' => cursor = skip_json_string(input, cursor, end)?,
-            b'{' => {
-                stack.push(b'}');
-                cursor += 1;
-            }
-            b'[' => {
-                stack.push(b']');
-                cursor += 1;
-            }
-            b'}' | b']' => {
-                let expected = stack
-                    .pop()
-                    .ok_or_else(|| anyhow!("Unexpected JSON delimiter at byte {cursor}"))?;
-                if input[cursor] != expected {
-                    bail!("Mismatched JSON delimiter at byte {cursor}");
-                }
-                cursor += 1;
-                if stack.is_empty() {
-                    return Ok(cursor);
-                }
-            }
-            _ => cursor += 1,
-        }
-    }
-    bail!("Unterminated JSON value at byte {start}")
-}
-
-fn skip_json_string(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let mut cursor = start + 1;
-    while cursor < end {
-        match input[cursor] {
-            b'\\' => {
-                cursor = cursor
-                    .checked_add(2)
-                    .ok_or_else(|| anyhow!("JSON string offset overflow"))?;
-            }
-            b'"' => return Ok(cursor + 1),
-            _ => cursor += 1,
-        }
-    }
-    bail!("Unterminated JSON string at byte {start}")
-}
-
-fn skip_whitespace(input: &[u8], mut cursor: usize, end: usize) -> usize {
-    while cursor < end && input[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    cursor
 }
 
 fn trim_range(input: &[u8], range: Range<usize>) -> Range<usize> {

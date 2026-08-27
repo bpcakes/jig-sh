@@ -12,13 +12,14 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
 use crate::command::StateDiagnoseRequest;
 use crate::context::RepoContext;
 
+use super::json_scan::{skip_json_string, skip_json_value, skip_whitespace};
 use super::jsonl::scan_jsonl_raw;
 
 const STATE_STREAMS: [(&str, &str); 4] = [
@@ -424,74 +425,6 @@ fn visit_array_values(
             _ => bail!("Expected ',' or ']' at byte {cursor}"),
         }
     }
-}
-
-fn skip_json_value(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let start = skip_whitespace(input, start, end);
-    match input.get(start).copied() {
-        Some(b'"') => skip_json_string(input, start, end),
-        Some(b'{') | Some(b'[') => skip_json_composite(input, start, end),
-        Some(_) => {
-            let mut cursor = start;
-            while cursor < end
-                && !input[cursor].is_ascii_whitespace()
-                && !matches!(input[cursor], b',' | b']' | b'}')
-            {
-                cursor += 1;
-            }
-            if cursor == start {
-                bail!("Expected JSON value at byte {start}");
-            }
-            Ok(cursor)
-        }
-        None => bail!("Expected JSON value at byte {start}"),
-    }
-}
-
-fn skip_json_composite(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let mut cursor = start;
-    let mut depth = 0usize;
-    while cursor < end {
-        match input[cursor] {
-            b'"' => cursor = skip_json_string(input, cursor, end)?,
-            b'{' | b'[' => {
-                depth += 1;
-                cursor += 1;
-            }
-            b'}' | b']' => {
-                depth = depth
-                    .checked_sub(1)
-                    .ok_or_else(|| anyhow!("Unexpected JSON delimiter at byte {cursor}"))?;
-                cursor += 1;
-                if depth == 0 {
-                    return Ok(cursor);
-                }
-            }
-            _ => cursor += 1,
-        }
-    }
-    bail!("Unterminated JSON value at byte {start}")
-}
-
-fn skip_json_string(input: &[u8], start: usize, end: usize) -> Result<usize> {
-    let mut cursor = start + 1;
-    while cursor < end {
-        match input[cursor] {
-            b'\\' => {
-                cursor = cursor.saturating_add(2);
-            }
-            b'"' => return Ok(cursor + 1),
-            _ => cursor += 1,
-        }
-    }
-    bail!("Unterminated JSON string at byte {start}")
-}
-
-fn skip_whitespace(input: &[u8], mut cursor: usize, end: usize) -> usize {
-    while cursor < end && input[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    cursor
 }
 
 fn first_non_whitespace(input: &[u8], range: Range<usize>) -> Option<u8> {

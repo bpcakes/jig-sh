@@ -1,3 +1,4 @@
+mod aad;
 mod audit;
 mod backup;
 mod broker;
@@ -10,6 +11,7 @@ mod exec_process;
 mod format;
 mod output;
 mod path_security;
+mod process_pipe;
 mod redact;
 mod run;
 mod secret;
@@ -29,7 +31,8 @@ pub use broker::{BrokeredEnv, BrokeredFile, BrokeredRun};
 pub use error::{Result, VaultError, VaultErrorKind};
 pub use exec::{
     ExecEnvBinding, ExecOutcome, MAX_EXEC_ARGUMENT_BYTES, MAX_EXEC_ARGUMENTS,
-    MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN, VaultExec,
+    MAX_EXEC_ENV_BINDINGS, MAX_EXEC_ENV_TOTAL_BYTES, MAX_EXEC_ENV_VALUE_LEN,
+    VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV, VaultExec, is_vault_passphrase_env,
 };
 pub use output::{PreparedPrivateFile, PrivateFilePrecondition};
 pub use redact::Redactor;

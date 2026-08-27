@@ -6,7 +6,8 @@ use std::{
 };
 
 use jig_tui::{
-    FuzzyMatchScore, PreparedFuzzyText, format_countdown, format_percent, sanitize_text,
+    FuzzyMatchScore, PreparedFuzzyText, RankedFuzzyText, best_ranked_fuzzy_match, format_countdown,
+    format_percent, sanitize_text,
 };
 use serde_json::Value;
 
@@ -298,27 +299,12 @@ pub(crate) enum ExitState {
 }
 
 #[derive(Clone, Debug)]
-struct SearchTerm {
-    priority: usize,
-    text: PreparedFuzzyText,
-}
-
-impl SearchTerm {
-    fn new(priority: usize, text: &str) -> Self {
-        Self {
-            priority,
-            text: PreparedFuzzyText::new(text),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct HomeRow {
     home: Home,
     display_name: String,
     display_path: String,
     inspection: Inspection,
-    search_terms: Vec<SearchTerm>,
+    search_terms: Vec<RankedFuzzyText>,
 }
 
 impl HomeRow {
@@ -363,29 +349,22 @@ impl HomeRow {
         display_name: &str,
         display_path: &str,
         inspection: &Inspection,
-    ) -> Vec<SearchTerm> {
+    ) -> Vec<RankedFuzzyText> {
         let mut terms = Vec::with_capacity(5);
-        terms.push(SearchTerm::new(0, display_name));
+        terms.push(RankedFuzzyText::new(0, display_name));
         if let Inspection::Ready(details) = inspection {
             terms.extend([
-                SearchTerm::new(1, details.account_label()),
-                SearchTerm::new(2, &details.plan),
-                SearchTerm::new(3, &details.status),
+                RankedFuzzyText::new(1, details.account_label()),
+                RankedFuzzyText::new(2, &details.plan),
+                RankedFuzzyText::new(3, &details.status),
             ]);
         }
-        terms.push(SearchTerm::new(4, display_path));
+        terms.push(RankedFuzzyText::new(4, display_path));
         terms
     }
 
     fn match_score(&self, query: &PreparedFuzzyText) -> Option<(usize, FuzzyMatchScore)> {
-        self.search_terms
-            .iter()
-            .filter_map(|term| {
-                term.text
-                    .match_score(query)
-                    .map(|score| (term.priority, score))
-            })
-            .min()
+        best_ranked_fuzzy_match(&self.search_terms, query)
     }
 
     pub(crate) fn account(&self) -> String {

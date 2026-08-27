@@ -1917,10 +1917,3 @@ pub(crate) enum StatusKind {
     Info,
     Error,
 }
-
-pub(crate) const fn kind_label(kind: FieldKind) -> &'static str {
-    match kind {
-        FieldKind::Concealed => "concealed",
-        FieldKind::Text => "text",
-    }
-}

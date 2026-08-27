@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use wait_timeout::ChildExt;
 
+#[cfg(target_os = "linux")]
+use crate::unix::linux_process_group_has_live_members;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::unix::{
     ConsecutiveQuiescence, ProcessGroupId, UnreapedChildObservation, WaitidClassificationError,
@@ -357,22 +359,13 @@ enum ProcessPipe {
 impl ProcessPipe {
     #[cfg(unix)]
     fn prepare(&self) -> std::io::Result<()> {
-        use std::os::fd::AsRawFd;
+        use std::os::fd::AsFd;
 
         let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
+            Self::Stdout(reader) => reader.as_fd(),
+            Self::Stderr(reader) => reader.as_fd(),
         };
-        // SAFETY: the live pipe reader owns the descriptor; F_GETFL only inspects its flags.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: the live descriptor keeps every flag when F_SETFL adds nonblocking reads.
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        crate::unix::set_nonblocking(descriptor)
     }
 
     #[cfg(not(unix))]
@@ -956,7 +949,8 @@ fn confirm_process_group_quiescent(
         "while confirming the Linux process group",
         signal_pinned_process_group,
         |_process, process_group, deadline| {
-            linux_process_group_has_live_members(process_group, deadline).map(|live| !live)
+            linux_process_group_has_live_members(ProcessGroupId::new(process_group)?, deadline)
+                .map(|live| !live)
         },
         Instant::now,
         std::thread::sleep,
@@ -1032,218 +1026,6 @@ fn macos_process_group_contains_only_pinned_leader(
             ),
         }
     })
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_group_has_live_members(
-    process_group: libc::pid_t,
-    deadline: Instant,
-) -> std::io::Result<bool> {
-    let mut within_budget = || {
-        deadline
-            .checked_duration_since(Instant::now())
-            .is_some_and(|remaining| !remaining.is_zero())
-    };
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-    let entries = std::fs::read_dir("/proc");
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-    let pids = collect_linux_process_ids_with(
-        process_group,
-        entries?,
-        |entry| {
-            entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.parse::<libc::pid_t>().ok())
-        },
-        &mut within_budget,
-    )?;
-    linux_process_group_has_live_members_bytes_with(
-        process_group,
-        pids,
-        // The parenthesized command name in /proc/<pid>/stat may contain
-        // arbitrary bytes even though the process-state fields are ASCII.
-        |pid| std::fs::read(format!("/proc/{pid}/stat")),
-        linux_process_group_for_pid,
-        &mut within_budget,
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn collect_linux_process_ids_with<T>(
-    process_group: i32,
-    mut entries: impl Iterator<Item = std::io::Result<T>>,
-    mut process_id: impl FnMut(T) -> Option<i32>,
-    mut within_budget: impl FnMut() -> bool,
-) -> std::io::Result<Vec<i32>> {
-    let mut pids = Vec::new();
-    loop {
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let entry = entries.next();
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let Some(entry) = entry else {
-            return Ok(pids);
-        };
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        };
-        if let Some(pid) = process_id(entry) {
-            pids.push(pid);
-        }
-    }
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn ensure_linux_process_scan_budget(
-    _process_group: i32,
-    within_budget: &mut impl FnMut() -> bool,
-) -> std::io::Result<()> {
-    if within_budget() {
-        Ok(())
-    } else {
-        Err(owned_process_cleanup_timeout(
-            "while scanning Linux processes",
-        ))
-    }
-}
-
-#[cfg(test)]
-fn linux_process_group_has_live_members_with(
-    process_group: i32,
-    pids: impl IntoIterator<Item = i32>,
-    mut read_stat: impl FnMut(i32) -> std::io::Result<String>,
-    mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
-    mut within_budget: impl FnMut() -> bool,
-) -> std::io::Result<bool> {
-    linux_process_group_has_live_members_bytes_with(
-        process_group,
-        pids,
-        |pid| read_stat(pid).map(String::into_bytes),
-        &mut process_group_for_pid,
-        &mut within_budget,
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn linux_process_group_has_live_members_bytes_with(
-    process_group: i32,
-    pids: impl IntoIterator<Item = i32>,
-    mut read_stat: impl FnMut(i32) -> std::io::Result<Vec<u8>>,
-    mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
-    mut within_budget: impl FnMut() -> bool,
-) -> std::io::Result<bool> {
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-    for pid in pids {
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let observation = read_stat(pid).and_then(|stat| parse_linux_process_stat(pid, &stat));
-        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-        let observation = match observation {
-            Ok(observation) => observation,
-            Err(stat_error) => {
-                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-                let observed_group = process_group_for_pid(pid);
-                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-                match observed_group {
-                    Ok(None) => continue,
-                    Ok(Some(other_group)) if other_group != process_group => continue,
-                    Ok(Some(_)) => {
-                        return Err(std::io::Error::new(
-                            stat_error.kind(),
-                            format!(
-                                "could not inspect process {pid} in owned group {process_group}: {stat_error}"
-                            ),
-                        ));
-                    }
-                    Err(group_error) => {
-                        return Err(std::io::Error::new(
-                            stat_error.kind(),
-                            format!(
-                                "could not inspect process {pid} or prove it is outside owned group {process_group}: {stat_error}; group lookup failed: {group_error}"
-                            ),
-                        ));
-                    }
-                }
-            }
-        };
-        if observation.process_group == process_group && observation.live {
-            ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-            return Ok(true);
-        }
-    }
-    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
-    Ok(false)
-}
-
-#[cfg(any(target_os = "linux", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LinuxProcessObservation {
-    process_group: i32,
-    live: bool,
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn parse_linux_process_stat(
-    expected_pid: i32,
-    stat: &[u8],
-) -> std::io::Result<LinuxProcessObservation> {
-    let expected_prefix = format!("{expected_pid} (");
-    if expected_pid <= 0 || !stat.starts_with(expected_prefix.as_bytes()) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Linux process stat did not begin with the expected process identifier",
-        ));
-    }
-    let command_end = stat
-        .windows(2)
-        .rposition(|window| window == b") ")
-        .filter(|command_end| *command_end >= expected_prefix.len())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "missing Linux process stat command field",
-            )
-        })?;
-    let fields = std::str::from_utf8(&stat[command_end + 2..]).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Linux process stat fields are not valid UTF-8",
-        )
-    })?;
-    let mut fields = fields.split_whitespace();
-    let state = fields.next().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing process state")
-    })?;
-    let process_group = fields
-        .nth(1)
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "missing process group")
-        })?
-        .parse::<i32>()
-        .map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process group")
-        })?;
-    Ok(LinuxProcessObservation {
-        process_group,
-        live: !matches!(state, "Z" | "X" | "x"),
-    })
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_group_for_pid(pid: libc::pid_t) -> std::io::Result<Option<libc::pid_t>> {
-    // SAFETY: `pid` is a positive identifier enumerated from /proc and this
-    // call only observes its current process-group membership.
-    let process_group = unsafe { libc::getpgid(pid) };
-    if process_group >= 0 {
-        return Ok(Some(process_group));
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(None)
-    } else {
-        Err(error)
-    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

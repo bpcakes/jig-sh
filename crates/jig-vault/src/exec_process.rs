@@ -1,10 +1,8 @@
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
-use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -12,6 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::exec::{VAULT_NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV};
 use crate::exec_output::StreamingRedactor;
+use crate::process_pipe::ProcessPipe;
 use crate::{EnvVarName, ExecOutcome};
 
 const EXEC_POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -238,55 +237,6 @@ fn portable_outcome(status: ExitStatus) -> ExecOutcome {
     }
 }
 
-enum ProcessPipe {
-    Stdout(ChildStdout),
-    Stderr(ChildStderr),
-}
-
-impl ProcessPipe {
-    #[cfg(unix)]
-    fn prepare(&self) -> io::Result<()> {
-        let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
-        };
-        // SAFETY: the descriptor is owned by this live pipe; F_GETFL only
-        // reads its flags and F_SETFL preserves them while adding O_NONBLOCK.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    #[cfg(not(unix))]
-    fn prepare(&self) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "transparent vault process pipes are unsupported on this platform",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn read_available(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Stdout(reader) => reader.read(buffer),
-            Self::Stderr(reader) => reader.read(buffer),
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn read_available(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "transparent vault process pipes are unsupported on this platform",
-        ))
-    }
-}
-
 struct StreamPump {
     reader: Option<ProcessPipe>,
     redactor: Option<StreamingRedactor>,
@@ -296,7 +246,7 @@ struct StreamPump {
 impl StreamPump {
     fn new(reader: ProcessPipe, redactor: StreamingRedactor) -> Result<Self, ExecProcessFailure> {
         reader
-            .prepare()
+            .prepare("transparent vault process pipes are unsupported on this platform")
             .map_err(|error| sanitized_failure("pipe", error))?;
         Ok(Self {
             reader: Some(reader),

@@ -1,9 +1,13 @@
 use std::fmt;
 use std::num::NonZeroI32;
 #[cfg(unix)]
+use std::os::fd::{AsRawFd, BorrowedFd};
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(unix)]
 use std::process::ExitStatus;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ProcessGroupId(NonZeroI32);
@@ -29,6 +33,41 @@ impl TryFrom<u32> for ProcessGroupId {
             .map_err(|_| std::io::Error::other("process identifier is not representable"))?;
         Self::new(raw)
     }
+}
+
+#[cfg(unix)]
+pub fn set_nonblocking(descriptor: BorrowedFd<'_>) -> std::io::Result<()> {
+    let descriptor = descriptor.as_raw_fd();
+    set_nonblocking_with(
+        || {
+            // SAFETY: BorrowedFd guarantees the descriptor remains live for
+            // this call, and F_GETFL only reads its status flags.
+            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+            if flags == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(flags)
+            }
+        },
+        |flags| {
+            // SAFETY: the same borrowed descriptor remains live, and F_SETFL
+            // preserves every existing flag while adding O_NONBLOCK.
+            if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags) } == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        },
+    )
+}
+
+#[cfg(any(unix, test))]
+fn set_nonblocking_with(
+    get_flags: impl FnOnce() -> std::io::Result<i32>,
+    set_flags: impl FnOnce(i32) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let flags = get_flags()?;
+    set_flags(flags | libc::O_NONBLOCK)
 }
 
 #[cfg(unix)]
@@ -142,6 +181,250 @@ pub fn classify_waitid_status(
     Ok(UnreapedChildObservation::Exited(ExitStatus::from_raw(
         raw_status,
     )))
+}
+
+#[cfg(target_os = "linux")]
+pub fn linux_process_group_has_live_members(
+    process_group: ProcessGroupId,
+    deadline: Instant,
+) -> std::io::Result<bool> {
+    let mut within_budget = || {
+        deadline
+            .checked_duration_since(Instant::now())
+            .is_some_and(|remaining| !remaining.is_zero())
+    };
+    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    let entries = std::fs::read_dir("/proc").map_err(|error| {
+        linux_process_scan_error(
+            error,
+            format!(
+                "failed to enumerate /proc while scanning Linux process group {}",
+                process_group.as_raw()
+            ),
+        )
+    })?;
+    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    let pids = collect_linux_process_ids_with(
+        process_group,
+        entries,
+        |entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<libc::pid_t>().ok())
+        },
+        &mut within_budget,
+    )?;
+    linux_process_group_has_live_members_with(
+        process_group,
+        pids,
+        // The parenthesized command name in /proc/<pid>/stat may contain
+        // arbitrary bytes even though the process-state fields are ASCII.
+        |pid| std::fs::read(format!("/proc/{pid}/stat")),
+        linux_process_group_for_pid,
+        &mut within_budget,
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn collect_linux_process_ids_with<T>(
+    process_group: ProcessGroupId,
+    mut entries: impl Iterator<Item = std::io::Result<T>>,
+    mut process_id: impl FnMut(T) -> Option<i32>,
+    mut within_budget: impl FnMut() -> bool,
+) -> std::io::Result<Vec<i32>> {
+    let mut pids = Vec::new();
+    loop {
+        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        let entry = entries.next();
+        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        let Some(entry) = entry else {
+            return Ok(pids);
+        };
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(linux_process_scan_error(
+                    error,
+                    format!(
+                        "failed to enumerate /proc entry while scanning Linux process group {}",
+                        process_group.as_raw()
+                    ),
+                ));
+            }
+        };
+        if let Some(pid) = process_id(entry) {
+            pids.push(pid);
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn ensure_linux_process_scan_budget(
+    process_group: ProcessGroupId,
+    within_budget: &mut impl FnMut() -> bool,
+) -> std::io::Result<()> {
+    if within_budget() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "Linux process group {} cleanup scan exceeded its deadline",
+                process_group.as_raw()
+            ),
+        ))
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_process_group_has_live_members_with(
+    process_group: ProcessGroupId,
+    pids: impl IntoIterator<Item = i32>,
+    mut read_stat: impl FnMut(i32) -> std::io::Result<Vec<u8>>,
+    mut process_group_for_pid: impl FnMut(i32) -> std::io::Result<Option<i32>>,
+    mut within_budget: impl FnMut() -> bool,
+) -> std::io::Result<bool> {
+    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    for pid in pids {
+        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        let observation = read_stat(pid).and_then(|stat| parse_linux_process_stat(pid, &stat));
+        ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+        let observation = match observation {
+            Ok(observation) => observation,
+            Err(stat_error) => {
+                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+                let observed_group = process_group_for_pid(pid);
+                ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+                match observed_group {
+                    Ok(None) => continue,
+                    Ok(Some(other_group)) if other_group != process_group.as_raw() => continue,
+                    Ok(Some(_)) => {
+                        return Err(linux_process_scan_error(
+                            stat_error,
+                            format!(
+                                "could not inspect process {pid}, which belongs to Linux process group {}",
+                                process_group.as_raw()
+                            ),
+                        ));
+                    }
+                    Err(group_error) => {
+                        return Err(linux_process_scan_error(
+                            stat_error,
+                            format!(
+                                "could not inspect process {pid} or prove it is outside Linux process group {}: {group_error}",
+                                process_group.as_raw()
+                            ),
+                        ));
+                    }
+                }
+            }
+        };
+        if observation.process_group == process_group.as_raw() && observation.live {
+            ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+            return Ok(true);
+        }
+    }
+    ensure_linux_process_scan_budget(process_group, &mut within_budget)?;
+    Ok(false)
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LinuxProcessObservation {
+    process_group: i32,
+    live: bool,
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_linux_process_stat(
+    expected_pid: i32,
+    stat: &[u8],
+) -> std::io::Result<LinuxProcessObservation> {
+    let expected_prefix = format!("{expected_pid} (");
+    if expected_pid <= 0 || !stat.starts_with(expected_prefix.as_bytes()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Linux process stat did not begin with the expected process identifier",
+        ));
+    }
+    let command_end = stat
+        .windows(2)
+        .rposition(|window| window == b") ")
+        .filter(|command_end| *command_end >= expected_prefix.len())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing Linux process stat command field",
+            )
+        })?;
+    let fields = std::str::from_utf8(&stat[command_end + 2..]).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Linux process stat fields are not valid UTF-8",
+        )
+    })?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing process state")
+    })?;
+    let process_group = fields
+        .nth(1)
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "missing process group")
+        })?
+        .parse::<i32>()
+        .map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid process group")
+        })?;
+    Ok(LinuxProcessObservation {
+        process_group,
+        live: !matches!(state, "Z" | "X" | "x"),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_group_for_pid(pid: libc::pid_t) -> std::io::Result<Option<libc::pid_t>> {
+    // SAFETY: `pid` is a positive identifier enumerated from /proc and this
+    // call only observes its current process-group membership.
+    let process_group = unsafe { libc::getpgid(pid) };
+    if process_group >= 0 {
+        return Ok(Some(process_group));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_process_scan_error(error: std::io::Error, message: String) -> std::io::Error {
+    let kind = error.kind();
+    std::io::Error::new(kind, LinuxProcessScanContext { message, error })
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug)]
+struct LinuxProcessScanContext {
+    message: String,
+    error: std::io::Error,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl fmt::Display for LinuxProcessScanContext {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.message, self.error)
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl std::error::Error for LinuxProcessScanContext {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 #[derive(Debug)]
@@ -277,6 +560,10 @@ impl ConsecutiveQuiescence {
 }
 
 #[cfg(test)]
+#[path = "unix/linux_tests.rs"]
+mod linux_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]
@@ -288,6 +575,63 @@ mod tests {
         assert!(ProcessGroupId::new(0).is_err());
         assert!(ProcessGroupId::new(-1).is_err());
         assert!(ProcessGroupId::try_from(u32::MAX).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn nonblocking_setup_preserves_real_descriptor_status_flags() {
+        use std::os::fd::{AsFd, AsRawFd};
+
+        let temporary = tempfile::NamedTempFile::new().unwrap();
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(temporary.path())
+            .unwrap();
+        // SAFETY: file owns this live descriptor and F_GETFL only reads it.
+        let before = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(before, -1);
+        assert_ne!(before & libc::O_APPEND, 0);
+
+        set_nonblocking(file.as_fd()).unwrap();
+
+        // SAFETY: file still owns this live descriptor and F_GETFL only reads it.
+        let after = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(after, -1);
+        assert_eq!(after & before, before);
+        assert_ne!(after & libc::O_NONBLOCK, 0);
+    }
+
+    #[test]
+    fn nonblocking_setup_propagates_each_fcntl_error() {
+        let written_flags = std::cell::Cell::new(None);
+        set_nonblocking_with(
+            || Ok(libc::O_APPEND),
+            |flags| {
+                written_flags.set(Some(flags));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(written_flags.get(), Some(libc::O_APPEND | libc::O_NONBLOCK));
+
+        let set_called = std::cell::Cell::new(false);
+        let get_error = set_nonblocking_with(
+            || Err(std::io::Error::from_raw_os_error(libc::EBADF)),
+            |_| {
+                set_called.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert_eq!(get_error.raw_os_error(), Some(libc::EBADF));
+        assert!(!set_called.get());
+
+        let set_error = set_nonblocking_with(
+            || Ok(libc::O_APPEND),
+            |_| Err(std::io::Error::from_raw_os_error(libc::EINVAL)),
+        )
+        .unwrap_err();
+        assert_eq!(set_error.raw_os_error(), Some(libc::EINVAL));
     }
 
     #[cfg(unix)]

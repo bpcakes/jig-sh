@@ -18,7 +18,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes, VaultReference};
+use jig_vault::{MAX_SECRET_VALUE_LEN, SecretBytes, VaultReference, is_vault_passphrase_env};
 use zeroize::Zeroizing;
 
 use crate::command::{
@@ -29,9 +29,6 @@ use crate::command::{
 pub(crate) const MAX_VAULT_ENV_FILE_LEN: usize = 1024 * 1024;
 pub(crate) const MAX_VAULT_ENV_ASSIGNMENTS: usize = 1024;
 pub(crate) const MAX_VAULT_ENV_TOTAL_DECODED_LEN: usize = 1024 * 1024;
-
-const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
-const NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 
 #[derive(Clone, Copy)]
 enum EnvOperation {
@@ -173,7 +170,7 @@ fn parse_vault_env_bytes_for(
         if !valid_env_name(name) {
             bail!("{label} line {line_number} has an invalid environment variable name");
         }
-        if reserved_env_name(name) {
+        if is_vault_passphrase_env(name) {
             bail!("{label} line {line_number} may not assign reserved variable '{name}'");
         }
         let comparison_name = comparable_env_name(name);
@@ -449,16 +446,8 @@ fn valid_env_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-fn reserved_env_name(name: &str) -> bool {
-    env_names_equal(name, PASSPHRASE_ENV) || env_names_equal(name, NEW_PASSPHRASE_ENV)
-}
-
 fn comparable_env_name(name: &str) -> String {
     name.to_owned()
-}
-
-fn env_names_equal(left: &str, right: &str) -> bool {
-    left == right
 }
 
 fn line_number_at(input: &[u8], offset: usize) -> usize {

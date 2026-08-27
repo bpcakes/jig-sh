@@ -7,9 +7,9 @@ mod package_detail;
 mod support;
 mod wire;
 
+pub(crate) use jig_tui::sanitize_text;
 use package_detail::{AcceptanceCheckView, PackageDetailState};
 pub(crate) use package_detail::{DETAIL_SECTION_ITEM_LIMIT, EXTENSION_ROW_LIMIT};
-pub(crate) use support::sanitize_text;
 use support::{array_len, fallback, moved_index, nonempty, sanitize_value};
 use wire::*;
 

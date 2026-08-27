@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::io::{self, IsTerminal, Read, Write};
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::os::fd::AsFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -415,25 +415,9 @@ struct CancellableChildPipe<R> {
 }
 
 #[cfg(unix)]
-impl<R: AsRawFd> CancellableChildPipe<R> {
+impl<R: AsFd> CancellableChildPipe<R> {
     fn new(inner: R) -> io::Result<Self> {
-        let descriptor = inner.as_raw_fd();
-        let flags = unsafe {
-            // SAFETY: descriptor is borrowed from the live pipe and F_GETFL
-            // does not mutate Rust-owned memory.
-            libc::fcntl(descriptor, libc::F_GETFL)
-        };
-        if flags == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        if unsafe {
-            // SAFETY: descriptor remains live and F_SETFL updates only its
-            // kernel file status flags.
-            libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK)
-        } == -1
-        {
-            return Err(io::Error::last_os_error());
-        }
+        jig_owned_process::unix::set_nonblocking(inner.as_fd())?;
         Ok(Self { inner })
     }
 }
