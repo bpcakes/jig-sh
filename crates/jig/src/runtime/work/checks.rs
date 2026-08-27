@@ -48,7 +48,7 @@ pub(in crate::runtime) fn check_tools_collect_failures_with_observer(
         ctx,
         plan_id,
         tools.into_iter().map(SelectedCheck::Tool).collect(),
-        false,
+        FailureMode::Collect,
         observer,
     )
 }
@@ -62,7 +62,8 @@ pub(in crate::runtime) fn check_required_collect_failures_with_observer(
     if selected.is_empty() {
         return Ok(None);
     }
-    check_selected_with_failure_mode(ctx, plan_id, selected, false, observer).map(Some)
+    check_selected_with_failure_mode(ctx, plan_id, selected, FailureMode::Collect, observer)
+        .map(Some)
 }
 
 fn check_selected_with_observer(
@@ -71,20 +72,152 @@ fn check_selected_with_observer(
     selected: Vec<SelectedCheck>,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
-    check_selected_with_failure_mode(ctx, plan_id, selected, true, observer)
+    check_selected_with_failure_mode(ctx, plan_id, selected, FailureMode::Abort, observer)
 }
 
 fn check_selected_with_failure_mode(
     ctx: &RepoContext,
     plan_id: &str,
     selected: Vec<SelectedCheck>,
-    fail_on_tool_error: bool,
+    failure_mode: FailureMode,
     observer: &mut dyn ExecutionControl,
 ) -> Result<Value> {
     if selected.is_empty() {
         bail!(EMPTY_CHECK_SELECTION_MESSAGE);
     }
     let started = now_ms();
+    let batch = prepare_check_batch(ctx, plan_id, selected, observer)?;
+    let outcome = execute_check_batch(ctx, plan_id, &batch, failure_mode, observer)?;
+    let receipt_result =
+        record_check_batch_receipt(ctx, plan_id, started, &batch, &outcome, observer);
+
+    if let Some(failure) = outcome.failure {
+        return match receipt_result {
+            Ok(_) => Err(failure.error),
+            Err(receipt_error) => {
+                bail!(
+                    "{:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}",
+                    failure.error
+                )
+            }
+        };
+    }
+    let receipt_id = receipt_result?;
+
+    Ok(json!({
+        "ok": true,
+        "plan_id": plan_id,
+        "checks": outcome.results,
+        "change_evidence": batch.changes.to_value(),
+        "gate_evidence": outcome.gate_evidence,
+        "receipt_id": receipt_id,
+    }))
+}
+
+#[derive(Clone, Copy)]
+enum FailureMode {
+    Abort,
+    Collect,
+}
+
+impl FailureMode {
+    fn aborts(self) -> bool {
+        matches!(self, Self::Abort)
+    }
+}
+
+struct PreparedCheckBatch {
+    checks: Vec<PreparedCheck>,
+    selected_tools: Vec<String>,
+    selected_gate_ids: Vec<String>,
+    initial_gate_scopes: Vec<(crate::context::WorkCheckGate, GateScopeEvaluation)>,
+    runnable_count: usize,
+    changes: BatchChanges,
+    before_fingerprint: crate::state::CurrentWorktreeFingerprint,
+}
+
+#[derive(Default)]
+struct BatchChanges {
+    paths: Vec<String>,
+    path_count: usize,
+    paths_truncated: bool,
+    paths_digest: Option<String>,
+}
+
+impl BatchChanges {
+    fn from_checks(checks: &[PreparedCheck]) -> Self {
+        checks
+            .iter()
+            .find_map(|check| match check {
+                PreparedCheck::Gate { scope, .. } if scope.changed_paths_digest.is_some() => {
+                    Some(Self {
+                        paths: scope.changed_paths.clone(),
+                        path_count: scope.changed_path_count,
+                        paths_truncated: scope.changed_paths_truncated,
+                        paths_digest: scope.changed_paths_digest.clone(),
+                    })
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "changed_paths": self.paths,
+            "changed_path_count": self.path_count,
+            "changed_paths_truncated": self.paths_truncated,
+            "changed_paths_digest": self.paths_digest,
+        })
+    }
+}
+
+struct CheckFailure {
+    exit_status: i32,
+    error: anyhow::Error,
+}
+
+struct BatchExecutionOutcome {
+    results: Vec<Value>,
+    gate_evidence: Vec<WorkCheckGateEvidence>,
+    failure: Option<CheckFailure>,
+}
+
+#[derive(Clone, Copy)]
+struct RunnableCheck<'a> {
+    name: &'a str,
+    gate_id: Option<&'a str>,
+    gate: Option<GateRun<'a>>,
+}
+
+#[derive(Clone, Copy)]
+struct GateRun<'a> {
+    gate: &'a crate::context::WorkCheckGate,
+    forced: bool,
+    scope: &'a GateScopeEvaluation,
+}
+
+enum PreparedCheckAction<'a> {
+    Evidence(WorkCheckGateEvidence),
+    Abort {
+        evidence: WorkCheckGateEvidence,
+        failure: CheckFailure,
+    },
+    Run(RunnableCheck<'a>),
+}
+
+struct CheckRunOutcome {
+    result: Option<Value>,
+    gate_evidence: Option<WorkCheckGateEvidence>,
+    failure: Option<CheckFailure>,
+}
+
+fn prepare_check_batch(
+    ctx: &RepoContext,
+    plan_id: &str,
+    selected: Vec<SelectedCheck>,
+    observer: &dyn ExecutionControl,
+) -> Result<PreparedCheckBatch> {
     for selected in &selected {
         validate_check_tool(ctx, selected.tool(), "Work check")?;
     }
@@ -172,179 +305,74 @@ fn check_selected_with_failure_mode(
         })
         .collect::<Vec<_>>();
     let runnable_count = prepared.iter().filter(|check| check.should_run()).count();
-    let batch_changes = prepared.iter().find_map(|check| match check {
-        PreparedCheck::Gate { scope, .. } if scope.changed_paths_digest.is_some() => Some((
-            scope.changed_paths.clone(),
-            scope.changed_path_count,
-            scope.changed_paths_truncated,
-            scope.changed_paths_digest.clone(),
-        )),
-        _ => None,
-    });
-    let mut results = Vec::with_capacity(runnable_count);
+    let changes = BatchChanges::from_checks(&prepared);
+
+    Ok(PreparedCheckBatch {
+        checks: prepared,
+        selected_tools,
+        selected_gate_ids,
+        initial_gate_scopes,
+        runnable_count,
+        changes,
+        before_fingerprint,
+    })
+}
+
+fn execute_check_batch(
+    ctx: &RepoContext,
+    plan_id: &str,
+    batch: &PreparedCheckBatch,
+    failure_mode: FailureMode,
+    observer: &mut dyn ExecutionControl,
+) -> Result<BatchExecutionOutcome> {
+    let mut results = Vec::with_capacity(batch.runnable_count);
     let mut gate_evidence = Vec::new();
-    let mut check_failure = None;
+    let mut failure = None;
     let mut runnable_index = 0;
-    for check in &prepared {
-        let (name, gate_id, scope) = match check {
-            PreparedCheck::Gate {
-                gate,
-                force,
-                scope,
-                reusable,
-            } => {
-                if let Some(error) = scope.error.as_deref()
-                    && !*force
-                {
-                    gate_evidence.push(gate_evidence_from_scope(
-                        gate, "unknown", scope, None, None, *force, None,
-                    ));
-                    if fail_on_tool_error {
-                        check_failure = Some((
-                            1,
-                            anyhow!("Work gate '{}' applicability is unknown: {error}", gate.id),
-                        ));
-                        break;
-                    }
-                    continue;
-                }
-                if !*force
-                    && scope.applicability
-                        == Some(crate::git_receipts::GateApplicability::NotApplicable)
-                {
-                    gate_evidence.push(gate_evidence_from_scope(
-                        gate,
-                        "not_applicable",
-                        scope,
-                        None,
-                        None,
-                        false,
-                        None,
-                    ));
-                    continue;
-                }
-                if let Some(reusable) = reusable {
-                    gate_evidence.push(gate_evidence_from_scope(
-                        gate,
-                        "reused",
-                        scope,
-                        None,
-                        None,
-                        false,
-                        Some(reusable),
-                    ));
-                    continue;
-                }
-                (
-                    gate.tool.as_str(),
-                    Some(gate.id.as_str()),
-                    Some((gate, *force, scope)),
-                )
+    for check in &batch.checks {
+        let runnable = match classify_prepared_check(check, failure_mode) {
+            PreparedCheckAction::Evidence(evidence) => {
+                gate_evidence.push(evidence);
+                continue;
             }
-            PreparedCheck::Tool(tool) => (tool.as_str(), None, None),
+            PreparedCheckAction::Abort {
+                evidence,
+                failure: check_failure,
+            } => {
+                gate_evidence.push(evidence);
+                failure = Some(check_failure);
+                break;
+            }
+            PreparedCheckAction::Run(runnable) => runnable,
         };
         if observer.cancelled() {
-            check_failure = Some((1, anyhow!("Work check was cancelled before {name} started")));
+            failure = Some(CheckFailure {
+                exit_status: 1,
+                error: anyhow!("Work check was cancelled before {} started", runnable.name),
+            });
             break;
         }
         runnable_index += 1;
-        let position = PhasePosition::new(runnable_index, runnable_count)
+        let position = PhasePosition::new(runnable_index, batch.runnable_count)
             .expect("work checks are enumerated within a nonempty tool list");
-        let execution =
-            super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
-                ctx,
-                name,
-                json!({}),
-                Some(plan_id.to_string()),
-                position,
-                observer,
-            );
-        let (mut result, was_cancelled) = match execution {
-            Ok(ManifestToolExecutionOutcome::Completed(result)) => (result, false),
-            Ok(ManifestToolExecutionOutcome::Cancelled(result)) => (result, true),
-            Err(error) => {
-                if let Some((gate, force, scope)) = scope {
-                    gate_evidence.push(gate_interruption_evidence(
-                        gate,
-                        "failed",
-                        scope,
-                        None,
-                        1,
-                        force,
-                        &format!("gate execution could not start: {error:#}"),
-                    ));
-                }
-                check_failure = Some((1, error));
-                break;
-            }
-        };
-        if let Some(gate_id) = gate_id
-            && let Some(result) = result.as_object_mut()
-        {
-            result.insert("gate_id".into(), json!(gate_id));
+        let check_outcome = run_check(ctx, plan_id, runnable, position, failure_mode, observer)?;
+        if let Some(evidence) = check_outcome.gate_evidence {
+            gate_evidence.push(evidence);
         }
-        let manifest_failure = manifest_tool_result_failure(&result)?;
-        if was_cancelled && manifest_failure.is_none() {
-            bail!("Cancelled tool returned a successful result");
+        if let Some(result) = check_outcome.result {
+            results.push(result);
         }
-        let result_failure = (!was_cancelled && fail_on_tool_error)
-            .then(|| manifest_failure.clone())
-            .flatten();
-        let tool_receipt_id = result["receipt_id"].as_str().map(str::to_string);
-        if let Some((gate, force, scope)) = scope {
-            let status = if was_cancelled {
-                "cancelled"
-            } else if manifest_failure.is_some() {
-                "failed"
-            } else {
-                "executed"
-            };
-            let exit_status = manifest_failure
-                .as_ref()
-                .map_or(0, |(exit_status, _)| *exit_status);
-            if was_cancelled {
-                let message = manifest_failure
-                    .as_ref()
-                    .map_or("gate execution was cancelled", |(_, message)| {
-                        message.as_str()
-                    });
-                gate_evidence.push(gate_interruption_evidence(
-                    gate,
-                    status,
-                    scope,
-                    tool_receipt_id,
-                    exit_status,
-                    force,
-                    message,
-                ));
-            } else {
-                gate_evidence.push(gate_evidence_from_scope(
-                    gate,
-                    status,
-                    scope,
-                    tool_receipt_id,
-                    Some(exit_status),
-                    force,
-                    None,
-                ));
-            }
-        }
-        results.push(result);
-        if was_cancelled {
-            let (exit_status, message) =
-                manifest_failure.expect("cancelled manifest tool outcome has a failure result");
-            check_failure = Some((exit_status, anyhow!(message)));
-            break;
-        }
-        if let Some((exit_status, message)) = result_failure {
-            check_failure = Some((exit_status, anyhow!(message)));
+        if check_outcome.failure.is_some() {
+            failure = check_outcome.failure;
             break;
         }
     }
-    if let Some((exit_status, error)) = check_failure.as_ref() {
-        let interruption =
-            format!("gate did not complete because the work-check batch stopped: {error:#}");
-        for check in &prepared {
+    if let Some(failure) = failure.as_ref() {
+        let interruption = format!(
+            "gate did not complete because the work-check batch stopped: {:#}",
+            failure.error
+        );
+        for check in &batch.checks {
             let PreparedCheck::Gate {
                 gate, force, scope, ..
             } = check
@@ -362,95 +390,269 @@ fn check_selected_with_failure_mode(
                 "unknown",
                 scope,
                 None,
-                *exit_status,
+                failure.exit_status,
                 *force,
                 &interruption,
             ));
         }
     }
-    let receipt_ids = results
+
+    Ok(BatchExecutionOutcome {
+        results,
+        gate_evidence,
+        failure,
+    })
+}
+
+fn classify_prepared_check(
+    check: &PreparedCheck,
+    failure_mode: FailureMode,
+) -> PreparedCheckAction<'_> {
+    let (gate, force, scope, reusable) = match check {
+        PreparedCheck::Gate {
+            gate,
+            force,
+            scope,
+            reusable,
+        } => (gate, force, scope, reusable),
+        PreparedCheck::Tool(tool) => {
+            return PreparedCheckAction::Run(RunnableCheck {
+                name: tool,
+                gate_id: None,
+                gate: None,
+            });
+        }
+    };
+
+    if let Some(error) = scope.error.as_deref()
+        && !*force
+    {
+        let evidence = gate_evidence_from_scope(gate, "unknown", scope, None, None, *force, None);
+        return if failure_mode.aborts() {
+            PreparedCheckAction::Abort {
+                evidence,
+                failure: CheckFailure {
+                    exit_status: 1,
+                    error: anyhow!("Work gate '{}' applicability is unknown: {error}", gate.id),
+                },
+            }
+        } else {
+            PreparedCheckAction::Evidence(evidence)
+        };
+    }
+    if !*force && scope.applicability == Some(crate::git_receipts::GateApplicability::NotApplicable)
+    {
+        return PreparedCheckAction::Evidence(gate_evidence_from_scope(
+            gate,
+            "not_applicable",
+            scope,
+            None,
+            None,
+            false,
+            None,
+        ));
+    }
+    if let Some(reusable) = reusable {
+        return PreparedCheckAction::Evidence(gate_evidence_from_scope(
+            gate,
+            "reused",
+            scope,
+            None,
+            None,
+            false,
+            Some(reusable),
+        ));
+    }
+    PreparedCheckAction::Run(RunnableCheck {
+        name: &gate.tool,
+        gate_id: Some(&gate.id),
+        gate: Some(GateRun {
+            gate,
+            forced: *force,
+            scope,
+        }),
+    })
+}
+
+fn run_check(
+    ctx: &RepoContext,
+    plan_id: &str,
+    runnable: RunnableCheck<'_>,
+    position: PhasePosition,
+    failure_mode: FailureMode,
+    observer: &mut dyn ExecutionControl,
+) -> Result<CheckRunOutcome> {
+    let execution = super::super::tool_execution::execute_manifest_tool_with_options_for_work_check(
+        ctx,
+        runnable.name,
+        json!({}),
+        Some(plan_id.to_string()),
+        position,
+        observer,
+    );
+    let (mut result, was_cancelled) = match execution {
+        Ok(ManifestToolExecutionOutcome::Completed(result)) => (result, false),
+        Ok(ManifestToolExecutionOutcome::Cancelled(result)) => (result, true),
+        Err(error) => {
+            let gate_evidence = runnable.gate.map(|gate| {
+                gate_interruption_evidence(
+                    gate.gate,
+                    "failed",
+                    gate.scope,
+                    None,
+                    1,
+                    gate.forced,
+                    &format!("gate execution could not start: {error:#}"),
+                )
+            });
+            return Ok(CheckRunOutcome {
+                result: None,
+                gate_evidence,
+                failure: Some(CheckFailure {
+                    exit_status: 1,
+                    error,
+                }),
+            });
+        }
+    };
+    if let Some(gate_id) = runnable.gate_id
+        && let Some(result) = result.as_object_mut()
+    {
+        result.insert("gate_id".into(), json!(gate_id));
+    }
+    let manifest_failure = manifest_tool_result_failure(&result)?;
+    if was_cancelled && manifest_failure.is_none() {
+        bail!("Cancelled tool returned a successful result");
+    }
+    let tool_receipt_id = result["receipt_id"].as_str().map(str::to_string);
+    let gate_evidence = runnable.gate.map(|gate| {
+        let status = if was_cancelled {
+            "cancelled"
+        } else if manifest_failure.is_some() {
+            "failed"
+        } else {
+            "executed"
+        };
+        let exit_status = manifest_failure
+            .as_ref()
+            .map_or(0, |(exit_status, _)| *exit_status);
+        if was_cancelled {
+            let message = manifest_failure
+                .as_ref()
+                .map_or("gate execution was cancelled", |(_, message)| {
+                    message.as_str()
+                });
+            gate_interruption_evidence(
+                gate.gate,
+                status,
+                gate.scope,
+                tool_receipt_id,
+                exit_status,
+                gate.forced,
+                message,
+            )
+        } else {
+            gate_evidence_from_scope(
+                gate.gate,
+                status,
+                gate.scope,
+                tool_receipt_id,
+                Some(exit_status),
+                gate.forced,
+                None,
+            )
+        }
+    });
+    let failure = if was_cancelled {
+        let (exit_status, message) =
+            manifest_failure.expect("cancelled manifest tool outcome has a failure result");
+        Some(CheckFailure {
+            exit_status,
+            error: anyhow!(message),
+        })
+    } else if failure_mode.aborts() {
+        manifest_failure.map(|(exit_status, message)| CheckFailure {
+            exit_status,
+            error: anyhow!(message),
+        })
+    } else {
+        None
+    };
+
+    Ok(CheckRunOutcome {
+        result: Some(result),
+        gate_evidence,
+        failure,
+    })
+}
+
+fn record_check_batch_receipt(
+    ctx: &RepoContext,
+    plan_id: &str,
+    started: u64,
+    batch: &PreparedCheckBatch,
+    outcome: &BatchExecutionOutcome,
+    observer: &dyn ExecutionControl,
+) -> Result<String> {
+    let receipt_ids = outcome
+        .results
         .iter()
         .filter_map(|result| result["receipt_id"].as_str())
         .collect::<Vec<_>>();
-    let scope_stability =
-        revalidate_gate_scopes(ctx, plan_id, &initial_gate_scopes, &|| observer.cancelled());
+    let scope_stability = revalidate_gate_scopes(ctx, plan_id, &batch.initial_gate_scopes, &|| {
+        observer.cancelled()
+    });
     let after_fingerprint =
         current_worktree_fingerprint_for_receipt_with_cancellation(ctx, &|| observer.cancelled());
     let worktree_fingerprint_override = Some(
-        work_check_fingerprint_evidence(&before_fingerprint, &after_fingerprint)
+        work_check_fingerprint_evidence(&batch.before_fingerprint, &after_fingerprint)
             .and_then(|fingerprint| scope_stability.map(|()| fingerprint)),
     );
-    let receipt_stderr = check_failure
+    let receipt_stderr = outcome
+        .failure
         .as_ref()
-        .map(|(_, error)| format!("{error:#}"))
+        .map(|failure| format!("{:#}", failure.error))
         .unwrap_or_default();
     let cancellation_active = observer.cancelled();
     let receipt_input = ReceiptInput {
         tool_name: tool::WORK_CHECK,
         args: json!({
             "plan_id": plan_id,
-            "gates": selected_gate_ids,
-            "tools": selected_tools,
+            "gates": batch.selected_gate_ids,
+            "tools": batch.selected_tools,
             "receipt_ids": receipt_ids,
         }),
         invoked_command_key: None,
         plan_id: Some(plan_id.to_string()),
         started_at_ms: started,
         ended_at_ms: now_ms(),
-        exit_status: check_failure
+        exit_status: outcome
+            .failure
             .as_ref()
-            .map_or(0, |(exit_status, _)| *exit_status),
+            .map_or(0, |failure| failure.exit_status),
         stdout: "",
         stderr: &receipt_stderr,
         evidence: Some(serde_json::to_value(WorkCheckBatchEvidence {
             schema: WORK_CHECK_EVIDENCE_SCHEMA.into(),
-            changed_paths: batch_changes
-                .as_ref()
-                .map_or_else(Vec::new, |changes| changes.0.clone()),
-            changed_path_count: batch_changes.as_ref().map_or(0, |changes| changes.1),
-            changed_paths_truncated: batch_changes.as_ref().is_some_and(|changes| changes.2),
-            changed_paths_digest: batch_changes.as_ref().and_then(|changes| changes.3.clone()),
-            gates: gate_evidence.clone(),
+            changed_paths: batch.changes.paths.clone(),
+            changed_path_count: batch.changes.path_count,
+            changed_paths_truncated: batch.changes.paths_truncated,
+            changed_paths_digest: batch.changes.paths_digest.clone(),
+            gates: outcome.gate_evidence.clone(),
         })?),
         session_override: None,
         collect_git_metadata: !cancellation_active,
         collect_worktree_fingerprint: false,
         worktree_fingerprint_override,
     };
-    let receipt_result = if cancellation_active {
+    if cancellation_active {
         // Cancellation is already authoritative, but its batch evidence still
         // has to supersede older passes. Append the small cleanup record
         // without starting fresh Git metadata collection.
         record_receipt(ctx, receipt_input)
     } else {
         record_receipt_with_cancellation(ctx, receipt_input, &|| observer.cancelled())
-    };
-
-    if let Some((_, check_error)) = check_failure {
-        return match receipt_result {
-            Ok(_) => Err(check_error),
-            Err(receipt_error) => {
-                bail!(
-                    "{check_error:#}\nwork check batch receipt recording also failed:\n{receipt_error:#}"
-                )
-            }
-        };
     }
-    let receipt_id = receipt_result?;
-
-    Ok(json!({
-        "ok": true,
-        "plan_id": plan_id,
-        "checks": results,
-        "change_evidence": {
-            "changed_paths": batch_changes.as_ref().map_or_else(Vec::new, |changes| changes.0.clone()),
-            "changed_path_count": batch_changes.as_ref().map_or(0, |changes| changes.1),
-            "changed_paths_truncated": batch_changes.as_ref().is_some_and(|changes| changes.2),
-            "changed_paths_digest": batch_changes.as_ref().and_then(|changes| changes.3.clone()),
-        },
-        "gate_evidence": gate_evidence,
-        "receipt_id": receipt_id,
-    }))
 }
 
 #[cfg(test)]
