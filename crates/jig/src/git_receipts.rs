@@ -2346,6 +2346,19 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
     use tempfile::tempdir;
 
+    const REDIRECT_HELPER_ENV: &str = "JIG_TEST_GIT_RECEIPT_REDIRECT_HELPER";
+    const REDIRECT_HELPER_ROOT_ENV: &str = "JIG_TEST_GIT_RECEIPT_REDIRECT_ROOT";
+    const REDIRECT_HELPER_WHOLE_ENV: &str = "JIG_TEST_GIT_RECEIPT_REDIRECT_WHOLE";
+    const REDIRECT_HELPER_SCOPE_ENV: &str = "JIG_TEST_GIT_RECEIPT_REDIRECT_SCOPE";
+    const REDIRECT_HELPER_TEST: &str =
+        "git_receipts::tests::repository_redirect_environment_helper";
+    #[cfg(unix)]
+    const NON_UTF8_TMPDIR_HELPER_ENV: &str = "JIG_TEST_NON_UTF8_TMPDIR_HELPER";
+    #[cfg(unix)]
+    const NON_UTF8_TMPDIR_HELPER_ROOT_ENV: &str = "JIG_TEST_NON_UTF8_TMPDIR_ROOT";
+    #[cfg(unix)]
+    const NON_UTF8_TMPDIR_HELPER_TEST: &str = "git_receipts::tests::canonical_diff_order_file_preserves_non_utf8_temporary_directory_helper";
+
     #[test]
     fn read_only_git_commands_disable_optional_locks() {
         let mut command = Command::new("git");
@@ -2398,7 +2411,6 @@ mod tests {
 
     #[test]
     fn repository_redirect_environment_cannot_change_scope_or_whole_worktree_proofs() {
-        let _env = crate::test_env::lock_env();
         let root = tempdir().unwrap();
         let decoy = tempdir().unwrap();
         for repo in [root.path(), decoy.path()] {
@@ -2426,27 +2438,55 @@ mod tests {
             ("GIT_WORK_TREE", decoy.path().to_path_buf()),
             ("GIT_INDEX_FILE", decoy.path().join(".git/index")),
         ] {
-            let guard = crate::test_env::EnvVarGuard::set(name, &value);
-            assert_eq!(
-                repo_worktree_fingerprint(root.path()).unwrap(),
-                expected_whole,
-                "ambient {name} changed the whole-worktree proof"
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", REDIRECT_HELPER_TEST, "--nocapture"])
+                .env(REDIRECT_HELPER_ENV, name)
+                .env(REDIRECT_HELPER_ROOT_ENV, root.path())
+                .env(REDIRECT_HELPER_WHOLE_ENV, &expected_whole)
+                .env(REDIRECT_HELPER_SCOPE_ENV, &expected_scope.scope_fingerprint);
+            configure_read_only_git_environment(&mut command);
+            let output = command.env(name, value).output().unwrap();
+            assert!(
+                output.status.success(),
+                "ambient {name} helper failed with {}\nstdout:\n{}\nstderr:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
             );
-            assert_eq!(
-                gate_scope_snapshot(
-                    root.path(),
-                    &baseline,
-                    Some(&["tracked.txt".into()]),
-                    &[],
-                    "fixture",
-                )
-                .unwrap()
-                .scope_fingerprint,
-                expected_scope.scope_fingerprint,
-                "ambient {name} changed the scoped proof"
-            );
-            drop(guard);
         }
+    }
+
+    #[test]
+    fn repository_redirect_environment_helper() {
+        let Some(redirect) = std::env::var_os(REDIRECT_HELPER_ENV) else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os(REDIRECT_HELPER_ROOT_ENV).unwrap());
+        let baseline = resolve_git_commit(&root, "HEAD").unwrap();
+        let expected_whole = std::env::var(REDIRECT_HELPER_WHOLE_ENV).unwrap();
+        let expected_scope = std::env::var(REDIRECT_HELPER_SCOPE_ENV).unwrap();
+
+        assert_eq!(
+            repo_worktree_fingerprint(&root).unwrap(),
+            expected_whole,
+            "ambient {} changed the whole-worktree proof",
+            redirect.to_string_lossy(),
+        );
+        assert_eq!(
+            gate_scope_snapshot(
+                &root,
+                &baseline,
+                Some(&["tracked.txt".into()]),
+                &[],
+                "fixture",
+            )
+            .unwrap()
+            .scope_fingerprint,
+            expected_scope,
+            "ambient {} changed the scoped proof",
+            redirect.to_string_lossy(),
+        );
     }
 
     #[cfg(unix)]
@@ -3069,7 +3109,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn canonical_diff_order_file_preserves_non_utf8_temporary_directory() {
-        let _env = crate::test_env::lock_env();
         let temp = tempdir().unwrap();
         run_git(temp.path(), &["init"]);
         run_git(
@@ -3080,19 +3119,43 @@ mod tests {
         std::fs::write(temp.path().join("source.txt"), "baseline\n").unwrap();
         run_git(temp.path(), &["add", "."]);
         run_git(temp.path(), &["commit", "-m", "baseline"]);
-        let baseline = resolve_git_commit(temp.path(), "HEAD").unwrap();
         std::fs::write(temp.path().join("source.txt"), "changed\n").unwrap();
 
         let raw_temp = temp
             .path()
             .join(OsString::from_vec(b"proof-temp-\xff".to_vec()));
         std::fs::create_dir(&raw_temp).unwrap();
-        let _tmpdir = crate::test_env::EnvVarGuard::set("TMPDIR", &raw_temp);
 
-        let whole = repo_worktree_fingerprint(temp.path()).unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", NON_UTF8_TMPDIR_HELPER_TEST, "--nocapture"])
+            .env(NON_UTF8_TMPDIR_HELPER_ENV, "1")
+            .env(NON_UTF8_TMPDIR_HELPER_ROOT_ENV, temp.path())
+            .env("TMPDIR", raw_temp);
+        configure_read_only_git_environment(&mut command);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "non-UTF-8 TMPDIR helper failed with {}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_diff_order_file_preserves_non_utf8_temporary_directory_helper() {
+        if std::env::var_os(NON_UTF8_TMPDIR_HELPER_ENV).is_none() {
+            return;
+        }
+        let root = PathBuf::from(std::env::var_os(NON_UTF8_TMPDIR_HELPER_ROOT_ENV).unwrap());
+        let baseline = resolve_git_commit(&root, "HEAD").unwrap();
+
+        let whole = repo_worktree_fingerprint(&root).unwrap();
         assert!(whole.starts_with("sha256:"));
         let scope = gate_scope_snapshot(
-            temp.path(),
+            &root,
             &baseline,
             Some(&["source.txt".to_string()]),
             &[],
