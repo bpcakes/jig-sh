@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail};
 #[cfg(any(unix, test))]
 use jig_owned_process::unix::ConsecutiveQuiescence;
+#[cfg(target_os = "linux")]
+use jig_owned_process::unix::linux_process_group_has_live_members as shared_linux_process_group_has_live_members;
 #[cfg(target_os = "macos")]
 use jig_owned_process::unix::{
     MacosProcessGroupSnapshotError,
@@ -863,160 +865,12 @@ fn confirm_exited_process_group_not_live(
 
 #[cfg(target_os = "linux")]
 fn linux_process_group_has_live_members(process_group: u32, deadline: Instant) -> Result<bool> {
-    let mut within_budget = || remaining_phase_budget(deadline, Instant::now()).is_some();
-    ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-    let entries = std::fs::read_dir("/proc");
-    ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-    let pids = collect_linux_process_ids_with(
-        process_group,
-        entries.context("failed to enumerate /proc")?,
-        |entry| {
-            entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.parse::<u32>().ok())
-        },
-        &mut within_budget,
-    )?;
-    linux_process_group_has_live_members_with(
-        process_group,
-        pids,
-        |pid| std::fs::read_to_string(format!("/proc/{pid}/stat")),
-        linux_process_group_for_pid,
-        &mut within_budget,
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn collect_linux_process_ids_with<T>(
-    process_group: u32,
-    mut entries: impl Iterator<Item = io::Result<T>>,
-    mut process_id: impl FnMut(T) -> Option<u32>,
-    mut within_budget: impl FnMut() -> bool,
-) -> Result<Vec<u32>> {
-    let mut pids = Vec::new();
-    loop {
-        ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-        let entry = entries.next();
-        ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-        let Some(entry) = entry else {
-            return Ok(pids);
-        };
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).context("failed to enumerate /proc entry"),
-        };
-        if let Some(pid) = process_id(entry) {
-            pids.push(pid);
-        }
-    }
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn ensure_linux_group_scan_budget(
-    process_group: u32,
-    within_budget: &mut impl FnMut() -> bool,
-) -> Result<()> {
-    if within_budget() {
-        Ok(())
-    } else {
-        bail!("child process group {process_group} cleanup scan exceeded its deadline")
-    }
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn linux_process_group_has_live_members_with(
-    process_group: u32,
-    pids: impl IntoIterator<Item = u32>,
-    mut read_stat: impl FnMut(u32) -> io::Result<String>,
-    mut process_group_for_pid: impl FnMut(u32) -> io::Result<Option<u32>>,
-    mut within_budget: impl FnMut() -> bool,
-) -> Result<bool> {
-    ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-    for pid in pids {
-        ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-        let observation = read_stat(pid).and_then(parse_linux_process_stat);
-        ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-        let observation = match observation {
-            Ok(observation) => observation,
-            Err(stat_error) => {
-                ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-                let observed_group = process_group_for_pid(pid);
-                ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-                match observed_group {
-                    Ok(None) => continue,
-                    Ok(Some(other_group)) if other_group != process_group => continue,
-                    Ok(Some(_)) => {
-                        return Err(stat_error).with_context(|| {
-                            format!(
-                                "could not inspect process {pid}, which belongs to owned process group {process_group}"
-                            )
-                        });
-                    }
-                    Err(group_error) => {
-                        return Err(stat_error).with_context(|| {
-                            format!(
-                                "could not inspect process {pid} or prove it is outside owned process group {process_group}: {group_error}"
-                            )
-                        });
-                    }
-                }
-            }
-        };
-        if observation.process_group == process_group && observation.live {
-            ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-            return Ok(true);
-        }
-    }
-    ensure_linux_group_scan_budget(process_group, &mut within_budget)?;
-    Ok(false)
-}
-
-#[cfg(any(target_os = "linux", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LinuxProcessObservation {
-    process_group: u32,
-    live: bool,
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn parse_linux_process_stat(stat: String) -> io::Result<LinuxProcessObservation> {
-    let (_, fields) = stat
-        .rsplit_once(") ")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing stat command field"))?;
-    let mut fields = fields.split_whitespace();
-    let state = fields
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing process state"))?;
-    let process_group = fields
-        .nth(1)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing process group"))?
-        .parse::<u32>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid process group"))?;
-    Ok(LinuxProcessObservation {
-        process_group,
-        live: !matches!(state, "Z" | "X" | "x"),
+    let raw_process_group = process_group;
+    let process_group = ProcessGroupId::try_from(process_group)
+        .with_context(|| format!("child process group {raw_process_group} is not representable"))?;
+    shared_linux_process_group_has_live_members(process_group, deadline).with_context(|| {
+        format!("failed to scan child process group {raw_process_group} for live members")
     })
-}
-
-#[cfg(target_os = "linux")]
-fn linux_process_group_for_pid(pid: u32) -> io::Result<Option<u32>> {
-    let pid = checked_pid_io(pid)?;
-    // SAFETY: `pid` is a positive, representable process identifier. `getpgid`
-    // only observes its current process-group membership.
-    let process_group = unsafe { libc::getpgid(pid) };
-    if process_group >= 0 {
-        return u32::try_from(process_group)
-            .map(Some)
-            .map_err(|_| io::Error::other("process group is not representable"));
-    }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(None)
-    } else {
-        Err(error)
-    }
 }
 #[cfg(unix)]
 fn probe_process_liveness(pid: i32) -> io::Result<bool> {

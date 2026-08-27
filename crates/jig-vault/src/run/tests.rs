@@ -1,6 +1,4 @@
 use super::process::*;
-#[cfg(any(target_os = "linux", test))]
-use super::process_linux::*;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 use super::process_unix::*;
 use super::*;
