@@ -273,12 +273,7 @@ fn browser_unlocks_resizes_locks_and_restores_the_terminal_on_quit() {
                 )
             });
     assert!(status.success(), "vault TUI exited with {status}");
-    let restored = terminal_attributes(&slave);
-    assert_eq!(
-        restored.c_lflag & (libc::ECHO | libc::ICANON),
-        original.c_lflag & (libc::ECHO | libc::ICANON),
-        "terminal echo/canonical flags were not restored"
-    );
+    assert_terminal_flags_restored(&slave, &original, "after Ctrl-C");
 
     let output = String::from_utf8_lossy(&output);
     assert!(
@@ -370,12 +365,7 @@ fn sigterm_clears_and_restores_the_vault_tui_before_redelivery() {
         "vault TUI exited with {status}; output: {}",
         String::from_utf8_lossy(&output)
     );
-    let restored = terminal_attributes(&slave);
-    assert_eq!(
-        restored.c_lflag & (libc::ECHO | libc::ICANON),
-        original.c_lflag & (libc::ECHO | libc::ICANON),
-        "terminal echo/canonical flags were not restored after SIGTERM"
-    );
+    assert_terminal_flags_restored(&slave, &original, "after SIGTERM");
     let output = String::from_utf8_lossy(&output);
     assert!(
         output.contains("\u{1b}[2J"),
@@ -493,6 +483,28 @@ fn terminal_attributes(slave: &File) -> libc::termios {
         std::io::Error::last_os_error()
     );
     attributes
+}
+
+fn assert_terminal_flags_restored(slave: &File, original: &libc::termios, context: &str) {
+    // macOS revokes a controlling PTY when its session leader exits. The
+    // retained slave descriptor then reports ENOTTY, so post-exit termios are
+    // no longer inspectable; the caller still verifies the emitted terminal
+    // teardown sequences. Other platforms retain the stronger flag check.
+    // SAFETY: zero is a valid initial representation and tcgetattr fills it.
+    let mut restored = unsafe { std::mem::zeroed::<libc::termios>() };
+    // SAFETY: `slave` is owned by the test and `restored` is writable.
+    if unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut restored) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if cfg!(target_vendor = "apple") && error.raw_os_error() == Some(libc::ENOTTY) {
+            return;
+        }
+        panic!("reading restored PTY attributes {context} failed: {error}");
+    }
+    assert_eq!(
+        restored.c_lflag & (libc::ECHO | libc::ICANON),
+        original.c_lflag & (libc::ECHO | libc::ICANON),
+        "terminal echo/canonical flags were not restored {context}"
+    );
 }
 
 fn set_nonblocking(file: &File) {
