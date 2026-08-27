@@ -91,6 +91,12 @@ pub struct AnswerOpts {
     pub schema_dump_command: Option<String>,
     #[arg(
         long,
+        help_heading = "Common Answers",
+        help = "Committed repository-relative schema documentation directory"
+    )]
+    pub schema_docs_dir: Option<String>,
+    #[arg(
+        long,
         help_heading = "Advanced Command Overrides",
         help = "Command used by legacy schema-check manifests"
     )]
@@ -157,6 +163,12 @@ pub struct AnswerOpts {
     )]
     pub web_package_manager: Option<String>,
     #[arg(
+        long,
+        help_heading = "Common Answers",
+        help = "Explicitly enable or disable required application-contract and public-artifact gates backed by the repository-owned scripts/contracts.mjs v1 interface"
+    )]
+    pub application_contracts_enabled: Option<bool>,
+    #[arg(
         long = "frontend-app",
         help_heading = "Common Answers",
         value_parser = parse_frontend_app,
@@ -164,6 +176,10 @@ pub struct AnswerOpts {
         long_help = "Frontend CI app as name:dir:coverage_threshold[:kind[:role]]. Kind defaults to vite; an omitted role defaults to astro for env-port, admin for the historical admin/admin-panel names, and spa otherwise. Roles accept spa, admin, or astro. Example: --frontend-app console:console:80:vite:admin. package.json must expose lint, typecheck, build:bundle, and test:coverage; may be repeated."
     )]
     pub frontend_apps: Vec<FrontendApp>,
+    /// Persisted JavaScript workspace ownership discovered during adoption;
+    /// there is intentionally no broad CLI spelling for this generated policy.
+    #[arg(skip)]
+    pub(crate) frontend_workspace_roots: Vec<String>,
     #[arg(skip)]
     pub dev_apps: Vec<DevApp>,
     #[arg(skip)]

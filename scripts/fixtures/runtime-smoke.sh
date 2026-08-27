@@ -696,13 +696,14 @@ tools = {receipt["tool_name"] for receipt in payload["receipts"]}
 required = {
     "jig.plans_open",
     "jig.contract_check",
+    "jig.rust_file_loc",
     "jig.test",
     "jig.decisions_add",
 }
 if os.environ["EXPECT_SQLX"] == "1":
     required.update({"jig.sqlx_check", "jig.migration_add"})
 if os.environ["EXPECT_SCHEMA_DUMP"] == "1":
-    required.update({"jig.schema_check", "jig.schema_dump"})
+    required.add("jig.schema_check")
 
 missing = sorted(required - tools)
 if missing:

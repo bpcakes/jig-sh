@@ -45,6 +45,7 @@ dirs.workspace = true
 dotenvy.workspace = true
 fs4.workspace = true
 flate2.workspace = true
+globset.workspace = true
 jig-contract.workspace = true
 jig-codex-tui.workspace = true
 jig-core.workspace = true
@@ -76,7 +77,11 @@ wait-timeout.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 jig-vault = { workspace = true, features = ["test-utils"] }
+
+[build-dependencies]
+sha2.workspace = true
 
 [lints]
 workspace = true

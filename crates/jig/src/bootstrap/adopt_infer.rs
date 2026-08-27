@@ -27,8 +27,11 @@ use self::rust_sqlx::{
     RustCrateRootSourceKind, infer_rust_crate_roots_from_scan,
     infer_rust_crate_roots_with_metadata, infer_sqlx,
 };
-use self::scan::RepoScan;
+use self::scan::{RepoScan, read_limited_text};
 use self::topology::{RepoTopology, infer_repo_topology};
+
+const APPLICATION_CONTRACT_CHECKER_MARKER: &str =
+    "// jig-application-contract-checker: v1 modes=check,public-check";
 
 #[cfg(test)]
 use self::frontend::segment_matches;
@@ -60,7 +63,9 @@ pub(super) struct AdoptInference {
     rust_test_locked_command: Option<String>,
     command_profile: CommandInference,
     web_package_manager: Option<String>,
+    application_contracts_enabled: Option<bool>,
     frontend_apps: Vec<FrontendApp>,
+    frontend_workspace_roots: Vec<String>,
     frontend_profiles: Vec<FrontendAppProfile>,
     ci_github_runner: Option<String>,
     ci_shape: GithubCiShapeInference,
@@ -127,7 +132,14 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             .map(CommandCandidate::command),
         command_profile: commands.clone(),
         web_package_manager: package_manager.value.clone(),
+        application_contracts_enabled: Some(infer_application_contracts_enabled(
+            root,
+            &scan,
+            !frontend_apps.apps.is_empty(),
+            &mut warnings,
+        )),
         frontend_apps: frontend_apps.apps.clone(),
+        frontend_workspace_roots: frontend_apps.workspace_roots.clone(),
         frontend_profiles: frontend_apps.profiles.clone(),
         ci_github_runner: github_ci.runner.clone(),
         ci_shape: github_ci.shape.clone(),
@@ -214,6 +226,15 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
             "frontend_apps",
             json!(inference.frontend_apps.clone()),
             frontend_apps.sources,
+            Confidence::High,
+            Vec::new(),
+        );
+    }
+    if inference.application_contracts_enabled == Some(true) {
+        inference.record_metadata(
+            "application_contracts_enabled",
+            json!(true),
+            vec!["scripts/contracts.mjs".into()],
             Confidence::High,
             Vec::new(),
         );
@@ -370,6 +391,45 @@ pub(super) fn infer_adopt_answers(root: &Path) -> AdoptInference {
     inference
 }
 
+fn infer_application_contracts_enabled(
+    root: &Path,
+    scan: &RepoScan,
+    has_frontend_apps: bool,
+    warnings: &mut Vec<String>,
+) -> bool {
+    if !has_frontend_apps {
+        return false;
+    }
+    let checker = root.join("scripts/contracts.mjs");
+    if !scan
+        .named_files("contracts.mjs")
+        .any(|candidate| candidate == &checker)
+    {
+        return false;
+    }
+    let text = match read_limited_text(&checker) {
+        Ok(text) => text,
+        Err(error) => {
+            warnings.push(format!(
+                "could not validate scripts/contracts.mjs application-contract interface; leaving application contracts disabled: {error:#}"
+            ));
+            return false;
+        }
+    };
+    if text
+        .lines()
+        .take(8)
+        .any(|line| line.trim() == APPLICATION_CONTRACT_CHECKER_MARKER)
+    {
+        true
+    } else {
+        warnings.push(format!(
+            "scripts/contracts.mjs does not declare the required `{APPLICATION_CONTRACT_CHECKER_MARKER}` interface marker; leaving application contracts disabled"
+        ));
+        false
+    }
+}
+
 impl AdoptInference {
     pub(super) fn apply_to_answers(
         &self,
@@ -405,6 +465,12 @@ impl AdoptInference {
             &self.frontend_apps,
             answer_shape,
         );
+        // Workspace ownership is generated adoption policy, not a project
+        // command override. Refresh it from the current declarations so added
+        // members and exclusions cannot leave stale gate authorities behind.
+        answers
+            .frontend_workspace_roots
+            .clone_from(&self.frontend_workspace_roots);
         if !answers.frontend_apps.is_empty() || answer_shape.contains_key("web_package_manager") {
             fill_string(
                 &mut answers.web_package_manager,
@@ -412,6 +478,11 @@ impl AdoptInference {
                 answer_shape,
                 "web_package_manager",
             );
+        }
+        if answers.application_contracts_enabled.is_none()
+            && !answer_shape.contains_key("application_contracts_enabled")
+        {
+            answers.application_contracts_enabled = self.application_contracts_enabled;
         }
         fill_string(
             &mut answers.rust_fmt_check_command,
@@ -584,7 +655,9 @@ impl AdoptInference {
             } else {
                 json!(self.web_package_manager)
             },
+            "application_contracts_enabled": self.application_contracts_enabled,
             "frontend_apps": self.frontend_apps,
+            "frontend_workspace_roots": self.frontend_workspace_roots,
             "frontend_profiles": self.frontend_profiles,
             "ci_github_runner": self.ci_github_runner,
             "ci_shape": self.ci_shape.report(),

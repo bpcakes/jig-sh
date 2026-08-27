@@ -369,6 +369,52 @@ fn work_start_plan_id_output_requires_plan_to_be_object() {
 }
 
 #[test]
+fn work_start_and_goal_summaries_label_empty_tree_baselines() {
+    let plan = json!({
+        "plan_id": "plan_initial",
+        "body_path": ".agent/plans/initial.md",
+        "baseline": {
+            "requested_ref": "HEAD",
+            "commit_oid": null,
+            "empty_tree_oid": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            "error": null
+        }
+    });
+    let start = format_work_start_summary(&json!({
+        "plan": plan,
+        "session": { "session_id": "session_1" }
+    }));
+    let goal = format_work_goal_summary(&json!({
+        "plan": plan,
+        "commands": {}
+    }));
+
+    for summary in [start, goal] {
+        assert!(
+            summary.contains("Baseline: 4b825dc642cb6eb9a060e54bf8d69288fbee4904 (empty tree)")
+        );
+    }
+}
+
+#[test]
+fn work_goal_summary_reports_baseline_collection_errors() {
+    let summary = format_work_goal_summary(&json!({
+        "plan": {
+            "plan_id": "plan_error",
+            "baseline": {
+                "requested_ref": "HEAD",
+                "commit_oid": null,
+                "empty_tree_oid": null,
+                "error": "Git metadata was unavailable"
+            }
+        },
+        "commands": {}
+    }));
+
+    assert!(summary.contains("Baseline: unavailable (Git metadata was unavailable)"));
+}
+
+#[test]
 fn work_status_summary_omits_truncation_hint_at_receipt_limit() {
     let summary = format_work_status_summary(&json!({
         "repo": {
@@ -648,6 +694,69 @@ fn work_check_summary_reports_empty_checks() {
     assert!(summary.contains("Checks: 0"));
     assert!(summary.contains("configure work checks"));
     assert!(summary.contains("--tool <tool>"));
+}
+
+#[test]
+fn work_check_summary_reports_classified_nonexecutions_as_success() {
+    let summary = format_work_check_summary(&json!({
+        "ok": true,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "not_applicable",
+                "reason": "no changed paths matched crates/**"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "reused",
+                "reason": "one changed path matched apps/web/**",
+                "source_tool_receipt_id": "receipt_source"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: passed"));
+    assert!(
+        summary
+            .contains("0 executed, 1 reused, 1 not applicable, 0 failed, 0 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: not_applicable"));
+    assert!(summary.contains("source receipt receipt_source"));
+    assert!(!summary.contains("no checks configured"));
+}
+
+#[test]
+fn work_check_summary_reports_failed_and_cancelled_gate_evidence() {
+    let summary = format_work_check_summary(&json!({
+        "ok": false,
+        "plan_id": "plan_1",
+        "receipt_id": "receipt_batch",
+        "checks": [],
+        "gate_evidence": [
+            {
+                "gate_id": "rust-tests",
+                "status": "failed",
+                "reason": "configured command exited 101"
+            },
+            {
+                "gate_id": "frontend-web-lint",
+                "status": "cancelled",
+                "reason": "work check was interrupted"
+            }
+        ]
+    }));
+
+    assert!(summary.contains("Work check: failed"));
+    assert!(
+        summary
+            .contains("0 executed, 0 reused, 0 not applicable, 1 failed, 1 cancelled, 0 unknown")
+    );
+    assert!(summary.contains("rust-tests: failed; configured command exited 101"));
+    assert!(summary.contains("frontend-web-lint: cancelled; work check was interrupted"));
+    assert!(!summary.contains("no checks configured"));
 }
 
 #[test]
@@ -1048,192 +1157,4 @@ fn work_receipts_summary_lists_multiple_receipts() {
     assert!(!summary.contains("No receipts matched"));
 }
 
-#[test]
-fn work_receipts_summary_handles_empty_results() {
-    let summary = format_work_receipts_summary(&json!({
-        "ok": true,
-        "receipts": []
-    }));
-
-    assert!(summary.contains("Showing: 0"));
-    assert!(summary.contains("No receipts matched"));
-}
-
-#[test]
-fn work_receipts_summary_omits_output_line_without_preview() {
-    let summary = format_work_receipts_summary(&json!({
-        "ok": true,
-        "receipts": [{
-            "id": "receipt_1",
-            "tool_name": "jig.test",
-            "exit_status": 0,
-            "diff_summary": "no changes",
-            "plan_id": null,
-            "session_id": null
-        }]
-    }));
-
-    assert!(summary.contains("jig.test (receipt_1): exit 0, no changes"));
-    assert!(summary.contains("plan: none; session: none"));
-    assert!(!summary.contains("output:"));
-}
-
-#[test]
-fn state_diagnose_shallow_summary_does_not_imply_deep_cleanliness() {
-    let summary = format_state_diagnose_summary(&json!({
-        "deep": false,
-        "totals": { "bytes": 42 },
-        "sessions": null,
-        "receipts": null
-    }));
-
-    assert!(summary.contains("Total bytes: 42"));
-    assert!(summary.contains("Session recursion: not analyzed"));
-    assert!(summary.contains("Receipt payloads: not analyzed"));
-    assert!(!summary.contains("Recursive session records: 0"));
-}
-
-#[test]
-fn state_diagnose_deep_summary_reports_compaction_opportunity() {
-    let summary = format_state_diagnose_summary(&json!({
-        "deep": true,
-        "totals": { "bytes": 1_000 },
-        "sessions": {
-            "recursive_session_records": 7,
-            "estimated_reclaimable_bytes": 800
-        }
-    }));
-
-    assert!(summary.contains("Recursive session records: 7"));
-    assert!(summary.contains("Estimated reclaimable bytes: 800"));
-}
-
-#[test]
-fn state_diagnose_summary_reports_cache_and_actionable_recommendations() {
-    let summary = format_state_diagnose_summary(&json!({
-        "deep": true,
-        "totals": {
-            "checkout_state_bytes": 1_000,
-            "maintenance_cache_bytes": 250,
-            "local_disk_bytes": 1_250
-        },
-        "maintenance_cache": {
-            "state_backups": { "bytes": 200 },
-            "state_archives": { "bytes": 50 }
-        },
-        "sessions": {
-            "recursive_session_records": 0,
-            "estimated_reclaimable_bytes": 0
-        },
-        "recommendations": [{
-            "reason": "Receipt state is large.",
-            "command": "jig state archive --before <YYYY-MM-DD> --dry-run",
-            "alternative_command": "jig state export receipts --before <YYYY-MM-DD> --output receipts.jsonl.gz"
-        }]
-    }));
-
-    assert!(summary.contains("Total bytes: 1250"));
-    assert!(summary.contains("State checkout bytes: 1000"));
-    assert!(summary.contains("Maintenance cache bytes: 250"));
-    assert!(summary.contains("State recovery backups: 200"));
-    assert!(summary.contains("Receipt archives: 50"));
-    assert!(summary.contains("Recommendations:"));
-    assert!(summary.contains("state archive"));
-    assert!(summary.contains("state export receipts"));
-}
-
-#[test]
-fn state_compact_summary_distinguishes_noop_and_recovery_artifact() {
-    let compacted = format_state_compact_summary(&json!({
-        "dry_run": false,
-        "records_changed": 3,
-        "duplicate_records": 1,
-        "bytes_before": 1_000,
-        "bytes_after": 100,
-        "bytes_reclaimable": 900,
-        "source_sha256": "source-checksum",
-        "backup_path": ".agent/.cache/state-backups/sessions-1"
-    }));
-    let noop = format_state_compact_summary(&json!({
-        "dry_run": false,
-        "records_changed": 0,
-        "duplicate_records": 0,
-        "bytes_before": 100,
-        "bytes_after": 100,
-        "backup_path": null
-    }));
-
-    assert!(compacted.contains("State compact sessions: compacted"));
-    assert!(compacted.contains("Recovery backup: .agent/.cache/state-backups/sessions-1"));
-    assert!(compacted.contains("Source SHA-256: source-checksum"));
-    assert!(compacted.contains("local and ignored"));
-    assert!(compacted.contains("does not remove reachable Git blobs"));
-    assert!(noop.contains("State compact sessions: no-op"));
-    assert!(noop.contains("state was already canonical"));
-}
-
-#[test]
-fn state_restore_summary_reports_noop_checksum_and_recovery_path() {
-    let restored = format_state_restore_summary(&json!({
-        "stream": "sessions",
-        "changed": true,
-        "bytes_restored": 1_000,
-        "backup_path": ".agent/.cache/state-backups/sessions-1",
-        "sha256_restored": "restored-checksum",
-        "recovery_backup_path": ".agent/.cache/state-backups/recovery-1"
-    }));
-    let noop = format_state_restore_summary(&json!({
-        "stream": "sessions",
-        "changed": false,
-        "bytes_restored": 1_000,
-        "recovery_backup_path": null
-    }));
-
-    assert!(restored.contains("State restore: restored"));
-    assert!(restored.contains("Restored SHA-256: restored-checksum"));
-    assert!(restored.contains("Replaced-state recovery backup: .agent/.cache"));
-    assert!(restored.contains("local and ignored"));
-    assert!(restored.contains("does not rewrite reachable Git blobs"));
-    assert!(noop.contains("State restore: no-op"));
-    assert!(noop.contains("Replaced-state recovery backup: not needed"));
-}
-
-#[test]
-fn state_archive_and_export_summaries_report_storage_and_durability() {
-    let archived = format_state_archive_summary(&json!({
-        "dry_run": false,
-        "before": "2026-01-01",
-        "archive_path": ".agent/.cache/state-archives/receipts.jsonl.gz",
-        "recovery_backup_path": ".agent/.cache/state-backups/receipts-1",
-        "receipts_archived": 20,
-        "receipts_retained": 5,
-        "protected_receipts_retained": 2,
-        "uncompressed_bytes": 10_000,
-        "compressed_bytes": 1_000,
-        "sha256": "gzip-checksum",
-        "content_sha256": "content-checksum"
-    }));
-    let exported = format_state_export_summary(&json!({
-        "before": "2026-01-01",
-        "output_path": "receipts.jsonl.gz",
-        "receipts_exported": 20,
-        "uncompressed_bytes": 10_000,
-        "compressed_bytes": 1_000,
-        "sha256": "gzip-checksum",
-        "content_sha256": "content-checksum"
-    }));
-
-    assert!(archived.contains("State archive: archived"));
-    assert!(archived.contains("Protected receipts retained: 2"));
-    assert!(archived.contains("Compressed bytes: 1000"));
-    assert!(archived.contains("Gzip SHA-256: gzip-checksum"));
-    assert!(archived.contains("Exact pre-archive recovery backup: .agent/.cache"));
-    assert!(archived.contains("not an off-machine backup"));
-    assert!(archived.contains("does not remove reachable Git blobs"));
-
-    assert!(exported.contains("State export receipts: exported"));
-    assert!(exported.contains("Active state: unchanged"));
-    assert!(exported.contains("JSONL SHA-256: content-checksum"));
-    assert!(exported.contains("durability depends on the selected destination"));
-    assert!(exported.contains("does not remove reachable Git blobs"));
-}
+include!("output_tests_parts/part_01.rs");

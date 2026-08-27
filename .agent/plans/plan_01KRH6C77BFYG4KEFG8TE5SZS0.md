@@ -94,7 +94,7 @@ Update `templates/project/.jig.toml.jinja` with default `[dev]` settings and opt
 
 ## Concrete Steps
 
-From `/Users/aa/Documents/jig-sh`, edit files with `apply_patch` only for manual edits. After each major edit, run a focused command:
+From `<private-path>`, edit files with `apply_patch` only for manual edits. After each major edit, run a focused command:
 
     cargo fmt --all
     cargo test -p jig-dev-proxy

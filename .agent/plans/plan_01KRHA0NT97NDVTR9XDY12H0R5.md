@@ -50,7 +50,7 @@ Review-loop outcome: Claude Code identified high-priority issues in stop diagnos
 
 ## Context and Orientation
 
-The repository root is `/Users/aa/Documents/jig-sh`. The Jig CLI crate is `crates/jig`; it parses CLI commands in `crates/jig/src/cli.rs`, loads `.jig.toml` in `crates/jig/src/context.rs`, dispatches commands in `crates/jig/src/runtime.rs`, and adapts CLI/config to the proxy crate in `crates/jig/src/dev_proxy.rs`.
+The repository root is `<private-path>`. The Jig CLI crate is `crates/jig`; it parses CLI commands in `crates/jig/src/cli.rs`, loads `.jig.toml` in `crates/jig/src/context.rs`, dispatches commands in `crates/jig/src/runtime.rs`, and adapts CLI/config to the proxy crate in `crates/jig/src/dev_proxy.rs`.
 
 The proxy implementation lives in `crates/jig-dev-proxy`. Its public API is in `src/lib.rs`, shared request/config types are in `src/types.rs`, local mutable state is in `src/state.rs`, HTTP/HTTPS forwarding is in `src/server.rs`, certificate generation and trust helpers are in `src/certs.rs`, process supervision and dev command launching are in `src/processes.rs`, service file generation is in `src/service.rs`, and JavaScript workspace discovery is in `src/workspace.rs`.
 
@@ -74,7 +74,7 @@ Finally, validate and review. Run `cargo fmt --all -- --check`, `cargo clippy --
 
 ## Concrete Steps
 
-All commands run from `/Users/aa/Documents/jig-sh`.
+All commands run from `<private-path>`.
 
 Build the current development binary before harness operations:
 

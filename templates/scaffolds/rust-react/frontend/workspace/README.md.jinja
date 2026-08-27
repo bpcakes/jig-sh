@@ -41,6 +41,8 @@ The public[% if admin_api_enabled %] and admin[% endif %] OpenAPI contract[% if 
 
 `contract:generate` stages all documents and clients before replacing committed files. `public:artifacts:check` proves that public frontend builds and the public server dependency graph contain no admin contract or client artifacts.
 
+Structured work exposes the same boundaries without hiding them inside broad TypeScript checks: `application-contracts` runs `scripts/check-webapps.sh application-contracts`, while `public-artifacts` builds each non-admin frontend and runs `scripts/check-webapps.sh public-artifacts`.
+
 [% if react_frontend_enabled %]
 ## Frontend linting
 

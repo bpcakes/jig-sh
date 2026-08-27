@@ -588,148 +588,79 @@ fn schema_check_reports_stale_schema_dump() {
 }
 
 #[test]
-fn schema_check_supervises_timeout_and_descendant_cleanup() {
+fn schema_check_uses_the_committed_schema_docs_directory() {
     let temp = tempdir().unwrap();
-    let marker = temp.path().join("schema-descendant-survived");
     write_schema_policy_repo(
         temp.path(),
-        &format!("(sleep 2; printf survived > '{}') & wait", marker.display()),
-        Some(1),
+        "mkdir -p artifacts/schema && printf 'changed\\n' > artifacts/schema/tables.sql",
+        None,
     );
-    init_git(temp.path());
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = schema_check(&ctx).unwrap_err().to_string();
-
-    assert!(error.contains("timed out after 1 seconds"), "{error}");
-    std::thread::sleep(std::time::Duration::from_millis(1_250));
-    assert!(
-        !marker.exists(),
-        "schema timeout left a configured-command descendant running"
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "schema_dump_enabled = true",
+        "schema_dump_enabled = true\nschema_docs_dir = \"artifacts/schema\"",
     );
-}
-
-#[test]
-fn schema_check_preserves_pre_start_cancellation() {
-    struct Cancelled;
-
-    impl crate::execution::ExecutionObserver for Cancelled {}
-
-    impl crate::execution::ExecutionCancellation for Cancelled {
-        fn cancelled(&self) -> bool {
-            true
-        }
-    }
-
-    let temp = tempdir().unwrap();
-    write_schema_policy_repo(temp.path(), "exit 99", None);
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-
-    let error = schema_check_with_observer(&ctx, &mut Cancelled).unwrap_err();
-
-    assert!(matches!(error, ExecutionCommandError::CancelledBeforeStart));
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_tracked_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn example() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: None,
-            all: true,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_staged_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(
-        temp.path().join("crates/app/src/staged.rs"),
-        "fn staged() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    init_git(temp.path());
-    git(temp.path(), &["add", "."]);
-
-    let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: true,
-            changed_against: None,
-            all: false,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/staged.rs"))
-    );
-}
-
-#[test]
-fn check_rust_file_loc_reports_oversized_changed_against_files() {
-    let temp = tempdir().unwrap();
-    write_policy_repo(temp.path());
-    fs::write(temp.path().join("crates/app/src/lib.rs"), "fn small() {}\n").unwrap();
+    fs::write(&config_path, config).unwrap();
+    fs::create_dir_all(temp.path().join("artifacts/schema")).unwrap();
+    fs::write(temp.path().join("artifacts/schema/tables.sql"), "stable\n").unwrap();
     init_git(temp.path());
     git(temp.path(), &["add", "."]);
     git(temp.path(), &["commit", "-m", "baseline", "-q"]);
-    let base = super::git_text(temp.path(), &["rev-parse", "HEAD"]).unwrap();
-    fs::write(
-        temp.path().join("crates/app/src/large.rs"),
-        "fn changed() {}\n".repeat(HARD_LIMIT + 1),
-    )
-    .unwrap();
-    git(temp.path(), &["add", "."]);
-    git(temp.path(), &["commit", "-m", "large", "-q"]);
-
     let ctx = RepoContext::load_from(temp.path()).unwrap();
-    let output = check_rust_file_loc(
-        &ctx,
-        &RustFileLocInput {
-            staged: false,
-            changed_against: Some(base.trim().to_string()),
-            all: false,
-        },
-    )
-    .unwrap();
 
-    assert_eq!(output["ok"], false);
-    assert!(
-        output["errors"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|error| error.as_str().unwrap().contains("crates/app/src/large.rs"))
-    );
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("artifacts/schema"));
 }
+
+#[test]
+fn schema_check_rejects_an_ignored_output_destination() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p target/schema && printf 'generated\\n' > target/schema/tables.sql",
+        None,
+    );
+    let config_path = temp.path().join(".jig.toml");
+    let config = fs::read_to_string(&config_path).unwrap().replace(
+        "schema_dump_enabled = true",
+        "schema_dump_enabled = true\nschema_docs_dir = \"target/schema\"",
+    );
+    fs::write(&config_path, config).unwrap();
+    fs::write(temp.path().join(".gitignore"), "target/\n").unwrap();
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("target/schema"));
+    assert!(output.stderr.contains("ignored by Git"));
+    assert!(!temp.path().join("target/schema/tables.sql").exists());
+}
+
+#[test]
+fn schema_check_explicitly_reports_untracked_output_hidden_by_git_config() {
+    let temp = tempdir().unwrap();
+    write_schema_policy_repo(
+        temp.path(),
+        "mkdir -p docs/schema && printf 'generated\\n' > docs/schema/new.sql",
+        None,
+    );
+    init_git(temp.path());
+    git(temp.path(), &["add", "."]);
+    git(temp.path(), &["commit", "-m", "baseline", "-q"]);
+    git(temp.path(), &["config", "status.showUntrackedFiles", "no"]);
+    let ctx = RepoContext::load_from(temp.path()).unwrap();
+
+    let output = schema_check(&ctx).unwrap();
+
+    assert_eq!(output.exit_status, 1);
+    assert!(output.stderr.contains("Schema dump is stale"));
+    assert!(output.stderr.contains("docs/schema/new.sql"));
+}
+
+include!("tests/loc_parts.rs");

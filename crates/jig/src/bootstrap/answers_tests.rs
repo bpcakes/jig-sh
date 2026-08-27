@@ -21,7 +21,7 @@ command_timeout_seconds = 321
 command_output_limit_bytes = 7654321
 
 [[status.providers]]
-id = "factorish.example"
+id = "example.example"
 argv = ["ruby", "scripts/status.rb", "--jig-v1"]
 timeout_seconds = 45
 "#,
@@ -31,7 +31,7 @@ timeout_seconds = 45
     let input = AnswerInput::from_file(&path).unwrap();
     let effective = input.effective_opts(&AnswerOpts::default()).unwrap();
     let provider = &effective.status.as_ref().unwrap().providers[0];
-    assert_eq!(provider.id, "factorish.example");
+    assert_eq!(provider.id, "example.example");
     assert_eq!(provider.timeout_seconds, 45);
     assert_eq!(
         effective

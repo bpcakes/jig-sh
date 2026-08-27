@@ -1,6 +1,41 @@
 use super::*;
 
 #[test]
+fn application_contract_inference_requires_the_complete_interface_marker() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("scripts")).unwrap();
+    let checker = temp.path().join("scripts/contracts.mjs");
+
+    for (contents, expected) in [
+        ("// unrelated project script\n", false),
+        (
+            "// jig-application-contract-checker: v1 modes=check\n",
+            false,
+        ),
+        (
+            "// jig-application-contract-checker: v1 modes=check,public-check\n",
+            true,
+        ),
+    ] {
+        fs::write(&checker, contents).unwrap();
+        let mut warnings = Vec::new();
+        let scan = RepoScan::collect(temp.path(), &mut warnings);
+
+        assert_eq!(
+            infer_application_contracts_enabled(temp.path(), &scan, true, &mut warnings),
+            expected,
+            "unexpected inference for {contents:?}"
+        );
+        assert_eq!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("interface marker")),
+            !expected
+        );
+    }
+}
+
+#[test]
 fn missing_workspace_glob_is_a_warning_not_a_failure() {
     let temp = tempfile::tempdir().unwrap();
     fs::write(

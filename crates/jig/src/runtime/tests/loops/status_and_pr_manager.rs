@@ -414,7 +414,7 @@ exit 2
     );
     assert_eq!(
         worker_receipts["receipts"][0]["evidence"]["codex_home_resolved"],
-        codex_home.canonicalize().unwrap().display().to_string()
+        "<repository-root>/.codex-loop"
     );
 }
 

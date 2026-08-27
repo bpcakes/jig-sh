@@ -210,7 +210,7 @@ mod tests {
                 "needs_attention": { "exhausted_attempts": [{}] }
             },
             "providers": [{
-                "id": "factorish.rewrite",
+                "id": "example.rewrite",
                 "status": "complete",
                 "duration_ms": 42,
                 "summary": {
@@ -224,7 +224,7 @@ mod tests {
                 ],
                 "error": null
             }, {
-                "id": "factorish.failed",
+                "id": "example.failed",
                 "status": "failed",
                 "duration_ms": 1000,
                 "summary": null,
@@ -243,7 +243,7 @@ mod tests {
         assert!(summary.contains("1 lease(s), 2 attempt(s), 1 exhausted"));
         assert!(summary.contains("130 package(s), 4 blocker(s), 1 diagnostic(s), 42 ms"));
         assert!(summary.contains("Inputs: target=dirty, legacy=current"));
-        assert!(summary.contains("factorish.failed: failed; 1000 ms"));
+        assert!(summary.contains("example.failed: failed; 1000 ms"));
         assert!(summary.contains("provider timed out"));
     }
 }

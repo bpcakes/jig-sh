@@ -1,4 +1,4 @@
-_commit = "bfbee69d906cbeb9e8bc77895ee42814fcb97a66"
+_commit = "52a8bdbf591b4f33dcc6a953686a37c5ff8aa5d4"
 _src_path = "https://github.com/bpcakes/jig-sh.git"
 _template_mode = "committed"
 _template_local_path = ""
@@ -6,16 +6,23 @@ repo_name = "jig-sh"
 default_branch = "master"
 ci_github_runner = "ubuntu-latest"
 template_source_url = "https://github.com/bpcakes/jig-sh.git"
+harness_footprint = "full"
 sqlx_enabled = false
 rust_crate_roots = ["crates"]
 schema_dump_enabled = false
+schema_docs_dir = "docs/schema"
 bootstrap_command = "cargo fetch"
 rust_fmt_check_command = "scripts/check-rust-format.sh"
 rust_clippy_command = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 rust_test_command = "cargo nextest run --workspace -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' && cargo nextest run -p jig-sh --test vault_tui -j 1"
 rust_test_locked_command = "cargo nextest run --workspace --locked -E 'not (package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/))))' && cargo nextest run --workspace --locked -E '(package(jig-vault) | package(jig-vault-tui) | (package(jig-sh) & (test(vault) | binary(/vault_.*/)))) & not (package(jig-sh) & binary(vault_tui))' && cargo nextest run -p jig-sh --test vault_tui --locked -j 1"
 web_package_manager = "bun"
+application_contracts_enabled = false
+frontend_workspace_roots = []
 frontend_apps = []
+
+[commands]
+rust_file_loc_command = "scripts/check-rust-file-loc.sh master"
 
 [execution]
 # Applies to configured checks and Codex-backed work/loop workers.
@@ -40,14 +47,32 @@ workspace_discovery = false
 # entries remain a fallback when no dev apps are configured.
 
 [[work.gates]]
-id = "contract"
+id = "jig-contract"
 kind = "check"
 tool = "jig.contract_check"
 
 [[work.gates]]
-id = "tests"
+id = "rust-file-loc"
 kind = "check"
-tool = "jig.test"
+tool = "jig.rust_file_loc"
+
+[[work.gates]]
+id = "source-rust-fmt"
+kind = "check"
+tool = "jig.source_fmt_check"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "rustfmt.toml", ".rustfmt.toml", "scripts/check-rust-format.sh"]
+
+[[work.gates]]
+id = "rust-clippy"
+kind = "check"
+tool = "jig.clippy"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "clippy.toml", ".clippy.toml"]
+
+[[work.gates]]
+id = "source-rust-tests"
+kind = "check"
+tool = "jig.source_test"
+paths = ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain*", ".cargo/**", "nextest.toml", ".config/nextest.toml", "templates/**", "scripts/**", "examples/**", "tests/**"]
 
 [[agent_tooling.codex.marketplaces]]
 id = "jig-skills"

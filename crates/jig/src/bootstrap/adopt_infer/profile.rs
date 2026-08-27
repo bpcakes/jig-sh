@@ -22,6 +22,7 @@ impl AdoptInference {
             "managed_files": managed_files,
             "retired_managed_files": retired_managed_files,
             "frontend_profiles": self.frontend_profiles,
+            "frontend_workspace_roots": self.frontend_workspace_roots,
             "repo_topology": self.repo_topology.report(),
             "command_profile": self.command_profile.report(),
             "ci_shape": self.ci_shape.report(),
@@ -67,6 +68,9 @@ impl AdoptInference {
             stack.push("Vite".into());
         } else if !self.frontend_apps.is_empty() {
             stack.push("frontend apps".into());
+        }
+        if self.application_contracts_enabled == Some(true) {
+            stack.push("application contracts".into());
         }
         if self.ci_shape.has_workflows() || self.ci_github_runner.is_some() {
             stack.push("GitHub Actions".into());
@@ -199,6 +203,16 @@ impl AdoptInference {
             overrides.push(format!(
                     "sqlx_enabled: inferred {value} ignored because {source} supplied an explicit answer"
                 ));
+        }
+        if let Some(source) = explicit_bool_source(
+            explicit_answers.application_contracts_enabled,
+            answer_shape,
+            "application_contracts_enabled",
+        ) && let Some(value) = self.application_contracts_enabled
+        {
+            overrides.push(format!(
+                "application_contracts_enabled: inferred {value} ignored because {source} supplied an explicit answer"
+            ));
         }
         overrides
     }

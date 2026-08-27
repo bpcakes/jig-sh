@@ -4,7 +4,7 @@ After this change, a freshly initialized Rust + React project has one explicit s
 
 ## Progress
 
-- [x] Reproduce the missing Postgres database and missing Vite dependency sequence from the reported `hocr2` repository.
+- [x] Reproduce the missing Postgres database and missing Vite dependency sequence from the reported `ExampleProject` repository.
 - [x] Add a read-only frontend dependency preflight before dev app startup.
 - [x] Add idempotent SQLx database creation and migration to generated scaffold bootstrap.
 - [x] Refresh embedded templates and add focused regression tests.

@@ -82,6 +82,12 @@ pub struct OpenPlanView {
     pub title: String,
     pub body_path: Option<String>,
     pub opened_at_ms: Option<u64>,
+    #[serde(default)]
+    pub baseline_ref: Option<String>,
+    #[serde(default)]
+    pub baseline_oid: Option<String>,
+    #[serde(default)]
+    pub baseline_error: Option<String>,
     pub gates: Option<GatesView>,
     pub gates_error: Option<String>,
 }
@@ -95,6 +101,12 @@ pub struct PlanSummary {
     pub closed_at_ms: Option<u64>,
     pub resolution: Option<String>,
     pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub baseline_ref: Option<String>,
+    #[serde(default)]
+    pub baseline_oid: Option<String>,
+    #[serde(default)]
+    pub baseline_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -205,6 +205,7 @@ skill = "jig-rust:rust-simplify"
         ""
     };
     TestRepoBuilder::new(root)
+        .contract_version(crate::context::CURRENT_CONTRACT_VERSION)
         .config(format!(
             r#"
 [commands]
@@ -254,6 +255,7 @@ pub(super) fn open_test_plan(ctx: &RepoContext) -> String {
             title: "Test plan".into(),
             body: Some("Test body".into()),
             body_file: None,
+            base: None,
         },
     )
     .unwrap();
@@ -301,7 +303,7 @@ pub(super) fn init_git_repo(root: &Path) {
     run_git(root, &["commit", "-m", "initial fixture"]);
 }
 
-fn run_git(root: &Path, args: &[&str]) {
+pub(super) fn run_git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .current_dir(root)
         .args(args)

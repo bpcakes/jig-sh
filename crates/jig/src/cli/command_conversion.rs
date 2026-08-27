@@ -148,6 +148,7 @@ impl From<WorkStartOpts> for command::WorkStartRequest {
             title: opts.title,
             body: opts.body,
             body_file: opts.body_file,
+            base: opts.base,
         }
     }
 }
@@ -166,6 +167,7 @@ impl From<WorkCheckOpts> for command::WorkCheckRequest {
     fn from(opts: WorkCheckOpts) -> Self {
         Self {
             plan_id: opts.plan_id,
+            gates: opts.gates,
             tools: opts.tools,
         }
     }
