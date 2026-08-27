@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_vault::SecretBytes;
-use jig_vault::{Vault, validate_new_vault_passphrase};
+use jig_vault::{
+    SecretBytes, VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV,
+    VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV, Vault, validate_new_vault_passphrase,
+};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
 use zeroize::Zeroizing;
@@ -20,9 +22,6 @@ use crate::command::{
 use super::{
     ResolvedVaultRuntime, add_vault_scope_fields, resolve_vault_runtime, vault, vault_base_home,
 };
-
-const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
-const NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 
 struct CapturedPassphrases {
     current: Option<SecretString>,
