@@ -13,7 +13,7 @@ pub(super) fn dispatch(ctx: Option<&RepoContext>, command: PromptCommand) -> Res
     let registry = PromptRegistry::from_env(ctx.map(RepoContext::root))?;
     match command {
         PromptCommand::Get(request) => get_prompt(&registry, request),
-        PromptCommand::Copy(request) => registry.copy_prompt(render_request(request)),
+        PromptCommand::Copy(request) => registry.copy_prompt(request),
         PromptCommand::Add(request) => add_prompt(&registry, request),
         PromptCommand::Edit(request) => edit_prompt(&registry, request),
         PromptCommand::Remove(request) => remove_prompt(&registry, request),
@@ -26,7 +26,7 @@ pub(super) fn dispatch(ctx: Option<&RepoContext>, command: PromptCommand) -> Res
 
 fn get_prompt(registry: &PromptRegistry, request: PromptRenderRequest) -> Result<Value> {
     let raw = request.raw;
-    let body = registry.render_prompt(render_request(request))?;
+    let body = registry.render_prompt(request)?;
     // Human CLI output selects `body`; JSON mode emits the complete envelope,
     // keeping prompt get shaped like other prompt runtime operations.
     let mut output = json!({
@@ -98,12 +98,4 @@ fn export_prompts(registry: &PromptRegistry, request: PromptExportRequest) -> Re
 
 fn import_prompts(registry: &PromptRegistry, request: PromptImportRequest) -> Result<Value> {
     registry.import_prompts(&request.file)
-}
-
-fn render_request(request: PromptRenderRequest) -> crate::prompt_registry::PromptRenderRequest {
-    crate::prompt_registry::PromptRenderRequest {
-        name: request.name,
-        vars: request.vars,
-        raw: request.raw,
-    }
 }

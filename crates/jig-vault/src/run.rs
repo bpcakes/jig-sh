@@ -18,8 +18,6 @@ use crate::types::{EnvVarName, SecretName};
 
 mod output;
 mod process;
-#[cfg(any(target_os = "linux", test))]
-mod process_linux;
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 mod process_unix;
 mod secret_files;

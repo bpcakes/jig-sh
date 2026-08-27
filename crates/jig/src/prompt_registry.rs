@@ -13,6 +13,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::command::PromptRenderRequest;
 use time::OffsetDateTime;
 
 const PROMPT_HOME_ENV: &str = "JIG_PROMPT_HOME";
@@ -132,12 +134,6 @@ pub(crate) struct PromptAddRequest {
     pub(crate) file: Option<PathBuf>,
     pub(crate) description: Option<String>,
     pub(crate) tags: Vec<String>,
-}
-
-pub(crate) struct PromptRenderRequest {
-    pub(crate) name: String,
-    pub(crate) vars: Vec<String>,
-    pub(crate) raw: bool,
 }
 
 impl PromptRegistry {

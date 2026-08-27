@@ -72,6 +72,7 @@ pub(crate) use timeline::{
 mod compression;
 mod diagnostics;
 mod execution_leases;
+mod json_scan;
 mod jsonl;
 mod maintenance;
 mod plans;

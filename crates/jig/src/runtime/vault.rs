@@ -168,7 +168,7 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
                 json!({
                     "variable": entry.name,
                     "reference": entry.reference.to_string(),
-                    "kind": field_kind_label(&entry.kind),
+                    "kind": entry.kind.as_str(),
                     "action": if *exists { "replace" } else { "create" },
                 })
             })
@@ -218,7 +218,7 @@ fn import_onepassword(mut request: VaultImportOnePasswordRequest) -> Result<Valu
             json!({
                 "variable": entry.name,
                 "reference": entry.reference.to_string(),
-                "kind": field_kind_label(&entry.kind),
+                "kind": entry.kind.as_str(),
             })
         })
         .collect::<Vec<_>>();
@@ -443,7 +443,7 @@ fn list_fields(request: VaultFieldListRequest) -> Result<Value> {
         .map(|record| {
             json!({
                 "reference": record.reference.to_string(),
-                "kind": field_kind_label(&record.kind),
+                "kind": record.kind.as_str(),
                 "created_at_ms": record.created_at_ms,
                 "updated_at_ms": record.updated_at_ms,
                 "value_len": record.value_len,
@@ -505,7 +505,7 @@ fn set_field(request: VaultFieldSetRequest) -> Result<Value> {
     } else {
         FieldKind::Concealed
     };
-    let kind_label = field_kind_label(&kind);
+    let kind_label = kind.as_str();
     let resolved = resolve_vault_runtime(&request.vault)?;
     let vault = vault(&resolved)?;
     let passphrase = passphrase()?;
@@ -762,13 +762,6 @@ fn parse_file_mappings(values: &[String]) -> Result<Vec<BrokeredFile>> {
         .iter()
         .map(|value| BrokeredFile::parse(value).map_err(anyhow::Error::from))
         .collect()
-}
-
-fn field_kind_label(kind: &FieldKind) -> &'static str {
-    match kind {
-        FieldKind::Concealed => "concealed",
-        FieldKind::Text => "text",
-    }
 }
 
 fn read_secret_value(mut input: impl Read) -> Result<SecretBytes> {

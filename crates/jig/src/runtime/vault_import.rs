@@ -2,20 +2,22 @@
 
 use std::io::{ErrorKind, Read};
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use jig_vault::{FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes, VaultItem};
+use jig_vault::{
+    FieldKind, FieldMutation, MAX_SECRET_VALUE_LEN, SecretBytes,
+    VAULT_NEW_PASSPHRASE_ENV as NEW_PASSPHRASE_ENV, VAULT_PASSPHRASE_ENV as PASSPHRASE_ENV,
+    VaultItem,
+};
 use zeroize::Zeroizing;
 
 use crate::command::{VaultImportEnvironment, VaultImportValueSource};
 
 const MAX_OP_STDERR_LEN: usize = 64 * 1024;
-const PASSPHRASE_ENV: &str = "JIG_VAULT_PASSPHRASE";
-const NEW_PASSPHRASE_ENV: &str = "JIG_VAULT_NEW_PASSPHRASE";
 const MAX_IMPORT_TOTAL_VALUE_LEN: usize = 16 * 1024 * 1024;
 const OP_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const OP_FINAL_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
@@ -336,19 +338,10 @@ impl OpPipe {
     #[cfg(unix)]
     fn prepare(&self) -> std::io::Result<()> {
         let descriptor = match self {
-            Self::Stdout(reader) => reader.as_raw_fd(),
-            Self::Stderr(reader) => reader.as_raw_fd(),
+            Self::Stdout(reader) => reader.as_fd(),
+            Self::Stderr(reader) => reader.as_fd(),
         };
-        // SAFETY: the descriptor is owned by this live pipe. F_GETFL only
-        // reads its flags, and F_SETFL preserves them while adding O_NONBLOCK.
-        let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if flags == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        jig_owned_process::unix::set_nonblocking(descriptor)
     }
 
     #[cfg(not(unix))]

@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use jig_tui::sanitize_text;
+
 pub(super) fn moved_index(current: usize, len: usize, delta: isize) -> usize {
     if len == 0 {
         return 0;
@@ -32,16 +34,4 @@ pub(super) fn sanitize_value(value: &mut Value) {
         Value::Object(values) => values.values_mut().for_each(sanitize_value),
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
-}
-
-pub(crate) fn sanitize_text(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_control() {
-                '\u{fffd}'
-            } else {
-                character
-            }
-        })
-        .collect()
 }
