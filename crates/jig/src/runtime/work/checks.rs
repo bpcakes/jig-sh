@@ -1,3 +1,4 @@
+// agentic-loc-exception: work-check orchestration stays cohesive with its receipt and status transitions.
 use std::collections::BTreeSet;
 
 use anyhow::{Result, anyhow, bail};

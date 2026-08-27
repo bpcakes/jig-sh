@@ -1,3 +1,4 @@
+// agentic-loc-exception: receipt validation and append-only persistence remain one auditable boundary.
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;

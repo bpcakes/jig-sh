@@ -1,3 +1,4 @@
+// agentic-loc-exception: MCP request dispatch remains centralized to keep protocol behavior consistent.
 use std::io::{self, BufRead, Write};
 
 use anyhow::{Context, Result, anyhow};

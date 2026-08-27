@@ -20,9 +20,8 @@ const BACKEND_COMPONENT: &str = "api";
 const DEFAULT_PROFILE: &str = "verify";
 const FRONTEND_CONTRACT_DRIFT_ACTION: &str = "frontend-contract-drift";
 const FRONTEND_PUBLIC_BOUNDARY_ACTION: &str = "frontend-public-boundary";
-// Explicit component and action inputs are matched before this list. These
-// defaults therefore suppress only repository guidance, documentation, and
-// hosted-CI metadata that no local action declares as an input. Files such as
+// Explicit action inputs take precedence; these defaults suppress only
+// repository guidance, docs, and hosted-CI metadata. Unlisted files such as
 // `.gitignore`, `Makefile`, and `justfile` deliberately remain fail-closed.
 const DEFAULT_AFFECTED_IGNORE: &[&str] = &[
     ".env",
@@ -539,7 +538,10 @@ impl<'a> ModelBuilder<'a> {
             );
             action.description = Some(description.into());
             action.effects = vec![ActionEffect::ReadOnly, ActionEffect::Process];
-            action.inputs = frontend_contract_inputs(action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION);
+            action.inputs = frontend_contract_inputs(
+                action_id == FRONTEND_PUBLIC_BOUNDARY_ACTION,
+                self.answers.frontend_workspace_roots(),
+            );
             action.provenance = provenance(&[
                 ("target", FieldProvenance::Inferred),
                 ("intent", FieldProvenance::Inherited),
@@ -664,7 +666,11 @@ impl<'a> ModelBuilder<'a> {
             );
             action.description = Some(descriptor.description.into());
             action.effects = descriptor.effects.to_vec();
-            action.inputs = frontend_inputs(&app.dir, descriptor.inputs);
+            action.inputs = frontend_inputs(
+                &app.dir,
+                descriptor.inputs,
+                self.answers.frontend_workspace_roots(),
+            );
             action.depends_on = match (self.answers.scaffolded_frontend_contracts(), descriptor.id)
             {
                 (true, "typecheck") => vec![
@@ -721,8 +727,11 @@ impl<'a> ModelBuilder<'a> {
             );
             action.description = Some(description.clone());
             action.effects = descriptor.effects.to_vec();
-            action.inputs =
-                aggregate_frontend_inputs(self.answers.frontend_apps(), descriptor.inputs);
+            action.inputs = aggregate_frontend_inputs(
+                self.answers.frontend_apps(),
+                descriptor.inputs,
+                self.answers.frontend_workspace_roots(),
+            );
             action.legacy_aliases = descriptor
                 .legacy_alias
                 .into_iter()
@@ -905,7 +914,7 @@ pub(super) fn frontend_component_id(name: &str) -> Result<ComponentId> {
         .with_context(|| format!("Invalid frontend app name '{name}' for repository identity"))
 }
 
-fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
+fn frontend_inputs(root: &str, inputs: &[&str], workspace_roots: &[String]) -> Vec<String> {
     let mut resolved = inputs
         .iter()
         .map(|input| {
@@ -921,20 +930,32 @@ fn frontend_inputs(root: &str, inputs: &[&str]) -> Vec<String> {
             .iter()
             .map(|input| (*input).to_owned()),
     );
+    resolved.extend(
+        workspace_roots
+            .iter()
+            .map(|root| component_root_input(root)),
+    );
     resolved.sort();
     resolved.dedup();
     resolved
 }
 
-fn aggregate_frontend_inputs(apps: &[FrontendApp], inputs: &[&str]) -> Vec<String> {
+fn aggregate_frontend_inputs(
+    apps: &[FrontendApp],
+    inputs: &[&str],
+    workspace_roots: &[String],
+) -> Vec<String> {
     apps.iter()
-        .flat_map(|app| frontend_inputs(&app.dir, inputs))
+        .flat_map(|app| frontend_inputs(&app.dir, inputs, workspace_roots))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
 }
 
-fn frontend_contract_inputs(include_public_artifacts: bool) -> Vec<String> {
+fn frontend_contract_inputs(
+    include_public_artifacts: bool,
+    workspace_roots: &[String],
+) -> Vec<String> {
     let mut inputs = FRONTEND_SHARED_INPUTS
         .iter()
         .copied()
@@ -948,6 +969,11 @@ fn frontend_contract_inputs(include_public_artifacts: bool) -> Vec<String> {
         ])
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    inputs.extend(
+        workspace_roots
+            .iter()
+            .map(|root| component_root_input(root)),
+    );
     if include_public_artifacts {
         inputs.extend(["docs/public/**".into(), "public-docs/**".into()]);
     }
@@ -963,16 +989,7 @@ fn provenance(entries: &[(&str, FieldProvenance)]) -> BTreeMap<String, FieldProv
         .collect()
 }
 
-fn component_id(value: &str) -> Result<ComponentId> {
-    ComponentId::parse(value).map_err(Into::into)
-}
-
-fn target_id(component: &str, action: &str) -> Result<TargetId> {
-    Ok(TargetId::new(
-        component_id(component)?,
-        ActionId::parse(action)?,
-    ))
-}
+include!("repository_model/ids.rs");
 
 #[cfg(test)]
 mod tests;

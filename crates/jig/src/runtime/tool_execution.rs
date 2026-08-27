@@ -1,3 +1,4 @@
+// agentic-loc-exception: tool dispatch and execution policy remain one security-sensitive boundary.
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};

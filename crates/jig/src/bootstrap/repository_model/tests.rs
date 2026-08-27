@@ -296,7 +296,7 @@ schema_dump_command = "scripts/dump-schema.sh"
 
 #[test]
 fn frontend_actions_depend_on_their_shared_runner() {
-    let inputs = frontend_inputs("apps/web", &["src/**"]);
+    let inputs = frontend_inputs("apps/web", &["src/**"], &[]);
 
     assert!(inputs.contains(&"apps/web/src/**".to_owned()));
     assert!(inputs.contains(&"scripts/check-webapps.sh".to_owned()));

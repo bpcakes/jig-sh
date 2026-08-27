@@ -1,3 +1,4 @@
+// agentic-loc-exception: gate orchestration stays cohesive with dependency and receipt evaluation.
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
